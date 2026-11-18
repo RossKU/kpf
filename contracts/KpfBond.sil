@@ -1,0 +1,384 @@
+pragma silverscript ^0.1.0;
+
+// KpfBond: the underwriting slot of an oracle-only market (docs/DESIGN-ORACLE-2.md 1.3; what this slice implements
+// and every deviation: docs/DESIGN-ORACLE-IMPL.md). A slot is bonded KAS K whose owner binds cover to pairs; the cover
+// it has counted and not yet released never exceeds rho x K, without any global total: the slot counts cover up when
+// a pair binds it and down only by the calendar, when the cover's liability has ended.
+//
+// State (redeem bytes from 1). A bond header first, the same as KpfLock's (ownerKey, status), so that KpfLock can
+// later become status 1 of this template (docs/DESIGN-ORACLE-IMPL.md, "Folding KpfLock in").
+//   ownerKey  the underwriter (x-only): signs binds, splits and unbonding; the only key that can move the KAS out
+//   status    2 slot (active), 3 unbonding; 1 is KpfLock's status and is not a status of this template
+//   market    the market id (the oracle market's block hash in the next slice; here any 32 bytes the pair names)
+//   rhoBps .. unbondDaa   the bond parameters of the market (bounds: checkBond, one text with the stand-in pair)
+//   j0        the ring position: bucket i (0..11) holds the cover whose pair expiry is X = (j0 + i + 1) * stepDaa,
+//             counted until its liability ends at X + tailDaa
+//   ring      12 buckets of 8 bytes: cover counted per expiry, in sompi (one 96-byte push)
+//
+// Invariant, required by every entry that adds cover or divides the slot: every bucket >= 0 and
+// sum(ring) <= rho x K, K this slot's own value (clamped at VALUE_CLAMP, which only lowers the capacity). A genesis
+// can write any state; every bucket an entry adds to or divides is required >= 0 first, so a forged deficit cannot
+// absorb cover the claimants read (found by the model fuzz Z3, docs/DESIGN-ORACLE-IMPL.md).
+//
+// Entries (every one checks checkBond and the status; owner entries are rate-limited by rateDaa, CSV):
+//   bind(t, x, d, r0, c0 .. r6, c6, s)  owner. Advances the ring by d steps (as advance), then adds c0 + .. + c6 to
+//                     the bucket of expiry x. Each (ri, ci) is a claim a pair or an opening order checks: ri names
+//                     the claimant (an input index, or OUT_REF + an output index), ci its cover. Used claims come
+//                     first with strictly increasing refs, unused ones are (-1, 0). x is a ring boundary at most
+//                     termDaa + stepDaa after t (tx.daa >= t by CLTV), so a pair renews in the last step before
+//                     its expiry. This entry never reads a pair: the claimants read its arguments.
+//   advance(d)        anyone, once the liability of the first d buckets has ended (CLTV): drops them.
+//   split(a0..a11, s) owner: two children of this id, child A with ring a, child B with the rest, each within the
+//                     invariant on its own value; values conserved.
+//   unbond(d, s)      owner: after advancing d steps every bucket is 0; status unbonding.
+//   withdraw(s)       owner, unbonding and unbondDaa old (CSV): no output of the id remains, the owner's signature
+//                     covers every output. An id-less bond (no pair can name it) is withdrawable in any status.
+// Exit without anybody's cooperation: advance (needs only the calendar), unbond, withdraw (need only the owner).
+// No entry pays the slot's value to anyone but a continuation of the slot or, at withdraw, wherever the owner signs.
+contract KpfBond(
+    pubkey init_ownerKey,
+    int init_status,
+    byte[32] init_market,
+    int init_rhoBps,
+    int init_stepDaa,
+    int init_termDaa,
+    int init_tailDaa,
+    int init_rateDaa,
+    int init_unbondDaa,
+    int init_j0,
+    byte[96] init_ring
+) {
+    // Bond header (state [0..42)).
+    pubkey ownerKey = init_ownerKey;
+    int status = init_status;
+    // Market id and bond parameters (state [42..129)), byte for byte the stand-in pair's.
+    byte[32] market = init_market;
+    int rhoBps = init_rhoBps;          // rho: counted cover <= rho x K
+    int stepDaa = init_stepDaa;        // one ring step
+    int termDaa = init_termDaa;        // the renewal period Lambda, a whole number of steps
+    int tailDaa = init_tailDaa;        // T_tail = W + T_retro: how long cover stays liable after its expiry
+    int rateDaa = init_rateDaa;        // a: the least age of the slot before an owner entry (CSV)
+    int unbondDaa = init_unbondDaa;    // U: the least age of an unbonding slot before withdraw (CSV)
+    // Ring (state [129..236)): its position, then one 96-byte push of RING buckets of 8 bytes each (script numbers).
+    // One field rather than twelve keeps the bind entry within the stack limit.
+    int j0 = init_j0;
+    byte[96] ring = init_ring;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant STATUS_SLOT = 2;
+    int constant STATUS_UNBONDING = 3;
+    int constant BPS = 10000;
+    int constant RING = 12;
+    int constant CSV_LIMIT = 4294967296;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    // rho <= 5 (the market check refuses more until the judge has a history; docs/DESIGN-ORACLE-2.md 7).
+    int constant RHO_MAX_BPS = 50000;
+    // The capacity is computed on min(K, VALUE_CLAMP): (10^18 / 10^4) * 5 * 10^4 = 5 * 10^18 < 2^63, and every ring sum
+    // the invariant admits stays below it.
+    // DESIGN: the note counts in KAS units (floor(sompi / 10^8), cover rounded up) to keep rho x K inside 64 bits at
+    // rho <= 20. With rho <= 5 the sompi itself fits once K is clamped at 10^18 sompi (a third of the supply; a larger
+    // slot only counts as 10^18), so cover is exact to the sompi and no rounding gives or takes capacity.
+    int constant VALUE_CLAMP = 1000000000000000000;
+    // Claim references: [0, OUT_REF) an input index, [OUT_REF, REF_LIMIT) OUT_REF + an output index.
+    int constant OUT_REF = 65536;
+    int constant REF_LIMIT = 131072;
+    // Redeem-script offsets (the state starts at byte 1, checked by the tests).
+    int constant STATUS_AT = 34;
+    int constant J0_AT = 130;
+    // The ring's push opcodes (OP_PUSHDATA1 96) at [139..141), its buckets at [141..237).
+    int constant RING_AT = 141;
+    int constant RING_LEN = 96;
+    int constant STATE_END = 237;
+
+    // The bond bounds: every parameter in its range, so that every slot an entry writes has a live advance, unbond
+    // and withdraw, and the capacity and the ring arithmetic stay inside 63 bits. The function between the markers is
+    // the same text in KpfBond and in the stand-in pair (contracts/stubs), which `bond_attack_tests` enforces with its
+    // constants, so the two cannot drift.
+    // DESIGN: the note's ring has 8 buckets of Lambda/8; it cannot hold a renewal (docs/DESIGN-ORACLE-IMPL.md, Z3):
+    // after the ring is advanced to the present its last bucket expires at most 7 steps ahead, while a renewal in the
+    // last step needs an expiry Lambda + 1 step ahead and the old bucket must stay until X + T_tail. Here the ring has
+    // RING buckets and a market needs termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa.
+    // BEGIN bond bounds
+    function checkBond() {
+        require(rhoBps >= BPS);
+        require(rhoBps <= RHO_MAX_BPS);
+        require(stepDaa > 0);
+        require(termDaa >= stepDaa);
+        require(termDaa % stepDaa == 0);
+        require(termDaa < CSV_LIMIT);
+        require(tailDaa >= 0);
+        require(tailDaa < CSV_LIMIT);
+        require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
+        require(rateDaa >= 0);
+        require(rateDaa < CSV_LIMIT);
+        require(unbondDaa >= 0);
+        require(unbondDaa < CSV_LIMIT);
+    }
+    // END bond bounds
+
+    // A 65-byte Schnorr signature with SIGHASH_ALL by k, so the signer commits to every input and output.
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    // This input's redeem script.
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    // An 8-byte integer state field with its push opcode.
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // An 8-byte bucket.
+    function e8(int c) : byte[] {
+        return byte[](c as byte[8]);
+    }
+
+    // Bucket i of a ring.
+    function at(byte[] r, int i) : int {
+        return int(byte[8](r.slice(8 * i, 8 * i + 8)));
+    }
+
+    // The sum of a ring, every bucket >= 0 (a genesis can write any state; a negative bucket would lower the sum).
+    // Written out bucket by bucket: every inlined helper call adds stack bindings, and bind is near the limit of 244.
+    function ringSum(byte[] r) : int {
+        require(r.length == RING_LEN);
+        require(int(byte[8](r.slice(0, 8))) >= 0);
+        require(int(byte[8](r.slice(8, 16))) >= 0);
+        require(int(byte[8](r.slice(16, 24))) >= 0);
+        require(int(byte[8](r.slice(24, 32))) >= 0);
+        require(int(byte[8](r.slice(32, 40))) >= 0);
+        require(int(byte[8](r.slice(40, 48))) >= 0);
+        require(int(byte[8](r.slice(48, 56))) >= 0);
+        require(int(byte[8](r.slice(56, 64))) >= 0);
+        require(int(byte[8](r.slice(64, 72))) >= 0);
+        require(int(byte[8](r.slice(72, 80))) >= 0);
+        require(int(byte[8](r.slice(80, 88))) >= 0);
+        require(int(byte[8](r.slice(88, 96))) >= 0);
+        int s = int(byte[8](r.slice(0, 8))) + int(byte[8](r.slice(8, 16))) + int(byte[8](r.slice(16, 24)))
+            + int(byte[8](r.slice(24, 32))) + int(byte[8](r.slice(32, 40))) + int(byte[8](r.slice(40, 48)))
+            + int(byte[8](r.slice(48, 56))) + int(byte[8](r.slice(56, 64))) + int(byte[8](r.slice(64, 72)))
+            + int(byte[8](r.slice(72, 80))) + int(byte[8](r.slice(80, 88))) + int(byte[8](r.slice(88, 96)));
+        return s;
+    }
+
+    // RING zero buckets.
+    function zeroRing() : byte[] {
+        byte[] z = e8(0);
+        byte[] z2 = z + z;
+        byte[] z4 = z2 + z2;
+        return z4 + z4 + z4;
+    }
+
+    // The most cover a slot of value v may count: floor(min(v, VALUE_CLAMP) * rhoBps / 10^4), in the split form.
+    function capacity(int v) : int {
+        int k = v;
+        if (k > VALUE_CLAMP) {
+            k = VALUE_CLAMP;
+        }
+        int c = (k / BPS) * rhoBps + ((k % BPS) * rhoBps) / BPS;
+        return c;
+    }
+
+    // This slot's ring moved by d >= 0 steps. The first d buckets are dropped, which needs their liability to have
+    // ended: tx.daa >= (j0 + d) * stepDaa + tailDaa, the end of bucket d - 1, proven by CLTV on a DAA lock time.
+    function advanced(int d) : byte[] {
+        require(d >= 0);
+        byte[] r = ownRs().slice(RING_AT, STATE_END);
+        if (d > 0) {
+            int e = (j0 + d) * stepDaa + tailDaa;
+            require(e >= 0);
+            require(e < LOCK_TIME_THRESHOLD);
+            require(tx.daa >= e);
+        }
+        byte[] out = zeroRing();
+        if (d < RING) {
+            out = r.slice(8 * d, RING_LEN) + out.slice(0, 8 * d);
+        }
+        return out;
+    }
+
+    // The P2SH script public key of this template with status st, ring position j and ring r (everything else kept).
+    function slotSpk(int st, int j, byte[] r) : byte[] {
+        byte[] rs = ownRs();
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATUS_AT) + i9(st) + rs.slice(STATUS_AT + 9, J0_AT)
+            + i9(j) + rs.slice(J0_AT + 9, RING_AT) + r + rs.slice(STATE_END, this.bytecodeSize)));
+    }
+
+    // One claim of a bind: (ref, cover). Unused claims (-1, 0) follow the used ones, whose refs strictly increase (so
+    // no two claimants can match one claim) and whose cover is 0 <= c <= v (one pair's cover never exceeds the slot:
+    // docs/DESIGN-ORACLE-2.md 2, a restitution H <= c is always payable). `last` is the previous claim's ref, or
+    // REF_LIMIT after an unused claim (so no used claim can follow one); returns the same for this claim.
+    function claim(byte[8] rb, byte[8] cb, int v, int last) : int {
+        int r = int(rb);
+        int c = int(cb);
+        int nl = REF_LIMIT;
+        if (r < 0) {
+            require(r == -1);
+            require(c == 0);
+        } else {
+            require(r > last);
+            require(r < REF_LIMIT);
+            require(c >= 0);
+            require(c <= v);
+            nl = r;
+        }
+        return nl;
+    }
+
+    // The single-input, single-continuation guard (DESIGN 4.4): no other input of this id can claim the continuation,
+    // and the continuation is the only output of the id. Returns the continuation's index.
+    function single() : int {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        return OpCovOutputIdx(selfId, 0);
+    }
+
+    // Bind (docs/DESIGN-ORACLE-2.md 1.3 "bind / renew"). The arguments are fixed-width pushes so that a claimant can
+    // read them from this input's signature script at fixed offsets (the stand-in pair's boundBy).
+    // DESIGN: the note's "X >= lockTime + 7 Lambda / 8" is not a rule of the slot: it would contradict the window
+    // (x <= t + Lambda + one step) for every renewal before expiry, and the term a pair gets is the pair's and the
+    // opening orders' business; the slot only needs x to fall into its ring and its liability end to be provable.
+    entry bind(byte[8] tb, byte[8] xb, byte[8] db, byte[8] r0, byte[8] c0, byte[8] r1, byte[8] c1, byte[8] r2, byte[8] c2,
+               byte[8] r3, byte[8] c3, byte[8] r4, byte[8] c4, byte[8] r5, byte[8] c5, byte[8] r6, byte[8] c6, sig s) {
+        int self = this.activeInputIndex;
+        int cont = single();
+        checkBond();
+        require(status == STATUS_SLOT);
+        signedBy(s, ownerKey);
+        require(this.ageDaa >= rateDaa);
+        int t = int(tb);
+        require(t >= 0);
+        require(t < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= t);
+        int d = int(db);
+        byte[] r = advanced(d);
+        int j = j0 + d;
+        int x = int(xb);
+        require(x >= 0);
+        require(x % stepDaa == 0);
+        require(x <= t + termDaa + stepDaa);
+        require(x + tailDaa < LOCK_TIME_THRESHOLD);
+        int k = x / stepDaa - j - 1;
+        require(k >= 0);
+        require(k < RING);
+        int v = tx.outputs[cont].value;
+        require(v >= tx.inputs[self].value);
+        int l = claim(r0, c0, v, -1);
+        l = claim(r1, c1, v, l);
+        l = claim(r2, c2, v, l);
+        l = claim(r3, c3, v, l);
+        l = claim(r4, c4, v, l);
+        l = claim(r5, c5, v, l);
+        l = claim(r6, c6, v, l);
+        // Unused claims carry cover 0 (claim), so the cover added is the sum of all seven.
+        int add = int(c0) + int(c1) + int(c2) + int(c3) + int(c4) + int(c5) + int(c6);
+        // The bucket must not be negative before the cover is added (a genesis can write a negative bucket; adding c to
+        // -c would count nothing while the claimants read c). Every other bucket is checked by ringSum below.
+        // DESIGN: the note (5.2) calls look-alike slots "real KAS with honest-or-higher counters"; a genesis can write
+        // lower counters too. Found by the model fuzz (Z3); refused here and in split (ringSum on both children).
+        int ok = at(r, k);
+        require(ok >= 0);
+        byte[] r2b = r.slice(0, 8 * k) + e8(ok + add) + r.slice(8 * k + 8, RING_LEN);
+        require(ringSum(r2b) <= capacity(v));
+        require(tx.outputs[cont].scriptPubKey == slotSpk(STATUS_SLOT, j, r2b));
+    }
+
+    // Advance (the note's "release on expiry"). Anyone, once the liability of the first d >= 1 buckets has ended; it
+    // only drops expired buckets, so it can be repeated only when another bucket ends (at most once per step).
+    entry advance(byte[8] db) {
+        int self = this.activeInputIndex;
+        int cont = single();
+        checkBond();
+        require(status == STATUS_SLOT);
+        int d = int(db);
+        require(d > 0);
+        byte[] r = advanced(d);
+        require(tx.outputs[cont].value >= tx.inputs[self].value);
+        require(tx.outputs[cont].scriptPubKey == slotSpk(STATUS_SLOT, j0 + d, r));
+    }
+
+    // Split (docs/DESIGN-ORACLE-2.md 1.3 "split / merge"). Owner. Child A (the first output of the id) gets the ring
+    // (a0..a11), child B the rest, bucket by bucket; both rings are re-encoded, every bucket >= 0, each child within
+    // the invariant on its own value, and the two values together at least this slot's.
+    entry split(byte[8] a0, byte[8] a1, byte[8] a2, byte[8] a3, byte[8] a4, byte[8] a5, byte[8] a6, byte[8] a7, byte[8] a8,
+                byte[8] a9, byte[8] a10, byte[8] a11, sig s) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 2);
+        checkBond();
+        require(status == STATUS_SLOT);
+        signedBy(s, ownerKey);
+        require(this.ageDaa >= rateDaa);
+        byte[] r = ownRs().slice(RING_AT, STATE_END);
+        byte[] ra = byte[](int(a0) as byte[8]) + byte[](int(a1) as byte[8]) + byte[](int(a2) as byte[8])
+            + byte[](int(a3) as byte[8]) + byte[](int(a4) as byte[8]) + byte[](int(a5) as byte[8])
+            + byte[](int(a6) as byte[8]) + byte[](int(a7) as byte[8]) + byte[](int(a8) as byte[8])
+            + byte[](int(a9) as byte[8]) + byte[](int(a10) as byte[8]) + byte[](int(a11) as byte[8]);
+        byte[] rb = byte[]((int(byte[8](r.slice(0, 8))) - int(a0)) as byte[8])
+            + byte[]((int(byte[8](r.slice(8, 16))) - int(a1)) as byte[8])
+            + byte[]((int(byte[8](r.slice(16, 24))) - int(a2)) as byte[8])
+            + byte[]((int(byte[8](r.slice(24, 32))) - int(a3)) as byte[8])
+            + byte[]((int(byte[8](r.slice(32, 40))) - int(a4)) as byte[8])
+            + byte[]((int(byte[8](r.slice(40, 48))) - int(a5)) as byte[8])
+            + byte[]((int(byte[8](r.slice(48, 56))) - int(a6)) as byte[8])
+            + byte[]((int(byte[8](r.slice(56, 64))) - int(a7)) as byte[8])
+            + byte[]((int(byte[8](r.slice(64, 72))) - int(a8)) as byte[8])
+            + byte[]((int(byte[8](r.slice(72, 80))) - int(a9)) as byte[8])
+            + byte[]((int(byte[8](r.slice(80, 88))) - int(a10)) as byte[8])
+            + byte[]((int(byte[8](r.slice(88, 96))) - int(a11)) as byte[8]);
+        int ia = OpCovOutputIdx(selfId, 0);
+        int ib = OpCovOutputIdx(selfId, 1);
+        int va = tx.outputs[ia].value;
+        int vb = tx.outputs[ib].value;
+        require(va + vb >= tx.inputs[self].value);
+        require(ringSum(ra) <= capacity(va));
+        require(ringSum(rb) <= capacity(vb));
+        require(tx.outputs[ia].scriptPubKey == slotSpk(STATUS_SLOT, j0, ra));
+        require(tx.outputs[ib].scriptPubKey == slotSpk(STATUS_SLOT, j0, rb));
+    }
+
+    // Unbond (docs/DESIGN-ORACLE-2.md 1.3). Owner. After advancing d steps no cover is counted: every pair bound to
+    // this slot has passed its expiry and its liability tail, so no claim can reach it.
+    entry unbond(byte[8] db, sig s) {
+        int self = this.activeInputIndex;
+        int cont = single();
+        checkBond();
+        require(status == STATUS_SLOT);
+        signedBy(s, ownerKey);
+        require(this.ageDaa >= rateDaa);
+        int d = int(db);
+        byte[] r = advanced(d);
+        require(ringSum(r) == 0);
+        require(tx.outputs[cont].value >= tx.inputs[self].value);
+        require(tx.outputs[cont].scriptPubKey == slotSpk(STATUS_UNBONDING, j0 + d, r));
+    }
+
+    // Withdraw. Owner, SIGHASH_ALL (it chooses every output). An unbonding slot unbondDaa old; no output of the id.
+    // DESIGN: the note's U must exceed M_age only for the judge's stake; the long delay belongs to that stake, not to
+    // the slot (resolution of the note's open point), so unbondDaa may be 0.
+    // DESIGN: a bond UTXO without a covenant id can be withdrawn in any status: no pair or opening order accepts an
+    // id-less slot (they require the slot's id), so it underwrites nothing, and every other entry needs the id
+    // (OpCovInputCount(0) is 0, X1); without this a bond funded without a binding would be locked forever.
+    entry withdraw(sig s) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        signedBy(s, ownerKey);
+        byte[] z8 = byte[](0 as byte[8]);
+        byte[32] zero = byte[32](z8 + z8 + z8 + z8);
+        if (selfId != zero) {
+            checkBond();
+            require(status == STATUS_UNBONDING);
+            require(this.ageDaa >= unbondDaa);
+            require(OpCovOutputCount(selfId) == 0);
+        }
+    }
+}

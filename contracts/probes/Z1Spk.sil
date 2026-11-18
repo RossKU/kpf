@@ -1,0 +1,27 @@
+pragma silverscript ^0.1.0;
+
+// Probe Z1 (docs/DESIGN-ORACLE-2.md 1.5, 7): can a contract prove that another input of its transaction is an
+// ordinary key's input, i.e. read that input's script public key (and what it signed)?
+contract Z1Spk(int init_tag) {
+    int tag = init_tag;
+
+    // Input j's script public key is the standard P2PK script of key k (0x20 || k || OP_CHECKSIG).
+    entry keyInput(int j, pubkey k) {
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+    }
+
+    // As keyInput, and input j's signature script is exactly one push of a 65-byte signature whose sighash byte is
+    // SIGHASH_ALL, so the key signed every input outpoint, every output and the lock time.
+    entry keyInputAll(int j, pubkey k) {
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+        require(OpTxInputScriptSigLen(j) == 66);
+        require(OpTxInputScriptSigSubstr(j, 0, 1) == byte[](0x41));
+        require(OpTxInputScriptSigSubstr(j, 65, 66) == byte[](0x01));
+    }
+
+    // The raw script bytes of input j, read piecewise (OpTxInputSpkLen, OpTxInputSpkSubstr).
+    entry spkBytes(int j, byte[] want) {
+        require(OpTxInputSpkLen(j) == want.length);
+        require(OpTxInputSpkSubstr(j, 0, want.length) == want);
+    }
+}

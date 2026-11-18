@@ -15,6 +15,8 @@
 //! - [`pending`]: the pure math of the two-step paths: bond, cure and forfeit bounds, the pending state, what each branch pays.
 //! - [`lock`]: guaranteed fast settlement (DESIGN 4.5f): the cover, the lock a guarantee needs, what a dispute and a release pay.
 //! - [`verify`]: every input through the rusty-kaspa v2.1.0 script engine, with consensus metering.
+//! - [`bond`]: the underwriting slot of oracle-only markets (`docs/DESIGN-ORACLE-IMPL.md`) as a pure model of
+//!   `KpfBond` and of its stand-in pair and order: the ring, the bounds, the acceptance rule of every entry.
 //!
 //! # The evidence paths
 //!
@@ -32,6 +34,7 @@
 //!
 
 pub mod artifacts;
+pub mod bond;
 pub mod build;
 pub mod error;
 pub mod evidence;

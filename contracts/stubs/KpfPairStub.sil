@@ -1,0 +1,208 @@
+pragma silverscript ^0.1.0;
+
+// KpfPairStub: a stand-in for the oracle-market pair of the next slice (KpfPairO, docs/DESIGN-ORACLE-2.md 1.4),
+// sufficient to test how a pair relies on the cover a KpfBond slot counts for it. It is NOT a pair.
+//
+// What it checks (and the real pair must keep):
+//   - renew: the slot input u is a KpfBond (template BOND_TPL, P2SH) of the pair's uwId, with the pair's market and
+//     bond parameters, owned by uwKey, spent by its bind entry (dispatch tag BIND_TAG, every argument push at its fixed
+//     offset) with expiry X + termDaa and, at claim k, this input's own index and a cover >= the pair's;
+//   - rely: the placeholder of the next slice's price claim: the cover is live (this UTXO's DAA score P <= X) and the
+//     pair's expiry lies at most termDaa + stepDaa after P, which every pair a template writes satisfies (opening and
+//     renewal bind x <= lock time + termDaa + stepDaa <= P + termDaa + stepDaa), so a pair made by a genesis that names
+//     a slot it never bound can rely on that slot for at most one period (bond_attack_tests);
+//   - the single-input guard on every entry, and checkBond (the same text as KpfBond's).
+// What it does NOT check, and so does not show: margins, prices, keys of two parties (one ownerKey stands for both
+// sides), the premium, transfers, splits and re-pairing of a pair, rebind to another slot, the lapse rule, any claim,
+// dispute or record. Its value is not tied to its cover. Anyone may renew it (the note's renewal needs no party
+// signature; the underwriter signs the slot's bind).
+contract KpfPairStub(
+    byte[32] BOND_TPL,
+    int BOND_PRE,
+    int BOND_SUF,
+    byte[4] BIND_TAG,
+    byte[32] init_market,
+    int init_rhoBps,
+    int init_stepDaa,
+    int init_termDaa,
+    int init_tailDaa,
+    int init_rateDaa,
+    int init_unbondDaa,
+    byte[32] init_uwId,
+    byte[32] init_uwKey,
+    pubkey init_ownerKey,
+    int init_cover,
+    int init_expiry
+) {
+    // Market id and bond parameters (state [0..87)), byte for byte the slot's.
+    byte[32] market = init_market;
+    int rhoBps = init_rhoBps;
+    int stepDaa = init_stepDaa;
+    int termDaa = init_termDaa;
+    int tailDaa = init_tailDaa;
+    int rateDaa = init_rateDaa;
+    int unbondDaa = init_unbondDaa;
+    // Binding (state [87..204)).
+    byte[32] uwId = init_uwId;         // the slot's covenant id
+    byte[32] uwKey = init_uwKey;       // the slot's owner: in the next slice, the only key that can vouch a price
+    pubkey ownerKey = init_ownerKey;   // the stand-in's single party
+    int cover = init_cover;            // the cover the slot counts for this pair, sompi
+    int expiry = init_expiry;          // X: the cover's expiry; its liability ends at X + tailDaa
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant STATUS_SLOT = 2;
+    int constant BPS = 10000;
+    int constant RING = 12;
+    int constant CSV_LIMIT = 4294967296;
+    int constant RHO_MAX_BPS = 50000;
+    int constant OUT_REF = 65536;
+    // KpfBond's state length and the offsets of its status and market block within it.
+    int constant BOND_STATE_LEN = 236;
+    int constant BOND_STATUS_AT = 33;
+    int constant BOND_MARKET_AT = 42;
+    int constant BOND_MARKET_END = 129;
+    // The bind entry's signature script: 17 pushes of 8 bytes, the 65-byte signature, the 4-byte dispatch tag, then
+    // the redeem script (OP_PUSHDATA2, 3 bytes of header).
+    int constant BIND_SIG_AT = 153;
+    int constant BIND_TAG_AT = 219;
+    int constant BIND_HEAD = 227;
+    // This contract's offsets (state from byte 1): market block [1..88), expiry push [196..205).
+    int constant MARKET_END = 88;
+    int constant EXPIRY_AT = 196;
+
+    // BEGIN bond bounds
+    function checkBond() {
+        require(rhoBps >= BPS);
+        require(rhoBps <= RHO_MAX_BPS);
+        require(stepDaa > 0);
+        require(termDaa >= stepDaa);
+        require(termDaa % stepDaa == 0);
+        require(termDaa < CSV_LIMIT);
+        require(tailDaa >= 0);
+        require(tailDaa < CSV_LIMIT);
+        require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
+        require(rateDaa >= 0);
+        require(rateDaa < CSV_LIMIT);
+        require(unbondDaa >= 0);
+        require(unbondDaa < CSV_LIMIT);
+    }
+    // END bond bounds
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // As KpfPair.tplState: input idx's redeem script is an instance of template tpl (prefix pre, state stLen, suffix
+    // suf bytes) and input idx is its P2SH; returns the state.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // The 8-byte push at offset `at` of input u's signature script.
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // BEGIN bind proof
+    // The slot input u proves that it counts cover >= c with expiry x for the claimant `ref`: u is a KpfBond, its
+    // state has status slot and this contract's market block, and it is spent by its bind entry whose second argument
+    // is x and whose claim k is (ref, >= c). The signature script is checked push by push from its first byte (a
+    // signature script is push-only and its last push is the redeem script whose hash the input's P2SH fixes), so the
+    // values read are the arguments the bind entry ran with. Returns (the slot's covenant id, its owner key).
+    // KpfBond.bind adds every claim's cover to the bucket of x and refuses two claims with one ref, so two claimants
+    // never count one claim, whatever else the transaction holds.
+    function boundBy(int u, int k, int x, int ref, int c) : (byte[32], byte[32]) {
+        byte[] st = tplState(u, BOND_PRE, BOND_STATE_LEN, BOND_SUF, BOND_TPL);
+        require(st.slice(BOND_STATUS_AT, BOND_STATUS_AT + 9) == i9(STATUS_SLOT));
+        require(st.slice(BOND_MARKET_AT, BOND_MARKET_END) == ownRs().slice(1, MARKET_END));
+        require(OpTxInputScriptSigLen(u) == BIND_HEAD + BOND_PRE + BOND_STATE_LEN + BOND_SUF);
+        require(OpTxInputScriptSigSubstr(u, BIND_TAG_AT, BIND_HEAD - 3) == byte[](0x04) + byte[](BIND_TAG));
+        require(OpTxInputScriptSigSubstr(u, BIND_SIG_AT, BIND_SIG_AT + 1) == byte[](0x41));
+        int t = push8(u, 0);
+        require(push8(u, 9) == x);
+        int d = push8(u, 18);
+        int r0 = push8(u, 27);
+        int c0 = push8(u, 36);
+        int r1 = push8(u, 45);
+        int c1 = push8(u, 54);
+        int r2 = push8(u, 63);
+        int c2 = push8(u, 72);
+        int r3 = push8(u, 81);
+        int c3 = push8(u, 90);
+        int r4 = push8(u, 99);
+        int c4 = push8(u, 108);
+        int r5 = push8(u, 117);
+        int c5 = push8(u, 126);
+        int r6 = push8(u, 135);
+        int c6 = push8(u, 144);
+        require(k >= 0);
+        require(k < 7);
+        require(push8(u, 27 + 18 * k) == ref);
+        require(push8(u, 36 + 18 * k) >= c);
+        return (OpInputCovenantId(u), byte[32](st.slice(1, 33)));
+    }
+    // END bind proof
+
+    // Renew (docs/DESIGN-ORACLE-2.md 1.4 "Renewal"): X -> X + termDaa, counted by the pair's own slot uwId (owned by
+    // uwKey) in this transaction's bind, claim k naming this input. Anyone (the underwriter's signature is the bind's).
+    entry renew(int u, int k) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        checkBond();
+        require(cover > 0);
+        int x2 = expiry + termDaa;
+        (byte[32] id, byte[32] key) = boundBy(u, k, x2, self, cover);
+        require(id == uwId);
+        require(key == uwKey);
+        int cont = OpCovOutputIdx(selfId, 0);
+        byte[] rs = ownRs();
+        require(tx.outputs[cont].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, EXPIRY_AT) + i9(x2) + rs.slice(EXPIRY_AT + 9, this.bytecodeSize))));
+        require(tx.outputs[cont].value >= tx.inputs[self].value);
+    }
+
+    // Rely: what the next slice's price claim will require of the cover before uwKey can vouch a price (a claim
+    // landing after X is void, docs/DESIGN-ORACLE-2.md 1.5); here the pair continues unchanged.
+    // DESIGN: the note leaves a pair made by a genesis that names a real slot (uncounted cover) to the entrant's
+    // wallet (5.2). This bound adds an on-chain limit: the expiry may lie at most termDaa + stepDaa after the pair
+    // UTXO's own DAA score, which every pair a template writes satisfies, so uncounted cover lasts at most one period.
+    entry rely() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        checkBond();
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        require(p <= expiry);
+        require(expiry <= p + termDaa + stepDaa);
+        int cont = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[cont].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(tx.outputs[cont].value >= tx.inputs[self].value);
+    }
+
+    // Close: the stand-in's exit, its owner's signature, no output of the id.
+    entry close(sig s) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 0);
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, ownerKey));
+    }
+}

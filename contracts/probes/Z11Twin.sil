@@ -1,0 +1,51 @@
+pragma silverscript ^0.1.0;
+
+// Probe Z11 (docs/DESIGN-ORACLE-2.md 1.4, 5.18, 7): at the genesis of a pair, can a creating input refuse a second
+// output carrying the new covenant id (a twin pair)? Two ways are tried: the covenant counter on the new id, and a scan
+// of every output.
+contract Z11Twin(int init_tag) {
+    int tag = init_tag;
+
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+
+    // What OpCovOutputCount shows for the id of output `out`.
+    entry count(int out, int nOut) {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != ZERO32);
+        require(OpCovOutputCount(id) == nOut);
+    }
+
+    // The counter rule: exactly one output carries the new id.
+    entry onlyOneByCount(int out) {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != ZERO32);
+        require(OpCovInputCount(id) == 0);
+        require(OpCovOutputCount(id) == 1);
+    }
+
+    // One output j other than `out` does not carry `id` (only read when it exists).
+    function notId(int j, int out, int n, byte[32] id) {
+        if (j < n) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+    }
+
+    // The scan rule: at most 8 outputs, and none but `out` carries the new id.
+    entry onlyOneByScan(int out) {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != ZERO32);
+        require(OpCovInputCount(id) == 0);
+        int n = tx.outputs.length;
+        require(n <= 8);
+        notId(0, out, n, id);
+        notId(1, out, n, id);
+        notId(2, out, n, id);
+        notId(3, out, n, id);
+        notId(4, out, n, id);
+        notId(5, out, n, id);
+        notId(6, out, n, id);
+        notId(7, out, n, id);
+    }
+}

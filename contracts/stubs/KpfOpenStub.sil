@@ -1,0 +1,194 @@
+pragma silverscript ^0.1.0;
+
+// KpfOpenStub: a stand-in for the opening order of an oracle-market pair (the KpfOpen of the next slice, T1' of
+// docs/DESIGN-ORACLE-2.md 1.4), sufficient to test the bind at open. It is NOT an order.
+//
+// What it checks (and the real orders must keep): the new pair output is exactly the KpfPairStub (PAIR_TPL) this
+// order's terms and the slot imply; its covenant id is a genesis of this transaction (non-zero, no input carries it);
+// it is the only output carrying that id (experiment Z11: OpCovOutputCount does not see genesis outputs, so every
+// output is scanned, at most 8); the slot input u is a KpfBond of an accepted id that counts the pair's cover at the
+// pair's expiry for claim OUT_REF + pairOut (boundBy, the same text as KpfPairStub's); the pair's uwKey is the slot's
+// owner; and the order is single and ends here.
+// What it does NOT check: prices, margins, sides, fills, a second order, the premium, the term the pair gets (no upper
+// bound on the present exists; the expiry is only bounded by the slot's window), activeFrom and expiry of the order,
+// refund or cancel paths (the stand-in has no exit but fill: test fixtures only).
+contract KpfOpenStub(
+    byte[32] PAIR_TPL,
+    byte[32] BOND_TPL,
+    int BOND_PRE,
+    int BOND_SUF,
+    byte[4] BIND_TAG,
+    byte[32] init_market,
+    int init_rhoBps,
+    int init_stepDaa,
+    int init_termDaa,
+    int init_tailDaa,
+    int init_rateDaa,
+    int init_unbondDaa,
+    byte[32] init_uwAccept,
+    pubkey init_ownerKey,
+    int init_cover
+) {
+    // Market id and bond parameters (state [0..87)), byte for byte the pair's.
+    byte[32] market = init_market;
+    int rhoBps = init_rhoBps;
+    int stepDaa = init_stepDaa;
+    int termDaa = init_termDaa;
+    int tailDaa = init_tailDaa;
+    int rateDaa = init_rateDaa;
+    int unbondDaa = init_unbondDaa;
+    // Order (state [87..162)).
+    byte[32] uwAccept = init_uwAccept; // the slot id this order accepts; zero: any slot of the market
+    pubkey ownerKey = init_ownerKey;
+    int cover = init_cover;
+
+    int constant STATUS_SLOT = 2;
+    int constant BPS = 10000;
+    int constant RING = 12;
+    int constant CSV_LIMIT = 4294967296;
+    int constant RHO_MAX_BPS = 50000;
+    int constant OUT_REF = 65536;
+    int constant BOND_STATE_LEN = 236;
+    int constant BOND_STATUS_AT = 33;
+    int constant BOND_MARKET_AT = 42;
+    int constant BOND_MARKET_END = 129;
+    int constant BIND_SIG_AT = 153;
+    int constant BIND_TAG_AT = 219;
+    int constant BIND_HEAD = 227;
+    int constant MARKET_END = 88;
+    // The largest output count the twin scan covers.
+    int constant MAX_OUTPUTS = 8;
+
+    // BEGIN bond bounds
+    function checkBond() {
+        require(rhoBps >= BPS);
+        require(rhoBps <= RHO_MAX_BPS);
+        require(stepDaa > 0);
+        require(termDaa >= stepDaa);
+        require(termDaa % stepDaa == 0);
+        require(termDaa < CSV_LIMIT);
+        require(tailDaa >= 0);
+        require(tailDaa < CSV_LIMIT);
+        require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
+        require(rateDaa >= 0);
+        require(rateDaa < CSV_LIMIT);
+        require(unbondDaa >= 0);
+        require(unbondDaa < CSV_LIMIT);
+    }
+    // END bond bounds
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // BEGIN bind proof
+    // The slot input u proves that it counts cover >= c with expiry x for the claimant `ref`: u is a KpfBond, its
+    // state has status slot and this contract's market block, and it is spent by its bind entry whose second argument
+    // is x and whose claim k is (ref, >= c). The signature script is checked push by push from its first byte (a
+    // signature script is push-only and its last push is the redeem script whose hash the input's P2SH fixes), so the
+    // values read are the arguments the bind entry ran with. Returns (the slot's covenant id, its owner key).
+    // KpfBond.bind adds every claim's cover to the bucket of x and refuses two claims with one ref, so two claimants
+    // never count one claim, whatever else the transaction holds.
+    function boundBy(int u, int k, int x, int ref, int c) : (byte[32], byte[32]) {
+        byte[] st = tplState(u, BOND_PRE, BOND_STATE_LEN, BOND_SUF, BOND_TPL);
+        require(st.slice(BOND_STATUS_AT, BOND_STATUS_AT + 9) == i9(STATUS_SLOT));
+        require(st.slice(BOND_MARKET_AT, BOND_MARKET_END) == ownRs().slice(1, MARKET_END));
+        require(OpTxInputScriptSigLen(u) == BIND_HEAD + BOND_PRE + BOND_STATE_LEN + BOND_SUF);
+        require(OpTxInputScriptSigSubstr(u, BIND_TAG_AT, BIND_HEAD - 3) == byte[](0x04) + byte[](BIND_TAG));
+        require(OpTxInputScriptSigSubstr(u, BIND_SIG_AT, BIND_SIG_AT + 1) == byte[](0x41));
+        int t = push8(u, 0);
+        require(push8(u, 9) == x);
+        int d = push8(u, 18);
+        int r0 = push8(u, 27);
+        int c0 = push8(u, 36);
+        int r1 = push8(u, 45);
+        int c1 = push8(u, 54);
+        int r2 = push8(u, 63);
+        int c2 = push8(u, 72);
+        int r3 = push8(u, 81);
+        int c3 = push8(u, 90);
+        int r4 = push8(u, 99);
+        int c4 = push8(u, 108);
+        int r5 = push8(u, 117);
+        int c5 = push8(u, 126);
+        int r6 = push8(u, 135);
+        int c6 = push8(u, 144);
+        require(k >= 0);
+        require(k < 7);
+        require(push8(u, 27 + 18 * k) == ref);
+        require(push8(u, 36 + 18 * k) >= c);
+        return (OpInputCovenantId(u), byte[32](st.slice(1, 33)));
+    }
+    // END bind proof
+
+    // One output j other than `out` does not carry `id` (only read when it exists).
+    function notId(int j, int out, int n, byte[32] id) {
+        if (j < n) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+    }
+
+    // T1' (stand-in): the pair at output pairOut with expiry x, bound by the slot input u at its claim k.
+    // DESIGN: the note (1.4) excludes a hidden twin of the new pair with OpCovOutputCount on the new id; experiment
+    // Z11 refutes that (the counter does not see genesis outputs: 0 with or without a twin), so every output is
+    // scanned instead, and the transaction may have at most MAX_OUTPUTS outputs.
+    entry fill(int pairOut, int u, int k, int x, byte[] cPre, byte[] cSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 0);
+        checkBond();
+        require(cover > 0);
+        require(pairOut >= 0);
+        (byte[32] uw, byte[32] key) = boundBy(u, k, x, OUT_REF + pairOut, cover);
+        require(uw != zero32());
+        if (uwAccept != zero32()) {
+            require(uw == uwAccept);
+        }
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        byte[] st = ownRs().slice(1, MARKET_END) + byte[](0x20) + byte[](uw) + byte[](0x20) + byte[](key) + byte[](0x20)
+            + byte[](byte[32](ownerKey)) + i9(cover) + i9(x);
+        require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
+        byte[32] pairId = OpOutputCovenantId(pairOut);
+        require(pairId != zero32());
+        require(OpCovInputCount(pairId) == 0);
+        int n = tx.outputs.length;
+        require(n <= MAX_OUTPUTS);
+        notId(0, pairOut, n, pairId);
+        notId(1, pairOut, n, pairId);
+        notId(2, pairOut, n, pairId);
+        notId(3, pairOut, n, pairId);
+        notId(4, pairOut, n, pairId);
+        notId(5, pairOut, n, pairId);
+        notId(6, pairOut, n, pairId);
+        notId(7, pairOut, n, pairId);
+        require(tx.outputs[pairOut].value >= tx.inputs[self].value);
+    }
+}
