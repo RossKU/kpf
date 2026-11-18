@@ -1,0 +1,228 @@
+pragma silverscript ^0.1.0;
+
+// KpfOpen: a resting order to open one side of a KpfPair, escrowed in KAS (docs/DESIGN.md 4.2, 4.3, 4.5 T1).
+//
+// A long order opens at a price X <= limit with its own margin rate myRate (bl = X - myRate) and accepts a short
+// whose margin rate bs - X is at least minCounterRate. A short order mirrors it (X >= limit, bs = X + myRate,
+// X - bl >= minCounterRate). Rates are sompi per whole token of `scale` base units.
+//
+// Entries of this slice:
+//   fill(pairOut, n, x, bl, bs, counterKey, counterTag, cPre, cSuf)
+//          T1 open: n base units at x into the fresh KpfPair at output pairOut. Anyone, once tx.daa >= activeFrom.
+//   cancel(s)   owner only, SIGHASH_ALL.
+//   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
+// Taking a same-side listing (transfer, liquidation by transfer) comes later.
+//
+// The order enforces only its own guarantees (KOB option 2). It never reads the counterparty: it rebuilds the
+// whole pair output script from its own market block, its own key, rate and covenant id, and the arguments, and
+// requires the output to be exactly that script under a covenant id created in this transaction. Two orders on
+// the two sides of one pair therefore accept the same output if and only if both rebuild the same bytes, and the
+// tag on its side (its own covenant id) means no second order of its side can claim the same output.
+contract KpfOpen(
+    byte[32] PAIR_TPL,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    byte[32] init_extensionCommitment,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_mmrBps,
+    int init_kBps,
+    int init_minRestDaa,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_priceMax,
+    int init_side,
+    pubkey init_ownerKey,
+    int init_sizeLeft,
+    int init_limit,
+    int init_myRate,
+    int init_minCounterRate,
+    int init_minFill,
+    int init_tip,
+    int init_activeFrom,
+    int init_expiryDaa
+) {
+    // Market block (state [0..207)), byte for byte the pair's.
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    byte[32] extensionCommitment = init_extensionCommitment;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;
+    int mmrBps = init_mmrBps;
+    int kBps = init_kBps;
+    int minRestDaa = init_minRestDaa;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int priceMax = init_priceMax;
+    // Order (state [207..321)).
+    int side = init_side;                    // 1 long, 2 short
+    pubkey ownerKey = init_ownerKey;         // maker (x-only)
+    int sizeLeft = init_sizeLeft;            // * base units still to open
+    int limit = init_limit;                  // long: X <= limit; short: X >= limit
+    int myRate = init_myRate;                // own margin per whole token, > 0
+    int minCounterRate = init_minCounterRate; // counterparty margin per whole token accepted, >= 0
+    int minFill = init_minFill;              // smallest fill unless it takes all that is left
+    int tip = init_tip;                      // per whole token, to the executor
+    int activeFrom = init_activeFrom;
+    int expiryDaa = init_expiryDaa;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant INT_MAX = 9223372036854775807;
+    int constant CSV_LIMIT = 4294967296;
+    // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
+    int constant MAX_IDLE = 77760000;
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+    // The six listing fields of a new pair, all zero (unlisted), with their 0x08 push opcodes.
+    byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
+    // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..208), sizeLeft
+    // payload [251..259).
+    int constant MARKET_AT = 1;
+    int constant MARKET_LEN = 207;
+    int constant LEFT_AT = 251;
+
+    // As KpfPair.quoteOf.
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // This input's redeem script.
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    // T1 open. n base units at price x into the pair at output pairOut with range [bl, bs]. counterKey and
+    // counterTag are the other side's owner and tag; this order does not check them (the other side's order, or
+    // a direct taker's own signature, does). cPre and cSuf are the KpfPair template prefix and suffix; their hash
+    // must be PAIR_TPL.
+    entry fill(int pairOut, int n, int x, int bl, int bs, byte[32] counterKey, byte[32] counterTag, byte[] cPre, byte[] cSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        // The single-input guard also makes the tag claim below unique (DESIGN 4.4): no other input carries this id.
+        require(OpCovInputCount(selfId) == 1);
+        require(tx.daa >= activeFrom);
+
+        // Nothing checks the state when the order is created, so a fill checks what it relies on, including every
+        // bound the new pair checks on each of its own entries (DESIGN 5), so the pair it creates is never stuck.
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(myRate > 0);
+        require(minCounterRate >= 0);
+        require(tip >= 0);
+
+        // Amount. n >= minFill unless it takes all that is left; every pair part is >= minSize (DESIGN 4.6), so
+        // what is left is 0 or itself at least one part.
+        // DESIGN: 4.6 states "s - n in {0} or >= minSize" for pair splits; it is applied to the order's sizeLeft
+        // too, since a rest below minSize could never open a pair and would only wait for refund.
+        require(n > 0);
+        require(n <= sizeLeft);
+        require(n >= minSize);
+        require(n >= minFill || n == sizeLeft);
+        int left = sizeLeft - n;
+        require(left == 0 || left >= minSize);
+        require(n / scale <= (INT_MAX - carrier) / priceMax - 1);
+
+        // Range and price.
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+        byte[32] lk = byte[32](ownerKey);
+        byte[32] sk = counterKey;
+        byte[32] tl = selfId;
+        byte[32] ts = counterTag;
+        if (side == SIDE_LONG) {
+            require(x <= limit);
+            require(bl == x - myRate);
+            require(bs - x >= minCounterRate);
+        } else {
+            require(side == SIDE_SHORT);
+            require(x >= limit);
+            require(bs == x + myRate);
+            require(x - bl >= minCounterRate);
+            lk = counterKey;
+            sk = byte[32](ownerKey);
+            tl = counterTag;
+            ts = selfId;
+        }
+
+        // The pair output, rebuilt byte for byte: KpfPair template, this order's market block, size n, [bl, bs],
+        // entry x, both keys, both listings unlisted, both tags. Its covenant id is non-zero (an id-less pair is
+        // unspendable forever, X1) and no input carries it (a fresh lineage created in this transaction).
+        // DESIGN: T1 does not say what the listing windows of a new pair hold; they start unlisted (all zero), so a
+        // listing always needs its owner's signed amend (P1).
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        byte[] rs = ownRs();
+        byte[] st = rs.slice(MARKET_AT, MARKET_AT + MARKET_LEN) + byte[](0x08) + byte[](n as byte[8]) + byte[](0x08)
+            + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](x as byte[8])
+            + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + byte[](NO_LISTS) + byte[](0x20) + byte[](tl)
+            + byte[](0x20) + byte[](ts);
+        require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
+        byte[32] pairId = OpOutputCovenantId(pairOut);
+        require(pairId != ZERO32);
+        require(OpCovInputCount(pairId) == 0);
+        require(tx.outputs[pairOut].value >= quoteOf(n, bs - bl, 0) + carrier);
+
+        // What this fill may take from the escrow: its margin and tip for n, rounded down, and one pair carrier.
+        // DESIGN: the escrow formula of 4.2 (q(sizeLeft, myRate + tip) + C + carrier) is read as: C is the pair
+        // carrier this order funds per fill, carrier the order's own UTXO carrier, which stays. Each of the two
+        // orders funds one C, so a maker of k partial fills needs k carriers; the executor keeps the spare C.
+        int spend = quoteOf(n, myRate + tip, 0) + carrier;
+        if (left > 0) {
+            // The rest continues this script with sizeLeft = left.
+            require(OpCovOutputCount(selfId) == 1);
+            int c = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                rs.slice(0, LEFT_AT) + byte[](left as byte[8]) + rs.slice(LEFT_AT + 8, this.bytecodeSize)
+            )));
+            require(tx.outputs[c].value >= tx.inputs[self].value - spend);
+        } else {
+            // Filled out. The order ends, and what is left of the escrow goes to the owner at output i.
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+            require(tx.outputs[self].value >= tx.inputs[self].value - spend);
+        }
+    }
+
+    // Cancel. The owner's SIGHASH_ALL signature covers every output.
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, ownerKey));
+    }
+
+    // Refund. Due at the earliest of expiryDaa and 90 days idle. The whole escrow goes to the owner at output i,
+    // and nothing stays bound to this covenant id.
+    entry refund() {
+        int self = this.activeInputIndex;
+        int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+        if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+        require(tx.daa >= idleEnd);
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 0);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+}

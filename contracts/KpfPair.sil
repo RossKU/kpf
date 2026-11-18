@@ -1,0 +1,275 @@
+pragma silverscript ^0.1.0;
+
+// KpfPair: one perpetual position of size s between a long and a short, held in one UTXO with both margins
+// (docs/DESIGN.md 3.1, 3.4, 4.2, 4.3).
+//
+// The pair is the price range [bl, bs] (bankruptcy prices, sompi per whole token of `scale` base units). With
+// c(p) = min(max(p, bl), bs) the long is owed q(s, c(p) - bl) and the short q(s, bs - c(p)), q = quoteOf rounding
+// down. Every pair output holds at least q(s, bs - bl) + carrier.
+//
+// Entries of this slice (M1, evidence-free):
+//   amend(s, side, ask, minPart, tipRate)   P1  owner of `side` rewrites its own listing window
+//   addMargin(s, side, delta)               P2  long lowers bl, short raises bs, by delta > 0
+//   idleSettle()                            P8  anyone, age >= idleDaa: settle all at entryPrice clamped to [bl, bs]
+//   coopClose(sl, ss)                       P9  both owners sign; any split, the pair ends
+// Transfer (P3), close-versus-close (P4), unilateral close (P5) and the liquidations (P6, P7) come later; their
+// state (listing windows, tags) is already part of the layout so the template does not change shape.
+//
+// Every entry is the only input of its covenant id (OpCovInputCount(selfId) == 1) and reads only its own input.
+// A continuation is found by OpCovOutputIdx(selfId, 0) and must equal this redeem script outside the bytes the
+// entry may change (contSpk). Party payouts use the injective slots of DESIGN 4.4: the long at output i (this
+// input's index) and the short at output M - 1 - i, which must be at least the input count.
+contract KpfPair(
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    byte[32] init_extensionCommitment,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_mmrBps,
+    int init_kBps,
+    int init_minRestDaa,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_priceMax,
+    int init_size,
+    int init_bl,
+    int init_bs,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    byte[32] init_tagL,
+    byte[32] init_tagS
+) {
+    // Market block (state [0..207)): identical in every pair and open order of one market.
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    byte[32] extensionCommitment = init_extensionCommitment;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;              // base units per whole token, 0 < scale <= 10^9
+    int mmrBps = init_mmrBps;            // maintenance margin (liquidation, later)
+    int kBps = init_kBps;                // evidence multiple k (later)
+    int minRestDaa = init_minRestDaa;    // evidence rest R (later)
+    int liqFeeBps = init_liqFeeBps;      // liquidation fee (later)
+    int keeperFeeMin = init_keeperFeeMin; // fee floor (later)
+    int minSize = init_minSize;          // smallest part, base units
+    int carrier = init_carrier;          // C, sompi on every pair output above its range
+    int idleDaa = init_idleDaa;          // idle timeout of P8, DAA (CSV)
+    int priceMax = init_priceMax;        // upper price bound, <= 10^14
+    // Position (state [207..429)). Mutable fields are marked *.
+    int size = init_size;                // * s, base units
+    int bl = init_bl;                    // * long bankruptcy price
+    int bs = init_bs;                    // * short bankruptcy price
+    int entryPrice = init_entryPrice;    // * E, last consented price (P8 and display only)
+    pubkey longKey = init_longKey;       // * long owner (x-only)
+    pubkey shortKey = init_shortKey;     // * short owner (x-only)
+    int longAsk = init_longAsk;          // * long listing: sell at >= longAsk (0 = unlisted)
+    int longMin = init_longMin;          // * smallest part of the long listing
+    int longTip = init_longTip;          // * tip per whole token the long gives a filler
+    int shortBid = init_shortBid;        // * short listing: buy back at <= shortBid (0 = unlisted)
+    int shortMin = init_shortMin;        // *
+    int shortTip = init_shortTip;        // *
+    byte[32] tagL = init_tagL;           // * covenant id of the input that put the current long here (0 if none)
+    byte[32] tagS = init_tagS;           // * as tagL for the short
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    // DESIGN 5 bounds. scale <= 10^9 keeps (n mod scale) * (r mod scale) < 10^18; priceMax <= 10^14 keeps the
+    // later trigger products a * 10^4 within 10^18.
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant INT_MAX = 9223372036854775807;
+    // A plain payout below 0.02 KAS is not created (DESIGN 4.6); its value goes to the other party.
+    int constant PLAIN_DUST = 2000000;
+    // Redeem-script offsets. The state starts at byte 1 (one prefix byte, checked by the tests against the
+    // compiled artifact). Payload windows: bl [218..226), bs [227..235); the two listing windows with their push
+    // opcodes [310..364), the long's [310..337) and the short's [337..364).
+    int constant BL_AT = 218;
+    int constant BS_AT = 227;
+    int constant LISTS_AT = 310;
+    int constant LISTS_END = 364;
+    int constant LIST_LEN = 27;
+
+    // Quote value of n base units at rate r (sompi per whole token). c = 0 rounds down, c = scale - 1 rounds up.
+    // As KobCondAsk.quoteOf: the product n * r is never formed.
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // DESIGN 5, checked at every entry: the market bounds and 0 <= bl < bs <= priceMax, size > 0.
+    //
+    // The size bound. With W = floor(size / scale) and any r <= priceMax, q(n, r) <= (W + 1) * r for every
+    // n <= size (the two low terms add up to at most floor(((scale - 1) * r + scale - 1) / scale) <= r), so
+    // W <= (INT_MAX - carrier) / priceMax - 1 keeps q(n, r) + carrier inside 63 bits on every path, and the low
+    // products stay below scale^2 <= 10^18. A size above the bound is refused here instead of overflowing later.
+    // DESIGN: 4.2 has no maxSize field and 5 states the bound only as "<= 9.2 * 10^4 whole tokens at r = 10^14";
+    // the bound is derived from the pair's own priceMax and carrier instead (92,232 whole tokens at 10^14, 0.2 KAS).
+    function checkPair() {
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(size > 0);
+        require(size / scale <= (INT_MAX - carrier) / priceMax - 1);
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+    }
+
+    // The value every pair output with range [b0, b1] must hold.
+    function floorOf(int b0, int b1) : int {
+        return quoteOf(size, b1 - b0, 0) + carrier;
+    }
+
+    // A 65-byte Schnorr signature with SIGHASH_ALL by k, so the signer commits to every output.
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    // This input's redeem script (the last push of its signature script).
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    // P2SH of this script with bl, bs and the two listing windows (54 bytes with their push opcodes) replaced.
+    // Every other byte, the market block, size, entryPrice, both keys and both tags included, is copied.
+    function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + rs.slice(LISTS_END, this.bytecodeSize)
+        ));
+    }
+
+    // P1 amend. The owner of `side` sets its own listing window (ask or bid, smallest part, tip). The other
+    // window and every other field stay. The continuation keeps at least this UTXO's value (an amend moves no
+    // value) and its range floor. A new UTXO resets the age that P8 measures.
+    // DESIGN: "value >= old value" is not in 4.3; without it one owner's amend could move any value above the
+    // range floor (which P8 would give to the short) to the signer's own outputs.
+    entry amend(sig s, int side, int ask, int minPart, int tipRate) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        require(ask >= 0);
+        require(ask <= priceMax);
+        require(minPart >= 0);
+        require(tipRate >= 0);
+        byte[] rs = ownRs();
+        byte[] win = byte[](0x08) + byte[](ask as byte[8]) + byte[](0x08) + byte[](minPart as byte[8]) + byte[](0x08)
+            + byte[](tipRate as byte[8]);
+        byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            lists = win + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+        }
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, bl, bs, lists));
+        require(tx.outputs[c].value >= tx.inputs[self].value);
+        require(tx.outputs[c].value >= floorOf(bl, bs));
+    }
+
+    // P2 add margin. The long lowers bl, the short raises bs, by delta > 0. The continuation's value grows by at
+    // least ceil(q(s, delta)) and covers the new range. Written as a difference, so it cannot overflow.
+    entry addMargin(sig s, int side, int delta) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        require(delta > 0);
+        int nbl = bl;
+        int nbs = bs;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            nbl = bl - delta;
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+            nbs = bs + delta;
+        }
+        require(nbl >= 0);
+        require(nbl < nbs);
+        require(nbs <= priceMax);
+        byte[] rs = ownRs();
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, nbl, nbs, rs.slice(LISTS_AT, LISTS_END)));
+        require(tx.outputs[c].value - tx.inputs[self].value >= quoteOf(size, delta, scale - 1));
+        require(tx.outputs[c].value >= floorOf(nbl, nbs));
+    }
+
+    // P8 idle settle. Anyone, once this UTXO is idleDaa old (CSV; the compiler refuses a value outside
+    // [0, 2^32), so a hand-built idleDaa cannot reach the sequence mask). The pair ends at the stored entry
+    // price clamped to [bl, bs]: the long gets q(s, c(E) - bl) at output i, the short the rest of this UTXO's
+    // value at output M - 1 - i.
+    entry idleSettle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        require(this.ageDaa >= idleDaa);
+        require(OpCovOutputCount(selfId) == 0);
+        int e = entryPrice;
+        if (e < bl) { e = bl; }
+        if (e > bs) { e = bs; }
+        int v = tx.inputs[self].value;
+        // DESIGN: T8 says "short >= the rest" without defining it. Read as the whole input value less the long's
+        // payout, so the carrier and any excess go to the short (the remainder side) and none to the executor.
+        int lp = quoteOf(size, e - bl, 0);
+        int sp = v - lp;
+        if (lp < PLAIN_DUST) {
+            lp = 0;
+            sp = v;
+        } else {
+            if (sp < PLAIN_DUST) {
+                lp = v;
+                sp = 0;
+            }
+        }
+        if (lp > 0) {
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(longKey)));
+            require(tx.outputs[self].value >= lp);
+        }
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(shortKey)));
+            require(tx.outputs[j].value >= sp);
+        }
+    }
+
+    // P9 cooperative close. Both owners sign with SIGHASH_ALL, so both commit to every output: any split. The
+    // pair ends, and no output stays bound to its covenant id.
+    // No bounds check here: two signatures are the last way out of a pair whose state is malformed (no honest
+    // KpfOpen creates one), and releasing it harms nobody else.
+    entry coopClose(sig sl, sig ss) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        signedBy(sl, longKey);
+        signedBy(ss, shortKey);
+        require(OpCovOutputCount(selfId) == 0);
+    }
+}

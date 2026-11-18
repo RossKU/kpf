@@ -125,6 +125,16 @@ pub enum Spend {
     Contract { art: SilAbiArtifact, entry: &'static str, args: Vec<ArtifactValue> },
     /// An ordinary P2PK input signed with SIGHASH_ALL.
     P2pk(Keypair),
+    /// A P2SH contract input whose arguments may include SIGHASH_ALL Schnorr signatures over this transaction.
+    Signed { art: SilAbiArtifact, entry: &'static str, args: Vec<Arg> },
+}
+
+/// A contract argument: a value, or a SIGHASH_ALL signature of `kp` over the transaction being built (signature
+/// scripts are not part of the sighash, so it is computed before they are filled).
+#[derive(Clone)]
+pub enum Arg {
+    V(ArtifactValue),
+    Sig(Keypair),
 }
 
 pub struct In {
@@ -148,14 +158,34 @@ pub fn p2pk_in(outpoint: TransactionOutpoint, value: u64, cov: Option<Hash>, kp:
 /// `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:208-209`), fills every signature
 /// script and returns it with its UTXO entries.
 pub fn build(ins: &[In], outputs: Vec<TransactionOutput>) -> (Transaction, Vec<UtxoEntry>) {
+    build_ext(ins, outputs, 0, &[])
+}
+
+/// As `build`, with the transaction lock time (what `tx.daa >= x` proves by CLTV) and per-input sequence numbers
+/// (what `this.ageDaa >= x` proves by CSV; a missing entry is 0).
+pub fn build_ext(ins: &[In], outputs: Vec<TransactionOutput>, lock_time: u64, sequences: &[u64]) -> (Transaction, Vec<UtxoEntry>) {
     let entries: Vec<UtxoEntry> = ins.iter().map(|i| i.utxo.clone()).collect();
-    let inputs: Vec<TransactionInput> = ins.iter().map(|i| TransactionInput::new(i.outpoint, vec![], 0, 0)).collect();
-    let unsigned = Transaction::new(1, inputs, outputs, 0, Default::default(), 0, vec![]);
+    let inputs: Vec<TransactionInput> = ins
+        .iter()
+        .enumerate()
+        .map(|(k, i)| TransactionInput::new(i.outpoint, vec![], sequences.get(k).copied().unwrap_or(0), 0))
+        .collect();
+    let unsigned = Transaction::new(1, inputs, outputs, lock_time, Default::default(), 0, vec![]);
     let mut tx = unsigned.clone();
     for (k, i) in ins.iter().enumerate() {
         tx.inputs[k].signature_script = match &i.spend {
             Spend::Contract { art, entry, args } => entry_sig_script(art, entry, args),
             Spend::P2pk(kp) => push(&sign(&unsigned, &entries, k, kp)),
+            Spend::Signed { art, entry, args } => {
+                let vals: Vec<ArtifactValue> = args
+                    .iter()
+                    .map(|a| match a {
+                        Arg::V(v) => v.clone(),
+                        Arg::Sig(kp) => ArtifactValue::Bytes(sign(&unsigned, &entries, k, kp)),
+                    })
+                    .collect();
+                entry_sig_script(art, entry, &vals)
+            }
         };
     }
     tx.finalize();
@@ -206,6 +236,44 @@ pub fn run(tx: &Transaction, entries: &[UtxoEntry]) -> Result<Vec<Result<(), TxS
         .collect())
 }
 
+/// One input measured with consensus engine flags (`EngineFlags::default()`, which also charges signature checks
+/// in script units): the result, the script units used, and the largest combined main + alt stack the engine held
+/// before any opcode (read from its opcode log).
+pub struct Metered {
+    pub result: Result<(), TxScriptError>,
+    pub script_units: u64,
+    pub max_stack: usize,
+}
+
+pub fn run_metered(tx: &Transaction, entries: &[UtxoEntry]) -> Vec<Metered> {
+    let populated = PopulatedTransaction::new(tx, entries.to_vec());
+    let cov_ctx = CovenantsContext::from_tx(&populated).expect("covenant bindings");
+    let reused = SigHashReusedValuesUnsync::new();
+    let cache = Cache::new(10_000);
+    (0..tx.inputs.len())
+        .map(|i| {
+            let input = tx.inputs[i].clone();
+            let mut log: Vec<u8> = Vec::new();
+            let (result, script_units) = {
+                let mut vm = TxScriptEngine::from_transaction_input(
+                    &populated,
+                    &input,
+                    i,
+                    &entries[i],
+                    EngineCtx::new(&cache).with_reused(&reused).with_covenants_ctx(&cov_ctx),
+                    EngineFlags::default(),
+                )
+                .with_opcode_execution_log_buffer(&mut log);
+                let r = vm.execute();
+                (r, vm.used_script_units().0)
+            };
+            let text = String::from_utf8_lossy(&log);
+            let max_stack = text.lines().map(|l| l.matches("\"0x").count()).max().unwrap_or(0);
+            Metered { result, script_units, max_stack }
+        })
+        .collect()
+}
+
 /// Every input passes.
 pub fn assert_accepted(tx: &Transaction, entries: &[UtxoEntry]) {
     let res = run(tx, entries).unwrap_or_else(|e| panic!("covenant context refused the transaction: {e:?}"));
@@ -220,4 +288,10 @@ pub fn assert_input_refused(tx: &Transaction, entries: &[UtxoEntry], idx: usize)
     let err = res[idx].clone().expect_err("input expected to fail");
     assert!(matches!(err, TxScriptError::VerifyError | TxScriptError::EvalFalse), "expected a failed require, got {err:?}");
     err
+}
+
+/// The covenant bindings are valid and input `idx` fails for any script reason (a lock-time refusal, an overflow).
+pub fn assert_input_fails(tx: &Transaction, entries: &[UtxoEntry], idx: usize) -> TxScriptError {
+    let res = run(tx, entries).unwrap_or_else(|e| panic!("covenant context refused the transaction: {e:?}"));
+    res[idx].clone().expect_err("input expected to fail")
 }
