@@ -440,6 +440,47 @@ tag cleared, `E` kept).
 - Not chosen: valuing the loser with two-sided evidence (an ask and a bid within a maximum spread in the same
   transaction). It keeps a residual for the loser but needs both sides of a thin book for every liquidation.
 
+### 4.5c Rules changed by review 3 (these override the evidence timing of 3.3 and 4.5b where they differ)
+
+**The limit behind the finding.** A covenant can prove a lower bound on the current time (lock time, a UTXO's DAA
+score, a UTXO's age) and never an upper bound. "This order is still unexpired now" therefore cannot be checked, and
+an order that conforming matchers no longer fill (soft-expired, hidden from every book) can still be filled by its
+owner at any later time (review 3, F1). What a covenant can do is tie the evidence to the pair's own clock.
+
+- **Evidence clock.** `KpfPair` gains a state field `since` (8 bytes). The clock start is `S = since` when it is
+  non-zero, otherwise the DAA score of the pair's own UTXO. Evidence counts for a pair only from `S`: with
+  `exposed' = max(exposed, S)` (`exposed` as in KOB's touch rule), the order must have been fillable by conforming
+  matchers through `exposed' + minRestDaa` (the three conditions of 4.5b, with `exposed'` in place of `exposed`), and
+  the lock time must prove `tx.daa ≥ exposed' + minRestDaa`. Evidence that rested before the pair's clock started, or
+  that died before it had rested `R` on the pair's clock, is refused.
+- **Who sets the clock.** A pair output created by a hand-over for the part that changes hands — the new pair of T1,
+  the transferred part of T2, the part of T7, the re-paired output of T3 — carries `since = 0`, so its clock starts
+  at its own UTXO. Every other pair output (the continuation of amend and add margin, the remainder of every split)
+  carries `since = S`: an owner cannot restart the clock by touching the pair. Adding margin needs no restart: it
+  moves the trigger, and evidence must satisfy the trigger of the state it is used against.
+- **Hand-overs are rate-limited.** Transfer (T2) and close-versus-close (T3) require `tx.daa ≥ S + 4·minRestDaa`, so
+  a side cannot dodge liquidation by handing itself over faster than evidence can rest. Liquidation by transfer
+  (T7) is exempt: the side that leaves forfeits.
+- **Consequence, stated plainly: barrier semantics.** A side is liquidatable if the market touched its trigger at
+  any time since the clock started while its bound is unchanged; the quote may be used later. With forfeiture the
+  amount does not depend on when. A side that was touched cures it only by adding margin.
+- **Residual risk, not removed.** Within the clock, a party can still use an order that rested honestly at a past
+  price and has since died: the closer of a unilateral close gets a look-back to the best quote since `S`, bounded
+  only by economics: the dead order stays fillable by anyone at its price, so it is a free gift to whoever sweeps
+  it, and it must cover `k` times the size. Executors of KPF must sweep dead mispriced orders; the tooling refuses
+  soft-expired evidence by default and warns. A shared heartbeat UTXO per market would bound staleness but
+  serialises every evidence transaction; not built.
+- **A side must be healthy when it enters** (F3, F4). At T1, T2 and T7 the entering side must not be liquidatable at
+  its own entry price `X`: long `X·(10⁴ − mmrBps) ≥ BL′·10⁴`, short `BS′·10⁴ ≥ X·(10⁴ + mmrBps)`. `KpfPair` enforces
+  it for every entrant, `KpfOpen` for the pair it creates.
+- **The range must be wider than both maintenance bands** (F2). A pair is created, and a side is liquidatable, only
+  when `BL·(10⁴ + mmrBps) < BS·(10⁴ − mmrBps)`, i.e. the long's trigger lies below the short's. Then no price
+  liquidates both sides and the side that forfeits is never the one owed the pair. The clamp of `T` to `[BL, BS]`
+  is dropped: with this condition `T` is inside the range.
+- **Tooling** (T2–T5): token amounts are parsed and printed exactly for any `scale` (no decimal shortcut unless
+  `scale` is a power of ten); funding files keep the covenant flag; object files without a DAA are refused, not read
+  as 0; `keygen` reports what it actually did about file permissions.
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part

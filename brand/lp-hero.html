@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KPF hero</title>
+<style>
+  :root {
+    --bg: #070707; --line: rgba(237, 237, 237, 0.09);
+    --fg: #f4f4f4; --fg-2: #b2b2b2; --kaspa: #70c7ba;
+    --display: 'Inter Display', 'Inter Variable', 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --sans: 'Inter Variable', 'Inter', 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', 'Roboto Mono', Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body { font: 17px/1.55 var(--sans); -webkit-font-smoothing: antialiased; width: 1430px; height: 1210px; overflow: hidden; }
+  .hero { padding: 72px 0 0 44px; }
+  .kicker { margin: 0 0 30px; font: 500 28px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
+  h1 { font: 800 236px/0.88 var(--display); letter-spacing: -0.06em; white-space: nowrap; margin-left: -8px; }
+  h1 span { display: block; padding-bottom: 0.16em; margin-bottom: -0.16em; }
+  h1 .accent { color: var(--kaspa); }
+  .tagline { margin: 58px 0 0; font: 500 28px/1.4 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
+  .foot { margin-top: 62px; padding-top: 56px; border-top: 1px solid var(--line); }
+  .foot p { max-width: 37.5em; font-size: 32px; line-height: 1.6; color: var(--fg-2); text-wrap: pretty; }
+  .foot p b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <p class="kicker">Kaspa Perpetual Futures</p>
+    <h1><span>Decentralized</span><span>derivatives</span><span class="accent">on Kaspa.</span></h1>
+    <p class="tagline">No admin keys · No oracle · No custody</p>
+    <div class="foot">
+      <p><b>Permissionless perpetual futures on KCC-20 tokens, straight from your wallet.</b> Every position is its own covenant UTXO on L1. KPF is a research prototype on testnet-10 — your keys never leave your wallet.</p>
+    </div>
+  </div>
+</body>
+</html>
