@@ -41,16 +41,14 @@ fn kpf(args: &[&str]) -> (bool, String) {
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr))
 }
 
-/// R4-F2 (Medium). `watch` and `evidence --pending` tell the defender that a counter order refutes a pending claim when
-/// its quote contradicts by g and it has rested on the proposal's clock, but never check that the order can fill k_c
-/// times the pending part, which KpfPending.challenge requires (n_ev >= ceil(kcBps * n / 10^4)). A stale liquidation of
-/// 1,000 tokens and a refuting bid at 9.80 that can buy only about 100 tokens: `watch` prints "REFUTES IT" with the
-/// command to run, `evidence --pending` exits 0 with "REFUTES the claim now", and the challenge builder (as the engine)
-/// refuses the order. The defender spends its window on an order that cannot save it.
-/// Who loses: the defender relying on `watch`: its part is forfeited at finalize if it does not find a large enough
-/// counter order (or cure) in time.
+/// R4-F2 (Medium), fixed (DESIGN 4.5e). `watch` and `evidence --pending` say a counter order refutes a pending claim only
+/// when its quote contradicts by g, it has rested on the proposal's clock, AND it can fill k_c times the pending part, as
+/// KpfPending.challenge requires (n_ev >= ceil(kcBps * n / 10^4)). A stale liquidation of 1,000 tokens and a refuting bid
+/// at 9.80 that can buy only about 100 tokens: neither command says it refutes (both say why: fewer tokens than the
+/// challenge must fill), `evidence --pending` exits non-zero, and the challenge builder refuses the order as before. The
+/// same bid funded for 1,000 tokens is reported as refuting by both.
 #[test]
-fn exploit_watch_reports_a_refuting_order_that_cannot_cover_the_part() {
+fn holds_watch_does_not_report_an_order_that_cannot_cover_the_part() {
     let dir = Dir(std::env::temp_dir().join(format!("kpf-audit4-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
     std::fs::create_dir_all(&dir.0).unwrap();
@@ -77,9 +75,26 @@ fn exploit_watch_reports_a_refuting_order_that_cannot_cover_the_part() {
 
     let (ok, out) = kpf(&["watch", "--pair", &pf, "--pending", &wf, "--order", &bf, "--daa", &now]);
     assert!(ok, "{out}");
-    assert!(out.contains("PENDING") && out.contains("REFUTES IT") && out.contains("kpf challenge --pending"), "{out}");
+    assert!(out.contains("PENDING") && !out.contains("REFUTES IT") && !out.contains("kpf challenge --pending"), "{out}");
+    assert!(out.contains("does not refute it") && out.contains("a challenge must fill"), "{out}");
     let (ok, out) = kpf(&["evidence", "--order", &bf, "--pending", &wf, "--daa", &now]);
+    assert!(!ok && !out.contains("REFUTES the claim now") && out.contains("a challenge must fill"), "{out}");
+    // Control: the same bid funded for the whole part refutes it in both commands.
+    let big = dir.0.join("bigbid.json");
+    let big_s = big.display().to_string();
+    obj(&big, &op(0x46), bid_escrow(&b, 1_000_000_000), p_daa, Hash::from_bytes([0xe8; 32]), &KobObj::Bid(b.clone()).redeem());
+    let (ok, out) = kpf(&["watch", "--pair", &pf, "--pending", &wf, "--order", &big_s, "--daa", &now]);
+    assert!(ok && out.contains("REFUTES IT") && out.contains("kpf challenge --pending"), "{out}");
+    let (ok, out) = kpf(&["evidence", "--order", &big_s, "--pending", &wf, "--daa", &now]);
     assert!(ok && out.contains("REFUTES the claim now"), "{out}");
+    // R4-F4 in `watch`: a look-alike of the same claim holding 1 KAS is not reported as a claim against the pair.
+    let lf = dir.0.join("lookalike.json");
+    obj(&lf, &op(0x47), 100_000_000, p_daa, id, &w.redeem());
+    let lf = lf.display().to_string();
+    let (ok, out) = kpf(&["watch", "--pair", &pf, "--pending", &lf, "--order", &big_s, "--daa", &now]);
+    assert!(ok && out.contains("NOT a pending part of a real proposal") && !out.contains("REFUTES IT"), "{out}");
+    let (ok, out) = kpf(&["evidence", "--order", &big_s, "--pending", &lf, "--daa", &now]);
+    assert!(!ok && out.contains("look-alike"), "{out}");
 
     // What the contract needs: a fill of at least k_c * n = 1,000 tokens; the bid can buy about 100.
     let ev = Evidence::Bid { order: LiveBid { b, value: bv, id: bid_id, op: op(0x43), daa: p_daa } };
@@ -90,4 +105,14 @@ fn exploit_watch_reports_a_refuting_order_that_cannot_cover_the_part() {
     let eu = EvidenceUse { order: ev, fill: None, seller: Some(seller), now: Some(p_daa + 100), allow_dead: false };
     let err = challenge(&[lw], &eu, &funding, &Opts::default()).unwrap_err().to_string();
     assert!(err.contains("fewer than the"), "the builder refuses the same order: {err}");
+}
+
+/// The review's note on two messages (`print_proposal`, `challenge_cmd`): a refuted part does not return "with a fresh
+/// clock"; since commit 6a481d1 the restore keeps the pair's clock S, and since DESIGN 4.5e it returns unlisted. Neither
+/// command can run offline without a funder, so the wording is checked in the source the binary is built from.
+#[test]
+fn holds_no_message_promises_a_fresh_clock_after_a_challenge() {
+    let src = include_str!("../src/evcmds.rs");
+    assert!(!src.contains("fresh clock"), "a message still promises a fresh clock after a challenge");
+    assert_eq!(src.matches("clock S kept").count(), 2, "both messages say the clock S is kept");
 }

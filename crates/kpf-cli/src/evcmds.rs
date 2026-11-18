@@ -91,6 +91,11 @@ fn evidence_use(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network, sc
 
 /// The evidence report in words.
 fn print_report(r: &EvidenceReport, m: &Market, daa: Option<u64>) {
+    print_report_k(r, m, daa, m.k_bps)
+}
+
+/// [`print_report`] with the multiple the report's `covers` was computed with (`kcBps` for counter-evidence).
+fn print_report_k(r: &EvidenceReport, m: &Market, daa: Option<u64>, k_bps: i64) {
     let sc = m.scale as i128;
     println!(
         "evidence: {} at {} KAS per token; it can fill {} tokens; one fill of all of it covers parts totalling {} tokens (k = {} bps)",
@@ -98,7 +103,7 @@ fn print_report(r: &EvidenceReport, m: &Market, daa: Option<u64>) {
         kas(r.quote),
         fmt_units(r.capacity as i128, sc),
         fmt_units(r.covers as i128, sc),
-        m.k_bps
+        k_bps
     );
     println!(
         "          rested since DAA {}{}; counts as evidence from DAA {} (rest {} DAA); conforming matchers fill it until DAA {}{}",
@@ -221,6 +226,32 @@ fn load_pendings(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network) -
         .collect()
 }
 
+/// Review 4 F4 (DESIGN 4.5e): every pending part must be one a genuine proposal writes (its hashes match its state, it
+/// holds its range and refund), and, when the user names its pairs with `--pair`, it must carry one of their covenant
+/// ids and keys. A pair file is read as it is (a pair spent by the proposal is gone from the node, but its file still
+/// names its id and keys).
+fn check_lineage(a: &Args, ws: &[LivePending]) -> R<()> {
+    let mut pairs = vec![];
+    for f in a.all("pair") {
+        let o = ObjFile::load(f)?;
+        match o.decoded()? {
+            Decoded::Pair(p) => pairs.push((f.to_string(), o.covenant_id, p)),
+            _ => return Err(format!("{f} is not a pair")),
+        }
+    }
+    for (i, w) in ws.iter().enumerate() {
+        check_pending(w).map_err(|m| format!("pending part {i}: {m}"))?;
+        if pairs.is_empty() {
+            continue;
+        }
+        let errs: Vec<String> = pairs.iter().filter_map(|(f, id, p)| check_pending_of(w, *id, p).err().map(|m| format!("{f}: {m}"))).collect();
+        if errs.len() == pairs.len() {
+            return Err(format!("pending part {i} was not cut from any pair given with --pair: {}", errs.join("; ")));
+        }
+    }
+    Ok(())
+}
+
 fn side_word(s: i64) -> &'static str {
     if s == LONG {
         "long"
@@ -274,7 +305,7 @@ fn print_proposal(l: &LivePair, n: i64, kind: i64, side: i64, quote: i64, propos
     );
     if let Some(b) = w.contradiction_bound() {
         println!(
-            "  it is refuted by a fresh {} {} {} KAS that rests {} DAA from the proposal (the bond then goes to the challenger and the part returns with a fresh clock)",
+            "  it is refuted by a fresh {} {} {} KAS that rests {} DAA from the proposal (the bond then goes to the challenger and the part returns unlisted with its evidence clock S kept: evidence that rested on the pair still counts against it)",
             if w.counter_is_ask() { "ask" } else { "bid" },
             if w.counter_is_ask() { "<=" } else { ">=" },
             kas(b),
@@ -283,7 +314,7 @@ fn print_proposal(l: &LivePair, n: i64, kind: i64, side: i64, quote: i64, propos
     }
     if kind == KIND_LIQ {
         println!(
-            "  at finalize the winner keeps both sides of the part (forfeit and keep) and the proposer {} receives the bond and the fee {} KAS; the loser may cure before then by moving its bound to {} KAS",
+            "  at finalize the winner keeps both sides of the part (forfeit and keep) and the proposer {} receives the bond and the fee {} KAS; the loser may cure before then by moving its bound to {} KAS (past the claim by the margin g)",
             to_hex(proposer),
             kas(w.fee),
             if w.can_cure() { kas(w.cure_bound) } else { "(no cure: the bound would pass priceMax)".into() }
@@ -364,23 +395,27 @@ pub fn propose_liquidate_cmd(a: &Args) -> R<()> {
 }
 
 pub fn challenge_cmd(a: &Args) -> R<()> {
-    let mut own = vec!["pending"];
+    let mut own = vec!["pending", "pair"];
     own.extend(EV_FLAGS);
     only_with(a, &own)?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let ws = load_pendings(a, &mut node, net)?;
+    check_lineage(a, &ws)?;
     let m = ws[0].w.m.clone();
     let now = now_daa(a, &mut node)?;
     let eu = evidence_use(a, &mut node, net, m.scale, now)?;
     for (i, w) in ws.iter().enumerate() {
         println!("pending part {i}: {}; its proposal's clock P is DAA {}: counter-evidence counts only for its rest from then on", describe_claim(w), w.daa);
-        print_report(&check_evidence_on(&eu.order, &m, Some(w.daa as i64), now), &m, now);
+        print_report_k(&check_counter_evidence_on(&eu.order, &m, Some(w.daa as i64), now), &m, now, m.kc_bps);
         println!("  {}", finalize_words(w, now));
     }
     let fk = funder_and_keys(a, true)?.expect("funder");
     let bonds: i64 = ws.iter().map(|w| w.w.bond).sum();
-    println!("challenge: each part returns to the pair it was cut from (fresh clock); the bonds, {} KAS, go to the executor (the challenger)", kas(bonds));
+    println!(
+        "challenge: each part returns to the pair it was cut from, unlisted, with that pair's evidence clock S kept (evidence that rested on it still counts); the bonds, {} KAS, go to the executor (the challenger)",
+        kas(bonds)
+    );
     let opts = fee_opts(a)?;
     let facts = std::cell::RefCell::new(None);
     let members: Vec<Member> = ws.iter().map(|w| Member::Challenge(w.clone())).collect();
@@ -397,23 +432,28 @@ pub fn challenge_cmd(a: &Args) -> R<()> {
 }
 
 pub fn cure_cmd(a: &Args) -> R<()> {
-    let mut own = vec!["pending"];
-    own.push("daa");
+    let own = vec!["pending", "daa", "pair"];
     only_with(a, &own)?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let w = load_pending(a, "pending", &mut node, net)?;
+    if w.w.kind == KIND_LIQ {
+        check_lineage(a, std::slice::from_ref(&w))?;
+    }
     let now = now_daa(a, &mut node)?;
     let loser = if w.w.side == LONG { w.w.long_key } else { w.w.short_key };
     println!("pending part: {}; {}", describe_claim(&w), finalize_words(&w, now));
-    println!(
-        "cure: the {} (key {}, --key) moves its bound to {} KAS, adds {} KAS of margin and repays the proposer its refund {} KAS",
-        side_word(w.w.side),
-        to_hex(&loser),
-        kas(w.w.cure_bound),
-        kas(w.w.cure_add()),
-        kas(w.w.refund)
-    );
+    if w.w.kind == KIND_LIQ && w.w.can_cure() {
+        println!(
+            "cure: the {} (key {}, --key) moves its bound to {} KAS (no quote within the margin g of the claim reopens it); the funder pays {} KAS in all besides the network fee ({} KAS of margin, and any part of the cured pair's floor the pending part does not hold, such as its carrier when the part is smaller than the pair); the proposer is repaid its refund {} KAS",
+            side_word(w.w.side),
+            to_hex(&loser),
+            kas(w.w.cure_bound),
+            kas(w.w.cure_total(w.value)),
+            kas(w.w.cure_add()),
+            kas(w.w.refund)
+        );
+    }
     let fk = funder_and_keys(a, true)?.expect("funder");
     let opts = fee_opts(a)?;
     let b = build_funded(a, net, &mut node, &fk.key, &|f| kpf_protocol::evidence::cure(&w, f, &opts))?;
@@ -421,11 +461,12 @@ pub fn cure_cmd(a: &Args) -> R<()> {
 }
 
 pub fn finalize_cmd(a: &Args) -> R<()> {
-    let own = vec!["pending", "daa"];
+    let own = vec!["pending", "daa", "pair"];
     only_with(a, &own)?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let w = load_pending(a, "pending", &mut node, net)?;
+    check_lineage(a, std::slice::from_ref(&w))?;
     let now = now_daa(a, &mut node)?;
     println!("pending part: {}; {}", describe_claim(&w), finalize_words(&w, now));
     if let Some(n) = now {
@@ -448,6 +489,9 @@ pub fn finalize_cmd(a: &Args) -> R<()> {
             kas(fv),
             to_hex(&w.w.proposer_key),
             kas(pay)
+        );
+        println!(
+            "  a part whose two sides have one owner cannot be liquidated (DESIGN 4.5e); the winner closes it alone (coop-close with its key twice) or lists a side and sells it from DAA S' + 4R (S' the forfeited part's DAA); a buyer enters healthy at its own price"
         );
     }
     let fk = funder_and_keys(a, true)?.expect("funder");
@@ -555,15 +599,24 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 continue;
             }
             let lw = wo.live_pending()?;
+            if let Err(m) = check_pending(&lw) {
+                if !a.has("json") {
+                    println!("  {wf}: NOT a pending part of a real proposal, ignored: {m}");
+                }
+                continue;
+            }
             found += 1;
             let threatened = if lw.w.kind == KIND_CLOSE { 3 - lw.w.side } else { lw.w.side };
+            // What KpfPending.challenge needs of the fill: k_c times the part (review 4, F2).
+            let need = needed_counter_fill(&lw.w.m, lw.w.n);
             let mut refuters = vec![];
             for (of, ev) in &orders {
                 let kind_ok = ev.is_ask() == lw.w.counter_is_ask();
                 let contra = lw.w.contradicts(ev.quote());
-                let rep = check_evidence_on(ev, &lw.w.m, Some(lw.daa as i64), now);
-                let ok = kind_ok && contra && rep.problems.is_empty() && rep.dead.is_empty();
-                refuters.push((of.clone(), ok, kind_ok, contra, rep));
+                let covers = ev.fill_cap() >= need;
+                let rep = check_counter_evidence_on(ev, &lw.w.m, Some(lw.daa as i64), now);
+                let ok = kind_ok && contra && covers && rep.problems.is_empty() && rep.dead.is_empty();
+                refuters.push((of.clone(), ok, kind_ok, contra, covers, ev.fill_cap(), rep));
             }
             let bound = lw.w.contradiction_bound();
             if a.has("json") {
@@ -574,7 +627,8 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                     "finalizeInSeconds": now.map(|n| lw.finalize_from().saturating_sub(n) as f64 / DAA_PER_SEC as f64),
                     "bond": lw.w.bond, "refutationBound": bound, "counterKind": if lw.w.counter_is_ask() { "ask" } else { "bid" },
                     "cureBound": lw.w.can_cure().then_some(lw.w.cure_bound),
-                    "refutingOrders": refuters.iter().filter(|r| r.1).map(|r| json!({"order": r.0, "restEnd": r.4.rest_end})).collect::<Vec<_>>(),
+                    "counterFillNeeded": need,
+                    "refutingOrders": refuters.iter().filter(|r| r.1).map(|r| json!({"order": r.0, "restEnd": r.6.rest_end})).collect::<Vec<_>>(),
                 }));
                 continue;
             }
@@ -596,7 +650,7 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             if orders.is_empty() {
                 println!("    no resting orders given (--order ORDER.json): none checked");
             }
-            for (of, ok, kind_ok, contra, rep) in &refuters {
+            for (of, ok, kind_ok, contra, covers, cap, rep) in &refuters {
                 if *ok {
                     let wait = match now {
                         Some(n) if n < rep.rest_end => format!(" once it has rested (from DAA {}, {} from now)", rep.rest_end, daa_secs(rep.rest_end - n)),
@@ -610,6 +664,13 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                         format!("it is {}; this claim needs {}", if lw.w.counter_is_ask() { "a bid" } else { "an ask" }, if lw.w.counter_is_ask() { "an ask" } else { "a bid" })
                     } else if !contra {
                         "its quote does not contradict the claim by the margin g".to_string()
+                    } else if !covers {
+                        format!(
+                            "it can fill {} tokens in one fill, fewer than the {} tokens (k_c = {} bps times the part) a challenge must fill",
+                            fmt_units(*cap as i128, lw.w.m.scale as i128),
+                            fmt_units(need as i128, lw.w.m.scale as i128),
+                            lw.w.m.kc_bps
+                        )
                     } else {
                         rep.problems.iter().chain(rep.dead.iter()).cloned().collect::<Vec<_>>().join("; ")
                     };
@@ -619,8 +680,9 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             if lw.w.can_cure() {
                 let lk = if lw.w.side == LONG { "LONG-KEY.json" } else { "SHORT-KEY.json" };
                 println!(
-                    "    or the {} cures it, adding {} KAS of margin (bound to {} KAS): kpf cure --pending {wf} --key {lk} --funder {funder}{node_flag} --submit",
+                    "    or the {} cures it, its funder paying {} KAS in all ({} KAS of margin; bound to {} KAS): kpf cure --pending {wf} --pair {pf} --key {lk} --funder {funder}{node_flag} --submit",
                     side_word(lw.w.side),
+                    kas(lw.w.cure_total(lw.value)),
                     kas(lw.w.cure_add()),
                     kas(lw.w.cure_bound)
                 );
@@ -701,28 +763,42 @@ fn counter_evidence(a: &Args, file: &KobFile, node: &mut Option<Node<WsTransport
     let now = now_daa(a, node)?;
     let m = &w.w.m;
     let ev = file.evidence()?;
-    let rep = check_evidence_on(&ev, m, Some(w.daa as i64), now);
+    let rep = check_counter_evidence_on(&ev, m, Some(w.daa as i64), now);
     let kind_ok = ev.is_ask() == w.w.counter_is_ask();
     let contra = w.w.contradicts(ev.quote());
     let bound = w.w.contradiction_bound();
-    let refutes = kind_ok && contra && rep.usable();
+    // KpfPending.challenge needs a fill of k_c times the part (review 4, F2), and a genuine pending part (F4).
+    let need = needed_counter_fill(m, w.w.n);
+    let covers = ev.fill_cap() >= need;
+    let genuine = check_pending(&w).err().map(|e| e.to_string());
+    let refutes = kind_ok && contra && covers && genuine.is_none() && rep.usable();
     if a.has("json") {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "claim": describe_claim(&w), "counterKind": if w.w.counter_is_ask() { "ask" } else { "bid" }, "refutationBound": bound,
                 "kind": rep.kind, "quote": rep.quote, "contradicts": kind_ok && contra, "restEnd": rep.rest_end, "finalizeFrom": w.finalize_from(),
+                "capacity": ev.fill_cap(), "counterFillNeeded": need, "covers": covers, "genuine": genuine.is_none(),
                 "problems": rep.problems, "waiting": rep.waiting, "dead": rep.dead, "refutes": refutes,
             }))
             .expect("json")
         );
     } else {
         println!("pending part: {}; proposal clock P = DAA {}; {}", describe_claim(&w), w.daa, finalize_words(&w, now));
-        print_report(&rep, m, now);
+        print_report_k(&rep, m, now, m.kc_bps);
+        let sc = m.scale as i128;
         match (kind_ok, contra, bound) {
+            _ if genuine.is_some() => println!("  does not refute it: {}", genuine.as_deref().unwrap_or_default()),
             (false, _, _) => println!("  does not refute it: the claim needs {}", if w.w.counter_is_ask() { "an ask" } else { "a bid" }),
             (true, false, Some(b)) => println!("  does not refute it: a quote {} {} KAS is needed (margin g {} bps)", if w.w.counter_is_ask() { "<=" } else { ">=" }, kas(b), m.g_bps),
             (true, false, None) => println!("  does not refute it: no quote does"),
+            (true, true, _) if !covers => println!(
+                "  does not refute it: it can fill {} tokens in one fill, fewer than the {} tokens a challenge must fill (k_c = {} bps times the part of {} tokens)",
+                fmt_units(ev.fill_cap() as i128, sc),
+                fmt_units(need as i128, sc),
+                m.kc_bps,
+                fmt_units(w.w.n as i128, sc)
+            ),
             (true, true, _) if refutes => println!("  REFUTES the claim now: kpf challenge --pending <file> --evidence <this order>"),
             (true, true, _) => println!("  its quote contradicts the claim; it refutes it once the problems above are gone"),
         }

@@ -623,12 +623,17 @@ fn bad_markets() -> Vec<(&'static str, Market)> {
     add("bondBps negative", &|x| x.bond_bps = -1);
     add("bondBps above 10^4", &|x| x.bond_bps = 10_001);
     add("bondMin negative", &|x| x.bond_min = -1);
-    add("bondMin above the KAS supply", &|x| x.bond_min = 2_900_000_000_000_000_001);
+    // DESIGN 4.5e: bondMin at most 10^12 sompi (was the KAS supply, 2.9 * 10^18).
+    add("bondMin above 10^12", &|x| x.bond_min = 1_000_000_000_001);
+    add("bondMin at the KAS supply", &|x| x.bond_min = 2_900_000_000_000_000_000);
     add("kcBps 0", &|x| x.kc_bps = 0);
     add("kcBps above 10^5", &|x| x.kc_bps = 100_001);
     add("gBps 0", &|x| x.g_bps = 0);
     add("gBps 10^4", &|x| x.g_bps = 10_000);
     add("challengeDaa below minRestDaa", &|x| x.challenge_daa = x.min_rest_daa - 1);
+    // DESIGN 4.5e (review 4, F5): W >= 2R.
+    add("challengeDaa equal to minRestDaa", &|x| x.challenge_daa = x.min_rest_daa);
+    add("challengeDaa one below 2 minRestDaa", &|x| x.challenge_daa = 2 * x.min_rest_daa - 1);
     add("challengeDaa at 2^32", &|x| x.challenge_daa = 4_294_967_296);
     add("minEvidenceLife negative", &|x| x.min_evidence_life = -1);
     add("minEvidenceLife + minRestDaa above 90 days", &|x| x.min_evidence_life = 77_760_000 - x.min_rest_daa + 1);
@@ -637,15 +642,16 @@ fn bad_markets() -> Vec<(&'static str, Market)> {
 
 /// Premise changed by DESIGN 4.5d: the second edge market used minRestDaa = 124,999,999,999, at which no evidence could
 /// ever qualify (its rest window passes the 90-day limit), so the market is now refused by L + R <= 90 days; the edge
-/// is the largest R with the testnet L, with the window at its lowest admissible value W = R.
+/// is the largest R with the testnet L, with the window at its lowest admissible value (W = R before review 4; W = 2R
+/// since DESIGN 4.5e). The first edge market's bond floor is the largest admissible one (10^12 sompi since 4.5e).
 fn edge_markets() -> Vec<Market> {
     let m = market();
     let mut a = m.clone();
     (a.k_bps, a.mmr_bps, a.liq_fee_bps, a.keeper_fee_min, a.min_rest_daa) = (100_000, 4_999, 10_000, 0, 0);
-    (a.bond_bps, a.bond_min, a.kc_bps, a.g_bps, a.min_evidence_life) = (10_000, 2_900_000_000_000_000_000, 100_000, 9_999, 77_760_000);
+    (a.bond_bps, a.bond_min, a.kc_bps, a.g_bps, a.min_evidence_life) = (10_000, 1_000_000_000_000, 100_000, 9_999, 77_760_000);
     let mut b = m.clone();
     (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 76_896_000);
-    (b.bond_bps, b.bond_min, b.kc_bps, b.g_bps, b.challenge_daa) = (0, 0, 1, 1, 76_896_000);
+    (b.bond_bps, b.bond_min, b.kc_bps, b.g_bps, b.challenge_daa) = (0, 0, 1, 1, 2 * 76_896_000);
     vec![a, b]
 }
 

@@ -152,14 +152,14 @@ What the steps mean for each party:
   against a short's liquidation or a long's close) that has rested `minRestDaa` counted from the pending part's own DAA
   `P` (an older order counts from `P`), stays fillable for the evidence life after its rest, is filled for `k_c` times
   the parts, and lies beyond the claim by the margin `g` (2 %): for a liquidation relative to the loser's trigger, for
-  a close relative to the closer's quote. The part returns to its pair with its evidence clock unchanged (`since` = `S`, the pair's clock start at the proposal), so a refuted claim gains nobody rest time; the bond goes to
+  a close relative to the closer's quote. The part returns to its pair, unlisted (DESIGN 4.5e: list again with `kpf amend`), with its evidence clock unchanged (`since` = `S`, the pair's clock start at the proposal), so a refuted claim gains nobody rest time; the bond goes to
   the challenge's funder. A refuted close is cancelled, not re-settled.
 - **Cure** (liquidations only). The threatened owner signs, moves its bound exactly to the cure bound (the nearest
-  bound at which the proposed quote no longer triggers) and pays the margin that takes; the proposer gets its refund,
-  no fee. The cured pair keeps its evidence clock.
+  bound at which no quote within the margin `g` of the proposed one triggers, DESIGN 4.5e) and pays the margin that takes; the proposer gets its refund,
+  no fee. The cured pair keeps its evidence clock and comes back unlisted.
 - **Finalize.** Anyone, once the pending part is `challengeDaa` old. A close: the closer receives its payoff at the
   quote plus its refund, the other party the rest. A liquidation: **forfeit and keep**: the winner now owns both
-  sides of the part (the loser's bound moved inward by the fee), and the proposer receives the bond and the keeper
+  sides of the part (the loser's bound moved inward by the fee; a part with one owner cannot be liquidated, DESIGN 4.5e), and the proposer receives the bond and the keeper
   fee. The winner then either closes the part with its own key twice (`kpf coop-close --pair FORFEITED.json
   --long-pay 0 --key $B --key $B $S` for a short winner) or sells the forfeited side by an ordinary listing and
   transfer (`kpf amend`, then `kpf transfer`, allowed from `S' + 4 * minRestDaa`, `S'` the forfeited part's DAA).
@@ -179,7 +179,7 @@ What the steps mean for each party:
    `minRestDaa` (default 50 DAA, 5 seconds) is how long an evidence order must have rested. The two-step parameters
    (DESIGN 4.5d) are in the same block: `bondBps` 300, `bondMin` 500,000,000 sompi (5 KAS), `kcBps` 10,000 (`k_c` = 1),
    `gBps` 200, `challengeDaa` 600 (the window `W`, 60 seconds), `minEvidenceLife` 864,000 (one day, `L`); the hand-over limit `S + 4 * minRestDaa` is then 200 DAA (20 seconds); `kpf market --check`
-   refuses `W < minRestDaa` and `L + minRestDaa > 77,760,000`.
+   refuses `W < 2 * minRestDaa` (DESIGN 4.5e), `bondMin` above 10,000 KAS and `L + minRestDaa > 77,760,000`.
 3. **Resting KOB orders of that token whose templates are byte-identical to the ones pinned in `KpfPair`.** The pair
    authenticates its evidence by the template hash, the prefix length and the suffix length of the order's redeem script:
 
@@ -272,11 +272,11 @@ every later step.
 | 20 | short proposes to close at a resting ask (10.5 KAS): `kpf propose-close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S --out-dir out/20` | a pending part of 4 tokens holding `q(4, 3)` + 0.2 carrier + 5 KAS bond = 17.2 KAS (refund 5.2 KAS) and the remainder pair of 6 tokens; nothing is paid out; the ask continues (or ends if it was exactly filled); the executor holds 4 tokens bought at 10.5 KAS; `kpf inspect out/20/*-pending.json` prints the DAA from which it can be finalized and the refuting bid (`>= 10.71` KAS) |
 | 21 | wait `challengeDaa` (600 DAA, 60 seconds), then `kpf finalize --pending out/20/*-pending.json $F $S --out-dir out/21` | the short is paid `q(4, 12 - 10.5)` = 6 KAS plus its refund 5.2 KAS; the long receives the rest, 6 KAS; earlier the command says `can be finalized only from DAA N` |
 | 22 | long proposes to close at a resting bid (10 KAS): `kpf propose-close --pair P.json --side long --n 4 --evidence bid.json --seller seller.json --key $A $F $S --out-dir out/22`, then after the window `kpf finalize --pending out/22/*-pending.json $F $S` | at the proposal the executor's tokens go to the bid's maker and it receives `4 x 10` KAS; at finalize the long is paid `q(4, 10 - 9)` = 4 KAS plus its refund, the short the rest; a fresh ask `<= 9.8` KAS would have refuted it |
-| 23 | the book falls to an ask of 9.4 KAS (the long's trigger is 9.47 KAS: `kpf quote --pair P.json` prints it, with the bond, the refuting bid and the cure bound): `kpf propose-liquidate --pair P.json --evidence ask.json $F $S --out-dir out/23` (`--proposer KEY` to be paid elsewhere; up to 8 pairs of distinct covenant ids: repeat `--pair`, with `--n T` per pair) | figures for a whole 10-token pair on 9 .. 12 (one opened again as in section 3, step 4): a pending part of 30.2 + 5 = 35.2 KAS, fee 0.47 KAS, cure bound 8.93 KAS, refuted by a bid `>= 9.66315790` KAS |
+| 23 | the book falls to an ask of 9.4 KAS (the long's trigger is 9.47 KAS: `kpf quote --pair P.json` prints it, with the bond, the refuting bid and the cure bound): `kpf propose-liquidate --pair P.json --evidence ask.json $F $S --out-dir out/23` (`--proposer KEY` to be paid elsewhere; up to 8 pairs of distinct covenant ids: repeat `--pair`, with `--n T` per pair) | figures for a whole 10-token pair on 9 .. 12 (one opened again as in section 3, step 4): a pending part of 30.2 + 5 = 35.2 KAS, fee 0.47 KAS, cure bound 8.7514 KAS, refuted by a bid `>= 9.66315790` KAS |
 | 24 | `kpf watch --pair P.json --scan out/23 --order bid.json --node $NODE` | `PENDING ... it threatens the long`, the DAA from which it can be finalized with the time left in DAA and seconds (10 DAA per second), and for each given order `REFUTES IT` with the exact `kpf challenge` command, or why it does not; also the `kpf cure` and `kpf finalize` commands |
-| 25a | refute it (if the quote is stale): `kpf evidence --order bid.json --pending out/23/*-pending.json --node $NODE`, then `kpf challenge --pending out/23/*-pending.json --evidence bid.json --seller seller.json $F $S --out-dir out/25` | the part returns to its pair (evidence clock unchanged: `since` = the pair's clock start `S`) with 30.2 KAS; the funder (the challenger) keeps the 5 KAS bond; several pending parts on one bid: repeat `--pending` |
-| 25b | or the long cures it: `kpf cure --pending out/23/*-pending.json --key $A $F $S --out-dir out/25` | the pair returns with `bl` 8.93 (0.7 KAS more margin, paid by the funder) and its old clock; the proposer is paid its refund, 5 KAS; the same ask no longer liquidates it |
-| 25c | or nobody acts: after the window `kpf finalize --pending out/23/*-pending.json $F $S --out-dir out/25` | forfeit and keep: a pair with both keys bob's, `bl` 9.047, holding 35.2 - 5 - 0.47 = 29.73 KAS; the proposer receives 5.47 KAS (bond and fee); the long nothing |
+| 25a | refute it (if the quote is stale): `kpf evidence --order bid.json --pending out/23/*-pending.json --node $NODE`, then `kpf challenge --pending out/23/*-pending.json --evidence bid.json --seller seller.json $F $S --out-dir out/25` | the part returns to its pair, unlisted (evidence clock unchanged: `since` = the pair's clock start `S`) with 30.2 KAS; the funder (the challenger) keeps the 5 KAS bond; several pending parts on one bid: repeat `--pending` |
+| 25b | or the long cures it: `kpf cure --pending out/23/*-pending.json --key $A $F $S --out-dir out/25` | the pair returns with `bl` 8.7514 (2.486 KAS more margin, paid by the funder; the command states the total), unlisted, with its old clock; the proposer is paid its refund, 5 KAS; no ask at or above 9.212 KAS (within `g` of 9.4) liquidates it |
+| 25c | or nobody acts: after the window `kpf finalize --pending out/23/*-pending.json $F $S --out-dir out/25` | forfeit and keep: a pair with both keys bob's, `bl` 9.047, holding 35.2 - 5 - 0.47 = 29.73 KAS; the proposer receives 5.47 KAS (bond and fee); the long nothing; the part, both sides bob's, can no longer be liquidated |
 | 26 | after 25c, bob ends the forfeited part: `kpf coop-close --pair out/25/*-pair.json --long-pay 0 --key $B --key $B $S` (or sells the long side: `kpf amend --side long ...`, then `kpf transfer` from `S' + 4 * minRestDaa`, `S'` the forfeited part's DAA) | the whole value goes to bob, less the network fee |
 
 After a transaction the evidence order that continued (`*-ask.json` with its custody, `*-bid.json`) and the executor's
@@ -286,7 +286,7 @@ id and each must be the only input of its id, so act on them in separate transac
 pair paths are refused (a second proposal, amend, add margin, idle settle, transfer, close-versus-close); the
 remainder is an ordinary pair. A part that changed hands or was forfeited starts a fresh
 evidence clock: it cannot be liquidated before an order has rested `minRestDaa` on it, and it cannot be transferred
-again (nor re-paired) before `S + 4 * minRestDaa`. A cured or restored part keeps its clock.
+again (nor re-paired) before `S + 4 * minRestDaa`. A cured or restored part keeps its clock and comes back unlisted.
 
 **`kpf watch` cannot discover pending parts from the node.** A node lists UTXOs by address only, not by covenant id,
 and a pending part's address depends on its whole state, so `watch` finds pending parts only from object files

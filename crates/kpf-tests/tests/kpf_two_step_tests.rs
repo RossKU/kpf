@@ -134,13 +134,17 @@ fn propose_writes_the_claim_and_the_three_return_states() {
     assert_eq!((w.kind, w.side, w.n, w.bl, w.bs, w.quote), (KIND_LIQ, LONG, HALF, l.p.bl, l.p.bs, LIQ_ASK));
     assert_eq!(w.bond, 4_500_000_000, "300 bps of the part's range: q(500 tokens, 0.09 KAS)");
     assert_eq!(w.refund, w.bond + C, "a part carries the carrier its proposer funded");
-    assert_eq!(w.cure_bound, 893_000_000);
+    // DESIGN 4.5e: the cure clears the claim by g (9.40 * 0.98 * 0.95 = 8.7514; 8.93 before review 4).
+    assert_eq!(w.cure_bound, 875_140_000);
     assert_eq!(w.fee, liq_fee(&l.p, HALF, LIQ_ASK, LONG));
     assert_eq!((w.since, w.proposer_key), (s, xonly(&proposer_kp())));
+    // Every return state is unlisted (DESIGN 4.5e); the pending state itself records the pair's listings.
+    assert_eq!((w.long_ask, w.short_bid), (l.p.long_ask, l.p.short_bid));
     let r = w.restore_pair().unwrap();
     assert_eq!((r.size, r.bl, r.bs, r.since, r.tag_l, r.tag_s), (HALF, l.p.bl, l.p.bs, s, ZERO, ZERO));
+    assert_eq!((r.long_ask, r.long_min, r.long_tip, r.short_bid, r.short_min, r.short_tip), (0, 0, 0, 0, 0, 0));
     let c = w.cure_pair().unwrap();
-    assert_eq!((c.bl, c.bs, c.since, c.long_key), (893_000_000, l.p.bs, s, l.p.long_key));
+    assert_eq!((c.bl, c.bs, c.since, c.long_key, c.long_ask, c.short_bid), (875_140_000, l.p.bs, s, l.p.long_key, 0, 0));
     let f = w.forfeit_pair().unwrap();
     assert_eq!((f.long_key, f.short_key, f.since, f.bs, f.long_ask, f.short_bid), (l.p.short_key, l.p.short_key, 0, l.p.bs, 0, 0));
     assert!(q(HALF, f.bs - f.bl, SCALE, 0) + w.fee <= l.p.range_of(HALF));
@@ -598,7 +602,8 @@ fn pending_part_and_its_remainder_cannot_be_co_spent() {
 fn cure_exactly_at_and_one_tick_short_of_the_bound() {
     let l = lv(0x4a);
     for n in [FULL, HALF] {
-        for (side, e, cb) in [(LONG, ask(LIQ_ASK, n), 893_000_000), (SHORT, bid(LIQ_BID, n), 1_207_500_000)] {
+        // DESIGN 4.5e: the cure bound clears the claim by g (before review 4: 8.93 and 12.075).
+        for (side, e, cb) in [(LONG, ask(LIQ_ASK, n), 875_140_000), (SHORT, bid(LIQ_BID, n), 1_231_650_000)] {
             let g = liq(&l, n, side);
             let w = pend(&g, e.price());
             assert_eq!(w.w.cure_bound, cb);
@@ -639,7 +644,7 @@ fn cure_keeps_the_excess_and_moves_exactly_the_margin() {
     let w = pend(&g, LIQ_ASK);
     let d = cure_draft(&w, &lk(), &fk(), 1);
     accept(&d);
-    let add = q(FULL, l.p.bl - 893_000_000, SCALE, SCALE - 1);
+    let add = q(FULL, l.p.bl - 875_140_000, SCALE, SCALE - 1);
     assert_eq!(d.outs[1].value as i64, l.value as i64 + add);
     assert_eq!(d.outs[0].value as i64, w.w.bond);
 }
@@ -670,9 +675,11 @@ fn cure_of_a_close_or_of_a_claim_without_cure_is_refused() {
     accept(&finalize_draft(&w, &fk(), 3));
 }
 
-/// After a cure (Y9), the quote of the claim no longer liquidates the cured pair; a lower fresh quote does.
+/// After a cure (Y9), no quote within g of the claim liquidates the cured pair; a fresh quote beyond g does. Premise
+/// changed by DESIGN 4.5e (review 4, F3): before, the cure cleared only the claim's own quote and one sompi lower
+/// reopened it.
 #[test]
-fn cured_pair_is_safe_at_the_claimed_quote_only() {
+fn cured_pair_is_safe_within_g_of_the_claimed_quote_only() {
     let l = lv(0x4e);
     let g = liq(&l, FULL, LONG);
     let w = pend(&g, LIQ_ASK);
@@ -680,10 +687,15 @@ fn cured_pair_is_safe_at_the_claimed_quote_only() {
     let tx = accept(&d);
     let cured = live_pairs(&tx, &d).remove(0).at(NOW - 2 * rest_daa());
     assert_eq!(cured.p.since, l.clock(), "a cure keeps the clock S");
+    let reach = kpf_protocol::pending::cure_reach_of(&l.p.m, LONG, LIQ_ASK);
     let e = ask(LIQ_ASK, FULL).placed(2_000);
-    refused(&ev_draft(&[liq(&cured, FULL, LONG)], &e, &fk(), 2), 0);
+    for price in [LIQ_ASK, LIQ_ASK - 1, reach] {
+        let mut x = e.clone();
+        x.ask.price = price;
+        refused(&ev_draft(&[liq(&cured, FULL, LONG)], &x, &fk(), 2), 0);
+    }
     let mut lower = e.clone();
-    lower.ask.price = LIQ_ASK - 1;
+    lower.ask.price = reach - 1;
     accept(&ev_draft(&[liq(&cured, FULL, LONG)], &lower, &fk(), 2));
 }
 

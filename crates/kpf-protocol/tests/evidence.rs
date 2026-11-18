@@ -340,7 +340,9 @@ fn a_cure_moves_the_bound_and_repays_the_proposer() {
     assert_outputs_are_least(&b);
     let (s, live) = w.run(&b);
     let c = pairs_of(&live).remove(0);
-    assert_eq!((c.p.bl, c.p.since), (893_000_000, l.clock()));
+    // DESIGN 4.5e: the cure clears the claim by g (9.40 * 0.98 * 0.95 = 8.7514) and the cured pair is unlisted.
+    assert_eq!((c.p.bl, c.p.since), (875_140_000, l.clock()));
+    assert_eq!((c.p.long_ask, c.p.short_bid), (0, 0));
     assert_eq!(w.chain.balance(&pubkey(23)), wp.w.refund as u64);
     println!("cure: size {} fee {} mass {:?}", s.mass.size, s.fee, s.mass);
     // A close cannot be cured.
@@ -706,15 +708,15 @@ fn what_the_evidence_lets_a_pair_do() {
 /// (name, txid, sha256 of the RPC JSON) of each shape: fixed TEST-ONLY keys and fixed inputs give fixed transactions
 /// (signing is deterministic). `KPF_GOLDEN=print` shows the values after an intended change.
 const GOLDEN: &[(&str, &str, &str)] = &[
-    ("propose: the long closes 1,000 at a 10 KAS bid", "6b5fdde8e1372b591a227ba813f71f0bac9042a7f2d0e60043d701d7dd07c477", "06c15f6f971e5127631d29e358454935b6fc9b36c31e4ce88e54bc800bf91f5f"),
-    ("finalize: the long's close", "a5a0700b5d497457e53997a6d5a686ead386a2cf2de527286265500c1186d2b2", "b45368e995306d06e9527d060da9eeada617e7919205e8093a13a029594f2f93"),
-    ("propose: the short closes 400 at a 10.5 KAS ask", "cec810b3a5ca96eca71fe817a1cb85277dbb186a8ba975e834e314581298b806", "f6cf6eeede59349e46954648252f1ea73a19b9d303f109f0141f562b6b14c293"),
-    ("propose: a long's liquidation at a 9.4 KAS ask", "e3a9a85a089e887cc068dbfd96ac977c80b68d06011e17c8815017e53bfc4bcf", "8e126efb11703f2c95b2d4df1ea456af3538f24eb9872f341386469b7fdbfbe8"),
-    ("cure: the long moves bl to 8.93", "9543dcb462d79d559fe05cc5bb50514dcd718a734dbdd85b96ef47fb5281df45", "1a5fa7c15f4e1083ebcca6191f50d77c3526e57f6ff63fc19af38d42bf456842"),
-    ("challenge: a 9.80 KAS bid refutes it", "0070085689b5eb604b0ca44e476e719064ebd2cd5d36aa6efb70e963fcc700d2", "ac57873b914926aaff3851d16f8d0943c678768ab1f3b8bcb4f2d866644bf44a"),
-    ("finalize: forfeit and keep", "97f0133276e91e7b650990019162c0eb07b536dde6747e8d88a8c81279bc0cae", "47c69138e039d8864c5df24e81db7e295b56be15af4ec00b8e61dd08502f479b"),
-    ("propose: a short's liquidation at an 11.5 KAS bid", "e53d74ec20f6d9fb852116dccd56e5be41c71cb59b5d8b64c833d06a0de35d06", "35ccaa3875d62120088d4db855e3cf2c9db455fc01bbbd7baadbeb7ba85bcf39"),
-    ("propose: a block of 3 longs on one 9.4 KAS ask", "f2fd59d57afb1fcfd983d80487074c75b207bd71972f34b999cae0ac46efb723", "3f3a8aa49cd8258cf405b1de55f91270e8621481d98fe129c2d8888d516da557"),
+    ("propose: the long closes 1,000 at a 10 KAS bid", "61f43883e7d2abb65dcda4b8b968bcdba582d23330d258dbef1e1270a2cdcce4", "cd3cadc58dfab9a106307ac1eab9357f90d59fbfc037b6ab847c853e45143ffb"),
+    ("finalize: the long's close", "575beb51550d10711b75f6d4126b568a4ad7c582383ef3d137ccd5a6cd0c504a", "1363dcd3b073243cb464d75ee5704aab2d9e042d34aa9ee41e4b6578fabd737b"),
+    ("propose: the short closes 400 at a 10.5 KAS ask", "535e5e7b4b06fedffb757a7ac9e114d8ffd0e318c13fe47eb33aa9b2348274e6", "c293d088690937b346c5f19412bf75fdddedf37be76350caed6e7b04023a7b18"),
+    ("propose: a long's liquidation at a 9.4 KAS ask", "4db5c85fcaf382f6c629f207e0c741f3b4519a3671600e4f2bafb0737134d366", "b69178c896f01c8021c432715040cf2a673d0a871aaf5b86d4db51a67c32fb5f"),
+    ("cure: the long moves bl to 8.7514", "34482a0b246c8b4b373f37e0e05e102cce0e58cdda4ff012af5b7f6a894663a9", "953d71b5de82866c0b73fc4e1835895be9e1ffcd7e322420b161c344aa5769fa"),
+    ("challenge: a 9.80 KAS bid refutes it", "efc8de70e4336211800f5ac42bdc269dded843f24195d69306ac7729a0bc7ebf", "9b8edbc4812eaf611c94a2040b17aa16ca33f9df6b868bae7d7aa9bccbf5862e"),
+    ("finalize: forfeit and keep", "b579c2fbc0203cd4a062601c34f6d16fe5979cdc37515539208be757901cdd65", "0826d9bc994ff6ce7ae85e611ec893607c4d46210b7ed36e0fb6e092f83b9fcf"),
+    ("propose: a short's liquidation at an 11.5 KAS bid", "d835b83b3644041e9b62689c12c4be7b8f363620a10ea17c90357e1758abff8b", "fd6d225bb61165fd85c5b1cb9e6fedf53e10c5effad5af1808b162780bfd0ece"),
+    ("propose: a block of 3 longs on one 9.4 KAS ask", "4f4c2f332287759df9c250b4f97c746cd6c4eac4247494307101b1beff114760", "3df7252ae3a29f09d193ca435dc668c6721b9498f9c3716693b9e752432c7dd6"),
 ];
 
 fn sha(v: &serde_json::Value) -> String {
@@ -766,7 +768,7 @@ fn golden_evidence_paths() {
         let live = w.chain.apply_signed(&s).unwrap();
         let wp = pendings_of(&live).remove(0);
         let f = w.funding();
-        add("cure: the long moves bl to 8.93", &cure(&wp, &f, &opts()).unwrap());
+        add("cure: the long moves bl to 8.7514", &cure(&wp, &f, &opts()).unwrap());
         let cb = w.bid_id(980_000_000, 1_500_000_000, 0xe7);
         let seller = w.tokens(1_500_000_000);
         w.rest();

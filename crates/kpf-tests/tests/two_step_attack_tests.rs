@@ -384,6 +384,11 @@ fn holds_propose_and_restore_does_not_bypass_the_hand_over_limit() {
     let tx = accept(&c);
     let restored = live_pairs(&tx, &c).remove(0).at(p_daa + R);
     assert!(p_daa + R < s + 4 * R);
+    // DESIGN 4.5e: the restored part is unlisted; the long lists again (an amend keeps S).
+    assert_eq!(restored.p.long_ask, 0);
+    let ad = amend_draft(&restored, &lk(), LONG, (1_000_000_000, 0, 0), &fk(), 4);
+    let atx = accept(&ad);
+    let restored = live_pairs(&atx, &ad).remove(0).at(p_daa + R + 1);
     let t = TransferSpec { side: LONG, n: N, x: 1_000_000_000, nb: 900_000_000, ek: xonly(&keypair(16)), et: ZERO, k: 0 };
     let mut d = transfer_draft(&restored, &t, &Entrant::Direct(keypair(16)), &fk(), 2);
     assert_eq!(d.lock, s + 4 * R, "the limit is that of the pair's clock S");
@@ -477,22 +482,36 @@ fn holds_old_evidence_never_reaches_a_new_owner_through_a_restore() {
     for (name, np, s_new) in [("transfer", part, s1), ("forfeit", forfeited, s2)] {
         assert_eq!((np.p.since, np.clock()), (0, s_new as i64), "{name}: a fresh clock");
         refused(&at_lock(&ev_draft(&[liq(&np, N, LONG)], &old, &fk(), 5), s_new + R + 1_000), 0);
-        // A proposal on the new part with fresh evidence (rested R on S'), refuted, restored.
         let p_daa = s_new + R;
-        let g = liq(&np, N, LONG);
-        accept(&at_lock(&ev_draft(&[g.clone()], &fresh_ask(s_new), &fk(), 6), p_daa));
-        let w = pend_of(&g, 940_000_000, p_daa);
+        // A proposal on the new part with fresh evidence (rested R on S'), refuted, restored. Premise changed by DESIGN
+        // 4.5e (review 4, F1): the forfeited part has one owner and cannot be liquidated at all, so the cycle there is a
+        // close by its owner at a bid of 9.50, refuted by an ask of 9.30.
+        let one_owner = np.p.long_key == np.p.short_key;
+        let (g, quote, ev, counter) = if one_owner {
+            let g = PairLeg { l: np.clone(), n: N, q: 0, act: Act::Close { side: LONG, signer: sk() } };
+            (g, 950_000_000, Evidence::bid(950_000_000, N).placed(s_new), Evidence::ask(930_000_000, N).placed(p_daa).other(0xd3))
+        } else {
+            (liq(&np, N, LONG), 940_000_000, fresh_ask(s_new), Evidence::bid(980_000_000, N).placed(p_daa))
+        };
+        accept(&at_lock(&ev_draft(&[g.clone()], &ev, &fk(), 6), p_daa));
+        let w = pend_of(&g, quote, p_daa);
         assert_eq!(w.w.since, s_new as i64, "{name}: the pending part records the new part's clock");
-        let mut c = ch_draft(&[w], &Evidence::bid(980_000_000, N).placed(p_daa), &fk(), 7);
+        let mut c = ch_draft(&[w], &counter, &fk(), 7);
         c.lock = p_daa + R;
         let ctx = accept(&c);
         let restored = live_pairs(&ctx, &c).remove(0).at(p_daa + R);
         assert_eq!(restored.p.since, s_new as i64, "{name}: the restore keeps the new part's clock, not the old S");
         assert_ne!(restored.p.since, s as i64);
         refused(&at_lock(&ev_draft(&[liq(&restored, N, LONG)], &old, &fk(), 8), p_daa + R + 1_000), 0);
-        // A live quote of the old book still counts, but only from the new part's clock (4.5c), as without the cycle.
+        // A live quote of the old book still counts, but only from the new part's clock (4.5c), as without the cycle;
+        // against the one-owner part no quote counts.
         let live_old = Evidence::ask(940_000_000, N).placed(s + 10).other(0xd2);
-        accept(&at_lock(&ev_draft(&[liq(&restored, N, LONG)], &live_old, &fk(), 9), p_daa + R));
+        let d = at_lock(&ev_draft(&[liq(&restored, N, LONG)], &live_old, &fk(), 9), p_daa + R);
+        if one_owner {
+            refused(&d, 0);
+        } else {
+            accept(&d);
+        }
     }
 }
 

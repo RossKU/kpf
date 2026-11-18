@@ -58,6 +58,8 @@ evidence block `n_ev ≥ ⌈k·Σn⌉`, the trigger, the range rule of 4.5c, the
 part with the loser's key replaced by the winner's, both sides unlisted, tags 0, `since = 0` (kind 2 only).
 `cureBound`: long loser `BL* = ⌊p·(10⁴ − mmrBps)/10⁴⌋`, short loser `BS* = ⌈p·(10⁴ + mmrBps)/10⁴⌉`, the nearest bound
 at which the proposed quote no longer triggers. The bond is `B = max(bondMin, q(n, ⌊(BS − BL)·bondBps/10⁴⌋))`.
+(*Superseded by DESIGN 4.5e after review 4: the restore and cure states are unlisted, the cure bound clears every quote
+within `g` of `p`, a part whose two keys are equal cannot be liquidated, and a market needs `W ≥ 2R`.*)
 
 ### 2.3 Challenge (`KpfPending.challenge`)
 

@@ -34,8 +34,8 @@ pub const LOCK_TIME_THRESHOLD: i64 = 500_000_000_000;
 pub const MAX_IDLE: u64 = 77_760_000;
 /// A plain payout below 0.02 KAS is not created (DESIGN 4.6).
 pub const PLAIN_DUST: i64 = 2_000_000;
-/// The largest bond floor (`KpfPair.SOMPI_MAX`, about the KAS supply).
-pub const SOMPI_MAX: i64 = 2_900_000_000_000_000_000;
+/// The largest bond floor (`KpfOpen.BOND_MIN_MAX`, 10,000 KAS; DESIGN 4.5e).
+pub const BOND_MIN_MAX: i64 = 1_000_000_000_000;
 /// Kinds of a pending claim (DESIGN 4.5d).
 pub const KIND_CLOSE: i64 = 1;
 pub const KIND_LIQ: i64 = 2;
@@ -241,10 +241,13 @@ impl Market {
         req(self.tpl_prefix_len >= 0 && self.tpl_suffix_len >= 0, "token template cut must be >= 0")?;
         // The two-step evidence parameters (DESIGN 4.5d; KpfOpen.checkMarket, KpfPair.propose).
         req(self.bond_bps >= 0 && self.bond_bps <= BPS, "bondBps must be in 0..=10^4")?;
-        req(self.bond_min >= 0 && self.bond_min <= SOMPI_MAX, "bondMin must be in 0..=2.9*10^18")?;
+        req(self.bond_min >= 0 && self.bond_min <= BOND_MIN_MAX, "bondMin must be in 0..=10^12 (10,000 KAS)")?;
         req(self.kc_bps > 0 && self.kc_bps <= K_MAX, "kcBps must be in 1..=10^5")?;
         req(self.g_bps > 0 && self.g_bps < BPS, "gBps must be in 1..10^4")?;
-        req(self.challenge_daa >= self.min_rest_daa && self.challenge_daa < CSV_LIMIT, "challengeDaa must be in minRestDaa..2^32")?;
+        req(
+            self.challenge_daa >= self.min_rest_daa.saturating_mul(2) && self.challenge_daa < CSV_LIMIT,
+            "challengeDaa must be in 2 * minRestDaa..2^32 (the window leaves the defender at least R after the earliest challenge, DESIGN 4.5e)",
+        )?;
         req(
             self.min_evidence_life >= 0 && self.min_evidence_life.saturating_add(self.min_rest_daa) <= MAX_IDLE as i64,
             "minEvidenceLife must be >= 0 with minEvidenceLife + minRestDaa <= 77,760,000",

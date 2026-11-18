@@ -23,15 +23,27 @@ pub fn claim_fee(p: &Pair, n: i64, side: i64, quote: i64) -> i64 {
     fee_of(&p.m, n, quote).min(slice_of(p, n, side))
 }
 
-/// The cure bound of a liquidation claim at `quote` (`KpfPair.propose`): a long loser's
-/// `floor(quote * (10^4 - mmrBps) / 10^4)`, a short loser's `ceil(quote * (10^4 + mmrBps) / 10^4)`, `None` when the
-/// short's exceeds priceMax (no cure).
-pub fn cure_bound_of(m: &Market, side: i64, quote: i64) -> Option<i64> {
-    let (qq, mm, b) = (quote as i128, m.mmr_bps as i128, BPS as i128);
+/// The farthest quote within the contradiction margin g of a liquidation claim at `quote` (DESIGN 4.5e): for a long
+/// loser (ask evidence) the lowest ask with `a * 10^4 >= quote * (10^4 - g)`, `ceil(quote * (10^4 - g) / 10^4)`; for a
+/// short loser the highest bid with `b * 10^4 <= quote * (10^4 + g)`, `floor(quote * (10^4 + g) / 10^4)`.
+pub fn cure_reach_of(m: &Market, side: i64, quote: i64) -> i64 {
+    let (qq, g, b) = (quote as i128, m.g_bps as i128, BPS as i128);
     if side == LONG {
-        Some((qq * (b - mm) / b) as i64)
+        ((qq * (b - g) + b - 1) / b) as i64
     } else {
-        let c = (qq * (b + mm) + b - 1) / b;
+        (qq * (b + g) / b) as i64
+    }
+}
+
+/// The cure bound of a liquidation claim at `quote` (`KpfPair.propose`, DESIGN 4.5e): the nearest bound at which no
+/// quote within g of the claim triggers, with `pg` = [`cure_reach_of`]: a long loser's `floor(pg * (10^4 - mmrBps) /
+/// 10^4)`, a short loser's `ceil(pg * (10^4 + mmrBps) / 10^4)`; `None` when the short's exceeds priceMax (no cure).
+pub fn cure_bound_of(m: &Market, side: i64, quote: i64) -> Option<i64> {
+    let (pg, mm, b) = (cure_reach_of(m, side, quote) as i128, m.mmr_bps as i128, BPS as i128);
+    if side == LONG {
+        Some((pg * (b - mm) / b) as i64)
+    } else {
+        let c = (pg * (b + mm) + b - 1) / b;
         (c <= m.price_max as i128).then_some(c as i64)
     }
 }
@@ -63,15 +75,24 @@ pub fn forfeit_bound_of(p: &Pair, n: i64, side: i64, fee: i64) -> i64 {
     }
 }
 
-/// The restore state (`KpfPair.propose`): the part `n` of `p` with every field unchanged, tags 0 and `since = S`
-/// (`p` clocked, i.e. [`Pair::clocked`]): a refuted claim neither restarts nor moves the pair's clock (DESIGN 4.5d).
-pub fn restore_state(p: &Pair, n: i64) -> Pair {
-    p.rest_of(n)
+/// The part `n` of `p` with both tags 0 and both sides unlisted: what every return state starts from (DESIGN 4.5e).
+fn unlisted_part(p: &Pair, n: i64) -> Pair {
+    let mut f = p.rest_of(n);
+    (f.long_ask, f.long_min, f.long_tip, f.short_bid, f.short_min, f.short_tip) = (0, 0, 0, 0, 0, 0);
+    f
 }
 
-/// The cure state: the part with the loser's bound moved to `cb` and `since = S` (`s` the pair's clock start).
+/// The restore state (`KpfPair.propose`): the part `n` of `p` with its keys, bounds and entry unchanged, tags 0, both
+/// sides unlisted (DESIGN 4.5e) and `since = S` (`p` clocked, i.e. [`Pair::clocked`]): a refuted claim neither restarts
+/// nor moves the pair's clock (DESIGN 4.5d), and a listing live at the proposal is not live again without its owner.
+pub fn restore_state(p: &Pair, n: i64) -> Pair {
+    unlisted_part(p, n)
+}
+
+/// The cure state: the part with the loser's bound moved to `cb`, both sides unlisted and `since = S` (`s` the pair's
+/// clock start).
 pub fn cure_state(p: &Pair, n: i64, side: i64, cb: i64, s: i64) -> Pair {
-    let mut c = p.rest_of(n);
+    let mut c = unlisted_part(p, n);
     if side == LONG {
         c.bl = cb;
     } else {
@@ -84,11 +105,10 @@ pub fn cure_state(p: &Pair, n: i64, side: i64, cb: i64, s: i64) -> Pair {
 /// The forfeit state: the part with both keys the winner's, both sides unlisted, `since = 0` and the loser's bound at
 /// `fb`.
 pub fn forfeit_state(p: &Pair, n: i64, side: i64, fb: i64) -> Pair {
-    let mut f = p.rest_of(n);
+    let mut f = unlisted_part(p, n);
     let w = if side == LONG { p.short_key } else { p.long_key };
     f.long_key = w;
     f.short_key = w;
-    (f.long_ask, f.long_min, f.long_tip, f.short_bid, f.short_min, f.short_tip) = (0, 0, 0, 0, 0, 0);
     if side == LONG {
         f.bl = fb;
     } else {
@@ -302,6 +322,18 @@ impl Pending {
             }
             Some(lo)
         }
+    }
+
+    /// The least value every genuine pending part of this claim holds: its range `q(n, bs - bl)` and the refund
+    /// (`KpfPair.propose`; review 4, F4).
+    pub fn least_value(&self) -> i64 {
+        q(self.n, self.bs - self.bl, self.m.scale, 0).saturating_add(self.refund)
+    }
+
+    /// What a cure costs its funder in all, besides the network fee: the refund to the proposer and the cured part's
+    /// value less this UTXO's value (the added margin, and the cured part's carrier when the curer funds it).
+    pub fn cure_total(&self, value: u64) -> i64 {
+        self.refund + self.cure_value(value) - value as i64
     }
 
     /// The least value of the restored pair after a challenge: this UTXO's value less the bond.

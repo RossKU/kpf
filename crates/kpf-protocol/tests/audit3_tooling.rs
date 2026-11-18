@@ -29,24 +29,33 @@ fn holds_refutation_bound_is_where_the_contract_rule_flips() {
     }
 }
 
-/// The cure bound is the nearest bound at which the claim's own quote no longer liquidates the side, and the forfeit
-/// bound is the nearest inward bound at which the narrowed range and the fee fit the part (unique, one tick wider does
-/// not fit).
+/// The cure bound is the nearest bound at which no quote within the margin g of the claim's own quote liquidates the
+/// side (premise changed by DESIGN 4.5e: before review 4 it was the nearest bound at which the claim's own quote no longer
+/// did), and the forfeit bound is the nearest inward bound at which the narrowed range and the fee fit the part (unique,
+/// one tick wider does not fit).
 #[test]
 fn holds_cure_and_forfeit_bounds_match_the_contract_rules() {
     let p = pair(pubkey(21), pubkey(22));
+    // Long at 9.40, g 2 %: the reach 9.212; the cure bound 8.7514 = 9.212 * 0.95.
+    let reach = kpf_protocol::pending::cure_reach_of(&p.m, LONG, 940_000_000);
     let cb = cure_bound_of(&p.m, LONG, 940_000_000).unwrap();
+    assert_eq!((reach, cb), (921_200_000, 875_140_000));
     let mut c = p.clone();
     c.bl = cb;
-    assert!(long_liquidatable(&p, 940_000_000) && !long_liquidatable(&c, 940_000_000));
+    assert!(long_liquidatable(&p, 940_000_000) && !long_liquidatable(&c, 940_000_000) && !long_liquidatable(&c, reach));
+    assert!(long_liquidatable(&c, reach - 1), "a quote beyond g of the claim still liquidates the cured part");
     c.bl = cb + 1;
-    assert!(long_liquidatable(&c, 940_000_000), "one tick less margin and the quote liquidates again");
+    assert!(long_liquidatable(&c, reach), "one tick less margin and the quote at the reach liquidates again");
+    // Short at 11.50: the reach 11.73; the cure bound 12.3165.
+    let reach = kpf_protocol::pending::cure_reach_of(&p.m, SHORT, 1_150_000_000);
     let cb = cure_bound_of(&p.m, SHORT, 1_150_000_000).unwrap();
+    assert_eq!((reach, cb), (1_173_000_000, 1_231_650_000));
     let mut c = p.clone();
     c.bs = cb;
-    assert!(!short_liquidatable(&c, 1_150_000_000));
+    assert!(!short_liquidatable(&c, 1_150_000_000) && !short_liquidatable(&c, reach));
+    assert!(short_liquidatable(&c, reach + 1));
     c.bs = cb - 1;
-    assert!(short_liquidatable(&c, 1_150_000_000));
+    assert!(short_liquidatable(&c, reach));
     for (side, quote) in [(LONG, 940_000_000), (SHORT, 1_150_000_000)] {
         let fee = claim_fee(&p, p.size, side, quote);
         let fb = forfeit_bound_of(&p, p.size, side, fee);

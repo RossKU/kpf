@@ -95,7 +95,7 @@ pragma silverscript ^0.1.0;
 // since = 0, so its clock starts at its own UTXO; every other pair output (P1, P2, every remainder) carries
 // since = S. P3 and P4 require tx.daa >= S + 4 * minRestDaa (hand-overs are rate-limited). The pair states fixed
 // by propose: restore since = S and cure since = S (a refuted or cured claim neither restarts nor moves the clock),
-// forfeit since = 0.
+// forfeit since = 0; all three unlisted (DESIGN 4.5e). A part whose two keys are equal cannot be liquidated.
 // Health at entry (4.5c, F3, F4): the entrant of P3 must not be liquidatable at its entry price x. Range (4.5c,
 // F2): a liquidation claim requires bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps).
 contract KpfPair(
@@ -925,14 +925,19 @@ contract KpfPair(
     // DESIGN: 4.5d's bond formula has no dust floor; a bond below 0.02 KAS could not be paid as a plain output, so the
     // bond is at least the plain dust 0.02 KAS.
     //
-    // The pair states KpfPending can create, each fixed here as a P2SH hash of this script with both tags 0 and the
-    // entry price kept (DESIGN 4.5d), so no party can be written out of them:
-    //   restore  the part n with every field unchanged and since = S, written explicitly (a successful challenge
-    //            neither restarts nor moves the clock, so a side that refutes its own claim gains no time against
-    //            evidence that already rested on S);
-    //   cure     (kind 2) the part with the loser's bound moved to the cure bound and since = S: a long loser
-    //            cb = floor(p * (10^4 - mmrBps) / 10^4), a short loser cb = ceil(p * (10^4 + mmrBps) / 10^4), the
-    //            nearest bound at which the proposed quote no longer triggers; cure hash 0 (no cure) when cb > priceMax;
+    // A liquidation is refused when longKey == shortKey (DESIGN 4.5e): one owner of both sides has no counterparty.
+    //
+    // The pair states KpfPending can create, each fixed here as a P2SH hash of this script with both tags 0, both
+    // listing windows zero (DESIGN 4.5e) and the entry price kept (DESIGN 4.5d), so no party can be written out of them:
+    //   restore  the part n with its keys, bounds and entry unchanged, unlisted, and since = S, written explicitly (a
+    //            successful challenge neither restarts nor moves the clock, so a side that refutes its own claim gains
+    //            no time against evidence that already rested on S);
+    //   cure     (kind 2) the part with the loser's bound moved to the cure bound, unlisted, and since = S: with g =
+    //            gBps, a long loser pg = ceil(p * (10^4 - g) / 10^4) and cb = floor(pg * (10^4 - mmrBps) / 10^4), a short
+    //            loser pg = floor(p * (10^4 + g) / 10^4) and cb = ceil(pg * (10^4 + mmrBps) / 10^4): the nearest bound
+    //            at which no quote within g of the proposed one (a * 10^4 >= p * (10^4 - g) for an ask against a long,
+    //            b * 10^4 <= p * (10^4 + g) for a bid against a short) triggers; cure hash 0 (no cure) when
+    //            cb > priceMax;
     //   forfeit  (kind 2) the part with both keys the winner's, both sides unlisted, since = 0, and the loser's bound
     //            moved inward to fb, the nearest bound with q(n, narrowed range) + fee <= q(n, bs - bl): fb is an
     //            argument and is required to be that bound (it fits, and one tick wider does not, unless it is the
@@ -964,6 +969,10 @@ contract KpfPair(
             }
         } else {
             require(kind == KIND_LIQ);
+            // A part whose two sides have one owner has nobody to be owed a liquidation (DESIGN 4.5e, review 4 F1):
+            // after forfeit and keep the old quote would otherwise liquidate the winner's own part again and again,
+            // a keeper fee each round. The keys compared are this pair's, as they are when the claim is proposed.
+            require(lk != sk);
             require(mmrBps >= 0);
             require(mmrBps < MMR_CAP);
             require(liqFeeBps >= 0);
@@ -978,7 +987,9 @@ contract KpfPair(
         int clk = clockStart();
         int p = evQuote(ask, ev, tk, qb, clk);
         byte[] rs = ownRs();
-        byte[] lists = rs.slice(LISTS_AT, LISTS_END);
+        // Every pair state the pending part may become is unlisted (DESIGN 4.5e): a listing its owner could not
+        // withdraw while the part was pending is not live again without the owner's signature.
+        byte[] unlisted = byte[](NO_LIST) + byte[](NO_LIST);
         int part = quoteOf(n, bs - bl, 0);
         byte[32] ch = zero32();
         byte[32] fh = ch;
@@ -995,16 +1006,22 @@ contract KpfPair(
             int f0 = bl;
             int f1 = bs;
             byte[32] wk = sk;
+            // The cure clears the claim by the margin g (DESIGN 4.5e, review 4 F3): pg is the farthest quote within g of
+            // p (long: ceil(p * (10^4 - g) / 10^4), short: floor(p * (10^4 + g) / 10^4)), and the cure bound is the
+            // nearest bound at which pg no longer triggers, so no quote between pg and p reopens the cured part.
+            int pg = 0;
             if (ask == 1) {
                 require(p * (BPS - mmrBps) < bl * BPS);
                 t = bl * BPS / (BPS - mmrBps) - bl;
-                cb = p * (BPS - mmrBps) / BPS;
+                pg = (p * (BPS - gBps) + BPS - 1) / BPS;
+                cb = pg * (BPS - mmrBps) / BPS;
                 u0 = cb;
                 f0 = fb;
             } else {
                 require(bs * BPS < p * (BPS + mmrBps));
                 t = bs - (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
-                cb = (p * (BPS + mmrBps) + BPS - 1) / BPS;
+                pg = p * (BPS + gBps) / BPS;
+                cb = (pg * (BPS + mmrBps) + BPS - 1) / BPS;
                 u1 = cb;
                 f1 = fb;
                 wk = lk;
@@ -1017,14 +1034,14 @@ contract KpfPair(
             require(f0 < f1);
             require(quoteOf(n, f1 - f0, 0) + fee <= part);
             require(f1 - f0 == bs - bl || quoteOf(n, f1 - f0 + 1, 0) + fee > part);
-            fh = pairHash(rs, n, f0, f1, wk, wk, byte[](NO_LIST) + byte[](NO_LIST), 0);
+            fh = pairHash(rs, n, f0, f1, wk, wk, unlisted, 0);
             if (u1 <= priceMax) {
-                ch = pairHash(rs, n, u0, u1, lk, sk, lists, clk);
+                ch = pairHash(rs, n, u0, u1, lk, sk, unlisted, clk);
             } else {
                 cb = 0;
             }
         }
-        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, lists, clk);
+        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, unlisted, clk);
         int bond = quoteOf(n, (bs - bl) * bondBps / BPS, 0);
         if (bond < bondMin) { bond = bondMin; }
         if (bond < PLAIN_DUST) { bond = PLAIN_DUST; }

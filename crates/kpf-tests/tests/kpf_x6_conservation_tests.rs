@@ -32,6 +32,14 @@
 //!     and fee (a finalized liquidation), refund (a cure), its payout plus refund (a finalized close), and by nothing
 //!     at a challenge, whose bond is the challenger's; the bonds posted equal the bonds returned to proposers plus
 //!     those taken by challengers.
+//!
+//! Review 4 (DESIGN 4.5e). In addition:
+//!   - a part with one owner (longKey == shortKey: a forfeited part) is never the subject of an accepted liquidation
+//!     proposal (every accepted one is checked, and forfeited parts are attacked with triggering quotes on purpose);
+//!   - after a cure, no accepted liquidation proposal against the cured side (the cured pair and every position that
+//!     keeps its cured bound) uses a quote within g of the cured claim, and the walk tries such quotes on purpose; the
+//!     first quote beyond the cure bound's trigger is accepted;
+//!   - no restore or cure output is listed (half of the proposals are made on a listed pair).
 
 mod common;
 mod kpf;
@@ -100,6 +108,12 @@ struct Stats {
     clock_restarted: usize,
     txs: usize,
     max_slack: i128,
+    /// Review 4: liquidations of a one-owner part refused; quotes within g of a cured claim refused; first quotes
+    /// beyond a cure accepted; listed parts that came back unlisted.
+    one_owner_refused: usize,
+    within_g_refused: usize,
+    beyond_cure_accepted: usize,
+    returned_unlisted: usize,
 }
 
 #[derive(Clone)]
@@ -121,6 +135,24 @@ struct Sim {
     daa: u64,
     /// The DAA at which each side of each live pair UTXO entered its position: (outpoint, side) -> DAA.
     entered: HashMap<(TransactionOutpoint, i64), u64>,
+    /// Review 4: every live position (pair or pending part) that keeps the bound of a cure: outpoint -> (loser side, cured
+    /// bound, quote of the cured claim).
+    cured: HashMap<TransactionOutpoint, (i64, i64, i64)>,
+}
+
+/// Whether `quote` lies within the margin g of a cured liquidation claim at `claim` of the loser `side` (DESIGN 4.5e):
+/// an ask with `a * 10^4 >= claim * (10^4 - g)` against a long, a bid with `b * 10^4 <= claim * (10^4 + g)` against a
+/// short.
+fn within_g(side: i64, claim: i64, quote: i64, g: i64) -> bool {
+    if side == LONG {
+        quote as i128 * 10_000 >= claim as i128 * (10_000 - g) as i128
+    } else {
+        quote as i128 * 10_000 <= claim as i128 * (10_000 + g) as i128
+    }
+}
+
+fn unlisted(p: &Pair) -> bool {
+    (p.long_ask, p.long_min, p.long_tip, p.short_bid, p.short_min, p.short_tip) == (0, 0, 0, 0, 0, 0)
 }
 
 impl World {
@@ -172,6 +204,7 @@ impl Sim {
             st: Stats::default(),
             daa: 1_000_000,
             entered: HashMap::new(),
+            cured: HashMap::new(),
         }
     }
 
@@ -294,10 +327,47 @@ impl Sim {
             let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
             let s = in_pos.iter().find(|s| Some(s.idx) == auth).expect("a pending part comes from a pair");
             assert_eq!(w.since, s.clock, "output {idx}: the pending part records the pair's clock S");
+            // Review 4 (DESIGN 4.5e): no accepted liquidation proposal has a part with one owner as its subject.
+            if w.kind == kpf::evidence::KIND_LIQ {
+                assert_ne!(w.long_key, w.short_key, "output {idx}: a liquidation of a part whose two sides have one owner was accepted");
+            }
+        }
+        // Review 4 (DESIGN 4.5e): every pair a pending part returns to (restore, cure, forfeit) is unlisted.
+        for (idx, p) in &d.pairs {
+            let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
+            if let Some(s) = auth.and_then(|a| in_pos.iter().find(|s| s.idx == a)) {
+                if s.restore.is_some() {
+                    assert!(unlisted(p), "output {idx}: a pair returned from a pending part is listed");
+                    if !unlisted(&s.p) {
+                        self.st.returned_unlisted += 1;
+                    }
+                }
+            }
         }
         let spent: Vec<TransactionOutpoint> = d.ins.iter().map(|i| i.outpoint).collect();
         let created: Vec<Live> = live_pairs(&tx, d).into_iter().map(|l| l.at(now)).collect();
         let created_w: Vec<LivePend> = live_pendings(&tx, d).into_iter().map(|w| w.at(now)).collect();
+        // The cured bound travels with every position that keeps it on the same loser (a remainder, an amend, a pending
+        // part and its restore); a cure itself is recorded by `cure`.
+        let carry = |idx: usize, op: TransactionOutpoint, lk: [u8; 32], sk: [u8; 32], bl: i64, bs: i64, cured: &mut HashMap<TransactionOutpoint, (i64, i64, i64)>| {
+            let auth = tx.outputs[idx].covenant.map(|c| c.authorizing_input as usize);
+            let Some(s) = auth.and_then(|a| in_pos.iter().find(|s| s.idx == a)) else { return };
+            if let Some(&(side, bound, claim)) = cured.get(&s.op) {
+                let same_keys = s.p.long_key == lk && s.p.short_key == sk;
+                if same_keys && (if side == LONG { bl } else { bs }) == bound {
+                    cured.insert(op, (side, bound, claim));
+                }
+            }
+        };
+        for ((idx, _), c) in d.pairs.iter().zip(&created) {
+            carry(*idx, c.op, c.p.long_key, c.p.short_key, c.p.bl, c.p.bs, &mut self.cured);
+        }
+        for ((idx, _), w) in d.pendings.iter().zip(&created_w) {
+            carry(*idx, w.op, w.w.long_key, w.w.short_key, w.w.bl, w.w.bs, &mut self.cured);
+        }
+        for op in &spent {
+            self.cured.remove(op);
+        }
         // When each side of a created position entered it: inherited from the input it comes from (the same key on the
         // same side), or now for an entrant.
         let enter = |op: TransactionOutpoint, lk: [u8; 32], sk: [u8; 32], ent: &mut HashMap<(TransactionOutpoint, i64), u64>| {
@@ -676,7 +746,15 @@ impl Sim {
     /// its restore state), up to the rounding of a split.
     fn propose(&mut self) {
         use kpf::evidence::*;
-        let l = self.pick();
+        let mut l = self.pick();
+        // Review 4: half of the proposals are made on a listed pair, so that a restore or a cure has a listing to drop.
+        if self.rng.coin() {
+            let side = if self.rng.coin() { LONG } else { SHORT };
+            let px = self.rng.range(l.p.bl.max(1), l.p.bs);
+            let n = l.p.size;
+            let w = (px, self.rng.range(0, n), self.rng.range(0, 500_000));
+            l = self.amend(&l, side, w);
+        }
         let p = l.p.clone();
         let m = p.m.clone();
         let partial = self.rng.coin();
@@ -706,6 +784,19 @@ impl Sim {
             }
             _ => return,
         };
+        // Review 4: against a cured side, half of the time a quote within g of the cured claim (it must be refused).
+        let mut forced_within = false;
+        let mut e = e;
+        if let Act::LiqBy { side, .. } = &act {
+            if let Some(&(cs, _, claim)) = self.cured.get(&l.op) {
+                if cs == *side && self.rng.coin() {
+                    let reach = kpf_protocol::pending::cure_reach_of(&m, cs, claim);
+                    let price = if cs == LONG { self.rng.range(reach, claim) } else { self.rng.range(claim, reach) };
+                    e = if cs == LONG { Evidence::ask(price, fill) } else { Evidence::bid(price, fill) };
+                    forced_within = true;
+                }
+            }
+        }
         let r = m.min_rest_daa as u64;
         let life = m.min_evidence_life;
         let s_clock = l.clock() as u64;
@@ -727,18 +818,27 @@ impl Sim {
         let g = PairLeg { l: l.clone(), n, q: 0, act: act.clone() };
         let mut d = ev_draft(&[g.clone()], &e, &self.f.clone(), fnn);
         d.lock = if stale && self.rng.coin() { e.daa + r } else { rest_end.max(self.daa) + self.rng.range(0, 50) as u64 };
-        let predicted = expiry >= rest_end as i64 + life && d.lock >= rest_end;
+        let predicted = expiry >= rest_end as i64 + life && d.lock >= rest_end && !forced_within;
         let (tx0, en0) = d.build();
         let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
-        assert_eq!(ok, predicted, "evidence at DAA {} (expiry {expiry}) on a pair whose clock starts at {s_clock}, lock {}: the clock rule", e.daa, d.lock);
+        assert_eq!(ok, predicted, "evidence at DAA {} (expiry {expiry}) on a pair whose clock starts at {s_clock}, lock {}: the clock rule (within g of a cure: {forced_within})", e.daa, d.lock);
         if !ok {
             self.st.ev_refused += 1;
+            if forced_within {
+                self.st.within_g_refused += 1;
+            }
             return;
         }
         if let Act::LiqBy { side, .. } = &act {
             let entry = self.entered[&(l.op, *side)];
             let start = e.daa.max(entry);
             assert!(expiry >= (start + r) as i64 + life && d.lock >= start + r, "a liquidation used evidence from before the loser entered (DAA {entry})");
+            // Review 4: against a cured side, no accepted proposal uses a quote within g of the cured claim.
+            if let Some(&(cs, _, claim)) = self.cured.get(&l.op) {
+                if cs == *side {
+                    assert!(!within_g(cs, claim, e.price(), m.g_bps), "a cured claim at {claim} was reopened by the quote {} within g", e.price());
+                }
+            }
         }
         let before = self.w.clone();
         self.apply(&d, &[]);
@@ -836,7 +936,7 @@ impl Sim {
         let before = self.w.clone();
         let fnn = self.fn_();
         let d = cure_draft(&w, &signer, &self.f.clone(), fnn);
-        self.apply(&d, &[]);
+        let tx = self.apply(&d, &[]);
         assert_eq!(self.w.cash(&w.w.proposer_key) - before.cash(&w.w.proposer_key), w.w.refund as i128, "a cure repays the proposer its refund");
         self.st.bonds_to_proposers += w.w.bond as i128;
         let winner = w.w.winner_key();
@@ -845,6 +945,89 @@ impl Sim {
             self.non_consenting(&before, &winner, 0, &g);
         }
         self.st.cured += 1;
+        let c = self.find(&live_pairs(&tx, &d)[0].op);
+        self.cured.insert(c.op, (w.w.side, w.w.cure_bound, w.w.quote));
+        self.probe_cure(&c, w.w.side, w.w.quote);
+    }
+
+    /// Review 4 (DESIGN 4.5e), run without applying: against a freshly cured pair, a liquidation on the farthest quote
+    /// within g of the cured claim (fresh evidence, rested, live) is refused, and one on the first quote that triggers the
+    /// cure bound is accepted; that quote lies beyond g.
+    fn probe_cure(&mut self, c: &Live, side: i64, claim: i64) {
+        use kpf::evidence::*;
+        let m = c.p.m.clone();
+        let (b, mm) = (10_000i128, m.mmr_bps as i128);
+        let reach = kpf_protocol::pending::cure_reach_of(&m, side, claim);
+        let first = if side == LONG {
+            ((c.p.bl as i128 * b + b - mm - 1) / (b - mm) - 1) as i64
+        } else {
+            (c.p.bs as i128 * b / (b + mm) + 1) as i64
+        };
+        assert!(!within_g(side, claim, first, m.g_bps), "the first quote that reopens a cure lies beyond g");
+        let n = c.p.size;
+        let fill = n * m.k_bps / 10_000 + 1;
+        let r = m.min_rest_daa as u64;
+        for (price, ok) in [(reach, false), (first, true)] {
+            if price < 1 || price > m.price_max {
+                continue;
+            }
+            let e = if side == LONG { Evidence::ask(price, fill) } else { Evidence::bid(price, fill) }.placed(self.daa);
+            let act = Act::LiqBy { side, proposer: xonly(&keypair(77)) };
+            let fnn = self.fn_();
+            let mut d = ev_draft(&[PairLeg { l: c.clone(), n, q: 0, act }], &e, &self.f.clone(), fnn);
+            d.lock = self.daa + r;
+            let (tx, en) = d.build();
+            let got = run(&tx, &en).unwrap().iter().all(|x| x.is_ok());
+            assert_eq!(got, ok, "a liquidation of a cured pair at {price} (claim {claim}, reach {reach}, side {side})");
+            if ok {
+                self.st.beyond_cure_accepted += 1;
+            } else {
+                self.st.within_g_refused += 1;
+            }
+        }
+    }
+
+    /// Review 4 (DESIGN 4.5e): a liquidation of a part whose two sides have one owner (a forfeited part), at a quote that
+    /// triggers it by price, with evidence that rested on its clock and stays live, by a fresh proposer, is refused.
+    fn propose_one_owner(&mut self) {
+        use kpf::evidence::*;
+        let Some(l) = self.w.pairs.iter().find(|l| l.p.long_key == l.p.short_key).cloned() else { return };
+        let m = l.p.m.clone();
+        if !l.p.range_ok() {
+            return;
+        }
+        let side = if self.rng.coin() { LONG } else { SHORT };
+        let n = l.p.size;
+        let fill = n * m.k_bps / 10_000 + 1;
+        let e = if side == LONG {
+            let a = (l.p.bl * 10_000 - 1) / (10_000 - m.mmr_bps);
+            if a < 1 {
+                return;
+            }
+            Evidence::ask(a, fill)
+        } else {
+            let b = l.p.bs * 10_000 / (10_000 + m.mmr_bps) + 1;
+            if b > m.price_max {
+                return;
+            }
+            Evidence::bid(b, fill)
+        }
+        .placed(self.daa);
+        let proposer = self.fresh_key();
+        let fnn = self.fn_();
+        let mut d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: Act::LiqBy { side, proposer: xonly(&proposer) } }], &e, &self.f.clone(), fnn);
+        d.lock = (self.daa.max(l.clock() as u64)) + m.min_rest_daa as u64;
+        let (tx, en) = d.build();
+        let r = run(&tx, &en).unwrap();
+        assert!(r[0].is_err(), "a liquidation of a one-owner part was accepted");
+        // Control: the same draft with a second key on the part is accepted, so the keys are what refuses it.
+        let mut two = l.clone();
+        two.p.short_key = xonly(&proposer);
+        let mut d2 = ev_draft(&[PairLeg { l: two, n, q: 0, act: Act::LiqBy { side, proposer: xonly(&proposer) } }], &e, &self.f.clone(), fnn);
+        d2.lock = d.lock;
+        let (tx2, en2) = d2.build();
+        assert!(run(&tx2, &en2).unwrap().iter().all(|x| x.is_ok()), "the control with two keys");
+        self.st.one_owner_refused += 1;
     }
 
     /// A finalize of a random pending part once W old. A close pays the closer its payoff at the clamped quote plus the
@@ -956,13 +1139,14 @@ fn walk_ev(seed: u64, st_total: &mut Stats) {
     s.open(None);
     s.open(None);
     for _ in 0..16 {
-        match s.rng.range(0, 9) {
+        match s.rng.range(0, 10) {
             0 => s.transfer(true, true),
             1 => s.close(),
             2 | 3 => s.challenge(),
             4 => s.cure(),
             5 => s.finalize(),
             6 => s.coop_forfeited(),
+            7 => s.propose_one_owner(),
             _ => s.propose(),
         }
         if s.w.pairs.is_empty() {
@@ -972,6 +1156,7 @@ fn walk_ev(seed: u64, st_total: &mut Stats) {
     while !s.w.pendings.is_empty() {
         s.finalize();
     }
+    s.propose_one_owner();
     while s.w.pairs.iter().any(|l| l.p.long_key == l.p.short_key) {
         s.coop_forfeited();
     }
@@ -996,6 +1181,10 @@ fn walk_ev(seed: u64, st_total: &mut Stats) {
     st_total.clock_restarted += t.clock_restarted;
     st_total.split += t.split;
     st_total.txs += t.txs;
+    st_total.one_owner_refused += t.one_owner_refused;
+    st_total.within_g_refused += t.within_g_refused;
+    st_total.beyond_cure_accepted += t.beyond_cure_accepted;
+    st_total.returned_unlisted += t.returned_unlisted;
 }
 
 #[test]
@@ -1011,6 +1200,8 @@ fn x6_evidence_random_walk() {
     // clocks were both kept and restarted.
     assert!(st.ev_refused > 0 && st.clock_kept > 0 && st.clock_restarted > 0, "{st:?}");
     assert_eq!(st.bonds_posted, st.bonds_to_proposers + st.bonds_to_challengers);
+    // Review 4 (DESIGN 4.5e): each new rule was exercised.
+    assert!(st.one_owner_refused > 0 && st.within_g_refused > 0 && st.beyond_cure_accepted > 0 && st.returned_unlisted > 0, "{st:?}");
 }
 
 #[test]

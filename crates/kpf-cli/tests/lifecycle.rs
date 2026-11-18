@@ -619,18 +619,20 @@ fn evidence_lifecycle_with_a_kob_book() {
     let cured = h.step(&["cure", "--pending", &pending, "--key", &lk, "--funder", &fk, "--funding", &fund]);
     let cured_pair = cured.iter().find(|p| object_kind(p) == "pair").cloned().expect("the cured pair");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&cured_pair).unwrap()).unwrap();
-    assert_eq!(v["state"]["bl"], 893_000_000);
+    // DESIGN 4.5e: the cure clears the claim by g (9.4 * 0.98 * 0.95 = 8.7514) and the cured pair is unlisted.
+    assert_eq!(v["state"]["bl"], 875_140_000);
+    assert_eq!((&v["state"]["longListing"]["ask"], &v["state"]["shortListing"]["bid"]), (&Value::from(0), &Value::from(0)));
     // The same 9.4 ask no longer liquidates it.
     h.chain.advance(650);
     let fund = h.funding("f", &f);
     let err = h.fail(&["propose-liquidate", "--pair", &cured_pair, "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--out-dir", &h.p("nope3")]);
     assert!(err.contains("not liquidatable"), "{err}");
 
-    // The market falls to 9.30: a new ask; the claim finalizes after the window (forfeit and keep), and the short closes
-    // the forfeited part with its own two signatures.
+    // The market falls to 9.20, beyond g of the cured claim (9.212): a new ask; the claim finalizes after the window
+    // (forfeit and keep), and the short closes the forfeited part with its own two signatures.
     let now = h.chain.daa;
     let low_id = kaspa_consensus_core::Hash::from_bytes([0xe4; 32]);
-    let low = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 930_000_000, 1_500_000_000)), 10 * KAS, low_id, now);
+    let low = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 920_000_000, 1_500_000_000)), 10 * KAS, low_id, now);
     let low_custody = h.chain.mint_kob(KobObj::Token(TokenState::covid(1_500_000_000, low_id, m.ext)), 20_000_000, m.token_cov_id, now);
     let low_c = kob_file(&h, "low-custody.json", &low_custody, None);
     let low_file = kob_file(&h, "low-ask.json", &low, Some(&low_c));
@@ -647,6 +649,10 @@ fn evidence_lifecycle_with_a_kob_book() {
     let forfeited = fin.iter().find(|p| object_kind(p) == "pair").cloned().expect("the forfeited part");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&forfeited).unwrap()).unwrap();
     assert_eq!(v["state"]["longKey"], v["state"]["shortKey"], "both sides are the winner's");
+    // DESIGN 4.5e (review 4, F1): a part with one owner is not liquidatable; the tool says so before building.
+    let fund = h.funding("f", &f);
+    let err = h.fail(&["propose-liquidate", "--pair", &forfeited, "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--out-dir", &h.p("nope4")]);
+    assert!(err.contains("one owner"), "{err}");
     let before = h.chain.balance(&s);
     h.step(&["coop-close", "--pair", &forfeited, "--long-pay", "0", "--key", &sk, "--key", &sk]);
     assert!(h.chain.balance(&s) > before, "the winner closed it alone");

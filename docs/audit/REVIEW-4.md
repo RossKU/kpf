@@ -184,3 +184,66 @@ Smallest fix: require `W ≥ 2R` (or `W ≥ R + a stated detection margin`) in `
 `KpfOpen` beyond the `checkMarket` diff; the `propose-close` / `propose-liquidate` summaries against their built
 transactions; close-versus-close (P4) with a pair whose sibling is pending; the compiled artifacts against the sources
 (relied on the pinned-artifact and layout tests); relay and mempool policy.
+
+## Status after fixes
+
+The rules of DESIGN 4.5e are implemented in `contracts/KpfPair.sil` (`propose`), `contracts/KpfOpen.sil`
+(`checkMarket`), the library (`pending.rs`, `evidence.rs`, `kob.rs`, `state.rs`) and the command line (`evcmds.rs`);
+DESIGN 4.5e "How the rules above are implemented" gives the exact inequalities. `KpfPending.sil` is unchanged (its
+template hash, pinned in `KpfPair` as `PENDING_TPL`, is the same). The pinned artifacts were regenerated
+(`cargo run -p kpf-artifacts -- write`): `KpfPair` is 12,201 bytes (1 + 492 + 11,708; was 12,155), `KpfOpen` 3,090
+(same size, new template hash), `KpfPending` 3,203 (unchanged); both golden vector sets (`golden.rs`, `evidence.rs`)
+were regenerated with `KPF_GOLDEN=print` (every transaction that creates or spends a pair has a new id). The state
+layouts are unchanged (pair 492 B, order 375 B, pending part 621 B). Every `exploit_*` test of the three audit4 files is
+now a `holds_*` test; the full workspace passes (`CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2`).
+
+| # | Status | Tests |
+|---|---|---|
+| R4-F1 | fixed: `propose` refuses a liquidation when `longKey == shortKey`; the tool refuses it with the reason | `holds_forfeited_part_is_not_liquidatable` (with a two-key control), `holds_forfeited_part_is_not_drained_and_its_owner_can_close_it` (0 of 39 rounds; close by the single owner and coop-close still work), `holds_sold_side_enters_healthy_and_on_a_fresh_clock`, `holds_tooling_refuses_to_liquidate_a_one_owner_pair`, CLI `lifecycle` |
+| R4-F2 | fixed: `watch` and `evidence --pending` require the order's fill capacity (capped by `maxFill`) to reach `ceil(kcBps * n / 10^4)` and report the coverage with `kcBps` | `holds_watch_does_not_report_an_order_that_cannot_cover_the_part` (with a funded control) |
+| R4-F3 | fixed: the cure bound clears every quote within `g` of the claim (9.40 -> 8.7514; 11.50 -> 12.3165) | `holds_cure_is_not_reopened_within_g`, `holds_cure_of_a_short_is_not_reopened_within_g` (equality and one sompi either side in the engine), `holds_cure_margin_inequality` (sweep), X6 |
+| R4-F4 | fixed: `cure`, `challenge`, `finalize` and `watch` refuse a part whose hashes do not match or whose value is below `q(n, BS - BL) + refund`; with `--pair`, also one of another covenant id or other keys; `cure` prints the funder's total | `holds_cure_refuses_an_underfunded_look_alike_pending`, the look-alike lines of the CLI test |
+| R4-F5 | fixed: `challengeDaa >= 2 * minRestDaa` in `KpfOpen.checkMarket` and `Market::validate` | `holds_window_below_twice_the_rest_is_refused`, `audit_tag_tests` bad and edge markets |
+| Unproven: resurrected listing | fixed: restore and cure states are unlisted | `holds_restored_part_is_unlisted`, `holds_cured_part_is_unlisted`, X6 |
+| Unproven: unfundable bond floor | fixed: `bondMin <= 10^12` sompi (10,000 KAS; a `// DESIGN:` choice, 4.5e names no number) | `holds_bond_floor_is_bounded`, `audit_tag_tests` |
+| Unproven: relay copy | accepted by design (DESIGN 4.5e) | `accepted_relay_copy_with_another_payout_key` |
+| Note: two messages | fixed: both say the part returns unlisted with its clock `S` kept | `holds_no_message_promises_a_fresh_clock_after_a_challenge` |
+
+Fixtures and existing tests changed: the second edge market of `audit_tag_tests` now has `W = 2R` (153,792,000) and the
+first `bondMin = 10^12` (both were at the old bounds); new bad markets `W = R`, `W = 2R - 1`, `bondMin = 10^12 + 1`.
+The cure bounds asserted in `kpf_two_step_tests`, `audit3_tooling`, the library's `evidence.rs` and the CLI
+`lifecycle` moved to the new values; `cured_pair_is_safe_at_the_claimed_quote_only` became
+`cured_pair_is_safe_within_g_of_the_claimed_quote_only`; the lifecycle's later liquidation of the cured pair uses an
+ask of 9.20 (beyond `g`) instead of 9.30. Two tests that transferred or liquidated a restored or forfeited part
+changed their premise: `holds_propose_and_restore_does_not_bypass_the_hand_over_limit` relists the restored long first,
+`holds_old_evidence_never_reaches_a_new_owner_through_a_restore` runs its cycle on the forfeited part as a close by its
+owner, and `audit3_tests::holds_the_clock_restarts_on_each_hand_over` shows the clock rule on the forfeited state with
+a second key. The testnet fixtures (`R` 50, `W` 600) and the engine fixtures (`R` 600, `W` 6,000) already satisfy
+`W >= 2R`.
+
+X6 (`kpf_x6_conservation_tests`) now asserts that no accepted liquidation proposal has a one-owner part as subject
+(and attacks forfeited parts with triggering quotes, with a two-key control), that after a cure no accepted proposal
+against the cured side (carried through remainders, amends and pending parts) uses a quote within `g` of the cured
+claim (it probes the farthest quote within `g`, refused, and the first quote beyond the cure bound's trigger,
+accepted), and that no pair returned from a pending part is listed (half of the proposals are made on listed pairs).
+
+Attacks on the fix (item 7), each a test of `audit4_tests`:
+- A loser cannot become unliquidatable without really owning both sides: buying the winner's side through its own
+  listing pays the winner its listed price and leaves nobody else in the part; giving its side to the winner only
+  enriches the winner; two different keys of one party are two owners and stay liquidatable
+  (`holds_one_owner_only_by_owning_both_sides`). A forfeit in the other direction on a stale quote is refuted by the
+  market's ask and the restored part is liquidatable at once (`holds_loser_cannot_take_both_sides_by_a_stale_claim`).
+  When one party holds both sides there is no counterparty: every sompi of the part is its own, so nobody can lose.
+- Selling a side of a one-owner part: the buyer enters healthy at its own price, with the entry price kept, its side
+  unlisted and a fresh clock (old evidence counts only from its own UTXO); no pending history carries over
+  (`holds_sold_side_enters_healthy_and_on_a_fresh_clock`). A buyer that chooses a bound the current market triggers is
+  liquidatable after `R`, as on any transfer; that is the healthy-at-entry rule at the buyer's own price, unchanged.
+  A buyer's stale `KpfOpen` limit can still be filled at that limit by any seller; this is generic, not specific to
+  one-owner parts.
+- Exits: a cured part can still be closed (proposed and finalized); a restored part can be relisted and transferred; a
+  claim whose wider cure bound passes `priceMax` loses its cure but keeps challenge and finalize
+  (`holds_without_a_cure_challenge_and_finalize_remain`); a one-owner part closes by kind 1, coop-close or idle settle.
+- Residual: a cure now costs `g` more margin per unit of quote (248.6 KAS instead of 70 on the example). The margin
+  stays the loser's, but a loser short of KAS against a stale claim on an empty opposite book is forfeited sooner.
+
+No exploit was found against the fixed rules.

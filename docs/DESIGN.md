@@ -607,7 +607,8 @@ per-pair clock, the range condition, health at entry, tags and entry-price rules
   (`pPre`, `pSuf`); its template hash must be the build constant `PENDING_TPL`.
 - Cure bound: long loser `⌊p·(10⁴ − m)/10⁴⌋`, short loser `⌈p·(10⁴ + m)/10⁴⌉`, the nearest bound at which the
   proposed quote no longer triggers; no cure (`cureHash` 0, `cureBound` 0) when the short's cure bound exceeds
-  `priceMax`.
+  `priceMax`. *(Superseded by §4.5e: the bound clears every quote within `g` of `p`.)*
+- *(§4.5e)* A liquidation is refused when `longKey == shortKey`.
 - Forfeit bound `fb` (argument, checked unique): the nearest inward bound with `q(n, narrowed range) + fee ≤
   q(n, BS − BL)` (it fits, and one tick wider does not, unless it is the loser's own bound).
 
@@ -629,7 +630,7 @@ the quote), close claims relative to the quote (the payout does). One output of 
 **Cure** (`KpfPending.cure(s)`). kind 2 only, the loser's signature; refused when `cureHash` is zero. One output
 P2SH(`cureHash`) with value `≥ max(q(n, cured range) + C, v − refund + ⌈q(n, moved distance)⌉)`; the proposer is
 paid `≥ refund` at output `i`. No cure fee (a fee would pay stale proposers). The cure moves the bound exactly to
-`cureBound`; more margin is an ordinary P2 afterwards.
+`cureBound` (since §4.5e past the claim by `g`); more margin is an ordinary P2 afterwards.
 
 **Finalize** (`KpfPending.finalize()`). Anyone, CSV age `≥ challengeDaa`. No key, no evidence.
 - kind 1: no output of the id; the closer `≥ q(n, c(p) − BL)` (long) or `q(n, BS − c(p))` (short) plus `refund`; the
@@ -643,10 +644,10 @@ order creates has live branches).
 | Parameter | Meaning | Bound | Testnet default |
 |---|---|---|---|
 | `bondBps` | bond rate, of the part's range `q(n, BS − BL)` | `0 ≤ bondBps ≤ 10⁴` | 300 |
-| `bondMin` | bond floor, sompi | `0 ≤ bondMin ≤ 2.9·10¹⁸` | 500,000,000 (5 KAS) |
+| `bondMin` | bond floor, sompi | `0 ≤ bondMin ≤ 10¹²` (10,000 KAS; `2.9·10¹⁸` before §4.5e) | 500,000,000 (5 KAS) |
 | `kcBps` | counter-evidence multiple `k_c` | `0 < kcBps ≤ 10⁵` | `= kBps` (10,000) |
 | `gBps` | contradiction margin `g` | `0 < gBps < 10⁴` | 200 |
-| `challengeDaa` | window `W`, earliest finalize (CSV) | `minRestDaa ≤ W < 2³²` | 600 DAA, 60 s (with `R` = 50 DAA, 5 s) |
+| `challengeDaa` | window `W`, earliest finalize (CSV) | `2·minRestDaa ≤ W < 2³²` (§4.5e; `minRestDaa ≤ W` before) | 600 DAA, 60 s (with `R` = 50 DAA, 5 s) |
 | `minEvidenceLife` | evidence life `L` after the rest, for evidence and counter-evidence | `L ≥ 0`, `L + minRestDaa ≤ 77,760,000` | 864,000 DAA (1 day) |
 
 The pair keeps its other evidence checks (`kBps`, `mmrBps`, `liqFeeBps`, `keeperFeeMin`, `minRestDaa`) as before.
@@ -660,8 +661,8 @@ party can be written out of them and no `KpfOpen` can claim them).
 
 | State | Written for | Content | `since` |
 |---|---|---|---|
-| restore | kind 1 and 2 | the part `n` with every field unchanged | `S` |
-| cure | kind 2 (0 if no cure) | the loser's bound moved to `cureBound` | `S` |
+| restore | kind 1 and 2 | the part `n` with keys, bounds and entry unchanged, both sides unlisted (§4.5e) | `S` |
+| cure | kind 2 (0 if no cure) | the loser's bound moved to `cureBound`, both sides unlisted (§4.5e) | `S` |
 | forfeit | kind 2 | both keys the winner's, both sides unlisted, the loser's bound moved inward by the fee to `fb` | 0 |
 
 **Bond, refund and fee in each branch.**
@@ -712,7 +713,7 @@ no-downgrade, the evidence block (a block may mix proposals and challenges on on
    proposer funded).
 6. `KpfPending.challenge`: a negative `P` (a mempool spend of an unaccepted proposal reads −1) is refused, as
    `clockStart` does.
-7. `KpfOpen.checkMarket`: `W ≥ R` and `L + R ≤ 77,760,000` required (the note only advises them): with `W < R` a
+7. `KpfOpen.checkMarket`: `W ≥ R` (since §4.5e `W ≥ 2R`) and `L + R ≤ 77,760,000` required (the note only advises them): with `W < R` a
    stale claim could be finalized before any counter-evidence can have rested; with `L + R` above 90 days no evidence
    ever qualifies. Consequence: a market with `R > 77,760,000 − L` is refused (the old edge market
    `R = 124,999,999,999`, where no evidence could ever qualify, is now refused).
@@ -746,40 +747,43 @@ no-downgrade, the evidence block (a block may mix proposals and challenges on on
 
 **Worked example** (§5 pair: 1,000 tokens, `BL` 9, `BS` 12, `C` 0.2, `mmr` 5 %, `liqFeeBps` 50, `k = 1`, testnet
 defaults). Bond `B = q(10⁹, ⌊3·10⁸·300/10⁴⌋)` = 90 KAS; pending value 3,000.2 + 90 = 3,090.2 KAS.
-- Liquidation of the long at an ask of 9.4: fee 47 KAS; cure bound 8.93 KAS (the cure adds 70 KAS); forfeit bound
+- Liquidation of the long at an ask of 9.4: fee 47 KAS; cure bound 8.7514 KAS since §4.5e (the cure adds 248.6 KAS;
+  8.93 and 70 KAS before review 4); forfeit bound
   `fb` = 9.047 KAS (`1,000·(12 − 9.047) + 47 = 3,000`); refuted by a bid `≥ 9.66315790` KAS
   (`b·9,500 ≥ 9·10,200·10⁸`). Finalize: the proposer receives 90 + 47 = 137 KAS; the short holds the forfeited part
   `[9.047, 12]` with 3,000.2 + 90 − 137 = 2,953.2 KAS (both sides).
-- A short's liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20`; its cure bound is 12.075.
+- A short's liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20`; its cure bound is 12.3165 (12.075 before
+  §4.5e).
 - A long's close at a bid of 10.5 is refuted by an ask `≤ 10.29`; a short's close at an ask of 11 by a bid `≥ 11.22`.
 
 **Size and compute** (measured, `kpf_metrics_tests`; offline).
 
-Script bytes (prefix + state + suffix): `KpfPair` 12,155 (1 + 492 + 11,662; before: 12,115 = 1 + 438 + 11,676, code 14
-bytes smaller, state 54 bytes larger); `KpfOpen` 3,090 (1 + 375 + 2,714); `KpfPending` 3,203 (1 + 621 + 2,581).
+Script bytes (prefix + state + suffix), measured after the §4.5e fixes: `KpfPair` 12,201 (1 + 492 + 11,708; before
+§4.5e 12,155 = 1 + 492 + 11,662; before §4.5d 12,115 = 1 + 438 + 11,676); `KpfOpen` 3,090 (1 + 375 + 2,714, unchanged
+in size); `KpfPending` 3,203 (1 + 621 + 2,581, unchanged).
 
-Script units per input: P1 amend 286,906; P2 add margin 274,574; P3 transfer (part) 302,769; `KpfOpen` take 151,588;
-P4 closeHost 290,361, closeDonor 278,354, mutualClose 149,825; propose close long at a bid 457,197, close short at an
-ask 487,314, liquidate long at an ask 619,781, liquidate short at a bid 589,742; challenge of a close long 55,750, of a
-close short 25,632, of a liquidation of a long 25,513, of a short 55,629; finalize close 7,235 / 7,368, finalize forfeit
-7,083; cure 107,966; P8 25,143; P9 225,399; `KpfOpen` fill 150,925 / 151,071, cancel 106,593, refund 6,522. Largest
-stack 215 of 244 (propose).
+Script units per input (after §4.5e): P1 amend 287,626; P2 add margin 275,246; P3 transfer (part) 303,921; `KpfOpen`
+take 152,022; P4 closeHost 291,465, closeDonor 279,410, mutualClose 150,401; propose close long at a bid 446,156, close
+short at an ask 476,273, liquidate long at an ask 609,705, liquidate short at a bid 579,654; challenge of a close long
+55,750, of a close short 25,632, of a liquidation of a long 25,513, of a short 55,629; finalize close 7,235 / 7,368,
+finalize forfeit 7,083; cure 107,977; P8 25,239; P9 225,495; `KpfOpen` fill 151,359 / 151,505, cancel 106,593, refund
+6,522. Largest stack 216 of 244 (propose).
 
 Whole transactions (partial parts of 400 tokens; relay fee 100 sompi per gram; limits: compute 500,000, storage
 500,000, 250,000 bytes):
 
 | Transaction | Inputs | Script units | Compute mass | Storage mass | Bytes | Fee (sompi) |
 |---|---|---|---|---|---|---|
-| propose close long at a bid | 4 | 705,225 | 29,452 | 203,474 | 20,452 | 4,090,400 |
-| propose close short at an ask | 4 | 646,543 | 28,486 | 200,056 | 20,356 | 4,071,200 |
-| propose liquidate long at an ask | 4 | 779,010 | 29,721 | 200,056 | 20,291 | 4,058,200 |
-| propose liquidate short at a bid | 4 | 837,770 | 30,687 | 203,205 | 20,387 | 4,077,400 |
+| propose close long at a bid | 4 | 694,184 | 29,400 | 203,474 | 20,500 | 4,100,000 |
+| propose close short at an ask | 4 | 635,502 | 28,434 | 200,056 | 20,404 | 4,080,800 |
+| propose liquidate long at an ask | 4 | 768,934 | 29,669 | 200,056 | 20,339 | 4,067,800 |
+| propose liquidate short at a bid | 4 | 827,682 | 30,635 | 203,205 | 20,435 | 4,087,000 |
 | challenge (ask counter) | 4 | 214,979 | 12,086 | 200,035 | 8,626 | 1,725,200 |
 | challenge (bid counter) | 4 | 273,660 | 13,052 | 203,255 | 8,722 | 1,744,400 |
 | finalize close | 2 | 107,236 | 5,715 | 31 | 3,635 | 727,000 |
 | finalize forfeit | 2 | 107,084 | 5,760 | 215 | 3,670 | 734,000 |
-| cure | 2 | 207,967 | 6,826 | 308 | 3,736 | 747,200 |
-| 8 proposals on one ask (8 × 500 tokens) | 11 | 5,122,461 | 183,660 | 200,408 | 125,550 | 25,110,000 |
+| cure | 2 | 207,978 | 6,826 | 306 | 3,736 | 747,200 |
+| 8 proposals on one ask (8 × 500 tokens) | 11 | 5,041,853 | 183,244 | 200,408 | 125,934 | 25,186,800 |
 | 8 challenges on one bid | 11 | 457,008 | 40,646 | 203,890 | 32,326 | 6,465,200 |
 
 The largest proposal block that fits is 8 (the scan's maximum); the note estimated it might not fit. The storage
@@ -816,6 +820,30 @@ Boundaries that depended on `restEnd` move by `L`; the `R = 124,999,999,999` edg
 - Accepted, documented: anyone who relays a proposal or a challenge can copy it with their own payout key and their
   own funds; these actions are permissionless by design.
 
+**How the rules above are implemented** (`contracts/KpfPair.sil` `propose`, `contracts/KpfOpen.sil` `checkMarket`,
+`crates/kpf-protocol` `pending.rs`, `evidence.rs`, `kob.rs`, `state.rs`; tests `audit4_tests`, `audit4_tooling`,
+`audit4_cli`, X6; `docs/audit/REVIEW-4.md`, "Status after fixes").
+- One owner: `require(longKey != shortKey)` in `propose` kind 2, on the pair's two keys as they are when the claim is
+  proposed (a pending part's keys never change). A close (kind 1) by the single owner, a cooperative close with its key
+  twice, an idle settle and a sale of a side stay open. Two different keys are two owners, even if one party holds both.
+- Cure margin, with `m = mmrBps`, `g = gBps`: a long loser at an ask `p` has the reach `pg = ⌈p·(10⁴ − g)/10⁴⌉` (the
+  lowest ask with `a·10⁴ ≥ p·(10⁴ − g)`) and the cure bound `cb = ⌊pg·(10⁴ − m)/10⁴⌋`; the cured part is liquidatable
+  at an ask `a` iff `a·(10⁴ − m) < cb·10⁴`, which no `a ≥ pg` satisfies and `pg − 2` always does (`pg − 1` does unless
+  `pg·(10⁴ − m) mod 10⁴ ≥ 10⁴ − m`; mirrored for a short). A short loser at a bid `p`: `pg = ⌊p·(10⁴ + g)/10⁴⌋`,
+  `cb = ⌈pg·(10⁴ + m)/10⁴⌉`, liquidatable at a bid `b` iff `cb·10⁴ < b·(10⁴ + m)`: never for `b ≤ pg`. No cure when
+  the short's `cb > priceMax`. Example: 9.40 → reach 9.212, cure bound 8.7514; 11.50 → reach 11.73, cure bound 12.3165.
+- Unlisted returns: the restore and cure hashes are computed with both listing windows zero; the pending state still
+  records the listings the pair had (self-describing, not read by `KpfPending`).
+- Window: `challengeDaa ≥ 2·minRestDaa` in `KpfOpen.checkMarket` and `Market::validate`; `KpfPair.propose` still
+  re-checks only the CSV range (deviation 8 of §4.5d).
+- `bondMin ≤ 10¹²` sompi (10,000 KAS) in `KpfOpen.checkMarket` and `Market::validate`. *Deviation:* §4.5e names no
+  number; 10¹² is 2,000 times the testnet floor and far below what one keeper can hold (the proportional part of the
+  bond is already bounded by the part's own range).
+- Tooling: `watch` and `evidence --pending` require the order's fill capacity (capped by its `maxFill`) to reach
+  `⌈kcBps·n/10⁴⌉` and report the coverage with `kcBps`; `cure`, `challenge`, `finalize` (library and command line) and
+  `watch` refuse a pending part whose hashes do not match its state or whose value is below `q(n, BS − BL) + refund`,
+  and with `--pair` one whose covenant id or keys are not that pair's; `cure` states the funder's total.
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part
@@ -838,7 +866,7 @@ minimum-fill bound, `[K] docs/spec/matcher.md:221-228`). Every covenant output �
 | pair value | `q(s, BS − BL) + C` | ≤ total KAS supply (≈ 2.9·10¹⁸ sompi) |
 | bond rate (§4.5d) | `(BS − BL)·bondBps` | `≤ 10¹⁸` for `bondBps ≤ 10⁴` |
 | contradiction (§4.5d) | `BL·(10⁴ + g)`, `a·(10⁴ + m)`, `c(b)·(10⁴ − g)` | `< 2·10¹⁸` for prices `≤ priceMax`, `g < 10⁴` |
-| cure bound (§4.5d) | `p·(10⁴ + mmrBps)` | `≤ 1.5·10¹⁸`; a short cure bound above `priceMax` means no cure |
+| cure bound (§4.5d, §4.5e) | `p·(10⁴ ± g)`, then `pg·(10⁴ + mmrBps)` with `pg < 2·priceMax` | `≤ 3·10¹⁸`; a short cure bound above `priceMax` means no cure |
 
 No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < BS ≤ priceMax`, `0 < n ≤ s`.
 
@@ -857,9 +885,10 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
 - Two-step (§4.5d, testnet defaults `bondBps` 300, `bondMin` 5 KAS, `gBps` 200, `W` 600 DAA): every claim on the
   whole pair carries `B = q(10⁹, ⌊3·10⁸·300/10⁴⌋)` = 90 KAS; the pending part holds 3,090.2 KAS. A liquidation of the
   long at `a = 9.4` is refuted by a bid `≥ 9.66315790` (`b·9,500 ≥ 9·10,200·10⁸`, rested `R` (50 DAA) from `P`), cured by
-  moving `BL` to 8.93 (70 KAS), or finalized after 600 DAA: the proposer receives 90 + 47 = 137 KAS and the short
+  moving `BL` to 8.7514 (248.6 KAS; §4.5e: no ask `≥ 9.212`, within `g` of 9.4, reopens it), or finalized after 600 DAA:
+  the proposer receives 90 + 47 = 137 KAS and the short
   holds the forfeited part `[9.047, 12]` (`1,000·(12 − 9.047) + 47 = 3,000`) with 2,953.2 KAS, both sides. A short's
-  liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20` (cure bound 12.075); a long's close at a bid of 10.5 by
+  liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20` (cure bound 12.3165); a long's close at a bid of 10.5 by
   an ask `≤ 10.29`; a short's close at an ask of 11 by a bid `≥ 11.22`.
 - Close-versus-close with `P2 = (BL2 = 8.5, BS2 = 11.5)` KAS at `X = 10.2`: L1 gets `1000·1.2` = 1,200 KAS, S2 gets
   `1000·1.3` = 1,300 KAS, `P3 = (8.5, 12.0)` holds 3,500 KAS. 3,000 + 3,000 = 1,200 + 1,300 + 3,500. No-downgrade:

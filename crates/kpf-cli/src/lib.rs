@@ -50,12 +50,14 @@ KAS, or SELLS its own tokens into the evidence bid. common flags as the builders
   propose-liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json] [--proposer KEY|HEX|ADDR]
             P6, up to 8 pairs on one evidence (an ask: longs, a bid: shorts); at finalize the winner keeps both sides
             (forfeit and keep) and the proposer (default the funder) receives the bond and the fee
-  challenge --pending W.json [--pending W.json]... --evidence ORDER.json [--seller TOKEN.json]
+  challenge --pending W.json [--pending W.json]... --evidence ORDER.json [--seller TOKEN.json] [--pair P.json]...
             refute pending claims with a counter order of the opposite kind beyond the claim by the margin g, rested from
-            the proposal's DAA; the parts return to their pairs and the bonds go to the funder (the challenger)
-  cure      --pending W.json --key LOSER                 the threatened side of a pending liquidation adds the margin it
-                                                         needs (bound to the cure bound) and repays the proposer
-  finalize  --pending W.json [--daa N]                   anyone, once the pending part is challengeDaa old: settle the claim
+            the proposal's DAA; the parts return to their pairs (unlisted, the clock kept) and the bonds go to the funder
+  cure      --pending W.json --key LOSER [--pair P.json] the threatened side of a pending liquidation adds the margin it
+                                                         needs (bound past the claim by g) and repays the proposer
+  finalize  --pending W.json [--daa N] [--pair P.json]   anyone, once the pending part is challengeDaa old: settle the claim
+            (--pair: the pair the part was cut from; the part must carry its covenant id and keys. Every pending part
+             must hold its range and refund, or it is refused as a look-alike)
   watch     --pair P.json [--pair ...] (--pending W.json | --scan DIR)... [--order ORDER.json]... [--node URL | --daa N] [--json]
             pending claims against these pairs, the time left before they can be finalized, which of the given resting
             orders refute them, and the exact command to do so

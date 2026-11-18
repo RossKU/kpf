@@ -110,8 +110,8 @@ contract KpfOpen(
     int constant LOCK_TIME_THRESHOLD = 500000000000;
     // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
-    // The largest bond floor (KpfPair.SOMPI_MAX).
-    int constant SOMPI_MAX = 2900000000000000000;
+    // The largest bond floor (DESIGN 4.5e): 10,000 KAS.
+    int constant BOND_MIN_MAX = 1000000000000;
     // The six listing fields of a new pair, all zero (unlisted), with their 0x08 push opcodes.
     byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
     // One empty listing window.
@@ -162,17 +162,23 @@ contract KpfOpen(
         // The two-step evidence parameters (DESIGN 4.5d), with the bounds KpfPair.propose checks, so every pending
         // part of the pair has a live challenge, cure and finalize.
         // DESIGN: 4.5d asks W >= R + detection and L <= 77,760,000 - R without making them rules. Both are required
-        // here: with W < R a stale claim could be finalized before any counter-evidence can have rested, and with
+        // here (W >= 2R since 4.5e): with W < R a stale claim could be finalized before any counter-evidence can have
+        // rested, with W = R the defender had no slack at all, and with
         // L + R above the 90-day limit no evidence could ever qualify, so the pair could never be liquidated.
         require(bondBps >= 0);
         require(bondBps <= BPS);
+        // DESIGN: 4.5e bounds bondMin "like the other market parameters" without a number; BOND_MIN_MAX (10,000 KAS,
+        // 2,000 times the testnet floor) is far below what one keeper can hold, so no market makes every proposal
+        // unfundable (P5 and P6 dead); the proportional part of the bond is bounded by the part's own range.
         require(bondMin >= 0);
-        require(bondMin <= SOMPI_MAX);
+        require(bondMin <= BOND_MIN_MAX);
         require(kcBps > 0);
         require(kcBps <= K_MAX);
         require(gBps > 0);
         require(gBps < BPS);
-        require(challengeDaa >= minRestDaa);
+        // The window leaves the defender slack (DESIGN 4.5e, review 4 F5): counter-evidence placed at P first counts at
+        // P + R, and finalize opens at P + W >= P + 2R.
+        require(challengeDaa >= 2 * minRestDaa);
         require(challengeDaa < CSV_LIMIT);
         require(minEvidenceLife >= 0);
         require(minEvidenceLife + minRestDaa <= MAX_IDLE);

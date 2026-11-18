@@ -561,6 +561,15 @@ impl Evidence {
             Evidence::Bid { order } => order.b.buying_power(order.value),
         }
     }
+    /// The most one fill of the order can take: [`Self::capacity`], capped by its `maxFill` when it has one.
+    pub fn fill_cap(&self) -> i64 {
+        let c = self.capacity();
+        if self.max_fill() > 0 {
+            c.min(self.max_fill())
+        } else {
+            c
+        }
+    }
     /// The DAA since which the order has rested at its quote as the contract measures it:
     /// `max(UTXO DAA + interval, activeFrom, an ask's custody DAA)`.
     pub fn exposed(&self) -> u64 {
@@ -600,7 +609,30 @@ impl Evidence {
 
 /// The least fill that covers `k * sum` (the evidence block rule of DESIGN 4.4, exact as in the contract).
 pub fn needed_fill(m: &Market, sum: i64) -> i64 {
-    (sum / BPS) * m.k_bps + ((sum % BPS) * m.k_bps + BPS - 1) / BPS
+    fill_with(m.k_bps, sum)
+}
+
+/// The least counter-evidence fill a challenge of parts totalling `sum` needs: `ceil(kcBps * sum / 10^4)`
+/// (`KpfPending.evBlock`, exact as in the contract).
+pub fn needed_counter_fill(m: &Market, sum: i64) -> i64 {
+    fill_with(m.kc_bps, sum)
+}
+
+fn fill_with(k_bps: i64, sum: i64) -> i64 {
+    (sum / BPS) * k_bps + ((sum % BPS) * k_bps + BPS - 1) / BPS
+}
+
+/// Most base units of parts one fill of `capacity` covers with the multiple `k_bps`: `capacity * 10^4 / k_bps`.
+pub fn covers_with(capacity: i64, k_bps: i64) -> i64 {
+    (capacity.max(0) as i128 * BPS as i128 / k_bps.max(1) as i128).min(i64::MAX as i128) as i64
+}
+
+/// [`check_evidence_on`] for counter-evidence against a pending part (DESIGN 4.5d): `clock` is the pending UTXO's DAA
+/// score P and `covers` is computed with the counter-evidence multiple `kcBps` (review 4, F2).
+pub fn check_counter_evidence_on(ev: &Evidence, m: &Market, clock: Option<i64>, daa: Option<u64>) -> EvidenceReport {
+    let mut r = check_evidence_on(ev, m, clock, daa);
+    r.covers = covers_with(ev.fill_cap(), m.kc_bps);
+    r
 }
 
 // ---------------------------------------------------------------- the check

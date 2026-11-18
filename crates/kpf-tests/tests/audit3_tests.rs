@@ -435,8 +435,13 @@ fn holds_the_clock_restarts_on_each_hand_over() {
     let e = placed(Evidence::ask(940_000_000, N), 2_100);
     let fp = forfeited(&l, SHORT, 1_150_000_000, 9_000);
     assert_eq!(fp.p.since, 0);
-    refused(&locked(&ev_draft(&[liq(&fp, N, LONG)], &e, &fk(), 28), 9_000 + R - 1), 0);
-    accept(&locked(&ev_draft(&[liq(&fp, N, LONG)], &e, &fk(), 28), 9_000 + R));
+    // Premise changed by DESIGN 4.5e (review 4, F1): the forfeited part has one owner and is never liquidatable; the
+    // clock rule is shown on the same state with a second key (as after a sale of one side).
+    refused(&locked(&ev_draft(&[liq(&fp, N, LONG)], &e, &fk(), 28), 9_000 + R), 0);
+    let mut two = fp.clone();
+    two.p.short_key = xonly(&keypair(19));
+    refused(&locked(&ev_draft(&[liq(&two, N, LONG)], &e, &fk(), 28), 9_000 + R - 1), 0);
+    accept(&locked(&ev_draft(&[liq(&two, N, LONG)], &e, &fk(), 28), 9_000 + R));
     let w = pend(&liq(&l, N, LONG), 940_000_000);
     let cd = ch_draft(&[w], &Evidence::bid(966_315_790, N), &fk(), 26);
     let tx = accept(&cd);

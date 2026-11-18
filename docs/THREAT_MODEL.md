@@ -174,8 +174,9 @@ V: the price gaps past bankruptcy faster than evidence of `k·n` can rest. P: th
 capped at the loser's margin (`[L] docs/plan.md:909`); the gap is lost to the winner. M: partial liquidation; per-pair
 `maxSize`; M2 pool pays the gap first. Since D§4.5d every liquidation settles at least `W` (600 DAA, 60 seconds, on testnet)
 after the proposal, and the winner carries the gap risk of that delay on top of the evidence rest; the parameter
-bound `W ≥ R` keeps refutation possible, and `W` should stay below the time in which the maintenance band absorbs a
-move. R: inherent to an evidence-only design. T: A2 simulation.
+bound `W ≥ 2R` (D§4.5e; `W ≥ R` before review 4, which left a defender no slack at `W = R`, R4-F5) keeps refutation
+possible with `R` of slack after the earliest challenge, and `W` should stay below the time in which the maintenance
+band absorbs a move. R: inherent to an evidence-only design. T: A2 simulation; `holds_window_below_twice_the_rest_is_refused`.
 
 **B4 Liquidation by transfer at a bad price.** *Superseded by D§4.5d: P7 is removed.* A finalized liquidation is
 **forfeit and keep**: the forfeited part (both keys the winner's, both sides unlisted, the loser's bound moved inward by
@@ -185,7 +186,11 @@ transaction, so no third party can be entered at a bound the quote liquidates; R
 P3 (the entrant healthy at its own `X`). Holds (`kpf_two_step_tests`): forfeit and keep then a two-signature cooperative
 close; forfeit and keep then the sale via amend + transfer to a `KpfOpen` at `S′ + 4R`
 (`holds_rate_limit_after_forfeit_and_cure`). R: the winner holds the part until it acts; it carries no price exposure
-meanwhile. T: the forfeit-and-keep tests.
+meanwhile. Review 4 (R4-F1) found that it did carry one cost: the old quote still triggered the forfeited part's long,
+so anyone could liquidate the winner's own part every `R + W` for a keeper fee. Since D§4.5e a part whose two keys are
+equal cannot be liquidated (`holds_forfeited_part_is_not_liquidatable`, `holds_forfeited_part_is_not_drained_and_its_owner_can_close_it`);
+a side the winner sells enters healthy at its own price on a fresh clock (`holds_sold_side_enters_healthy_and_on_a_fresh_clock`).
+T: the forfeit-and-keep tests, `audit4_tests`.
 
 **B5 Liquidation of a healthy pair.**
 V: liquidate with evidence that does not satisfy the trigger, or with a trigger computed on the wrong side; since

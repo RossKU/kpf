@@ -337,6 +337,11 @@ pub fn check_claim(p: &Pair, n: i64, act: &Act, is_ask: bool, quote: i64, ev_nam
             if *side != LONG && *side != SHORT {
                 return invalid("side must be long or short");
             }
+            if p.long_key == p.short_key {
+                return invalid(
+                    "both sides of this pair have one owner (a forfeited part, or a side bought by the other owner): nobody is owed a liquidation, and KpfPair.propose refuses one (DESIGN 4.5e)",
+                );
+            }
             if (*side == LONG) != is_ask {
                 return invalid(format!(
                     "a {} is liquidated by {} (a long by an ask, a short by a bid), but the evidence is {} {ev_name}",
@@ -359,6 +364,45 @@ pub fn check_claim(p: &Pair, n: i64, act: &Act, is_ask: bool, quote: i64, ev_nam
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Whether `lw` is the pending part a genuine proposal of the pinned `KpfPair` writes (review 4, F4; DESIGN 4.5e): its
+/// restore, cure and forfeit hashes match the pair its own state describes, and it holds at least the part's range and
+/// the refund, `q(n, bs - bl) + refund`, which every genuine part holds (`KpfPair.propose`: `v + B` with `v >= q + C`
+/// when `n = s`, `q + C + B` with `refund = B + C` when `n < s`). A look-alike that fails either is refused: acting on it
+/// would make the user's funding pay what the part does not hold.
+pub fn check_pending(lw: &LivePending) -> Result<()> {
+    let w = &lw.w;
+    if !w.hashes_match() {
+        return invalid(
+            "the pending part's restore, cure or forfeit hash does not match the pair its own state describes: it was not proposed by the pinned KpfPair",
+        );
+    }
+    let least = w.least_value();
+    if (lw.value as i128) < least as i128 {
+        return invalid(format!(
+            "the pending part holds {} KAS, less than the {} KAS every genuine part of this claim holds (its range q(n, bs - bl) and the refund): it is a look-alike, not a proposal of a real pair; acting on it would make your funding pay the difference",
+            kas_str(lw.value as i128),
+            kas_str(least as i128)
+        ));
+    }
+    Ok(())
+}
+
+/// [`check_pending`], and that `lw` was cut from the user's pair `pair` (an object file of the pair, live or already spent
+/// by the proposal): the same covenant id (a pending part shares its pair's id) and the same two keys.
+pub fn check_pending_of(lw: &LivePending, pair_id: Hash, pair: &Pair) -> Result<()> {
+    check_pending(lw)?;
+    if lw.id != pair_id {
+        return invalid(format!(
+            "the pending part's covenant id {} is not the pair's {}: it was not cut from this pair (a part and its pair share one id)",
+            lw.id, pair_id
+        ));
+    }
+    if lw.w.long_key != pair.long_key || lw.w.short_key != pair.short_key {
+        return invalid("the pending part names other owners than the pair: it was not cut from this pair");
     }
     Ok(())
 }
@@ -443,6 +487,7 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
             Member::Challenge(w) => {
                 any_pending = true;
                 if checked {
+                    check_pending(w).map_err(|e| Error::Invalid(format!("pending part {j}: {e}")))?;
                     check_challenge(&w.w, is_ask, quote, ev.name()).map_err(|e| Error::Invalid(format!("pending part {j}: {e}")))?;
                 }
             }
@@ -719,6 +764,7 @@ pub fn cure(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Built> {
             "this claim has no cure: the short's cure bound would exceed priceMax".into()
         })
     })?;
+    check_pending(lw)?;
     let loser = if w.side == LONG { w.long_key } else { w.short_key };
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
     d.add_pending_in(lw, "cure", vec![Arg::Sig(loser)], format!("pending part (cure by the {})", side_name(w.side)));
@@ -734,6 +780,7 @@ pub fn cure(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Built> {
 /// the winner (both sides then the winner's) and pays the proposer the bond and the fee.
 pub fn finalize(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Built> {
     let w = &lw.w;
+    check_pending(lw)?;
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
     let i = d.add_pending_in(lw, "finalize", vec![], "pending part (finalize)");
     d.ins[i].sequence = w.m.challenge_daa.max(0) as u64;
