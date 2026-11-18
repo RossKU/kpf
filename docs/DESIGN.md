@@ -1084,6 +1084,22 @@ if the book refutes it within the window, the wronged party is paid from that lo
 (only refuted claims are paid, only within `D`, and in cash at the refuting quote); "faster liquidations are as safe on
 any book" (not on books without arbitrage, residual risk 1).
 
+### 4.5g Rules changed by review 5 (these refine 4.5f)
+
+- **A successful dispute pays the wronged party the whole cover**, not a payoff priced at the disputing order's
+  quote (R5-F1: whoever disputed first chose the counter-order, so a party to the claim could dispute its own
+  claim with an order at the refutation limit and leave the wronged party a fraction, the rest burned). The cover
+  is the upper bound of what the claim could have taken from that party, so it is never short-changed whoever
+  disputes and with whichever valid order. The disputer's reward is unchanged; what remains of the lock is burned.
+  Known cost: on a thin book the deserving loser who self-fills a counter-order now receives the cover rather than
+  a quote-priced amount; the guarantor's loss (its whole lock) is the same as before, the attacker's gain is larger.
+  Guarantors must not guarantee on a book that cannot refute a false counter-order; the tooling says so.
+- **`guarantee` checks the whole market block** with the bounds `KpfOpen` and `KpfPair` enforce (R5-F2: a
+  look-alike pending part with impossible parameters was accepted, then disputed at once). The tooling validates
+  the market of any pending part before it calls a claim undisputable, and refuses otherwise.
+- **`watch` shows the fast path** (R5-F3): for a pending liquidation it states that a guarantor can settle it once
+  the cure grace has passed, shows that deadline before the slow-path one, and puts the cure command first.
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part
