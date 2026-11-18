@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 pub struct KeyFile {
     pub secret: [u8; 32],
     pub public: [u8; 32],
+    /// What `generate` actually did about the file's permissions, in words (review 3 T5); empty for a loaded key.
+    pub permissions: String,
 }
 
 /// The home directory (`USERPROFILE` on Windows, `HOME` elsewhere).
@@ -59,34 +61,47 @@ pub fn generate(path: &Path, net: Network, allow_in_repo: bool) -> Result<KeyFil
         "format": "kpf-key/1", "network": net.name(), "secretKey": to_hex(&secret), "publicKey": to_hex(&public),
         "address": p2pk_address(&public, net),
     });
-    write_private(path, &serde_json::to_string_pretty(&doc).expect("json"))?;
-    Ok(KeyFile { secret, public })
+    let permissions = write_private(path, &serde_json::to_string_pretty(&doc).expect("json"))?;
+    Ok(KeyFile { secret, public, permissions })
 }
 
 #[cfg(unix)]
-fn write_private(path: &Path, text: &str) -> Result<(), String> {
+fn write_private(path: &Path, text: &str) -> Result<String, String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    f.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    f.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok("the file was created with mode 600 (owner read and write only)".into())
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, text: &str) -> Result<(), String> {
+fn write_private(path: &Path, text: &str) -> Result<String, String> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     f.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Windows: drop inherited permissions and grant the current user only (best effort).
-    if let Some(user) = std::env::var_os("USERNAME") {
-        let _ = std::process::Command::new("icacls")
-            .arg(path)
-            .args(["/inheritance:r", "/grant:r"])
-            .arg(format!("{}:F", user.to_string_lossy()))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
-    Ok(())
+    drop(f);
+    // Windows: drop the inherited permissions and grant the current user only, and report what really happened (review 3
+    // T5): the file starts with the folder's inherited permissions, and `icacls` may fail (a USERNAME it cannot resolve,
+    // a domain account that needs DOMAIN\user).
+    let warn = |why: String| {
+        format!("WARNING: the file keeps the permissions it inherited from its folder ({why}); restrict it yourself, e.g. `icacls <file> /inheritance:r /grant:r <you>:F`, or keep it in a folder only you can read")
+    };
+    let Some(user) = std::env::var_os("USERNAME") else {
+        return Ok(warn("USERNAME is not set, so no account to grant".into()));
+    };
+    let user = user.to_string_lossy().into_owned();
+    let r = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{user}:F"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    Ok(match r {
+        Ok(s) if s.success() => format!("inherited permissions were removed and only the account {user} was granted access (icacls)"),
+        Ok(s) => warn(format!("icacls failed with {s} for the account `{user}`")),
+        Err(e) => warn(format!("icacls could not be run: {e}")),
+    })
 }
 
 /// Loads a key file; checks that the public key belongs to the secret and the file is a testnet one.
@@ -104,7 +119,7 @@ pub fn load(path: &Path) -> Result<KeyFile, String> {
             return Err(format!("key file {}: publicKey does not belong to secretKey", path.display()));
         }
     }
-    Ok(KeyFile { secret, public })
+    Ok(KeyFile { secret, public, permissions: String::new() })
 }
 
 /// A key set of the given key files.

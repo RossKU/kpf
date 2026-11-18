@@ -106,6 +106,18 @@ impl LivePair {
     pub fn entry(&self) -> UtxoEntry {
         UtxoEntry::new(self.value, self.p.spk(), self.daa, false, Some(self.id))
     }
+    /// The evidence clock start S of this pair (DESIGN 4.5c): `since`, or this UTXO's DAA score when `since` is 0.
+    pub fn clock(&self) -> i64 {
+        self.p.clock_start(self.daa)
+    }
+    /// The state with `since = S`: what the outputs that do not change hands carry.
+    pub fn clocked(&self) -> Pair {
+        self.p.clocked(self.daa)
+    }
+    /// The first DAA at which a hand-over (transfer, close-versus-close) is allowed: `S + 4 * minRestDaa`.
+    pub fn handover_from(&self) -> u64 {
+        self.p.handover_from(self.daa).max(0) as u64
+    }
 }
 
 /// A live `KpfOpen` UTXO.

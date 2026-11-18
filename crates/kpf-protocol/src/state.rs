@@ -200,6 +200,7 @@ impl Market {
         req(self.liq_fee_bps >= 0 && self.liq_fee_bps <= BPS, "liqFeeBps must be in 0..=10^4")?;
         req(self.keeper_fee_min >= 0, "keeperFeeMin must be >= 0")?;
         req(self.min_rest_daa >= 0 && self.min_rest_daa < LOCK_TIME_THRESHOLD, "minRestDaa must be in 0..5*10^11")?;
+        req(self.min_rest_daa.saturating_mul(4) < LOCK_TIME_THRESHOLD, "4 * minRestDaa must be below 5*10^11 (the hand-over limit S + 4R is a lock time, DESIGN 4.5c)")?;
         req(self.tpl_prefix_len >= 0 && self.tpl_suffix_len >= 0, "token template cut must be >= 0")?;
         Ok(())
     }
@@ -250,6 +251,33 @@ impl Market {
     }
 }
 
+// ---------------------------------------------------------------- health rules of review 3
+
+/// The range condition of DESIGN 4.5c: `bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps)`.
+pub fn range_ok(m: &Market, bl: i64, bs: i64) -> bool {
+    (bl as i128) * ((BPS + m.mmr_bps) as i128) < (bs as i128) * ((BPS - m.mmr_bps) as i128)
+}
+
+/// Health at entry of DESIGN 4.5c: a long with bound `bl` is not liquidatable at price x
+/// (`x * (10^4 - mmrBps) >= bl * 10^4`).
+pub fn long_healthy_at(m: &Market, bl: i64, x: i64) -> bool {
+    (x as i128) * ((BPS - m.mmr_bps) as i128) >= (bl as i128) * (BPS as i128)
+}
+
+/// Health at entry of a short with bound `bs` at price x (`bs * 10^4 >= x * (10^4 + mmrBps)`).
+pub fn short_healthy_at(m: &Market, bs: i64, x: i64) -> bool {
+    (bs as i128) * (BPS as i128) >= (x as i128) * ((BPS + m.mmr_bps) as i128)
+}
+
+/// Health at entry of a side with bound `b` (bl for a long, bs for a short) at price x.
+pub fn healthy_at(m: &Market, side: i64, b: i64, x: i64) -> bool {
+    if side == LONG {
+        long_healthy_at(m, b, x)
+    } else {
+        short_healthy_at(m, b, x)
+    }
+}
+
 // ---------------------------------------------------------------- KpfPair
 
 #[derive(Clone, Debug, PartialEq)]
@@ -269,6 +297,8 @@ pub struct Pair {
     pub short_tip: i64,
     pub tag_l: Hash,
     pub tag_s: Hash,
+    /// Evidence clock start (DESIGN 4.5c): 0 means the DAA score of the pair's own UTXO.
+    pub since: i64,
 }
 
 impl Pair {
@@ -289,11 +319,12 @@ impl Pair {
             F::I(self.short_tip),
             F::B(self.tag_l.as_bytes()),
             F::B(self.tag_s.as_bytes()),
+            F::I(self.since),
         ]);
         f
     }
 
-    /// The canonical encoded state (429 bytes).
+    /// The canonical encoded state (438 bytes).
     pub fn state_bytes(&self) -> Vec<u8> {
         encode(&self.fields())
     }
@@ -357,6 +388,7 @@ impl Pair {
             short_tip: c.int()?,
             tag_l: c.hash()?,
             tag_s: c.hash()?,
+            since: c.int()?,
         };
         c.done()?;
         Ok(p)
@@ -370,6 +402,7 @@ impl Pair {
         req(self.size / self.m.scale <= self.m.max_whole_tokens(), "size exceeds the 63-bit bound of the contracts")?;
         req(self.bl >= 0 && self.bl < self.bs && self.bs <= self.m.price_max, "need 0 <= bl < bs <= priceMax")?;
         req(self.entry >= 0 && self.entry <= self.m.price_max, "entry must be in 0..=priceMax")?;
+        req(self.since >= 0 && self.since < LOCK_TIME_THRESHOLD, "since must be in 0..5*10^11")?;
         for (n, v) in [("longAsk", self.long_ask), ("shortBid", self.short_bid)] {
             req(v >= 0 && v <= self.m.price_max, &format!("{n} must be in 0..=priceMax"))?;
         }
@@ -384,6 +417,37 @@ impl Pair {
     /// q(s, bs - bl) + C: what every output of this pair must hold.
     pub fn floor(&self) -> i64 {
         q(self.size, self.bs - self.bl, self.m.scale, 0) + self.m.carrier
+    }
+
+    /// The evidence clock start S of this pair in a UTXO of DAA score `utxo_daa` (DESIGN 4.5c, `KpfPair.clockStart`):
+    /// `since` when non-zero, else the UTXO's own DAA score.
+    pub fn clock_start(&self, utxo_daa: u64) -> i64 {
+        if self.since != 0 {
+            self.since
+        } else {
+            utxo_daa as i64
+        }
+    }
+
+    /// This state with `since` set to its clock start: the state every pair output that does not change hands
+    /// carries (the continuation of amend and add margin, every remainder). The payoff functions build their outputs
+    /// from a clocked pair.
+    pub fn clocked(&self, utxo_daa: u64) -> Pair {
+        let mut p = self.clone();
+        p.since = self.clock_start(utxo_daa);
+        p
+    }
+
+    /// The first DAA at which a hand-over (transfer, close-versus-close) of this pair is allowed:
+    /// `S + 4 * minRestDaa` (DESIGN 4.5c).
+    pub fn handover_from(&self, utxo_daa: u64) -> i64 {
+        self.clock_start(utxo_daa).saturating_add(self.m.min_rest_daa.saturating_mul(4))
+    }
+
+    /// Whether the range is wider than both maintenance bands (DESIGN 4.5c, review 3 F2):
+    /// `bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps)`. A pair that fails it can never be liquidated.
+    pub fn range_ok(&self) -> bool {
+        range_ok(&self.m, self.bl, self.bs)
     }
 
     pub fn with_size(&self, s: i64) -> Pair {
@@ -428,7 +492,7 @@ impl Pair {
             "longKey": to_hex(&self.long_key), "shortKey": to_hex(&self.short_key),
             "longListing": {"ask": self.long_ask, "minPart": self.long_min, "tip": self.long_tip},
             "shortListing": {"bid": self.short_bid, "minPart": self.short_min, "tip": self.short_tip},
-            "tagL": to_hex(&self.tag_l.as_bytes()), "tagS": to_hex(&self.tag_s.as_bytes()),
+            "tagL": to_hex(&self.tag_l.as_bytes()), "tagS": to_hex(&self.tag_s.as_bytes()), "since": self.since,
             "floorValue": self.floor(),
         })
     }
@@ -469,7 +533,7 @@ impl Open {
         f
     }
 
-    /// The canonical encoded state (321 bytes).
+    /// The canonical encoded state (321 bytes; unchanged by review 3).
     pub fn state_bytes(&self) -> Vec<u8> {
         encode(&self.fields())
     }

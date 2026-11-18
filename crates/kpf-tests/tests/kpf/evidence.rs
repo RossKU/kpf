@@ -222,7 +222,7 @@ pub use kpf_protocol::payoff::{fee_of, liq_fee, loser_price, slice_of, trigger_o
 
 /// KpfPair.closeAt: (long payout, short payout, remainder and its least value).
 pub fn close_at(l: &Live, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Option<(Pair, i64)>) {
-    kpf_protocol::payoff::close_at(&l.p, l.value, n, c, side, fee)
+    kpf_protocol::payoff::close_at(&l.clocked(), l.value, n, c, side, fee)
 }
 
 /// The settlement price of an evidence quote for a pair: clamped to [bl, bs].
@@ -384,7 +384,7 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
 
 /// A live pair for the evidence tests (the DESIGN 5 worked example: 1,000 tokens, bl 9, bs 12 KAS).
 pub fn live(p: &Pair, tag: u8) -> Live {
-    Live { p: p.clone(), value: p.floor() as u64, id: Hash::from_bytes([tag; 32]), op: outpoint(tag) }
+    Live { p: p.clone(), value: p.floor() as u64, id: Hash::from_bytes([tag; 32]), op: outpoint(tag), daa: 0 }
 }
 
 /// The output index of the short payout of block pair i.

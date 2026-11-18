@@ -33,8 +33,9 @@ Builders (common: --funder KEY --funding UTXOS.json | --node URL, [--key KEY]...
   open-taker    --order O.json --n T --x P --rate P                 order x signing taker (the funder)
   amend         --pair P.json --side long|short (--price P [--min-part T] [--tip P] | --unlist) --key OWNER
   add-margin    --pair P.json --side long|short --delta P --key OWNER
-  transfer      --pair P.json --side long|short --n T --x P (--entrant-order O.json | --rate P) [--k 0|1]
-  close-vs-close --host P.json --donor P.json --n T --x P [--e3 P]
+  transfer      --pair P.json --side long|short --n T --x P (--entrant-order O.json | --rate P) [--k 0|1] [--daa N]
+                allowed from DAA S + 4 * minRestDaa (S: the pair's evidence clock start, shown by the command)
+  close-vs-close --host P.json --donor P.json --n T --x P [--e3 P] [--daa N]   (both pairs' hand-over limits apply)
   mutual-close  --pair P.json --n T --x P
   coop-close    --pair P.json --long-pay KAS [--fee-from long|short] --key LONG --key SHORT [--funder KEY]
   idle-settle   --pair P.json
@@ -51,7 +52,8 @@ ask's tokens with its own KAS, or SELLS its own tokens into the evidence bid. co
   kob-file  --redeem HEX --outpoint TXID:INDEX (--node URL | --amount SOMPI --daa N --covenant-id HEX) [--custody FILE] [--out FILE]
             an ORDER.json / TOKEN.json from a KOB order's or a token holder's redeem script
   (--daa N: the DAA the time checks use when there is no --node; a transaction whose lock time is ahead of the node's DAA
-   is not submitted)
+   is not submitted. Evidence counts only from the pair's evidence clock start S, and a dead (soft-expired) order is
+   refused; --allow-dead-evidence accepts one, for sweeping tests only)
 
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)

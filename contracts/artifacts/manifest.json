@@ -18,23 +18,23 @@
   "kob_commit": "ed16148",
   "kpf_open": {
     "artifact": "KpfOpen.json",
-    "artifact_sha256": "ff48d02c00d32f73213e8f67fd821287475fc25d661c09c44cb311d14c6f0a8c",
+    "artifact_sha256": "1b43890d8fecf7eb003ada1b4fd541e34b765bebbd66f980cc81c7a45830f3e2",
     "prefix_len": 1,
     "source": "contracts/KpfOpen.sil",
-    "source_sha256": "955dd4d64c02ccd3e8a9e4b0c0a6992a7649b3f95d4212375b5dace3e1d7d855",
+    "source_sha256": "242f4e4736264438c7bb7121b91a76e4c17114958172c86b2d4cdefa7534195f",
     "state_len": 321,
-    "suffix_len": 2312,
-    "template_hash": "f61dd656349aa2279600595cb338de5e3b99807267702cc080c55897a11b4e03"
+    "suffix_len": 2487,
+    "template_hash": "b7b66c72cd5a24178ea3e4b5b9635fde0bdeb3d86112e1549140442ee51a6345"
   },
   "kpf_pair": {
     "artifact": "KpfPair.json",
-    "artifact_sha256": "0e927d67c6869fa0818bbe827164c94d47b0443cf8e9cf86e6c04ba9a5900875",
+    "artifact_sha256": "eb8502adfcad6fe1e5a45fbbe3cc4f3352b08c86bf648f6bd644ea2cdcb5e714",
     "prefix_len": 1,
     "source": "contracts/KpfPair.sil",
-    "source_sha256": "af47b338568ea613af1fc7d7d136ce43354aa42917bc4e56e2ac9b33b18f955a",
-    "state_len": 429,
-    "suffix_len": 11137,
-    "template_hash": "785bea8298d15fee62496009a1e57bb5f6ce28430d242bc938a46fad5f65a5f3"
+    "source_sha256": "58152af691e3ef24beff509c1c945dae6870e6b66cbeb8ad7e4b5f037d55148a",
+    "state_len": 438,
+    "suffix_len": 11676,
+    "template_hash": "47fc3a5eba4925bd7b52f599d278c759323084221b986be8b521a84e87d5c659"
   },
   "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write"
 }

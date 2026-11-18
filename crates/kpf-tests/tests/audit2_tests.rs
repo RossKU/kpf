@@ -205,13 +205,17 @@ fn holds_self_liquidating_loser_receives_zero_at_any_quote() {
         let d = ev_draft(&[liq_t(&l, n, LONG, 950_000_000, 0)], &Evidence::ask(TOP_ASK, n), &fk(), 5);
         let tx = accept(&d);
         assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&l.p.long_key)), "P7: nothing paid to the loser");
-        let d = ev_draft(&[liq_t(&l, n, SHORT, 1_000_000_000, 0)], &own_bid(LOW_BID, n, &sk()), &sk(), 6);
+        // Premise changed by review 3 (F3, DESIGN 4.5c): the short entrant must be healthy at the bid itself, so it enters
+        // at x = 10.00000001 (bound 12.00000001), not at x = 10, where its bound 12 equals the loser's and the same
+        // bid liquidates it.
+        let xs = 1_000_000_001;
+        let d = ev_draft(&[liq_t(&l, n, SHORT, xs, 0)], &own_bid(LOW_BID, n, &sk()), &sk(), 6);
         accept(&d);
         assert_eq!(d.outs[0].script_public_key, p2pk_x(&l.p.long_key));
         let mut x = d.clone();
         x.outs[0].script_public_key = p2pk_x(&l.p.short_key);
         refused(&x, 0);
-        let d = ev_draft(&[liq_t(&l, n, SHORT, 1_000_000_000, 0)], &Evidence::bid(LOW_BID, n), &fk(), 6);
+        let d = ev_draft(&[liq_t(&l, n, SHORT, xs, 0)], &Evidence::bid(LOW_BID, n), &fk(), 6);
         let tx = accept(&d);
         assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&l.p.short_key)), "P7: nothing paid to the loser");
     }
@@ -264,6 +268,17 @@ fn holds_winner_receipt_depends_on_the_quote_only_through_the_fee() {
     for p in mmr_pairs() {
         tag += 1;
         let l = live(&p, tag);
+        if !p.range_ok() {
+            // Premise changed by review 3 (F2, DESIGN 4.5c): a pair whose range is not wider than both maintenance
+            // bands (here mmr 49.99 %) is not liquidatable at all, at any quote of either window.
+            for side in [LONG, SHORT] {
+                for quote in window(&p, side) {
+                    let e = if side == LONG { Evidence::ask(quote, p.size) } else { Evidence::bid(quote, p.size) };
+                    refused(&ev_draft(&[liq(&l, p.size, side)], &e, &fk(), 7), 0);
+                }
+            }
+            continue;
+        }
         for side in [LONG, SHORT] {
             for n in [p.size, (p.size / 2 / MIN_SIZE).max(1) * MIN_SIZE] {
                 if n < p.size && p.size - n < MIN_SIZE {
@@ -285,9 +300,6 @@ fn holds_winner_receipt_depends_on_the_quote_only_through_the_fee() {
                         assert!(w >= last, "{what}: the receipt fell as the ask fell");
                     }
                     last = w;
-                    if w == 0 {
-                        continue; // T clamped to the loser's bound: the slice is the whole part
-                    }
                     let mut x = d.clone();
                     if side == LONG {
                         let m = x.outs.len();
@@ -313,13 +325,23 @@ fn holds_p7_winner_at_least_its_trigger_payoff() {
         p.m.mmr_bps = m;
         tag += 1;
         let l = live(&p, tag);
+        if !p.range_ok() {
+            // Premise changed by review 3 (F2, DESIGN 4.5c): at mmr 49.99 % the base pair is not wider than both
+            // maintenance bands, so neither side is liquidatable by transfer.
+            refused(&ev_draft(&[liq_t(&l, N, LONG, 1_000_000_000, 0)], &Evidence::ask(window(&p, LONG)[0], N), &fk(), 8), 0);
+            continue;
+        }
         // The fixture entrants accept a long at x <= E = 10 KAS and a short at x >= 10 KAS.
         let x = 1_000_000_000;
         for (side, quotes) in [(LONG, [x.min(window(&p, LONG)[0]), 500_000_000]), (SHORT, [x.max(window(&p, SHORT)[0]), 2_000_000_000])] {
             for n in [N, HALF] {
                 for quote in quotes {
                     let e = if side == LONG { Evidence::ask(quote, n) } else { Evidence::bid(quote, n) };
-                    let xx = if side == LONG { x.max(quote) } else { x.min(quote) };
+                    // Premise changed by review 3 (F3, DESIGN 4.5c): the entrant must be healthy at the quote, so x is
+                    // also bounded by the entrant's health (the default price of the tool, `p7_default_x`).
+                    let rate = if side == LONG { 100_000_000 } else { 200_000_000 };
+                    let hb = kpf_protocol::evidence::entrant_health_bound(&p.m, side, quote, rate);
+                    let xx = if side == LONG { x.max(quote).min(hb) } else { x.min(quote).max(hb) };
                     let d = ev_draft(&[liq_t(&l, n, side, xx, 0)], &e, &fk(), 8);
                     let tx = accept(&d);
                     let what = format!("mmr {m} side {side} n {n} quote {quote}");
@@ -545,6 +567,9 @@ fn holds_trigger_boundary_and_rounding_of_t() {
     assert!(short_out(&d) >= q(N, p.bs - 1_000_000_000, SCALE, 0) + C);
     let mut p = base();
     p.m.mmr_bps = 2_000;
+    // Premise changed by review 3 (F2, DESIGN 4.5c): at 20 % the base pair (bl 9) is narrower than both maintenance
+    // bands (9 * 1.2 > 12 * 0.8) and not liquidatable; bl 7 keeps the exact short trigger of 10 KAS inside the range.
+    p.bl = 700_000_000;
     let l = live(&p, 0x6f);
     assert_eq!(trigger_of(&p, SHORT), 1_000_000_000);
     refused(&ev_draft(&[liq(&l, N, SHORT)], &Evidence::bid(1_000_000_000, N), &lk(), 1), 0);
@@ -556,7 +581,9 @@ fn holds_trigger_boundary_and_rounding_of_t() {
     assert_eq!((trigger_of(&l.p, LONG), trigger_of(&l.p, SHORT)), (TOP_ASK, LOW_BID));
     accept(&ev_draft(&[liq(&l, N, LONG)], &Evidence::ask(TOP_ASK, N), &sk(), 1));
     accept(&ev_draft(&[liq(&l, N, SHORT)], &Evidence::bid(LOW_BID, N), &lk(), 1));
-    for p in mmr_pairs() {
+    // Premise changed by review 3: T is no longer clamped, so the slices are bounded only for the pairs that can be
+    // liquidated at all (range wider than both maintenance bands).
+    for p in mmr_pairs().into_iter().filter(|p| p.range_ok()) {
         let m = p.m.mmr_bps as i128;
         let (bl, bs, s) = (p.bl as i128, p.bs as i128, p.size as i128);
         let sc = p.m.scale as i128;
@@ -597,6 +624,8 @@ fn holds_close_donor_half_alone_is_only_a_transfer() {
     ];
     let mut d = Draft::new(ins, outs, Some(2));
     d.genesis.push((1, 1, fop(7)));
+    // The donor's short hands over: it waits for the pair's hand-over limit S + 4R (review 3, DESIGN 4.5c).
+    d.lock = donor.handover_from();
     accept(&d);
     for price in [0, 800_000_000, 950_000_000, 1_000_000_000, 1_200_000_000, 1_250_000_000, 2_000_000_000] {
         assert!(p3.long_at(price) >= p.long_at(price), "long worse off at {price}");

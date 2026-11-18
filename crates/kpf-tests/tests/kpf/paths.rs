@@ -48,6 +48,28 @@ pub struct Live {
     pub value: u64,
     pub id: Hash,
     pub op: TransactionOutpoint,
+    /// The UTXO's DAA score (what `OpTxInputDaaScore` reads; the clock start of a pair with `since = 0`).
+    pub daa: u64,
+}
+
+impl Live {
+    /// The evidence clock start S (DESIGN 4.5c).
+    pub fn clock(&self) -> i64 {
+        self.p.clock_start(self.daa)
+    }
+    /// The state with `since = S`: what every output that does not change hands carries.
+    pub fn clocked(&self) -> Pair {
+        self.p.clocked(self.daa)
+    }
+    /// The first DAA at which a hand-over (P3, P4) is allowed: S + 4R.
+    pub fn handover_from(&self) -> u64 {
+        self.p.handover_from(self.daa).max(0) as u64
+    }
+    /// This pair in a UTXO of DAA score `daa`.
+    pub fn at(mut self, daa: u64) -> Live {
+        self.daa = daa;
+        self
+    }
 }
 
 /// A live KpfOpen UTXO.
@@ -126,7 +148,7 @@ impl Draft {
 }
 
 pub fn pair_input(l: &Live, entry: &'static str, args: Vec<Arg>) -> In {
-    In { outpoint: l.op, utxo: UtxoEntry::new(l.value, p2sh(&l.p.art()), 0, false, Some(l.id)), spend: Spend::Signed { art: l.p.art(), entry, args } }
+    In { outpoint: l.op, utxo: UtxoEntry::new(l.value, p2sh(&l.p.art()), l.daa, false, Some(l.id)), spend: Spend::Signed { art: l.p.art(), entry, args } }
 }
 
 pub fn open_input(l: &LiveOpen, entry: &'static str, args: Vec<Arg>) -> In {
@@ -180,7 +202,7 @@ pub fn open_draft(lo: &LiveOpen, so: &LiveOpen, n: i64, x: i64, f: &Keypair, fn_
 
 /// P1: in 0 pair (signed by `signer`), 1 F. out 0 continuation (value kept), 1 change.
 pub fn amend_draft(l: &Live, signer: &Keypair, side: i64, w: (i64, i64, i64), f: &Keypair, fn_: u32) -> Draft {
-    let mut n = l.p.cleared();
+    let mut n = l.clocked().cleared();
     if side == LONG {
         (n.long_ask, n.long_min, n.long_tip) = w;
     } else {
@@ -206,12 +228,12 @@ pub enum Entrant {
 }
 
 pub fn transfer_out(l: &Live, t: &TransferSpec) -> TransferOut {
-    kpf_protocol::payoff::transfer_out(&l.p, l.value, t)
+    kpf_protocol::payoff::transfer_out(&l.clocked(), l.value, t)
 }
 
 /// The hand-over of P3 and P7 (KpfPair.handOver) for a leaver owed `pay`.
 pub fn hand_over_out(l: &Live, t: &TransferSpec, pay: i64) -> TransferOut {
-    kpf_protocol::payoff::hand_over_out(&l.p, l.value, t, pay)
+    kpf_protocol::payoff::hand_over_out(&l.clocked(), l.value, t, pay)
 }
 
 /// P3: in 0 pair, 1 entrant (KpfOpen or direct taker), 2 F (KpfOpen case only). out 0 leaver, 1 entrant's
@@ -273,6 +295,8 @@ pub fn transfer_draft(l: &Live, t: &TransferSpec, ent: &Entrant, f: &Keypair, fn
     let mut d = Draft::new(ins, outs, Some(change));
     d.pairs = pairs;
     d.opens = opens;
+    // The hand-over rate limit (DESIGN 4.5c): the least lock time the pair accepts.
+    d.lock = l.handover_from();
     d
 }
 
@@ -288,7 +312,7 @@ pub fn take_args(part: &Pair, side: i64, part_out: i64, n: i64, x: i64) -> Vec<A
 // ---------------------------------------------------------------- P4 close-versus-close
 
 pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
-    kpf_protocol::payoff::close_out(&h.p, h.value, &d.p, d.value, d.id, c)
+    kpf_protocol::payoff::close_out(&h.clocked(), h.value, &d.clocked(), d.value, d.id, c)
 }
 
 pub fn host_args(d: &Live, c: &CloseSpec, k: i64) -> Vec<Arg> {
@@ -324,13 +348,14 @@ pub fn close_draft(h: &Live, d: &Live, c: &CloseSpec, f: &Keypair, fn_: u32) -> 
     let ch = outs.len() - 1;
     let mut dr = Draft::new(ins, outs, Some(ch));
     dr.pairs = pairs;
+    dr.lock = h.handover_from().max(d.handover_from());
     dr
 }
 
 // ---------------------------------------------------------------- P4 mutual close
 
 pub fn mutual_out(l: &Live, n: i64, x: i64) -> MutualOut {
-    kpf_protocol::payoff::mutual_out(&l.p, l.value, n, x)
+    kpf_protocol::payoff::mutual_out(&l.clocked(), l.value, n, x)
 }
 
 /// T3': in 0 pair, 1 F. out 0 long, then the remainder if any, then F's change, then the short at M - 1.
@@ -374,7 +399,7 @@ pub fn live_pairs(tx: &Transaction, d: &Draft) -> Vec<Live> {
         .iter()
         .map(|(idx, p)| {
             let (op, u) = utxo_of(tx, *idx);
-            Live { p: p.clone(), value: u.amount, id: u.covenant_id.expect("pair output has an id"), op }
+            Live { p: p.clone(), value: u.amount, id: u.covenant_id.expect("pair output has an id"), op, daa: u.block_daa_score }
         })
         .collect()
 }

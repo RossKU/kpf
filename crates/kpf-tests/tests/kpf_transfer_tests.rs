@@ -44,7 +44,7 @@ fn listed(k: &K) -> Pair {
 }
 
 fn live(p: &Pair) -> Live {
-    Live { p: p.clone(), value: p.floor() as u64, id: PAIR_ID, op: outpoint(10) }
+    Live { p: p.clone(), value: p.floor() as u64, id: PAIR_ID, op: outpoint(10), daa: 0 }
 }
 
 /// A long KpfOpen with rate 2 KAS (so bl' = x - 2 <= 9 at x <= 11), limit 11, accepting a short rate >= 1.5.
@@ -213,8 +213,9 @@ fn p3_dust_payout_stays_in_the_remainder() {
     (p.long_ask, p.long_tip) = (1, 0);
     let l = live(&p);
     // At x = bl + 0.00001 KAS the leaver is owed q(400, 1,000 sompi) = 400,000 sompi, below dust: no payout, and
-    // the remainder holds it.
-    let t = direct_spec(&k, LONG, 400_000_000, p.bl + 1_000, p.bl);
+    // the remainder holds it. Premise changed by review 3 (DESIGN 4.5c): the entrant must be healthy at x, so it posts
+    // the maintenance margin of x (bound floor(x * 0.95)) instead of entering at the leaver's bl.
+    let t = direct_spec(&k, LONG, 400_000_000, p.bl + 1_000, (p.bl + 1_000) * 9_500 / 10_000);
     let d = tx_d(&l, &t, &Entrant::Direct(k.taker), &k);
     let tx = accept_d(&d);
     assert_eq!(tx.outputs[0].value, 0);
@@ -566,7 +567,7 @@ fn p3_two_orders_cannot_claim_one_part() {
         }
     }
     let ch = outs.len() - 1;
-    let dd = Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], opens: vec![] };
+    let dd = Draft { ins, outs, lock: d.lock, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], opens: vec![] };
     // The take arguments name partOut = 2; the part moved to 3, so fix both orders' argument.
     let mut dd2 = dd.clone();
     for i in [1, 2] {
@@ -622,7 +623,7 @@ fn p3_stale_tag_cannot_alias_a_hand_over() {
     let x0 = 1_000_000_000;
     let mut qp = pair(&k.entrant, &k.short);
     (qp.size, qp.bl, qp.bs, qp.entry, qp.tag_l) = (400_000_000, x0 - lo.o.my_rate, 1_200_000_000, x0, L_ID);
-    let ql = Live { p: qp.clone(), value: qp.floor() as u64, id: Hash::from_bytes([0x77; 32]), op: outpoint(30) };
+    let ql = Live { p: qp.clone(), value: qp.floor() as u64, id: Hash::from_bytes([0x77; 32]), op: outpoint(30), daa: 0 };
     let w = (950_000_000, 100_000_000, 0);
     let mut d = amend_draft(&ql, &k.short, SHORT, w, &k.f, 4);
     let cont = d.pairs[0].1.clone();

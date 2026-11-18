@@ -85,8 +85,16 @@ verbatim: `interval ≥ 0` (audit 2026-10-29 F1, `[K] docs/spec/matcher.md:729-7
 `activeFrom`, custody DAA, checked by CLTV (`[K] contracts/orders/KobCondAsk.sil:219-246`); only accepted UTXOs
 (`matcher.md:1047-1054`). The order must also have been fillable by conforming matchers for the whole window
 (review 2, F2; D§4.5b): `expiryDaa`, the IOC/FOK kill `max(UTXO DAA, activeFrom) + 600` and UTXO DAA + 90 days all
-`≥ exposed + R`, read from the order's own state. R: KOB's `KobCondAsk.touch` still lacks the soft-expiry rule. T:
-port KOB's evidence mutation suite to every KPF evidence path; `audit2_tests` expiry, kill and idle boundaries.
+`≥ exposed + R`, read from the order's own state. Review 3 (F1, D§4.5c): a covenant can prove only a lower bound on
+the time, so an order that died after resting could be used forever; evidence now counts only on the pair's own clock
+(`exposed' = max(exposed, S)`, `S` = `since` or the pair UTXO's DAA), the three conditions use `exposed'`, and
+hand-overs restart the clock at most once per `4R`. R: a dead order that rested honestly at a past price within the
+clock stays usable: the closer of a P5 gets a look-back to the best quote since `S`, and a side touched since `S`
+stays liquidatable while its bound is unchanged (barrier semantics); executors must sweep dead mispriced orders and the
+tooling refuses dead evidence by default. A touch that starts resting in the last `R` before `S + 4R` and dies before
+resting `R` after a self-transfer is dodged. KOB's `KobCondAsk.touch` still lacks the soft-expiry rule. T: port KOB's
+evidence mutation suite to every KPF evidence path; `audit2_tests` expiry, kill and idle boundaries; `audit3_tests`
+clock, rate-limit and sentinel tests; X6 cross-check of the clock rule.
 
 **A6 Evidence identity.**
 V: evidence of another token, another extension commitment, another `scale`, a decaying order, or a conditional /
@@ -120,16 +128,24 @@ capped at the loser's margin (`[L] docs/plan.md:909`); the gap is lost to the wi
 
 **B4 Liquidation by transfer at a bad price.**
 V: keeper and a colluding `KpfOpen` buy the loser's part at a price below the market. P: T7. I: the winner, which
-receives the entrant's payment (D§4.5b), is under-paid; the loser receives nothing in any case. M: T7 requires
+receives the entrant's payment (D§4.5b), is under-paid; the loser receives nothing in any case. The entrant itself can
+be entered at a bound the same quote liquidates (review 3 F3) and then forfeit its whole margin. M: T7 requires
 `X ≥ a` for a long (`X ≤ b` for a short); the winner keeps its position (no-downgrade) and its cash plus the part's
-payoff at `X` is at least its payoff at `T`. R: the winner's cash depends on `X`, chosen by the entrant within its own
+payoff at `X` is at least its payoff at `T`; the entrant must be healthy at the evidence quote itself
+(`a·(10⁴ − mmrBps) ≥ BL′·10⁴`, D§4.5c), and `KpfOpen` checks its own health at its own `x`. R: the winner's cash depends on `X`, chosen by the entrant within its own
 limit. T: mutation `X < a`; `holds_p7_winner_at_least_its_trigger_payoff`.
 
 **B5 Liquidation of a healthy pair.**
 V: liquidate with evidence that does not satisfy the trigger, or with a trigger computed on the wrong side; since
-review 2 the winner gains the loser's whole residual, so the winner has the motive. M: trigger in price units only
+review 2 the winner gains the loser's whole residual, so the winner has the motive. Review 3 found two more: a dead quote
+(A5) and a range narrower than the maintenance band (F2), in which the side owed the whole pair was "liquidatable" and
+forfeited it; and a fill at the order's limit born liquidatable (F4). M: trigger in price units only
 (`a·(10⁴ − mmrBps) < BL·10⁴`, D§3.6), checked by the pair itself; one evidence kind per side; market identity; the
-evidence block; `T` affects only the fee cap. R: none found (review 2 follow-up). T: boundary vectors X11;
+evidence block; `T` affects only the fee cap; the evidence clock (A5); a pair is liquidatable only when
+`BL·(10⁴ + mmrBps) < BS·(10⁴ − mmrBps)`, which `KpfOpen` requires at creation and no hand-over or add margin can
+break; every entrant is healthy at its entry price (D§4.5c). R: an order filled at its limit above the market is
+liquidated once the market stays below its trigger for `R` on the pair's clock (limit slippage under forfeiture; the
+order ticket warns). T: boundary vectors X11;
 `audit2_tests` `holds_winner_cannot_*` and `holds_trigger_boundary_and_rounding_of_t`.
 
 ### C. Re-mark, re-pair and transfer
@@ -279,13 +295,16 @@ inequalities and lists only consistent UTXOs; funds are not at risk (C3).
 **K1 Evidence impossible.** Token paused, token migrated to a new id (`[K] contracts/third-party/kusdt/UPSTREAM.md:17`), KOB
 makers moved off the pinned v3 templates, or an empty book. I: no unilateral close and no liquidation. M: evidence-free
 exits remain: transfer (T2), close-versus-close and mutual close (T3), cooperative close (T9), idle settle (T8).
+Transfer and close-versus-close wait for the hand-over limit `S + 4R` (D§4.5c); mutual close, cooperative close and
+idle settle do not.
 R: liquidations stop for the duration; bad debt accrues to winners. T: X13.
 **K2 Idle settle as a free option.** V: a losing party waits out `idleDaa` hoping nobody touches the pair, then settles
 at `E`. M: `idleDaa` long (90 days, as KOB, `[K] contracts/orders/KobCondAsk.sil:109-110`); the winner can close with
 evidence or amend (which resets the age) at any time; `E` changes only with both parties' consent (T1 sets it, P3/P7
 keep it, P4 writes `E(donor) ≤ E3 ≤ E(host)`, D§4.5a), so no party can move it alone (review 1, F3), and a `KpfOpen`
 entrant accepts the kept `E` only on its own side of its fill price. R: a winner absent for `idleDaa` with no evidence
-available loses its unrealised profit since `E`, never more. T: X8, X6 (idle payout of every party that did not act).
+available loses its unrealised profit since `E`, never more. The hand-over limit does not touch P8: amend resets the age,
+never the evidence clock. T: X8, X6 (idle payout of every party that did not act).
 **K3 Lost key.** The counterparty of a lost-key owner can still close (evidence), transfer its own side, or wait for idle
 settle; the lost key's own funds are lost as with any key. **K4 Open orders.** `KpfOpen` refundable by anyone after
 `min(expiryDaa, 90 days idle)`. **K5 Censorship.** All executors refusing a pair's transactions: accepted residual (T4).

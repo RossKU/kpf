@@ -29,6 +29,7 @@ fn random_pair(r: &mut Lcg) -> Pair {
     p.long_ask = r.range(0, 1_000_000);
     p.short_bid = r.range(0, 1_000_000);
     p.tag_l = Hash::from_bytes([(r.next() & 255) as u8; 32]);
+    p.since = r.range(0, 1_000_000_000);
     p
 }
 

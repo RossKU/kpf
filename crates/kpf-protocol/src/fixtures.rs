@@ -103,6 +103,7 @@ pub fn pair(long: [u8; 32], short: [u8; 32]) -> Pair {
         short_tip: 0,
         tag_l: Hash::default(),
         tag_s: Hash::default(),
+        since: 0,
     }
 }
 

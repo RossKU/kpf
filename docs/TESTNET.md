@@ -70,7 +70,7 @@ per whole token, sizes are whole tokens.
 | 4 | `kpf open --long out/1/*-out0-order.json --short out/2/*-out0-order.json --n 10 --x 10 $F $S --out-dir out/4` | a pair: `kpf inspect out/4/*-pair.json` says size 10, range 9 .. 12 KAS, floor 30.2 KAS; the long order continues with 10 tokens; the short order is filled out (its remainder is paid to bob) |
 | 5 | `kpf amend --pair out/4/*-pair.json --side long --price 10 --key $A $F $S --out-dir out/5` | the pair is spent (NOT LIVE) and replaced: long listing 10 |
 | 6 | `kpf amend --pair out/5/*-pair.json --side short --price 10.5 --key $B $F $S --out-dir out/6` | short listing 10.5 |
-| 7 | `kpf transfer --pair out/6/*-pair.json --side short --n 4 --x 10.2 --entrant-order out/3/*-out0-order.json $F $S --out-dir out/7` | two pairs: a part of 4 tokens (short = carol) and a remainder of 6 (short = bob); bob is paid `q(4, 12 - 10.2)` = 7.2 KAS; carol's order continues with 6 tokens |
+| 7 | wait until the DAA the command prints for a hand-over (the pair's clock start + 4 x minRestDaa, about 4 minutes after step 4 with `minRestDaa` 600; the transaction's lock time is that DAA and `kpf` will not submit it earlier), then `kpf transfer --pair out/6/*-pair.json --side short --n 4 --x 10.2 --entrant-order out/3/*-out0-order.json $F $S --out-dir out/7` | two pairs: a part of 4 tokens (short = carol) and a remainder of 6 (short = bob); bob is paid `q(4, 12 - 10.2)` = 7.2 KAS; carol's order continues with 6 tokens |
 | 8 | `kpf add-margin --pair out/7/*-out3-pair.json --side long --delta 0.1 --key $A $F $S --out-dir out/8` | `bl` 9 -> 8.9, value +0.6 KAS |
 | 9 | `kpf mutual-close --pair out/8/*-pair.json --n 3 --x 10.2 $F $S --out-dir out/9` | both listings cross: alice is paid `q(3, 10.2 - 8.9)` = 3.9 KAS, bob `q(3, 12 - 10.2)` = 5.4 KAS; a remainder of 3 tokens |
 | 10 | `kpf coop-close --pair out/9/*-out1-pair.json --long-pay <half of its value>s --fee-from short --key $A --key $B $S --out-dir out/10` | the pair is spent, nothing replaces it; both keys signed one transaction |
@@ -102,7 +102,7 @@ the short owner of the new pair and its own UTXOs pay the short margin. Close-ve
 | idle settle | 0.0240 | 14,279 | 2,736 |
 
 Script units are small (the largest input uses about 280,000, every input commits the exact budget). The mass is dominated
-by the size of the redeem scripts (a pair's script is 11.6 KB and is revealed on every spend). If blocks are contended the
+by the size of the redeem scripts (a pair's script is 12.1 KB since review 3 and is revealed on every spend; the table was measured at 11.6 KB). If blocks are contended the
 node may not relay at the floor: raise `--fee-rate` or add `--priority` (which also pays for the storage mass).
 
 ## 5. If something fails
@@ -187,8 +187,13 @@ kpf evidence --order ask.json --pair out/4/*-pair.json --node $NODE        # or 
 
 `kpf evidence` decodes the order, checks it against the pair's market the way `KpfPair` does (token covenant id, scale,
 extension commitment, token program, not decaying, interval, custody, the rest window of DESIGN 4.5b: soft expiry, IOC/FOK
-kill and the 90-day idle limit) and prints, in words, why an order cannot serve: `CANNOT SERVE` (never, as it is) or
-`NOT YET` (it must rest until DAA N). It also lists what the quote lets this pair do (the long closes at a bid, the short
+kill and the 90-day idle limit) **on the pair's evidence clock** (DESIGN 4.5c: the rest counts only from
+`max(exposed, S)`, `S` the pair's clock start; the command prints the clock start, `since`, and the DAA from which a hand-over
+is allowed) and prints, in words, why an order cannot serve: `CANNOT SERVE` (never, as it is), `NOT YET` (it must rest
+until DAA N) or `DEAD` (it is past its soft expiry, its IOC/FOK kill or 90 days idle at the DAA the transaction would
+land: conforming matchers no longer fill it and no book shows it). `kpf evidence`, `close`, `liquidate` and
+`liquidate-transfer` refuse a dead order; `--allow-dead-evidence` accepts one, for sweeping tests only. Order and object
+files must carry `daa` (a file without it is refused, not read as 0: refresh it with `--node` or `kpf status --update`). It also lists what the quote lets this pair do (the long closes at a bid, the short
 at an ask, who is liquidatable at that quote and why not). It exits non-zero unless the order is usable (without a DAA only the time-free conditions are judged).
 
 **If the live KOB deployment uses different templates** the check says so: *the script (N bytes) is not an instance of the
@@ -203,7 +208,9 @@ exits of section 3.
 
 Use the pair of section 3, step 4 (size 10 tokens at 10 KAS, range 9 .. 12 KAS) on the market of 7.1, with `F` and `S` as
 there and `--out-dir out/<step>`; dry run first, then `$S`. Time matters: `minRestDaa` DAA after the evidence order was
-created (and, for an ask, after its custody) its quote counts; before that `kpf evidence` says `NOT YET`, and a built
+created (and, for an ask, after its custody), **and after the pair's own clock start** (its UTXO's DAA for a pair that
+just changed hands), its quote counts; an order that rested before the pair was opened or transferred counts only from
+then, and only if it is still live; before that `kpf evidence` says `NOT YET`, and a built
 transaction carries a lock time ahead of the chain, which `kpf` will not submit (`--daa` or `--node` tells it the DAA).
 
 | # | Command | After it, check |
@@ -211,14 +218,20 @@ transaction carries a lock time ahead of the chain, which `kpf` will not submit 
 | 20 | short closes at a resting ask (10.5 KAS): `kpf close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S` | the short is paid `q(4, 12 - 10.5)` = 6 KAS at the pair's last output; the long receives the rest of the part (`q(4, 3)` - 6 = 6 KAS); the pair continues with 6 tokens; the ask continues (or ends if it was exactly filled); the executor holds 4 tokens bought at 10.5 KAS |
 | 21 | long closes at a resting bid (10 KAS): `kpf close --pair P.json --side long --n 4 --evidence bid.json --seller seller.json --key $A $F $S` | the long is paid `q(4, 10 - 9)` = 4 KAS; the executor's tokens went to the bid's maker and the executor received `4 x 10` KAS |
 | 22 | the book falls to an ask of 9.4 KAS (the long's trigger is 9.47 KAS: `kpf quote --pair P.json` prints it): `kpf liquidate --pair P.json --evidence ask.json $F $S` | the long receives nothing; the short receives the part's value less the fee (`kpf quote` shows it); up to 8 pairs of distinct covenant ids go in one transaction: repeat `--pair` |
-| 23 | the same, sold to a resting long order: `kpf liquidate-transfer --pair P.json --entrant-order out/.../order.json --evidence ask.json --n 4 $F $S` (`--x` defaults to the best price the entrant allows) | the loser's 4 tokens belong to the entrant's owner at its price; the short keeps its position and is paid the entrant's payment less the fee |
+| 23 | the same, sold to a resting long order: `kpf liquidate-transfer --pair P.json --entrant-order out/.../order.json --evidence ask.json --n 4 $F $S` (`--x` defaults to the best price the entrant allows while it stays healthy at the ask: 9.93 KAS for a rate of 1 KAS; an entrant too thin for the quote is refused) | the loser's 4 tokens belong to the entrant's owner at its price, with a bound the same ask does not liquidate; the short keeps its position (on a fresh evidence clock) and is paid the entrant's payment less the fee |
 
 After a transaction the evidence order that continued (`*-ask.json` with its custody, `*-bid.json`) and the executor's
 tokens (`*-token.json`) are written beside the new pairs. The continuation is a new UTXO: it must rest again before it is
 evidence. The pieces of one split (a part and its remainder) share a covenant id and a pair must be the only input of
-its id, so liquidate them in separate transactions.
+its id, so liquidate them in separate transactions. A part that changed hands starts a fresh evidence clock: it cannot be
+liquidated before an order has rested `minRestDaa` on it, and it cannot be transferred again (nor re-paired) before
+`S + 4 * minRestDaa`.
 
 ### 7.4 Measured cost (offline, relay floor 100 sompi per gram)
+
+Since review 3 the pair's script is 12.1 KB (11.6 KB before); the figures below were measured before that change and
+are about 0.6 KB and 1 to 3 % of compute mass larger now per pair (the engine metrics: 8 liquidations on one evidence,
+104,934 bytes and compute mass 130,644; `kpf_metrics_tests`).
 
 Every transaction contains the 11.6 KB redeem script of each pair, KOB's order script and the token program script
 (2.9 KB) with the custody or the seller's tokens. The storage mass (KIP-9) comes from the small token outputs; the block

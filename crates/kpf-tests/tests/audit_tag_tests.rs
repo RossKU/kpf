@@ -79,11 +79,11 @@ fn refused_any(d: &Draft, what: &str) {
 }
 
 fn live0(p: &Pair) -> Live {
-    Live { p: p.clone(), value: p.floor() as u64, id: PAIR_ID, op: outpoint(10) }
+    Live { p: p.clone(), value: p.floor() as u64, id: PAIR_ID, op: outpoint(10), daa: 0 }
 }
 
 fn live_at(p: &Pair, id: u8) -> Live {
-    Live { p: p.clone(), value: p.floor() as u64, id: Hash::from_bytes([id; 32]), op: outpoint(id) }
+    Live { p: p.clone(), value: p.floor() as u64, id: Hash::from_bytes([id; 32]), op: outpoint(id), daa: 0 }
 }
 
 /// A direct-taker transfer of the whole long side of `l` at x: entrant key ek, tag et, new bound nb.
@@ -596,6 +596,8 @@ fn bad_markets() -> Vec<(&'static str, Market)> {
     add("keeperFeeMin negative", &|x| x.keeper_fee_min = -1);
     add("minRestDaa negative", &|x| x.min_rest_daa = -1);
     add("minRestDaa at the lock-time threshold", &|x| x.min_rest_daa = 500_000_000_000);
+    // Review 3 (DESIGN 4.5c): the hand-over limit S + 4R is a lock time, so 4R must stay below the threshold.
+    add("minRestDaa at a quarter of the lock-time threshold", &|x| x.min_rest_daa = 125_000_000_000);
     v
 }
 
@@ -604,15 +606,21 @@ fn edge_markets() -> Vec<Market> {
     let mut a = m.clone();
     (a.k_bps, a.mmr_bps, a.liq_fee_bps, a.keeper_fee_min, a.min_rest_daa) = (100_000, 4_999, 10_000, 0, 0);
     let mut b = m.clone();
-    (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 499_999_999_999);
+    (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 124_999_999_999);
     vec![a, b]
 }
 
+/// The fixture orders on market m. Review 3 (DESIGN 4.5c): a side must be healthy at its entry price and the range
+/// wider than both maintenance bands, so in a market of high maintenance (the 49.99 % edge) the orders post margin rates
+/// of 6 and 12 KAS (bl 4, bs 22 at x = 10) instead of 1 and 2.
 fn orders_of(m: &Market) -> (LiveOpen, LiveOpen) {
     let mut lo = long_order(&keypair(21));
     lo.m = m.clone();
     let mut so = short_order(&keypair(22));
     so.m = m.clone();
+    if m.mmr_bps > 1_000 {
+        (lo.my_rate, so.my_rate) = (600_000_000, 1_200_000_000);
+    }
     (
         LiveOpen { value: lo.escrow() as u64, o: lo, id: Hash::from_bytes([0x81; 32]), op: outpoint(0x81) },
         LiveOpen { value: so.escrow() as u64, o: so, id: Hash::from_bytes([0x82; 32]), op: outpoint(0x82) },
@@ -644,12 +652,21 @@ fn holds_take_refuses_malformed_evidence_parameters() {
         let mut p = pair(&lk(), &sk());
         p.m = m.clone();
         (p.long_ask, p.long_min, p.long_tip) = (1_000_000_000, 0, 0);
-        let l = live_at(&p, 0x63);
         let (lo, _) = orders_of(&m);
-        let t = TransferSpec { side: LONG, n: HALF, x: 1_000_000_000, nb: 900_000_000, ek: lo.o.owner, et: lo.id, k: 0 };
+        if lo.o.my_rate != 100_000_000 {
+            // The high-maintenance edge: a pair wide enough to be healthy (see orders_of).
+            (p.bl, p.bs) = (400_000_000, 2_200_000_000);
+        }
+        let l = live_at(&p, 0x63);
+        let t = TransferSpec { side: LONG, n: HALF, x: 1_000_000_000, nb: 1_000_000_000 - lo.o.my_rate, ek: lo.o.owner, et: lo.id, k: 0 };
         let d = transfer_draft(&l, &t, &Entrant::Open(lo), &fk(), 32);
         if name == "edge" {
             accept_d(&d);
+        } else if name.starts_with("minRestDaa") {
+            // Review 3 (DESIGN 4.5c): the pair now reads minRestDaa on a transfer (the hand-over limit S + 4R), so a
+            // malformed one makes the pair refuse as well; the order refuses on its own.
+            let (tx, e) = d.build();
+            assert_input_fails(&tx, &e, 1);
         } else {
             refused_only(&d, 1, &[0]);
         }

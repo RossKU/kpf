@@ -16,7 +16,7 @@ mod kpf;
 use common::*;
 use kaspa_consensus_core::config::params::MAINNET_PARAMS;
 use kaspa_consensus_core::mass::{transaction_estimated_serialized_size, ComputeBudget, MassCalculator, ScriptUnits};
-use kaspa_consensus_core::tx::{Transaction, TransactionInput, UtxoEntry};
+use kaspa_consensus_core::tx::{PopulatedTransaction, Transaction, TransactionInput, UtxoEntry};
 use kaspa_consensus_core::Hash;
 use kpf::evidence::*;
 use kpf::paths::*;
@@ -211,7 +211,14 @@ fn metrics_every_path() {
 fn metrics_eight_liquidations_on_one_evidence() {
     let n = 500_000_000;
     let legs: Vec<PairLeg> = (0..8).map(|i| PairLeg { l: live(&base(), 0x50 + i as u8), n, q: 0, act: Act::Liq { side: LONG } }).collect();
-    let d = ev_draft(&legs, &Evidence::ask(940_000_000, 8 * n), &f(), 1);
+    let mut d = ev_draft(&legs, &Evidence::ask(940_000_000, 8 * n), &f(), 1);
+    // The loser's slot of each pair (a liquidated long is owed 0, so no covenant constrains it) holds a 1 KAS filler,
+    // as the library's builder writes it: a zero-value output has no storage mass (KIP-9 divides by the value).
+    for (i, o) in d.outs.iter_mut().enumerate() {
+        if o.value == 0 && Some(i) != d.change {
+            o.value = 100_000_000;
+        }
+    }
     let (tx, e) = d.build();
     assert_accepted(&tx, &e);
     let m = run_metered(&tx, &e);
@@ -220,7 +227,14 @@ fn metrics_eight_liquidations_on_one_evidence() {
         assert!(r.max_stack < 244);
     }
     let (u, c, b) = tx_mass(&tx, &e);
-    println!("8 liquidations on one evidence: {} inputs, {} outputs, script units {u}, compute mass {c} / {COMPUTE_LIMIT}, bytes {b} / {BYTES_LIMIT}", tx.inputs.len(), tx.outputs.len());
+    let calc = MassCalculator::new_with_consensus_params(&MAINNET_PARAMS);
+    let storage = calc.calc_contextual_masses(&PopulatedTransaction::new(&tx, e.clone())).map(|m| m.storage_mass).expect("storage mass");
+    println!(
+        "8 liquidations on one evidence: {} inputs, {} outputs, script units {u}, compute mass {c} / {COMPUTE_LIMIT}, storage mass {storage} / {COMPUTE_LIMIT}, bytes {b} / {BYTES_LIMIT}",
+        tx.inputs.len(),
+        tx.outputs.len()
+    );
     assert!(c <= COMPUTE_LIMIT, "compute mass {c} above the limit");
+    assert!(storage <= COMPUTE_LIMIT, "storage mass {storage} above the limit");
     assert!(b <= BYTES_LIMIT, "size {b} above the limit");
 }

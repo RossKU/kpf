@@ -90,6 +90,11 @@ pub struct EvidenceUse {
     /// Bid evidence: the executor's token UTXO sold into the bid (P2PK owner, the market's extension commitment, at
     /// least the fill). Ask evidence needs none.
     pub seller: Option<LiveToken>,
+    /// The DAA score now, when known (the node's, or `--daa`): the evidence must still be live then.
+    pub now: Option<u64>,
+    /// Accept an order that is dead (soft-expired) at the DAA the transaction lands. For sweeping tests only: a dead
+    /// order is a quote nobody can trade at any more (DESIGN 4.5c, review 3 F1).
+    pub allow_dead: bool,
 }
 
 /// Where the KOB side put things, for the report.
@@ -316,6 +321,14 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     for (j, g) in legs.iter().enumerate() {
         let p = &g.pair.p;
         p.validate()?;
+        // The evidence clock of this pair (DESIGN 4.5c): the rest counts from max(exposed, S), and the lock time must
+        // prove its end.
+        let s = g.pair.clock();
+        let on = check_evidence_on(ev, &m, Some(s), eu.now);
+        if checked && !on.problems.is_empty() {
+            return invalid(format!("pair {j}: this order cannot serve as evidence on the pair's clock (DAA {s}): {}", on.problems.join("; ")));
+        }
+        lock = lock.max(on.rest_end);
         if p.m != m {
             return invalid(format!("pair {j} is of another market than pair 0"));
         }
@@ -399,6 +412,18 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
                     } else if !(nb >= p.bs && nb <= m.price_max) {
                         return invalid(format!("pair {j}: the entrant's bound {nb} would lower bs below {} (no-downgrade for the winner)", p.bs));
                     }
+                    // Health at entry (DESIGN 4.5c, review 3 F3): the entrant must not be liquidatable at the very quote of
+                    // this transaction (KpfPair checks it at the quote, which implies the check at x).
+                    if !healthy_at(&m, *side, nb, quote) {
+                        return invalid(format!(
+                            "pair {j}: the entrant would enter liquidatable: with its bound {} KAS it is liquidatable at the evidence {} {} KAS itself; sell at a price x {} {} KAS (or choose an entrant with more margin)",
+                            crate::error::kas_str(nb as i128),
+                            ev.name(),
+                            crate::error::kas_str(quote as i128),
+                            if *side == LONG { "at most" } else { "at least" },
+                            crate::error::kas_str(entrant_health_bound(&m, *side, quote, entrant.o.my_rate) as i128)
+                        ));
+                    }
                     // The entrant's own rules (`KpfOpen.take`): its limit, its minimum counter rate and the entry price it
                     // accepts (a long: entry >= x; a short: entry <= x).
                     let eo = &entrant.o;
@@ -433,6 +458,12 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     if lock as i64 >= LOCK_TIME_THRESHOLD {
         return invalid("the required lock time is above the lock-time threshold");
     }
+    // A dead order (soft-expired at the DAA the transaction can land) is refused by default (DESIGN 4.5c).
+    let at = lock.max(eu.now.unwrap_or(0));
+    if checked && !eu.allow_dead && at as i64 > ev.live_until() {
+        let r = check_evidence_on(ev, &m, None, Some(at));
+        return invalid(r.dead.join("; "));
+    }
     let need = needed_fill(&m, sum);
 
     // The KOB side.
@@ -462,7 +493,9 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     let _ = z32;
     for (j, g) in legs.iter().enumerate() {
         let l = &g.pair;
-        let lp = &l.p;
+        // The outputs that do not change hands keep the clock S (DESIGN 4.5c).
+        let lpc = l.clocked();
+        let lp = &lpc;
         let z = [0u8; 32];
         match &g.act {
             Act::Close { side } => {
@@ -732,15 +765,35 @@ pub fn liquidate_transfer(l: &LivePair, n: i64, x: i64, entrant: &LiveOpen, k: i
     evidence_tx(&[leg], eu, funding, opts)
 }
 
+/// The price bound at which a P7 entrant of `side` with margin rate `my_rate` is healthy at the evidence `quote`
+/// (DESIGN 4.5c, review 3 F3): a long entrant (bound `x - my_rate`) needs `x <= floor(quote * (10^4 - mmrBps) / 10^4) +
+/// my_rate`; a short entrant (bound `x + my_rate`) needs `x >= ceil(quote * (10^4 + mmrBps) / 10^4) - my_rate`.
+pub fn entrant_health_bound(m: &Market, side: i64, quote: i64, my_rate: i64) -> i64 {
+    let (q, mm, b) = (quote as i128, m.mmr_bps as i128, BPS as i128);
+    let v = if side == LONG { q * (b - mm) / b + my_rate as i128 } else { (q * (b + mm) + b - 1) / b - my_rate as i128 };
+    v.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+}
+
 /// The price `x` at which the loser's part is best sold to `entrant` for the winner (who receives the entrant's payment
 /// less the fee): the highest `x` for a long loser, the lowest for a short loser, within what the evidence quote, the
-/// no-downgrade rule and the entrant's own limit, entry and counter-rate rules allow.
+/// no-downgrade rule, the entrant's health at the quote (DESIGN 4.5c) and the entrant's own limit, entry and
+/// counter-rate rules allow. When no price keeps the entrant healthy at the quote, it refuses: such an entrant would
+/// enter liquidatable by the very quote of the transaction (review 3 F3).
 pub fn p7_default_x(p: &Pair, side: i64, quote: i64, entrant: &Open) -> Result<i64> {
+    let health = entrant_health_bound(&p.m, side, quote, entrant.my_rate);
     if side == LONG {
-        let hi = [entrant.limit, p.bl + entrant.my_rate, p.bs - entrant.min_counter_rate, p.entry, p.m.price_max].into_iter().min().expect("five bounds");
+        let hi = [entrant.limit, p.bl + entrant.my_rate, p.bs - entrant.min_counter_rate, p.entry, p.m.price_max, health].into_iter().min().expect("six bounds");
         if hi < quote {
+            if health < quote {
+                return invalid(format!(
+                    "no price works: this entrant (margin rate {} KAS) would be liquidatable at the evidence ask {} KAS itself at any x >= the ask; it would forfeit its whole margin at the next liquidation. Choose an entrant with a margin rate of at least {} KAS",
+                    crate::error::kas_str(entrant.my_rate as i128),
+                    crate::error::kas_str(quote as i128),
+                    crate::error::kas_str((quote - (quote as i128 * (BPS - p.m.mmr_bps) as i128 / BPS as i128) as i64) as i128)
+                ));
+            }
             return invalid(format!(
-                "no price works: a long is sold at x >= the evidence ask {quote}, but this entrant allows at most {hi} (its limit {}, no-downgrade {}, counter rate, the pair's entry {})",
+                "no price works: a long is sold at x >= the evidence ask {quote}, but this entrant allows at most {hi} (its limit {}, no-downgrade {}, counter rate, the pair's entry {}, health at the ask {health})",
                 entrant.limit,
                 p.bl + entrant.my_rate,
                 p.entry
@@ -748,10 +801,18 @@ pub fn p7_default_x(p: &Pair, side: i64, quote: i64, entrant: &Open) -> Result<i
         }
         Ok(hi)
     } else {
-        let lo = [entrant.limit, p.bs - entrant.my_rate, p.bl + entrant.min_counter_rate, p.entry, 0].into_iter().max().expect("five bounds");
+        let lo = [entrant.limit, p.bs - entrant.my_rate, p.bl + entrant.min_counter_rate, p.entry, 0, health].into_iter().max().expect("six bounds");
         if lo > quote {
+            if health > quote {
+                return invalid(format!(
+                    "no price works: this entrant (margin rate {} KAS) would be liquidatable at the evidence bid {} KAS itself at any x <= the bid; it would forfeit its whole margin at the next liquidation. Choose an entrant with a margin rate of at least {} KAS",
+                    crate::error::kas_str(entrant.my_rate as i128),
+                    crate::error::kas_str(quote as i128),
+                    crate::error::kas_str((((quote as i128 * (BPS + p.m.mmr_bps) as i128 + BPS as i128 - 1) / BPS as i128) as i64 - quote) as i128)
+                ));
+            }
             return invalid(format!(
-                "no price works: a short is sold at x <= the evidence bid {quote}, but this entrant needs at least {lo} (its limit {}, no-downgrade {}, counter rate, the pair's entry {})",
+                "no price works: a short is sold at x <= the evidence bid {quote}, but this entrant needs at least {lo} (its limit {}, no-downgrade {}, counter rate, the pair's entry {}, health at the bid {health})",
                 entrant.limit,
                 p.bs - entrant.my_rate,
                 p.entry

@@ -77,6 +77,7 @@ pub fn pair(long: &Keypair, short: &Keypair) -> Pair {
         short_tip: 0,
         tag_l: Hash::from_bytes([0x1a; 32]),
         tag_s: Hash::from_bytes([0x1b; 32]),
+        since: 0,
     }
 }
 

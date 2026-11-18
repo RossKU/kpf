@@ -278,3 +278,79 @@ against the UTXO it spends.
 
 GhostDAG races on a node (X7), script budgets of new shapes, the KCC-20 program itself, the KOB router in mixed
 batches, and the economic size of R3-F1 and R3-F3 on a real book (X9).
+
+## Status after fixes
+
+The fixes implement DESIGN 4.5c. Every `exploit_*` test of this review is now a `holds_*` test (refused, or valid
+only within the residual 4.5c documents, as each test's comment says). Proofs: `audit3_tests` (25 engine tests),
+`audit3_tooling` (2), `audit3_cli` (4, one Windows-only), the extended X6 walk, and the updated tests listed below. The
+full workspace passes (`CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2`). The pinned artifacts and both golden
+vector sets were regenerated.
+
+| # | Status | Shown by |
+|---|---|---|
+| R3-F1 | Fixed. `KpfPair` state field `since`; `S = since` or the UTXO's DAA; `exposed' = max(exposed, S)` in the three fillability conditions and the lock-time proof; `since = 0` on the part that changes hands (T1, T2, T7, T3's re-paired output), `since = S` on every other pair output (P1, P2 and every remainder: P3, P4 host and donor, P4', P5, P6, P7); transfer and close-versus-close need `tx.daa ≥ S + 4R`, P7 does not. Residual as 4.5c: a quote that rested on the clock and died later still counts (look-back since `S`, barrier semantics); a touch that starts resting in the last `R` before `S + 4R` and dies within `R` of a self-transfer is dodged | `holds_stale_ask_cannot_liquidate_a_pair_opened_after_it_died`, `holds_stale_bid_cannot_close_the_long_at_the_whole_range`, `holds_evidence_resting_before_the_clock_counts_only_from_s`, `holds_evidence_that_died_before_it_rested_on_the_clock_is_refused`, `holds_the_clock_is_kept_by_every_output_that_changes_no_hands`, `holds_the_clock_restarts_on_each_hand_over`, `holds_self_transfer_before_s_plus_4r_is_refused_and_keepers_keep_the_window`, X6 |
+| R3-F2 | Fixed. `KpfOpen.fill` requires `BL·(10⁴ + mmr) < BS·(10⁴ − mmr)`, P6 and P7 require it, the clamp of `T` is gone; add margin, transfer and re-pairing only move bounds outward, so they keep it (tested from the narrowest admissible pair) | `holds_profitable_side_never_forfeits_in_a_narrow_pair`, `holds_range_condition_at_its_boundary`, `holds_narrow_pairs_are_refused_at_creation`, `holds_add_margin_transfer_and_re_pairing_keep_the_range` |
+| R3-F3 | Fixed. The P7 entrant must be healthy at the evidence quote (deviation 1 below); `p7_default_x` picks the highest healthy `x` or refuses | `holds_p7_entrant_is_healthy_at_the_quote`, `holds_entrant_unhealthy_by_one_tick_is_refused`, `holds_default_p7_price_*` |
+| R3-F4 | Fixed as 4.5c: every entrant is healthy at its entry price (both sides at T1, the order's own side in `take`, the entrant in P3 and P7). Residual: a fill at the limit above the market is liquidated once a live quote below its trigger rests `R` on the pair's clock; `create-order` prints the forfeiture and the trigger at the limit | `holds_order_filled_at_its_limit_is_healthy_at_entry` |
+| R3-T1 | Fixed with F3 | `holds_default_p7_price_keeps_the_entrant_healthy_at_the_quote` |
+| R3-T2 | Fixed: exact parsing and printing for any scale; an inexact decimal is refused | `holds_token_amounts_are_exact_for_a_non_decimal_scale` |
+| R3-T3 | Fixed: the simple funding shape keeps `covenantId` and the script; `kpf utxos --out` writes both | `holds_saved_funding_file_keeps_the_covenant_flag` |
+| R3-T4 | Fixed: a missing `daa` is unknown and refused wherever it matters; new object files are written with `daa: null` | `holds_object_file_without_daa_is_refused` |
+| R3-T5 | Fixed: `keygen` prints what it did, a WARNING when `icacls` fails | `holds_keygen_reports_the_permissions_it_set` |
+
+Tooling. The evidence decoder and `evidence`, `close`, `liquidate`, `liquidate-transfer` apply the clock rule per pair,
+show the pair's clock start, `since` and the DAA from which a hand-over is allowed, and refuse an order that is dead at
+the DAA the transaction would land (`--allow-dead-evidence` for sweeping tests only). The builders set the lock time
+each entry needs: the rest on every pair's clock, `S + 4R` for transfer and close-versus-close, and each order's
+`activeFrom` (open, open-taker, transfer, P7). `inspect` shows the clock and warns on a narrow range.
+
+`// DESIGN:` deviations (each marked in the source):
+1. `KpfPair.onEvidence`: the P7 entrant's health is checked at the evidence quote, not only at `x`. A check at `x` alone
+   lets the executor pick `x` above the trigger while the same quote proves the entrant liquidatable (F3 again); the
+   check at the quote implies the one at `x`.
+2. `KpfOpen.fill` checks the health of both sides of the pair it creates, so a pair opened against a signing taker is
+   healthy on both sides too.
+3. `KpfOpen.take` also requires the range condition of the part it enters (binds only a look-alike part).
+4. `KpfOpen.checkMarket` requires `4·minRestDaa < 5·10¹¹`: the hand-over limit is a lock time, and without the bound a
+   market could create pairs that can never be transferred (`Market::validate` mirrors it).
+5. `KpfPair.clockStart` refuses a negative clock (a forged `since`, or a mempool spend of an unaccepted parent, whose
+   DAA score the engine reads as -1), so a mempool and consensus never disagree about a written clock.
+
+Attacks on the fix (all recorded as `holds_*`; none found beyond what 4.5c documents):
+- the `since = 0` sentinel: a UTXO of DAA 0 writes `since = 0` and restarts its clock at the next output; only the
+  genesis block has DAA 0, so this exists in the engine only. An unknown DAA (-1) is refused by every clock-dependent
+  entry (`holds_since_sentinel_against_unknown_and_zero_daa`);
+- a forged `since` in the future freezes evidence and hand-overs of the forger's own look-alike, which keeps amend, idle
+  settle and cooperative close; one in the far past makes stale quotes count only against that look-alike, never for a
+  part an order takes (`holds_forged_future_since_freezes_evidence_and_hand_overs`,
+  `holds_forged_past_since_binds_only_the_look_alike`);
+- one lock time for several lower bounds: each covenant checks its own, so the transaction needs their maximum
+  (`holds_one_lock_time_must_cover_every_bound`);
+- split pieces with different clocks re-paired, and close-versus-close of pairs with different clocks: each pair's limit
+  binds, P3 restarts and cannot take over either clock, remainders keep their own
+  (`holds_split_pieces_with_different_clocks_re_paired`, `holds_close_versus_close_with_two_different_clocks`);
+- the rate limit against the idle timeout (independent; amend resets the age, never the clock), and P7 of a part handed
+  over moments ago: it needs `R` on the part's clock and is not rate-limited, and the winner's part restarts too, so
+  when both sides were touched since `S` whichever liquidation lands first decides, a race of the kind of B1
+  (`holds_rate_limit_counts_from_the_clock_and_leaves_the_idle_timeout_alone`,
+  `holds_liquidation_by_transfer_of_a_part_handed_over_moments_ago`).
+
+Existing tests whose premise changed: `audit2_tests` (P7 entrant prices now healthy at the quote; pairs at 20 % and
+49.99 % maintenance are narrow, so they are refused or rebuilt wider; the close-donor half waits for `S + 4R`),
+`audit_tag_tests` (high-maintenance edge orders post wider rates; a market with `4·minRestDaa` at the threshold is
+refused; a malformed `minRestDaa` now also makes the pair's transfer refuse), `kpf_open_tests`
+(`t1_counter_rate_below_minimum_is_refused` uses rates above the maintenance margin), `kpf_transfer_tests` (the dust
+entrant posts the maintenance margin; hand-built drafts carry the lock time), `kpf_close_tests` (lock time),
+`kpf_layout_tests` (state 438 bytes, since window), `kpf_x6_conservation_tests` (healthy random orders and a DAA
+model), the library's `builders`, `evidence` (default P7 price 9.93 / 10.075; a dead order is refused, not noted),
+`golden` and `pinned`, and the CLI `lifecycle` (waits for lock times; the P7 entrant is no longer liquidatable by the
+same ask).
+
+Sizes and compute. `KpfPair` 11,567 → 12,115 bytes (state 429 → 438), `KpfOpen` 2,634 → 2,809. Script units per path
+(after review 2 → now): P1 277,252 → 285,946; P2 265,506 → 273,652; P3 263,254 → 276,290; P4 host 251,468 → 263,921,
+donor 240,046 → 251,952, mutual 142,103 → 149,153; P5 long 249,422 → 255,928, short 279,672 → 286,178; P6 long
+179,339 → 185,870, short 149,340 → 155,871; P7 long 312,627 → 325,685, short 282,552 → 295,610; P8 23,971 → 25,067; P9
+224,227 → 225,323; `KpfOpen` fill 146,447 / 146,593, take 147,110, cancel 106,031, refund 5,960; largest stack 190 of
+244. Eight liquidations on one evidence: 1,651,150 script units, compute mass 130,644 / 500,000, storage mass
+280,256 / 500,000 (1 KAS fillers in the loser slots), 104,934 / 250,000 bytes.

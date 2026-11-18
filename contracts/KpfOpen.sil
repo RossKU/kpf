@@ -16,6 +16,10 @@ pragma silverscript ^0.1.0;
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
 // Liquidation by transfer (T7) uses take unchanged: the pair's liqTransfer entry replaces the listing by price
 // evidence and pays the winner (DESIGN 4.5b), and this order checks only its own guarantees, as for T2.
+// Review 3 (DESIGN 4.5c): every pair output this order rebuilds carries since = 0 (a fresh evidence clock), the
+// order's side is healthy at its own entry price x, and the range is wider than both maintenance bands. The
+// order's activeFrom is a lower bound on tx.daa (CLTV); it shares the transaction's one lock time with the bounds
+// the pair proves (the evidence rest, the hand-over limit), each of which is a lower bound too.
 //
 // The order enforces only its own guarantees (KOB option 2). It never reads the counterparty: it rebuilds the
 // whole pair output script from its own market block, its own key, rate and covenant id, and the arguments, and
@@ -136,6 +140,11 @@ contract KpfOpen(
         require(keeperFeeMin >= 0);
         require(minRestDaa >= 0);
         require(minRestDaa < LOCK_TIME_THRESHOLD);
+        // The hand-over limit tx.daa >= S + 4 * minRestDaa (DESIGN 4.5c) is proven by CLTV too, so 4 * minRestDaa must
+        // stay below the lock-time threshold, or the pair this order creates could never be transferred or re-paired.
+        // DESIGN: 4.5c adds the rate limit but no bound; this one is required so no order creates a pair with a dead
+        // path (the rule of 4.5a, review 1 F4).
+        require(minRestDaa * 4 < LOCK_TIME_THRESHOLD);
         require(myRate > 0);
         require(minCounterRate >= 0);
         require(tip >= 0);
@@ -146,6 +155,16 @@ contract KpfOpen(
     function zero32() : byte[32] {
         byte[] z8 = byte[](0 as byte[8]);
         return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    // A new pair [bl, bs] opened at x is healthy (DESIGN 4.5c): the long is not liquidatable at x
+    // (x * (10^4 - mmrBps) >= bl * 10^4), the short is not (bs * 10^4 >= x * (10^4 + mmrBps)), and the range is
+    // wider than both maintenance bands (bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps)). Every product is at most
+    // priceMax * 1.5 * 10^4 < 2^63.
+    function healthy(int x, int bl, int bs) {
+        require(x * (BPS - mmrBps) >= bl * BPS);
+        require(bs * BPS >= x * (BPS + mmrBps));
+        require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
     }
 
     // This input's redeem script.
@@ -204,10 +223,17 @@ contract KpfOpen(
             tl = counterTag;
             ts = selfId;
         }
+        // Healthy at entry (DESIGN 4.5c, review 3 F4): neither side of the new pair is liquidatable at its entry
+        // price x, and the range is wider than both maintenance bands (review 3 F2), so the long's trigger lies
+        // below the short's.
+        // DESIGN: 4.5c says KpfOpen enforces health "for the pair it creates"; both sides are checked, so a pair
+        // opened against a signing taker (which no other covenant checks at T1) is healthy on both sides too.
+        healthy(x, bl, bs);
 
         // The pair output, rebuilt byte for byte: KpfPair template, this order's market block, size n, [bl, bs],
-        // entry x, both keys, both listings unlisted, both tags. Its covenant id is non-zero (an id-less pair is
-        // unspendable forever, X1) and no input carries it (a fresh lineage created in this transaction).
+        // entry x, both keys, both listings unlisted, both tags, since = 0 (its evidence clock starts at its own
+        // UTXO, DESIGN 4.5c). Its covenant id is non-zero (an id-less pair is unspendable forever, X1) and no input
+        // carries it (a fresh lineage created in this transaction).
         // DESIGN: T1 does not say what the listing windows of a new pair hold; they start unlisted (all zero), so a
         // listing always needs its owner's signed amend (P1).
         require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
@@ -215,7 +241,7 @@ contract KpfOpen(
         byte[] st = rs.slice(MARKET_AT, MARKET_AT + MARKET_LEN) + byte[](0x08) + byte[](n as byte[8]) + byte[](0x08)
             + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](x as byte[8])
             + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + byte[](NO_LISTS) + byte[](0x20) + byte[](tl)
-            + byte[](0x20) + byte[](ts);
+            + byte[](0x20) + byte[](ts) + byte[](0x08) + byte[](0 as byte[8]);
         require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
         byte[32] pairId = OpOutputCovenantId(pairOut);
         require(pairId != zero32());
@@ -300,13 +326,25 @@ contract KpfOpen(
         require(bl >= 0);
         require(bl < bs);
         require(bs <= priceMax);
+        // Healthy at entry (DESIGN 4.5c, review 3 F3, F4): this order's own side is not liquidatable at its own
+        // entry price x (a long: x * (10^4 - mmrBps) >= bl * 10^4, i.e. myRate * 10^4 >= mmrBps * x), and the part
+        // is wider than both maintenance bands.
+        // DESIGN: 4.5c states the range condition at creation; it is also required of the part an order enters,
+        // because a part that violates it can never be liquidated in this order's favour (the pair's own
+        // transfer, P4 and add margin keep the condition, so this binds only a part whose author is not a pair).
+        if (side == SIDE_LONG) {
+            require(x * (BPS - mmrBps) >= bl * BPS);
+        } else {
+            require(bs * BPS >= x * (BPS + mmrBps));
+        }
+        require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
 
         require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
         byte[] rs = ownRs();
         byte[] st = rs.slice(MARKET_AT, MARKET_AT + MARKET_LEN) + byte[](0x08) + byte[](n as byte[8]) + byte[](0x08)
             + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](e as byte[8])
             + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + lists + byte[](0x20) + byte[](tl)
-            + byte[](0x20) + byte[](ts);
+            + byte[](0x20) + byte[](ts) + byte[](0x08) + byte[](0 as byte[8]);
         require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
         require(OpOutputCovenantId(partOut) != zero32());
         require(tx.outputs[partOut].value >= quoteOf(n, bs - bl, 0) + carrier);

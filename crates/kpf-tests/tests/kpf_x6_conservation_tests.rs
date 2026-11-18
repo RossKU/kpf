@@ -12,7 +12,12 @@
 //!   - every party that did not act keeps its idle-settle payout (cash plus the payout of each of its pairs at
 //!     that pair's E), up to 1 sompi per split (review 1, F3);
 //!   - no pair output carries a non-zero tag other than one written by a hand-over of that transaction (each
-//!     exactly once), so no tag outlives its transaction (review 1, F1/F2; DESIGN 4.4).
+//!     exactly once), so no tag outlives its transaction (review 1, F1/F2; DESIGN 4.4);
+//!   - the evidence clock (review 3, DESIGN 4.5c): no pair output's clock moves backwards, and a clock restarts
+//!     (since = 0) only on an output where a side changed hands; every other output carries since = S of its input;
+//!   - every evidence transaction is accepted exactly when the order was fillable through max(exposed, S) + R and
+//!     the lock time proves that end (stale and dead orders and the review-2 lock time are mixed in), and no
+//!     accepted liquidation counts evidence for any time before the liquidated side entered.
 
 mod common;
 mod kpf;
@@ -67,6 +72,9 @@ struct Stats {
     ev_close: usize,
     ev_liq: usize,
     ev_transfer: usize,
+    ev_refused: usize,
+    clock_kept: usize,
+    clock_restarted: usize,
     txs: usize,
     max_slack: i128,
 }
@@ -84,6 +92,10 @@ struct Sim {
     ctr: u32,
     f: Keypair,
     st: Stats,
+    /// The DAA score of the chain: every UTXO a transaction creates gets it (review 3, the evidence clock).
+    daa: u64,
+    /// The DAA at which each side of each live pair UTXO entered its position: (outpoint, side) -> DAA.
+    entered: HashMap<(TransactionOutpoint, i64), u64>,
 }
 
 impl World {
@@ -120,7 +132,16 @@ impl World {
 
 impl Sim {
     fn new(seed: u64) -> Sim {
-        Sim { w: World { pairs: vec![], cash: HashMap::new() }, keys: HashMap::new(), rng: Rng(seed), ctr: (seed as u32) << 12, f: keypair(14), st: Stats::default() }
+        Sim {
+            w: World { pairs: vec![], cash: HashMap::new() },
+            keys: HashMap::new(),
+            rng: Rng(seed),
+            ctr: (seed as u32) << 12,
+            f: keypair(14),
+            st: Stats::default(),
+            daa: 1_000_000,
+            entered: HashMap::new(),
+        }
     }
 
     fn fresh_key(&mut self) -> Keypair {
@@ -164,6 +185,12 @@ impl Sim {
             }
         }
         assert!(want.is_empty(), "hand-over tags not written: {want:?}");
+        // A transaction whose lock time is ahead of the chain waits for it (the hand-over limit S + 4R, the evidence
+        // rest): the chain's DAA moves to the lock time.
+        if d.lock > self.daa {
+            self.daa = d.lock;
+        }
+        let now = self.daa;
         let (tx, e) = d.build();
         assert_accepted(&tx, &e);
         let ins: u128 = e.iter().map(|u| u.amount as u128).sum();
@@ -186,9 +213,48 @@ impl Sim {
                 }
             }
         }
+        // The evidence clock (review 3, DESIGN 4.5c). Every pair output is bound to the input that authorizes it. One
+        // whose two keys are those of that input pair (a continuation, a remainder) keeps the input's clock exactly
+        // (since = S); one where a side changed hands (T1's new pair, the part of P3 and P7, P4's re-paired output)
+        // restarts it (since = 0, its clock is its own UTXO). So no clock moves backwards, and a clock restarts only
+        // on a hand-over.
+        let in_pairs: Vec<(usize, Live)> =
+            d.ins.iter().enumerate().filter_map(|(i, inp)| self.w.pairs.iter().find(|l| l.op == inp.outpoint).map(|l| (i, l.clone()))).collect();
+        for (idx, p) in &d.pairs {
+            let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
+            let src = auth.and_then(|a| in_pairs.iter().find(|(i, _)| *i == a)).map(|(_, l)| l.clone());
+            match &src {
+                Some(s) if s.p.long_key == p.long_key && s.p.short_key == p.short_key => {
+                    assert_eq!(p.since, s.clock(), "output {idx}: a pair output that changes no hands keeps the clock S");
+                    self.st.clock_kept += 1;
+                }
+                _ => {
+                    assert_eq!(p.since, 0, "output {idx}: a side changed hands, so its clock restarts (since = 0)");
+                    self.st.clock_restarted += 1;
+                }
+            }
+            if let Some(s) = &src {
+                assert!(p.clock_start(now) >= s.clock(), "output {idx}: the clock moved backwards");
+            }
+        }
         let spent: Vec<TransactionOutpoint> = d.ins.iter().map(|i| i.outpoint).collect();
+        let created: Vec<Live> = live_pairs(&tx, d).into_iter().map(|l| l.at(now)).collect();
+        // When each side of a created pair entered its position: inherited from the input pair it comes from (the same
+        // key on the same side), or now for an entrant.
+        for c in &created {
+            for (side, key) in [(LONG, c.p.long_key), (SHORT, c.p.short_key)] {
+                let from = in_pairs.iter().find(|(_, s)| (if side == LONG { s.p.long_key } else { s.p.short_key }) == key);
+                let at = from.map(|(_, s)| self.entered[&(s.op, side)]).unwrap_or(now);
+                self.entered.insert((c.op, side), at);
+            }
+        }
+        for op in &spent {
+            self.entered.remove(&(*op, LONG));
+            self.entered.remove(&(*op, SHORT));
+        }
         self.w.pairs.retain(|l| !spent.contains(&l.op));
-        self.w.pairs.extend(live_pairs(&tx, d));
+        self.w.pairs.extend(created);
+        self.daa += self.rng.range(1, 3_000) as u64;
         for l in &self.w.pairs {
             assert!(l.value as i64 >= l.p.floor(), "pair below its floor");
             assert!(l.p.bl >= 0 && l.p.bl < l.p.bs && l.p.bs <= l.p.m.price_max);
@@ -248,20 +314,30 @@ impl Sim {
     // ------------------------------------------------------------ actions
 
     /// T1 between two fresh orders, with the given range if any.
-    fn open(&mut self, range: Option<(i64, i64)>) -> Live {
+    fn open(&mut self, range: Option<(i64, i64)>) -> Option<Live> {
         self.open_capped(range, i64::MAX)
     }
 
-    /// T1 as `open`, with the fill price (the new pair's E) at most `x_max` when a range is given.
-    fn open_capped(&mut self, range: Option<(i64, i64)>, x_max: i64) -> Live {
+    /// T1 as `open`, with the fill price (the new pair's E) at most `x_max` when a range is given. Review 3 (DESIGN
+    /// 4.5c): both sides are healthy at x and the range is wider than both maintenance bands, so x lies in
+    /// [ceil(bl / (1 - mmr)) + 1, floor(bs / (1 + mmr))] and each random rate is at least mmr * x + 1; `None` when the
+    /// given range leaves no such x.
+    fn open_capped(&mut self, range: Option<(i64, i64)>, x_max: i64) -> Option<Live> {
+        let mm = market().mmr_bps;
         let (x, rl, rs) = match range {
             Some((bl, bs)) => {
-                let x = self.rng.range(bl + 1, (bs - 1).min(x_max).max(bl + 1));
+                let lo = (bl * 10_000 + 10_000 - mm - 1) / (10_000 - mm) + 1;
+                let hi = (bs * 10_000 / (10_000 + mm)).min(x_max);
+                if lo > hi {
+                    return None;
+                }
+                let x = self.rng.range(lo, hi);
                 (x, x - bl, bs - x)
             }
             None => {
                 let x = self.rng.range(500_000_000, 2_000_000_000);
-                (x, self.rng.range(50_000_000, 500_000_000), self.rng.range(50_000_000, 500_000_000))
+                let need = x * mm / 10_000 + 2;
+                (x, self.rng.range(need.max(50_000_000), 500_000_000), self.rng.range(need.max(50_000_000), 500_000_000))
             }
         };
         let n = self.rng.range(MIN, 3_000_000_000);
@@ -276,7 +352,7 @@ impl Sim {
         let d = open_draft(&lo, &so, n, x, &self.f.clone(), fnn);
         let tx = self.apply(&d, &[(LONG, lo.id), (SHORT, so.id)]);
         self.st.open += 1;
-        live_pairs(&tx, &d).remove(0)
+        Some(self.find(&live_pairs(&tx, &d)[0].op))
     }
 
     fn find(&self, op: &TransactionOutpoint) -> Live {
@@ -297,7 +373,7 @@ impl Sim {
         self.non_consenting(&before, &key, 0, &g);
         self.idle_kept(&before, &other, 0);
         self.st.amend += 1;
-        live_pairs(&tx, &d).remove(0)
+        self.find(&live_pairs(&tx, &d)[0].op)
     }
 
     fn random_n(&mut self, s: i64, partial: bool) -> i64 {
@@ -350,19 +426,31 @@ impl Sim {
             o.min_counter_rate = 0;
             let id = self.fresh_hash(0xb1);
             let nb;
+            // Review 3 (DESIGN 4.5c): the entrant is healthy at x, so its rate is at least mmr * x.
+            let need = (x * p.m.mmr_bps + 9_999) / 10_000;
             if side == LONG {
-                o.my_rate = self.rng.range((x - bl).max(1), x.max(1));
+                let lo = (x - bl).max(need).max(1);
+                o.my_rate = self.rng.range(lo, x.max(lo));
                 o.limit = x + self.rng.range(0, 1_000_000);
                 nb = x - o.my_rate;
             } else {
-                o.my_rate = self.rng.range((bs - x).max(1), bs - x + 500_000_000);
+                let lo = (bs - x).max(need).max(1);
+                o.my_rate = self.rng.range(lo, lo + 500_000_000);
                 o.limit = x - self.rng.range(0, x.min(1_000_000));
                 nb = x + o.my_rate;
             }
             let lo = LiveOpen { value: o.escrow() as u64, o, id, op: self.fresh_op() };
             (TransferSpec { side, n, x, nb, ek: xonly(&entrant), et: id, k: self.rng.range(0, 1) }, Entrant::Open(lo))
         } else {
-            let nb = if side == LONG { bl - self.rng.range(0, bl.min(200_000_000)) } else { bs + self.rng.range(0, 200_000_000) };
+            // Review 3: the direct taker's bound is also healthy at x (at most x * (1 - mmr) for a long, at least
+            // x * (1 + mmr) for a short) and keeps no-downgrade.
+            let mm = p.m.mmr_bps;
+            let nb = if side == LONG {
+                let top = bl.min(x * (10_000 - mm) / 10_000);
+                top - self.rng.range(0, top.min(200_000_000))
+            } else {
+                bs.max((x * (10_000 + mm) + 9_999) / 10_000) + self.rng.range(0, 200_000_000)
+            };
             // A direct taker writes any tag it likes (review 1, F1/F2): 0, the pair's own id, the token's id, or
             // a random id. None may freeze the pair.
             let et = match self.rng.range(0, 3) {
@@ -415,7 +503,7 @@ impl Sim {
         let d = if cands.is_empty() || self.rng.coin() {
             let bl = h.p.bl - self.rng.range(0, h.p.bl.min(200_000_000));
             let bs = h.p.bs - self.rng.range(0, (h.p.bs - bl - 2).min(200_000_000));
-            let d = self.open_capped(Some((bl, bs)), h.p.entry);
+            let Some(d) = self.open_capped(Some((bl, bs)), h.p.entry) else { return };
             if d.p.entry > h.p.entry {
                 return;
             }
@@ -537,7 +625,10 @@ impl Sim {
                     let who = self.fresh_key();
                     let mut o = long_order(&who);
                     (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
-                    o.my_rate = self.rng.range((x - p.bl).max(1), x.max(1));
+                    // Review 3 (F3, DESIGN 4.5c): the entrant is healthy at the quote, bound <= a * (1 - mmr).
+                    let hb = a * (10_000 - m.mmr_bps) / 10_000;
+                    let lo = (x - p.bl).max(x - hb).max(1);
+                    o.my_rate = self.rng.range(lo, x.max(lo));
                     let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb3), op: self.fresh_op() };
                     (Act::LiqTransfer { side: LONG, x, open, k: self.rng.range(0, 1) }, Evidence::ask(a, fill), a)
                 }
@@ -555,16 +646,56 @@ impl Sim {
                     let who = self.fresh_key();
                     let mut o = short_order(&who);
                     (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
-                    o.my_rate = self.rng.range((p.bs - x).max(1), (p.bs - x).max(1) + 300_000_000);
+                    // Review 3: healthy at the bid, bound >= b * (1 + mmr).
+                    let hb = (b * (10_000 + m.mmr_bps) + 9_999) / 10_000;
+                    let lo = (p.bs - x).max(hb - x).max(1);
+                    o.my_rate = self.rng.range(lo, lo + 300_000_000);
                     let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb4), op: self.fresh_op() };
                     (Act::LiqTransfer { side: SHORT, x, open, k: self.rng.range(0, 1) }, Evidence::bid(b, fill), b)
                 }
             }
             _ => return,
         };
-        let before = self.w.clone();
+        // Evidence timing (review 3, DESIGN 4.5c). A third of the orders are fresh (placed now, GTC). The others were
+        // placed around the pair's clock start S, up to 3R before it, with a soft expiry (GTD) that may end before the
+        // order has rested R on the pair's clock; and half of those are used with the lock time of review 2 (the end of
+        // the order's own rest, ignoring the clock). The engine must accept exactly when the order was fillable through
+        // max(exposed, S) + R and the lock time proves that end.
+        let r = m.min_rest_daa as u64;
+        let s_clock = l.clock() as u64;
+        let mut e = e;
+        let stale = self.rng.range(0, 2) > 0;
+        let expiry;
+        if stale {
+            let at = self.rng.range(s_clock.saturating_sub(3 * r) as i64, (s_clock + r) as i64) as u64;
+            (e.daa, e.tok_daa) = (at, at);
+            expiry = self.rng.range((at + r) as i64, (s_clock + 2 * r) as i64);
+            e.ask.expiry_daa = expiry;
+            e.bid.expiry_daa = expiry;
+        } else {
+            (e.daa, e.tok_daa) = (self.daa, self.daa);
+            expiry = if e.kind == Kind::Ask { e.ask.expiry_daa } else { e.bid.expiry_daa };
+        }
+        let rest_end = e.daa.max(s_clock) + r;
         let fnn = self.fn_();
-        let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: act.clone() }], &e, &self.f.clone(), fnn);
+        let mut d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: act.clone() }], &e, &self.f.clone(), fnn);
+        d.lock = if stale && self.rng.coin() { e.daa + r } else { rest_end.max(self.daa) + self.rng.range(0, 50) as u64 };
+        let predicted = expiry >= rest_end as i64 && d.lock >= rest_end;
+        let (tx0, en0) = d.build();
+        let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
+        assert_eq!(ok, predicted, "evidence at DAA {} (expiry {expiry}) on a pair whose clock starts at {s_clock}, lock {}: the clock rule", e.daa, d.lock);
+        if !ok {
+            self.st.ev_refused += 1;
+            return;
+        }
+        // No accepted liquidation counts evidence for any time before the liquidated side entered: the order was
+        // fillable for R DAA after max(exposed, entry), and the lock time proves the end of that rest.
+        if let Act::Liq { side } | Act::LiqTransfer { side, .. } = &act {
+            let entry = self.entered[&(l.op, *side)];
+            let start = e.daa.max(entry);
+            assert!(expiry >= (start + r) as i64 && d.lock >= start + r, "a liquidation used evidence from before the loser entered (DAA {entry})");
+        }
+        let before = self.w.clone();
         let handed = match &act {
             Act::LiqTransfer { side, open, .. } => vec![(*side, open.id)],
             _ => vec![],
@@ -683,6 +814,8 @@ fn walk(seed: u64, st_total: &mut Stats) {
     st_total.mutual += t.mutual;
     st_total.idle += t.idle;
     st_total.txs += t.txs;
+    st_total.clock_kept += t.clock_kept;
+    st_total.clock_restarted += t.clock_restarted;
     st_total.max_slack = st_total.max_slack.max(t.max_slack);
 }
 
@@ -709,6 +842,9 @@ fn walk_ev(seed: u64, st_total: &mut Stats) {
     st_total.ev_close += t.ev_close;
     st_total.ev_liq += t.ev_liq;
     st_total.ev_transfer += t.ev_transfer;
+    st_total.ev_refused += t.ev_refused;
+    st_total.clock_kept += t.clock_kept;
+    st_total.clock_restarted += t.clock_restarted;
     st_total.split += t.split;
     st_total.txs += t.txs;
 }
@@ -721,6 +857,9 @@ fn x6_evidence_random_walk() {
     }
     println!("X6 evidence: {st:?}");
     assert!(st.ev_close > 0 && st.ev_liq > 0 && st.ev_transfer > 0 && st.split > 0);
+    // Review 3: some evidence was refused by the clock rule (stale or dead before resting R on the pair's clock), and
+    // clocks were both kept and restarted.
+    assert!(st.ev_refused > 0 && st.clock_kept > 0 && st.clock_restarted > 0, "{st:?}");
 }
 
 #[test]
@@ -733,4 +872,5 @@ fn x6_conservation_random_walk() {
     assert!(st.open > 0 && st.amend > 0 && st.split > 0 && st.transfer_open > 0 && st.transfer_direct > 0);
     assert!(st.close_vs_close > 0 && st.close_partial > 0 && st.mutual > 0 && st.idle > 0);
     assert!(st.max_slack <= 1);
+    assert!(st.clock_kept > 0 && st.clock_restarted > 0, "{st:?}");
 }

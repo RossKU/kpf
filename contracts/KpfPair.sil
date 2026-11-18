@@ -37,9 +37,10 @@ pragma silverscript ^0.1.0;
 // authenticates its trigger evidence: template hash and P2SH of its redeem script, its signature script starting
 // with the fixed 8-byte push of its fill n_ev > 0, its token covenant id and scale equal to this market's, not
 // decaying (slope 0), interval >= 0, and exposed at its quote for minRestDaa DAA before this transaction:
-// tx.daa >= max(UTXO DAA + interval, activeFrom, for an ask its custody's UTXO DAA) + minRestDaa, tx.daa proven by
-// CLTV, and fillable by conforming matchers for that whole window: expiryDaa, the IOC/FOK kill and the 90-day idle
-// limit all at or after its end (DESIGN 4.5b, review 2 F2). An ask's custody tk is a holder UTXO of this market's token program (template hash tokenTplHash) owned by
+// tx.daa >= max(UTXO DAA + interval, activeFrom, for an ask its custody's UTXO DAA, this pair's clock start S)
+// + minRestDaa, tx.daa proven by CLTV, and fillable by conforming matchers for that whole window: expiryDaa, the
+// IOC/FOK kill and the 90-day idle limit all at or after its end (DESIGN 4.5b, 4.5c; reviews 2 F2, 3 F1). An ask's
+// custody tk is a holder UTXO of this market's token program (template hash tokenTplHash) owned by
 // the ask's covenant id (scheme 0x04) with this market's extension commitment; a bid carries the commitment in
 // its own state. The KobAsk and KobBid templates (hash, prefix and suffix length) are build constants.
 //
@@ -82,6 +83,15 @@ pragma silverscript ^0.1.0;
 // Entry price (DESIGN 4.5a). E changes only with the consent of both parties: P3 and P7 keep it in the part and
 // in the remainder, P4 writes e3 with E(donor) <= e3 <= E(host) into P3 (each pair checks its own half), and
 // every other continuation keeps it. P8 therefore settles an absent party at a price it consented to, or better.
+//
+// Evidence clock (DESIGN 4.5c, review 3 F1). The clock start S is `since` when it is non-zero, otherwise the DAA
+// score of this pair's own UTXO. Evidence counts only from S: with exposed' = max(exposed, S) the order must have
+// been fillable through exposed' + minRestDaa and the lock time must prove tx.daa >= exposed' + minRestDaa. The
+// part that changes hands (the part of P3 and P7, P4's re-paired output) carries since = 0, so its clock starts
+// at its own UTXO; every other pair output (P1, P2, every remainder) carries since = S. P3 and P4 require
+// tx.daa >= S + 4 * minRestDaa (hand-overs are rate-limited); P7 is exempt.
+// Health at entry (4.5c, F3, F4): the entrant of P3 must not be liquidatable at its entry price x, the entrant
+// of P7 not at the evidence quote. Range (4.5c, F2): P6 and P7 require bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps).
 contract KpfPair(
     byte[32] ASK_TPL,
     int ASK_PRE,
@@ -117,7 +127,8 @@ contract KpfPair(
     int init_shortMin,
     int init_shortTip,
     byte[32] init_tagL,
-    byte[32] init_tagS
+    byte[32] init_tagS,
+    int init_since
 ) {
     // Market block (state [0..207)): identical in every pair and open order of one market.
     byte[32] tokenCovId = init_tokenCovId;
@@ -135,7 +146,7 @@ contract KpfPair(
     int carrier = init_carrier;          // C, sompi on every pair output above its range
     int idleDaa = init_idleDaa;          // idle timeout of P8, DAA (CSV)
     int priceMax = init_priceMax;        // upper price bound, <= 10^14
-    // Position (state [207..429)). Mutable fields are marked *.
+    // Position (state [207..438)). Mutable fields are marked *.
     int size = init_size;                // * s, base units
     int bl = init_bl;                    // * long bankruptcy price
     int bs = init_bs;                    // * short bankruptcy price
@@ -151,6 +162,7 @@ contract KpfPair(
     byte[32] tagL = init_tagL;           // * covenant id of the input that handed the long over in the transaction
                                          //   that created this UTXO (0 if none); read only by that claimer
     byte[32] tagS = init_tagS;           // * as tagL for the short
+    int since = init_since;              // * evidence clock start (0: this UTXO's DAA score), DESIGN 4.5c
 
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_LONG = 1;
@@ -170,9 +182,10 @@ contract KpfPair(
     int constant LISTS_AT = 310;
     int constant LISTS_END = 364;
     int constant LIST_LEN = 27;
-    // size payload [209..217); the whole position state ends at 430.
+    // size payload [209..217); the tag window ends at 430, the since push is [430..439) and the whole position
+    // state ends at 439.
     int constant SIZE_AT = 209;
-    int constant STATE_END = 430;
+    int constant STATE_END = 439;
     // An empty listing window (ask, minPart, tip all zero) with its push opcodes.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
     // Evidence (KobCondAsk.touch): state lengths of KobAsk and KobBid, the largest evidence block, basis points.
@@ -247,31 +260,54 @@ contract KpfPair(
         return byte[32](z8 + z8 + z8 + z8);
     }
 
-    // P2SH of this script with bl, bs and the two listing windows (54 bytes with their push opcodes) replaced and
-    // both tags zero. Every other byte, the market block, size, entryPrice and both keys included, is copied.
-    function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
+    // The since window [430..439) with its push opcode.
+    function sinceWin(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // The evidence clock start S (DESIGN 4.5c): since when non-zero, else the DAA score of this UTXO.
+    // DESIGN: 4.5c does not bound S. A negative value (a hand-built since, or a UTXO whose DAA score the engine does not
+    // know yet: a mempool spend of an unaccepted parent reads u64::MAX, i.e. -1) is refused, so no output is ever written
+    // with a clock that consensus and a mempool would read differently.
+    function clockStart() : int {
+        int c = since;
+        if (c == 0) { c = OpTxInputDaaScore(this.activeInputIndex); }
+        require(c >= 0);
+        return c;
+    }
+
+    // The hand-over rate limit of P3 and P4 (DESIGN 4.5c): tx.daa >= S + 4 * minRestDaa, proven by CLTV.
+    function handOverLimit(int c) {
+        require(tx.daa >= c + 4 * minRestDaa);
+    }
+
+    // P2SH of this script with bl, bs and the two listing windows (54 bytes with their push opcodes) replaced,
+    // both tags zero and since = c. Every other byte, the market block, size, entryPrice and both keys included,
+    // is copied.
+    function contSpk(byte[] rs, int newBl, int newBs, byte[] lists, int c) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
             rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
-                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noTags() + rs.slice(STATE_END, this.bytecodeSize)
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noTags() + sinceWin(c) + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
 
     // P2SH of a KpfPair with this script's template and market block and the given position: size, range, entry,
-    // keys, both listing windows (54 bytes with their push opcodes) and tags.
+    // keys, both listing windows (54 bytes with their push opcodes) and tags, and since = 0. Used only for an
+    // output whose side changes hands (P3 and P7 parts, P4's re-paired output), whose clock restarts.
     function pairSpk(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] lists, byte[32] tl, byte[32] ts) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
             rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + byte[](0x08) + byte[](b0 as byte[8]) + byte[](0x08)
                 + byte[](b1 as byte[8]) + byte[](0x08) + byte[](e as byte[8]) + byte[](0x20) + byte[](lk) + byte[](0x20)
-                + byte[](sk) + lists + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts)
+                + byte[](sk) + lists + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts) + sinceWin(0)
                 + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
 
-    // P2SH of the remainder: this script with the size replaced and both tags zero (the entry price, keys and
-    // listings are kept).
-    function restSpk(byte[] rs, int sz) : byte[] {
+    // P2SH of the remainder: this script with the size replaced, both tags zero and since = c (the entry price,
+    // keys and listings are kept).
+    function restSpk(byte[] rs, int sz, int c) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
-            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noTags()
+            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noTags() + sinceWin(c)
                 + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
@@ -315,7 +351,7 @@ contract KpfPair(
     // The continuations of a part n moved into a new position (P3, and the host of P4). With n = s the part is the
     // only output of this id and inherits keep (the old carrier and the excess); with n < s the part is ordinal k
     // of two, it carries a new carrier, and the remainder (ordinal 1 - k) keeps keep and the range floor.
-    function partAndRest(byte[32] selfId, byte[] rs, int n, int k, byte[] partSpk, int partRange, int keep) {
+    function partAndRest(byte[32] selfId, byte[] rs, int n, int k, byte[] partSpk, int partRange, int keep, int clk) {
         if (n == size) {
             require(OpCovOutputCount(selfId) == 1);
             int c = OpCovOutputIdx(selfId, 0);
@@ -330,7 +366,7 @@ contract KpfPair(
             require(tx.outputs[c0].value >= partRange + carrier);
             int c1 = OpCovOutputIdx(selfId, 1 - k);
             int rest = size - n;
-            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest, clk));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
             require(tx.outputs[c1].value >= keep);
         }
@@ -363,7 +399,7 @@ contract KpfPair(
         }
         require(OpCovOutputCount(selfId) == 1);
         int c = OpCovOutputIdx(selfId, 0);
-        require(tx.outputs[c].scriptPubKey == contSpk(rs, bl, bs, lists));
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, bl, bs, lists, clockStart()));
         require(tx.outputs[c].value >= tx.inputs[self].value);
         require(tx.outputs[c].value >= floorOf(bl, bs));
     }
@@ -392,7 +428,7 @@ contract KpfPair(
         byte[] rs = ownRs();
         require(OpCovOutputCount(selfId) == 1);
         int c = OpCovOutputIdx(selfId, 0);
-        require(tx.outputs[c].scriptPubKey == contSpk(rs, nbl, nbs, rs.slice(LISTS_AT, LISTS_END)));
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, nbl, nbs, rs.slice(LISTS_AT, LISTS_END), clockStart()));
         require(tx.outputs[c].value - tx.inputs[self].value >= quoteOf(size, delta, scale - 1));
         require(tx.outputs[c].value >= floorOf(nbl, nbs));
     }
@@ -429,14 +465,18 @@ contract KpfPair(
             require(n >= shortMin || n == size);
             pay = owed(n, bs - x, shortTip);
         }
-        handOver(side, n, nb, ek, et, k, pay, side);
+        int clk = clockStart();
+        handOverLimit(clk);
+        handOver(side, n, nb, ek, et, k, pay, side, x, clk);
     }
 
     // The hand-over of P3 and P7: the party `payee` (the leaver `side` in P3, the stayer in P7) is paid `pay` at
     // output i (a payout below dust stays in the pair), and an entrant with key ek, tag et and new bound nb takes
-    // the leaver's place in a part of size n with the entry price kept and its side unlisted; the stayer's tag is
-    // cleared. No-downgrade: nb <= bl for a staying short, nb >= bs for a staying long.
-    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay, int payee) {
+    // the leaver's place in a part of size n with the entry price kept, its side unlisted and since = 0; the
+    // stayer's tag is cleared and the remainder keeps the clock clk. No-downgrade: nb <= bl for a staying short,
+    // nb >= bs for a staying long. Health at entry (DESIGN 4.5c): the entrant is not liquidatable at the price hp,
+    // a long hp * (10^4 - mmrBps) >= nb * 10^4, a short nb * 10^4 >= hp * (10^4 + mmrBps).
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay, int payee, int hp, int clk) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         byte[] rs = ownRs();
@@ -452,6 +492,7 @@ contract KpfPair(
         if (side == SIDE_LONG) {
             require(nb >= 0);
             require(nb <= bl);
+            require(hp * (BPS - mmrBps) >= nb * BPS);
             b0 = nb;
             lk = ek;
             lw = byte[](NO_LIST);
@@ -460,6 +501,7 @@ contract KpfPair(
             require(side == SIDE_SHORT);
             require(nb >= bs);
             require(nb <= priceMax);
+            require(nb * BPS >= hp * (BPS + mmrBps));
             b1 = nb;
             sk = ek;
             sw = byte[](NO_LIST);
@@ -477,7 +519,7 @@ contract KpfPair(
             p = 0;
         }
         payTo(self, payKey, p);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep, clk);
     }
 
     // P4 close-versus-close, host side (DESIGN 3.4 c, 4.5 T3). This pair's long listing is filled for n at x: the
@@ -501,6 +543,8 @@ contract KpfPair(
         require(bl3 >= 0);
         require(bl3 <= bl);
         require(e3 <= entryPrice);
+        int clk = clockStart();
+        handOverLimit(clk);
         byte[] rs = ownRs();
         int pay = owed(n, x - bl, longTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -510,7 +554,7 @@ contract KpfPair(
         }
         payTo(self, longKey, pay);
         byte[] lists = win(la3, lm3, lt3) + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep, clk);
     }
 
     // P4 close-versus-close, donor side. This pair's short listing is filled for n at x: the short leaves with
@@ -537,6 +581,8 @@ contract KpfPair(
         require(bs3 >= bs);
         require(bs3 <= priceMax);
         require(e3 >= entryPrice);
+        int clk = clockStart();
+        handOverLimit(clk);
         byte[] rs = ownRs();
         byte[32] pid = OpOutputCovenantId(c);
         require(pid != zero32());
@@ -558,7 +604,7 @@ contract KpfPair(
             require(OpCovOutputCount(selfId) == 1);
             int c1 = OpCovOutputIdx(selfId, 0);
             int rest = size - n;
-            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest, clk));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
             require(tx.outputs[c1].value >= keep);
         }
@@ -612,7 +658,7 @@ contract KpfPair(
             int c1 = OpCovOutputIdx(selfId, 0);
             int rest = size - n;
             byte[] rs = ownRs();
-            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest, clockStart()));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
             require(tx.outputs[c1].value >= keep);
         }
@@ -734,7 +780,9 @@ contract KpfPair(
     // [190..198) slope [208..216); KobBid's scale, price, tif, activeFrom and expiryDaa sit 33 bytes later, after
     // its extensionCommitment [118..150), its interval and slope 51 (kpf_layout_tests checks them against the
     // compiled KOB templates).
-    function evQuote(int ask, int ev, int tk, byte[8] qb) : int {
+    // The evidence clock (DESIGN 4.5c): exposed' = max(exposed, clk), clk this pair's clock start, so evidence that
+    // rested before the clock started, or that died before it had rested minRestDaa on the clock, is refused.
+    function evQuote(int ask, int ev, int tk, byte[8] qb, int clk) : int {
         require(minRestDaa >= 0);
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int nev = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
@@ -779,6 +827,7 @@ contract KpfPair(
         } else {
             require(byte[32](o.slice(118, 150)) == extensionCommitment);
         }
+        if (clk > exposed) { exposed = clk; }
         int restEnd = exposed + minRestDaa;
         require(tx.daa >= restEnd);
         // Fillable by conforming matchers for the whole rest window (DESIGN 4.5b, review 2 F2; KOB matcher.md 2.3):
@@ -825,7 +874,7 @@ contract KpfPair(
     // M - 1 - i (at least the input count). A payout below dust is not created: with a remainder its value stays
     // there, with n = s it goes to the other party. Whatever no output is required to hold (the fee) is the
     // executor's.
-    function closeAt(int n, int c, int side, int fee) {
+    function closeAt(int n, int c, int side, int fee, int clk) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         int v = tx.inputs[self].value;
@@ -863,7 +912,7 @@ contract KpfPair(
             require(OpCovOutputCount(selfId) == 1);
             int c1 = OpCovOutputIdx(selfId, 0);
             int rest = size - n;
-            require(tx.outputs[c1].scriptPubKey == restSpk(ownRs(), rest));
+            require(tx.outputs[c1].scriptPubKey == restSpk(ownRs(), rest, clk));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
             require(tx.outputs[c1].value >= keep);
         }
@@ -918,10 +967,20 @@ contract KpfPair(
     // the winner keeps its key, bound and listing in the part. The loser gets 0. A payout below dust stays in the
     // pair as in P3 (with n = s, in the part).
     //
-    // DESIGN: 4.5b writes the fee cap as q(n, T - BL) (long) and q(n, BS - T) (short). When the range is so narrow
-    // that T lies outside [bl, bs] (T > bs for a long), that cap would exceed the part and the winner could be
-    // left below 0; T is clamped to [bl, bs] first, so the cap is at most q(n, bs - bl) and the winner receives at
-    // least its payoff at the clamped T (0 when T >= bs).
+    // Range (DESIGN 4.5c, review 3 F2). P6 and P7 require bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps): the long's
+    // trigger lies below the short's, so no quote liquidates both sides and the side that forfeits is never the
+    // one owed the pair. With it the trigger price T lies strictly inside (bl, bs), so the review 2 clamp of T is
+    // dropped and the fee cap q(n, T - bl) (long) or q(n, bs - T) (short) is always below the part.
+    //
+    // Health at entry of the P7 entrant (DESIGN 4.5c, review 3 F3). 4.5c asks that the entrant is not liquidatable
+    // at its own entry price x. In P7 the executor chooses x anywhere at or beyond the quote (x >= a for a long),
+    // so a check at x alone still lets the same transaction's quote prove the entrant liquidatable (review 3 F3
+    // with x above the trigger). DESIGN: the check is made at the evidence quote p instead, which implies the check
+    // at x (a long's x >= p, a short's x <= p): a long entrant needs p * (10^4 - mmrBps) >= nbd * 10^4, a short
+    // nbd * 10^4 >= p * (10^4 + mmrBps).
+    //
+    // Evidence clock (DESIGN 4.5c). S = clockStart() bounds the evidence from below (evQuote); the remainder of
+    // P5, P6 and P7 keeps since = S, the part of P7 carries since = 0. P7 is not rate-limited.
     //
     // DESIGN: 5 bounds the trigger products for a, b <= priceMax only; a liquidation quote outside [0, priceMax] is
     // refused (P5 only clamps, it forms no product with the quote).
@@ -962,7 +1021,8 @@ contract KpfPair(
                 require(side == SIDE_SHORT);
             }
         }
-        int p = evQuote(ask, ev, tk, qb);
+        int clk = clockStart();
+        int p = evQuote(ask, ev, tk, qb, clk);
         // P5 settles at the quote clamped to [bl, bs]; P6 at the loser's own bankruptcy price, so the loser `side`
         // is owed 0 and the winner takes the rest less the fee (closeAt).
         int c = clampP(p);
@@ -970,20 +1030,18 @@ contract KpfPair(
         if (path != 5) {
             require(p >= 0);
             require(p <= priceMax);
-            // The trigger price t from this pair's own state and the maintenance slice q(n, t - bl) (long) or
-            // q(n, bs - t) (short) that caps the fee; t is clamped to [bl, bs] (see DESIGN below).
-            int t = bl;
+            // The range is wider than both maintenance bands (see Range above).
+            require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
+            // The trigger price T from this pair's own state and the maintenance slice t = T - bl (long) or
+            // bs - T (short) that caps the fee; T lies inside (bl, bs).
+            int t = 0;
             if (ask == 1) {
                 require(p * (BPS - mmrBps) < bl * BPS);
-                t = bl * BPS / (BPS - mmrBps);
-                if (t > bs) { t = bs; }
-                t = t - bl;
+                t = bl * BPS / (BPS - mmrBps) - bl;
                 c = bl;
             } else {
                 require(bs * BPS < p * (BPS + mmrBps));
-                t = (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
-                if (t < bl) { t = bl; }
-                t = bs - t;
+                t = bs - (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
                 c = bs;
             }
             fee = feeAt(n, p);
@@ -1004,9 +1062,9 @@ contract KpfPair(
             int pay = o - fee;
             if (pay < 0) { pay = 0; }
             // The entrant's payment for the loser's part goes to the winner, the stayer (DESIGN 4.5b).
-            handOver(side, n, nbd, ek, et, k, pay, SIDE_LONG + SIDE_SHORT - side);
+            handOver(side, n, nbd, ek, et, k, pay, SIDE_LONG + SIDE_SHORT - side, p, clk);
         } else {
-            closeAt(n, c, side, fee);
+            closeAt(n, c, side, fee, clk);
         }
     }
 }

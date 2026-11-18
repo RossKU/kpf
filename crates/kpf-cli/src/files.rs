@@ -38,7 +38,10 @@ pub fn outpoint_from(v: &Value) -> Result<TransactionOutpoint, String> {
 pub struct ObjFile {
     pub op: TransactionOutpoint,
     pub amount: u64,
-    pub daa: u64,
+    /// The UTXO's DAA score; `None` when the file does not say (a just-built output, or a hand-written file). Every
+    /// use that depends on it (the evidence rest, the evidence clock, the hand-over limit, an order's refund time)
+    /// refuses an unknown DAA instead of reading it as 0 (review 3 T4).
+    pub daa: Option<u64>,
     pub covenant_id: Hash,
     pub redeem: Vec<u8>,
 }
@@ -54,9 +57,22 @@ impl ObjFile {
         Ok(ObjFile {
             op: outpoint_from(g("outpoint")?)?,
             amount: g("amount")?.as_u64().ok_or("`amount` is not an integer")?,
-            daa: v.get("daa").and_then(Value::as_u64).unwrap_or(0),
+            daa: match v.get("daa") {
+                None | Some(Value::Null) => None,
+                Some(d) => Some(d.as_u64().ok_or("`daa` is not a non-negative integer")?),
+            },
             covenant_id: Hash::from_bytes(hex32(g("covenantId")?.as_str().unwrap_or("")).map_err(|e| format!("covenantId: {e}"))?),
             redeem: from_hex(g("redeem")?.as_str().unwrap_or("")).map_err(|e| format!("redeem: {e}"))?,
+        })
+    }
+
+    /// The UTXO's DAA score, or a plain refusal when the file does not give it.
+    pub fn known_daa(&self) -> Result<u64, String> {
+        self.daa.ok_or_else(|| {
+            format!(
+                "the file of UTXO {}:{} has no `daa` (its DAA score is unknown, e.g. it was written before the transaction was accepted): pass --node, or run `kpf status --object FILE --node URL --update` once it is accepted. It is not read as 0: the evidence rest, the evidence clock and the hand-over limit depend on it",
+                self.op.transaction_id, self.op.index
+            )
         })
     }
 
@@ -66,14 +82,14 @@ impl ObjFile {
 
     pub fn live_pair(&self) -> Result<LivePair, String> {
         match self.decoded()? {
-            Decoded::Pair(p) => Ok(LivePair { p, value: self.amount, id: self.covenant_id, op: self.op, daa: self.daa }),
+            Decoded::Pair(p) => Ok(LivePair { p, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Open(_) => Err("this object is an order, not a pair".into()),
         }
     }
 
     pub fn live_open(&self) -> Result<LiveOpen, String> {
         match self.decoded()? {
-            Decoded::Open(o) => Ok(LiveOpen { o, value: self.amount, id: self.covenant_id, op: self.op, daa: self.daa }),
+            Decoded::Open(o) => Ok(LiveOpen { o, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Pair(_) => Err("this object is a pair, not an order".into()),
         }
     }
@@ -141,18 +157,18 @@ impl KobFile {
                 let c = self.custody.as_ref().ok_or("an ask needs its custody UTXO: add a `custody` entry (the token UTXO owned by the ask's covenant id)")?;
                 let t = TokenState::decode_redeem(&c.redeem).map_err(|e| format!("custody: {e}"))?;
                 Ok(Evidence::Ask {
-                    order: LiveAsk { a, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa },
-                    custody: LiveToken { t, value: c.amount, id: c.covenant_id, op: c.op, daa: c.daa },
+                    order: LiveAsk { a, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.known_daa()? },
+                    custody: LiveToken { t, value: c.amount, id: c.covenant_id, op: c.op, daa: c.known_daa().map_err(|e| format!("custody: {e}"))? },
                 })
             }
-            KobOrder::Bid(b) => Ok(Evidence::Bid { order: LiveBid { b, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa } }),
+            KobOrder::Bid(b) => Ok(Evidence::Bid { order: LiveBid { b, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.known_daa()? } }),
         }
     }
 
     /// The token holder UTXO this file describes.
     pub fn live_token(&self) -> Result<kpf_protocol::kob::LiveToken, String> {
         let t = kpf_protocol::kob::TokenState::decode_redeem(&self.obj.redeem).map_err(|e| e.to_string())?;
-        Ok(kpf_protocol::kob::LiveToken { t, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa })
+        Ok(kpf_protocol::kob::LiveToken { t, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.known_daa()? })
     }
 }
 
@@ -166,7 +182,8 @@ pub struct ListedUtxo {
     pub covenant_id: Option<Hash>,
 }
 
-/// Parses a UTXO list: an array of `{txid, index, amount, daa}` or of the node's `{outpoint, utxoEntry}` entries
+/// Parses a UTXO list: an array of `{txid, index, amount, daa, covenantId?, scriptPublicKey?}` or of the node's
+/// `{outpoint, utxoEntry}` entries
 /// (or an object with an `entries` array).
 pub fn parse_utxos(v: &Value) -> Result<Vec<ListedUtxo>, String> {
     let arr = match v {
@@ -192,12 +209,19 @@ pub fn parse_utxos(v: &Value) -> Result<Vec<ListedUtxo>, String> {
                     covenant_id: cov,
                 });
             }
+            // The simple shape (what `kpf utxos --out` writes) keeps the covenant flag and, when present, the script, so a
+            // covenant-bound UTXO read back from the tool's own file is never funding (review 3 T3).
+            let spk = e.get("scriptPublicKey").filter(|v| !v.is_null()).map(spk_value).transpose().map_err(|e| ctx(e.to_string()))?;
+            let cov = match e.get("covenantId") {
+                None | Some(Value::Null) => None,
+                Some(c) => Some(Hash::from_bytes(hex32(c.as_str().unwrap_or("")).map_err(|e| ctx(format!("covenantId: {e}")))?)),
+            };
             Ok(ListedUtxo {
                 op: outpoint_from(e).map_err(ctx)?,
                 amount: num(e.get("amount")).ok_or_else(|| ctx("no amount".into()))?,
                 daa: num(e.get("daa").or_else(|| e.get("blockDaaScore"))).unwrap_or(0),
-                spk: None,
-                covenant_id: None,
+                spk,
+                covenant_id: cov,
             })
         })
         .collect()
@@ -249,7 +273,7 @@ mod tests {
         let o = ObjFile {
             op: TransactionOutpoint { transaction_id: TransactionId::from_bytes([7; 32]), index: 2 },
             amount: p.floor() as u64,
-            daa: 55,
+            daa: Some(55),
             covenant_id: Hash::from_bytes([9; 32]),
             redeem: p.redeem(),
         };

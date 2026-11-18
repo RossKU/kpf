@@ -576,6 +576,26 @@ impl Evidence {
     pub fn rest_end(&self, m: &Market) -> u64 {
         self.exposed() + m.min_rest_daa.max(0) as u64
     }
+    /// `exposed' = max(exposed, S)` for a pair whose evidence clock starts at `clock` (DESIGN 4.5c): only the rest on the
+    /// pair's clock counts.
+    pub fn exposed_on(&self, clock: Option<i64>) -> u64 {
+        self.exposed().max(clock.unwrap_or(0).max(0) as u64)
+    }
+    /// The first DAA at which the order has rested `minRestDaa` on the pair's clock: the lock time a transaction using it
+    /// for that pair needs.
+    pub fn rest_end_on(&self, m: &Market, clock: Option<i64>) -> u64 {
+        self.exposed_on(clock) + m.min_rest_daa.max(0) as u64
+    }
+    /// The last DAA at which conforming matchers still fill the order (KOB matcher.md 2.3): the earliest of its soft
+    /// expiry, its IOC/FOK kill (`max(UTXO DAA, activeFrom) + 600`) and 90 days idle (`UTXO DAA + 77,760,000`). After it
+    /// the order is hidden from every book: it is dead (review 3 F1).
+    pub fn live_until(&self) -> i64 {
+        let mut t = self.expiry_daa().min(self.daa() as i64 + MAX_IDLE as i64);
+        if self.tif() != 0 {
+            t = t.min((self.daa() as i64).max(self.active_from()) + IOC_LIFE);
+        }
+        t
+    }
 }
 
 /// The least fill that covers `k * sum` (the evidence block rule of DESIGN 4.4, exact as in the contract).
@@ -595,9 +615,17 @@ pub struct EvidenceReport {
     pub capacity: i64,
     /// Most base units of pairs (sum of the `n` of the block) one fill of the whole capacity can cover: `capacity / k`.
     pub covers: i64,
+    /// `exposed'`: the DAA since which the order counts as resting, on the pair's clock when one is given.
     pub exposed: u64,
-    /// The first DAA a transaction may prove for this evidence.
+    /// The first DAA a transaction may prove for this evidence (on the pair's clock when one is given).
     pub rest_end: u64,
+    /// The pair's evidence clock start S the report was made for (DESIGN 4.5c), if any.
+    pub clock: Option<i64>,
+    /// The last DAA conforming matchers fill the order ([`Evidence::live_until`]).
+    pub live_until: i64,
+    /// Why the order is dead (soft-expired: hidden from every book) at the DAA checked. The builders refuse dead
+    /// evidence unless told otherwise (`allow_dead`, for sweeping tests only).
+    pub dead: Vec<String>,
     /// Reasons the order can never serve this market as it is.
     pub problems: Vec<String>,
     /// Reasons it cannot serve at the DAA asked about (it may later).
@@ -608,18 +636,26 @@ pub struct EvidenceReport {
 
 impl EvidenceReport {
     pub fn usable(&self) -> bool {
-        self.problems.is_empty() && self.waiting.is_empty()
+        self.problems.is_empty() && self.waiting.is_empty() && self.dead.is_empty()
     }
     /// Every reason in one list, problems first.
     pub fn reasons(&self) -> Vec<String> {
-        self.problems.iter().chain(self.waiting.iter()).cloned().collect()
+        self.problems.iter().chain(self.waiting.iter()).chain(self.dead.iter()).cloned().collect()
     }
 }
 
 /// Checks an order against a market the way `KpfPair.evQuote` does (DESIGN 3.3, 4.5b), and says why it cannot serve.
 /// `daa` is the DAA score at which the transaction would be proven; with `None` only the time-free conditions and the
-/// first usable DAA are reported.
+/// first usable DAA are reported. No pair clock: see [`check_evidence_on`].
 pub fn check_evidence(ev: &Evidence, m: &Market, daa: Option<u64>) -> EvidenceReport {
+    check_evidence_on(ev, m, None, daa)
+}
+
+/// [`check_evidence`] for a pair whose evidence clock starts at `clock` (DESIGN 4.5c, `LivePair::clock`): the rest
+/// counts only from `max(exposed, clock)`, the order must have stayed fillable until that rest ends, and the order is
+/// reported dead (`dead`) when it is soft-expired at the DAA the transaction would land (the later of `daa` and the
+/// end of the rest).
+pub fn check_evidence_on(ev: &Evidence, m: &Market, clock: Option<i64>, daa: Option<u64>) -> EvidenceReport {
     let mut problems: Vec<String> = vec![];
     let mut waiting: Vec<String> = vec![];
     let mut notes: Vec<String> = vec![];
@@ -681,27 +717,55 @@ pub fn check_evidence(ev: &Evidence, m: &Market, daa: Option<u64>) -> EvidenceRe
     if quote < 0 || quote > m.price_max {
         notes.push(format!("the quote {quote} is outside 0..=priceMax {}: it can close a pair (P5) but never liquidate one", m.price_max));
     }
-    // Time (DESIGN 3.3, 4.5b; KpfPair.evQuote).
-    let exposed = ev.exposed();
-    let rest_end = ev.rest_end(m);
+    // Time (DESIGN 3.3, 4.5b, 4.5c; KpfPair.evQuote). On a pair's clock S the rest counts from exposed' = max(exposed, S).
+    let raw_exposed = ev.exposed();
+    let exposed = ev.exposed_on(clock);
+    let rest_end = ev.rest_end_on(m, clock);
     let end = rest_end as i64;
+    let on_clock = |what: &str| -> String {
+        match clock {
+            Some(s) if s as u64 > raw_exposed => format!("{what} (the order rested from DAA {raw_exposed}, but the pair's evidence clock starts at DAA {s}: only its rest from then counts)"),
+            _ => what.to_string(),
+        }
+    };
+    if let Some(s) = clock {
+        if s as u64 > raw_exposed {
+            notes.push(format!("the order rested before this pair's evidence clock started (DAA {s}): its rest counts from DAA {s} only (DESIGN 4.5c)"));
+        }
+    }
     if ev.expiry_daa() < end {
-        problems.push(format!(
+        problems.push(on_clock(&format!(
             "its soft expiry (DAA {}) falls before the end of the {} DAA rest window (DAA {rest_end}): matchers would already have hidden it",
             ev.expiry_daa(),
             m.min_rest_daa
-        ));
+        )));
     }
     if ev.tif() != 0 {
         let mut kill = ev.daa() as i64;
         kill = kill.max(ev.active_from());
         kill += IOC_LIFE;
         if kill < end {
-            problems.push(format!("it is an IOC/FOK order and is killed (refundable by anyone) at DAA {kill}, before its rest window ends at DAA {rest_end}"));
+            problems.push(on_clock(&format!("it is an IOC/FOK order and is killed (refundable by anyone) at DAA {kill}, before its rest window ends at DAA {rest_end}")));
         }
     }
     if rest_end > ev.daa() + MAX_IDLE {
-        problems.push(format!("its rest window ends at DAA {rest_end}, after the 90 days (DAA {}) at which anyone may refund it", ev.daa() + MAX_IDLE));
+        problems.push(on_clock(&format!("its rest window ends at DAA {rest_end}, after the 90 days (DAA {}) at which anyone may refund it", ev.daa() + MAX_IDLE)));
+    }
+    let live_until = ev.live_until();
+    let mut dead = vec![];
+    // The earliest DAA a transaction using it can land: the end of its rest (the lock time) or now, whichever is later.
+    let at = daa.unwrap_or(0).max(rest_end) as i64;
+    if at > live_until {
+        let why = if at > ev.expiry_daa() {
+            format!("its soft expiry DAA {} has passed", ev.expiry_daa())
+        } else if ev.tif() != 0 && at > (ev.daa() as i64).max(ev.active_from()) + IOC_LIFE {
+            format!("it is an IOC/FOK order killed at DAA {}", (ev.daa() as i64).max(ev.active_from()) + IOC_LIFE)
+        } else {
+            format!("it has been idle 90 days (since DAA {})", ev.daa())
+        };
+        dead.push(format!(
+            "the order is dead at DAA {at}: {why}, so KOB's conforming matchers no longer fill it and no book shows it. A dead order is a past quote, not a live one: using it looks back to a price nobody can trade at now (DESIGN 4.5c). The tools refuse it; sweep it instead (anyone may fill it at its price, or refund it), or pass --allow-dead-evidence in a test"
+        ));
     }
     if let Some(d) = daa {
         if d < rest_end {
@@ -713,12 +777,6 @@ pub fn check_evidence(ev: &Evidence, m: &Market, daa: Option<u64>) -> EvidenceRe
         }
         if (ev.active_from().max(0) as u64) > d {
             waiting.push(format!("the order is not active before DAA {}", ev.active_from()));
-        }
-        if d as i64 > ev.expiry_daa() {
-            notes.push(format!("the order is past its soft expiry (DAA {}); KOB's keepers may refund it at any time, so use it now or not at all", ev.expiry_daa()));
-        }
-        if ev.tif() != 0 && d as i64 > (ev.daa() as i64).max(ev.active_from()) + IOC_LIFE {
-            notes.push("the IOC/FOK kill time has passed: a keeper may refund the order before your transaction lands".into());
         }
     }
     if let Evidence::Bid { order } = ev {
@@ -734,7 +792,7 @@ pub fn check_evidence(ev: &Evidence, m: &Market, daa: Option<u64>) -> EvidenceRe
     let capacity = ev.capacity().max(0);
     let k = m.k_bps.max(1) as i128;
     let covers = (capacity as i128 * BPS as i128 / k).min(i64::MAX as i128) as i64;
-    EvidenceReport { kind: word, quote, capacity, covers, exposed, rest_end, problems, waiting, notes }
+    EvidenceReport { kind: word, quote, capacity, covers, exposed, rest_end, clock, live_until, dead, problems, waiting, notes }
 }
 
 /// What an evidence order lets each side of a pair do, with the reason when it cannot.

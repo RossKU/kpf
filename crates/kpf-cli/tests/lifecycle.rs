@@ -122,6 +122,12 @@ impl H {
                 Err(_) => continue,
             }));
         }
+        // A transaction whose lock time is ahead of the chain (a hand-over waits S + 4R, DESIGN 4.5c) is applied once the
+        // chain reaches it, as a user would wait.
+        if tx.lock_time > self.chain.daa {
+            let d = tx.lock_time - self.chain.daa;
+            self.chain.advance(d);
+        }
         // The chain re-runs every input in the engine on its own.
         self.chain.apply(&tx, &created).unwrap_or_else(|e| panic!("the chain refused {args:?}: {e}"));
         for f in &files {
@@ -575,7 +581,9 @@ fn evidence_lifecycle_with_a_kob_book() {
     let err = h.fail(&["liquidate", "--pair", &rest, "--evidence", &high_file, "--funder", &fk, "--funding", &fund, "--daa", &daa, "--out-dir", &h.p("nope")]);
     assert!(err.contains("not liquidatable"), "{err}");
 
-    // P7: 300 tokens of the long are sold to the resting long order at the best price the entrant allows (10 KAS).
+    // P7: 300 tokens of the long are sold to the resting long order at the best price the entrant allows. Premise changed by
+    // review 3 (F3, DESIGN 4.5c): that is 9.93 KAS, the highest x at which the entrant (rate 1) is healthy at the 9.4 ask
+    // (it was 10 KAS, which gave the entrant the loser's bl 9 and made it liquidatable by the same ask).
     let before = h.chain.balance(&s);
     let fund = h.funding("f", &f);
     let moved = h.step(&[
@@ -591,7 +599,7 @@ fn evidence_lifecycle_with_a_kob_book() {
 
     // The two pieces of one split share a covenant id, and a pair must be the only input of its id: a block holds one piece
     // per id, so they are liquidated one after the other (each time on the ask's latest continuation, once it has rested).
-    let err = h.fail(&["liquidate", "--pair", pairs[0], "--pair", pairs[1], "--evidence", &ask_cont, "--funder", &fk, "--funding", &h.funding("f", &f), "--out-dir", &h.p("nope3")]);
+    let err = h.fail(&["liquidate", "--pair", pairs[1], "--pair", pairs[0], "--evidence", &ask_cont, "--funder", &fk, "--funding", &h.funding("f", &f), "--out-dir", &h.p("nope3")]);
     assert!(err.contains("covenant id of an earlier pair"), "{err}");
 
     // P6: the remainder (300 tokens, the rest) is liquidated whole.
@@ -605,12 +613,13 @@ fn evidence_lifecycle_with_a_kob_book() {
     assert!(h.chain.balance(&s) > before_s);
     let ask_cont = done.iter().find(|p| object_kind(p) == "ask").cloned().expect("the ask continues again");
 
-    // And the entrant's part, on the next continuation: a part of a pair that was itself liquidated by transfer.
+    // And the entrant's part, on the next continuation. Premise changed by review 3 (F3): the entrant entered healthy at the
+    // quote (bl 8.93, trigger exactly 9.4), so the same 9.4 ask does not liquidate it; it used to forfeit its margin here.
     h.chain.advance(650);
     let daa = h.chain.daa.to_string();
     let fund = h.funding("f", &f);
-    let done = h.step(&["liquidate", "--pair", pairs[0], "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--daa", &daa]);
-    assert!(done.iter().all(|p| object_kind(p) != "pair"));
+    let err = h.fail(&["liquidate", "--pair", pairs[0], "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--daa", &daa, "--out-dir", &h.p("nope4")]);
+    assert!(err.contains("not liquidatable"), "{err}");
 
     // Refusals: a mainnet network, a submission with no node, an unknown flag.
     let err = h.fail(&["evidence", "--order", &bid_file, "--pair", &pair, "--network", "mainnet"]);

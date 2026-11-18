@@ -95,7 +95,7 @@ impl W {
 }
 
 fn eu(order: Evidence, seller: Option<LiveToken>) -> EvidenceUse {
-    EvidenceUse { order, fill: None, seller }
+    EvidenceUse { order, fill: None, seller, now: None, allow_dead: false }
 }
 
 
@@ -565,7 +565,7 @@ fn assert_unusable(w: &mut W, ev: Evidence, word: &str) {
     let seller = w.tokens(9_000_000_000);
     w.rest();
     let f = w.funding();
-    let eu = EvidenceUse { order: ev, fill: None, seller: Some(seller) };
+    let eu = EvidenceUse { order: ev, fill: None, seller: Some(seller), now: None, allow_dead: false };
     let leg = Leg { pair: l, n: N, act: Act::Liq { side: if eu.order.is_ask() { LONG } else { SHORT } } };
     // The builder refuses it, in the same words.
     let e = evidence_tx(std::slice::from_ref(&leg), &eu, &f, &opts()).err().expect("the builder refuses").to_string();
@@ -635,11 +635,22 @@ fn the_rest_window_is_reported_against_the_daa_asked_about() {
     let b = liquidate(&[(l, N)], &eu(e, None), &f, &opts()).unwrap();
     assert_eq!(b.tx.lock_time, 1_600);
     refused(&b, 0, |m| m.tx.lock_time = 1_599);
-    // Past the soft expiry the contract still accepts it, but the check warns.
+    // Past the soft expiry the contract may still accept it within the pair's clock (the residual of DESIGN 4.5c), but the
+    // check reports it dead and the builders refuse it unless `allow_dead` is set. Premise changed by review 3 (F1): this
+    // was only a note ("use it now or not at all").
     let mut w = W::new();
     let e = ask_with(&mut w, |a, _| a.expiry_daa = 1_000 + 2_000);
     let r = check_evidence(&e, &w.m, Some(5_000));
-    assert!(r.usable() && r.notes.iter().any(|n| n.contains("past its soft expiry")), "{:?}", r.notes);
+    assert!(!r.usable() && r.problems.is_empty() && r.dead.iter().any(|n| n.contains("dead") && n.contains("soft expiry")), "{:?}", r.dead);
+    let l = w.pair(0x31);
+    w.rest();
+    let f = w.funding();
+    let mut u = eu(e, None);
+    u.now = Some(5_000);
+    let err = liquidate(&[(l.clone(), N)], &u, &f, &opts()).unwrap_err().to_string();
+    assert!(err.contains("dead") && err.contains("--allow-dead-evidence"), "{err}");
+    u.allow_dead = true;
+    assert!(liquidate(&[(l, N)], &u, &f, &opts()).is_ok(), "the sweeping-test switch builds it");
 }
 
 #[test]
@@ -667,12 +678,12 @@ fn what_the_evidence_lets_a_pair_do() {
 /// (name, txid, sha256 of the RPC JSON) of each shape: fixed TEST-ONLY keys and fixed inputs give fixed transactions
 /// (signing is deterministic). `KPF_GOLDEN=print` shows the values after an intended change.
 const GOLDEN: &[(&str, &str, &str)] = &[
-    ("P5 long closes 1,000 at a 10 KAS bid", "cec2b06e73dcec0049882b30eff5925c15d0c0750dd710090684903646ac6f5f", "83b195179214ab77cd1507ebfa4c232a213f6bf79a8a862e4df72c0c20e2654d"),
-    ("P5 short closes 400 at a 10.5 KAS ask", "a60a32c39ce4c0bdd8abddb2aee97288d246a197783732fe709d5d52cead7c5a", "0433a5200f5ab9d144eac76e3fa52c6f68f38d48416260e384fdfd1f1390bd03"),
-    ("P6 liquidates a long at a 9.4 KAS ask", "c08254d252bc67a835b4e976ce37d6920612c5a80d8972d9174810d300a603e2", "73dc9a14ce526f7d6505092fc23a2bad589f2fdeeee58095eeea4c090eabaa27"),
-    ("P6 liquidates a short at an 11.5 KAS bid", "af7b87b47564903e1a13d3cac9ac4a4a6da2abe7d4f0fd903c721244dfdf50a7", "01f0f9a6932211eebe0fa4bcc64eaf89c8a22ac300d8d2cea5321f759eedb901"),
-    ("P6 block of 3 longs on one 9.4 KAS ask", "f5db5c0b7399cf2fd1a7e9ab980c1206b952dcec2b2ea7b2ba17bfb61429f01f", "e950a5f001dfe41aa2820d68cc999a72089e1ff1705f5eebf7d9bb19b79e2e73"),
-    ("P7 sells 400 of a liquidated long at 9.5 KAS", "b2487be8e02a172f3d55fdedb7bdf6192550cdcdf243534fd38e0b6256669c70", "6d4f3688c4bb197b9078019a40154ff7167f0ad669c8cc4e810808284ceb1ddb"),
+    ("P5 long closes 1,000 at a 10 KAS bid", "28732120b43d24883a7a9c33dc774d5c780a731686d279a0cfd746b39b3aa8ff", "3b81d13016b0259d771a95eb8b352db1ddccaa6f7ef627f10d102dd9f1c83e68"),
+    ("P5 short closes 400 at a 10.5 KAS ask", "dc5a5fff88b4a6d06e617be77ce3f3c43f153e59bd03202eb1fce05c57cf8a1d", "7355c09b9937fc029aa63039f19010fb606ea73ec8dde4ebd835ff1745e2b059"),
+    ("P6 liquidates a long at a 9.4 KAS ask", "95732c2a28d69e435a347cf4385921dd94031d1a8dc864b93d5fab8b815ac656", "c3b070f9933d72b9d87cea973553c492e11d677b57d981aa00d5373395369733"),
+    ("P6 liquidates a short at an 11.5 KAS bid", "ff2bf110dd6591643fd21ebffb2e63310680817f6168df44430fb93b8a52d1ef", "ac9ef5d9486654607b4339ff14b3f40bbab63b0bc50881277cc9ac859e9e5eb7"),
+    ("P6 block of 3 longs on one 9.4 KAS ask", "20221e762c53a72b256c38bf9ae789cb8110b36ebcb013e0289eb0bfeefa8cfe", "d2f09d05ae9199317e9bff524e5703032f793ad58f7b9a1b8613409d3b9177dc"),
+    ("P7 sells 400 of a liquidated long at 9.5 KAS", "7a03bc2e80b35fcdbe6af5f51d7db648a7f77a4ab6f27fefcd04fab930829834", "0874d488606a56da11c688d276b78526479873ab6c232e08da2774a691e85c6f"),
 ];
 
 fn sha(v: &serde_json::Value) -> String {
@@ -758,13 +769,16 @@ fn the_default_sale_price_is_the_best_one_the_entrant_allows() {
     let mut w = W::new();
     let l = w.pair(0x31);
     let lo = entrant(&mut w, LONG, 0x71);
-    // Long loser: at most min(limit 10.5, bl + rate 10, bs - minCounterRate 10.5, entry 10) = 10 KAS.
-    assert_eq!(p7_default_x(&l.p, LONG, LIQ_ASK, &lo.o).unwrap(), 1_000_000_000);
+    // Long loser: at most min(limit 10.5, bl + rate 10, bs - minCounterRate 10.5, entry 10, health at the ask
+    // floor(9.4 * 0.95) + rate 1 = 9.93) = 9.93 KAS. Premise changed by review 3 (F3, DESIGN 4.5c): the default was 10, at
+    // which the entrant's bound 9 equals the loser's and the same ask already liquidates it.
+    assert_eq!(p7_default_x(&l.p, LONG, LIQ_ASK, &lo.o).unwrap(), 993_000_000);
     let e = p7_default_x(&l.p, LONG, 1_010_000_000, &lo.o).unwrap_err().to_string();
     assert!(e.contains("no price works"), "{e}");
-    // Short loser: at least max(limit 9.5, bs - rate 10, bl + minCounterRate 9.5, entry 10) = 10 KAS.
+    // Short loser: at least max(limit 9.5, bs - rate 10, bl + minCounterRate 9.5, entry 10, health at the bid
+    // ceil(11.5 * 1.05) - rate 2 = 10.075) = 10.075 KAS (was 10 before review 3).
     let so = entrant(&mut w, SHORT, 0x72);
-    assert_eq!(p7_default_x(&l.p, SHORT, LIQ_BID, &so.o).unwrap(), 1_000_000_000);
+    assert_eq!(p7_default_x(&l.p, SHORT, LIQ_BID, &so.o).unwrap(), 1_007_500_000);
     assert!(p7_default_x(&l.p, SHORT, 990_000_000, &so.o).is_err());
     // The default is accepted by the contracts.
     let e = w.ask(LIQ_ASK, 1_500_000_000);

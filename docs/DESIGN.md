@@ -142,7 +142,8 @@ only be simulated (X9). (2) **Per transaction, not per position.** Evidence is "
 (`matcher.md:742-743`): `fill ≥ k × size` per position lets one print act on unboundedly many pairs. KPF requires
 `n_ev ≥ ⌈k·Σ n_i⌉` over all pairs acting on that evidence (evidence block, §4.4). Evidence must be an accepted UTXO
 (`matcher.md:1047-1054`) and must have been fillable by conforming matchers for the whole rest window: not past its
-`expiryDaa`, its IOC/FOK kill or 90 days idle before `exposed + R` (§4.5b, review 2 F2).
+`expiryDaa`, its IOC/FOK kill or 90 days idle before `exposed + R` (§4.5b, review 2 F2), with the rest counted only on
+the pair's own evidence clock: `exposed' = max(exposed, S)` (§4.5c, review 3 F1).
 
 ### 3.4 D3 position representation: one UTXO per pair, not two
 
@@ -273,9 +274,10 @@ No other UTXO type. No registry, pool, or oracle in M1.
 | longAsk*, longMin*, longTip* | 8 ×3 | long listing: sell ≥ `longAsk`, parts ≥ `longMin`, tip per whole token (`longAsk = 0`: unlisted) |
 | shortBid*, shortMin*, shortTip* | 8 ×3 | short listing: buy back ≤ `shortBid` (`0`: unlisted) |
 | tagL*, tagS* | 32 ×2 | covenant id of the input that handed the long / short over in the transaction that created this UTXO (0 if none; no entry copies it, §4.4) |
+| since* | 8 | evidence clock start `S` (0: the DAA score of this UTXO); kept by every output that changes no hands, 0 on a part that changes hands (§4.5c) |
 
-About 390 B of state *(estimate)*. The market block is identical in every pair and open order of a market; a reader
-compares it byte for byte.
+438 B of state (the market block 207 B, the position 231 B; `KpfOpen` 321 B; measured, `kpf_layout_tests`). The
+market block is identical in every pair and open order of a market; a reader compares it byte for byte.
 
 `KpfOpen`.
 
@@ -302,11 +304,11 @@ equals this state outside the windows the path may change; `value ≥ q(s, BS �
 |---|---|---|---|---|
 | P1 | amend | owner of the side (sig) | none | set own listing window; resets age |
 | P2 | add margin | owner (sig) | none | `BL −= δ` or `BS += δ`, value grows ≥ `⌈q(s, δ)⌉` |
-| P3 | fill listing: transfer | anyone | none | leaver paid; entrant's key, tag and new bound written; no-downgrade |
-| P4 | fill listings: close-versus-close or mutual | anyone | none | §3.4 (c); same-pair crossing listings close both at `X` |
+| P3 | fill listing: transfer | anyone, `tx.daa ≥ S + 4R` | none | leaver paid; entrant's key, tag and new bound written; no-downgrade; entrant healthy at `X` |
+| P4 | fill listings: close-versus-close or mutual | anyone (close-versus-close: `tx.daa ≥ S + 4R` on each pair) | none | §3.4 (c); same-pair crossing listings close both at `X` |
 | P5 | unilateral close | owner (sig) | adverse bound | settle `n` at `b` (long) / `a` (short) |
-| P6 | liquidate (close both) | anyone | trigger only (ask for a long, bid for a short) | loser 0; winner the part less the fee (§4.5b) |
-| P7 | liquidate by transfer | anyone | as P6 | loser's `n` sold to a `KpfOpen` at `X ≥ a` / `X ≤ b`; payment less fee to the winner |
+| P6 | liquidate (close both) | anyone | trigger only (ask for a long, bid for a short), range wider than both bands | loser 0; winner the part less the fee (§4.5b) |
+| P7 | liquidate by transfer | anyone | as P6 | loser's `n` sold to a `KpfOpen` at `X ≥ a` / `X ≤ b`, entrant healthy at the quote; payment less fee to the winner |
 | P8 | idle settle | anyone, `age ≥ idleDaa` (CSV, `KobCondAsk.sil:553`) | none | settle all at `E` |
 | P9 | cooperative close | both owners (2 sigs) | none | any split (`[L] docs/PERP_DESIGN.md:94-97`) |
 
@@ -364,7 +366,8 @@ in: `0` KpfPair P, `1` KpfOpen L′, `2` F. out: `0` leaver payout ≥ `q(n, X �
 L′ continuation-or-refund, `c1` P remainder `(s − n)` (if any, tags 0), `c2` P part `(n, BL′ = X − rL′, BS, E kept,
 longKey = L′, tagL = id(L′), shortKey, tagS = 0)`, `3` Ch.
 P checks: listing (`X ≥ longAsk`, `n ≥ longMin` or `n = s`), leaver payout, `BL′ ≤ BL` (no-downgrade), both
-continuations, value of each ≥ its range. L′ checks its own guarantees as in T1, and accepts the kept `E` only if `E ≥ X` (a short order: `E ≤ X`), so its
+continuations, value of each ≥ its range. Since review 3 (§4.5c): `tx.daa ≥ S + 4R` (lock time at least that and the
+entrant order's `activeFrom`), the entrant healthy at `X`, the part `since = 0`, the remainder `since = S`. L′ checks its own guarantees as in T1, and accepts the kept `E` only if `E ≥ X` (a short order: `E ≤ X`), so its
 own idle payout is at least its margin (`KpfOpen.take`).
 A direct taker (P2PK signer) may replace L′ (any `tagL` it writes; 0 by convention).
 
@@ -374,7 +377,8 @@ in: `0` P1, `1` P2, `2` F. out: `0` L1 payout ≥ `q(n, X − BL1)` less tip, `1
 remainders of P1 and P2 (if any, tags 0), `3` Ch.
 P1 checks: L1 payout; P3 found by its own id with `BS = BS1`, `shortKey = S1`, `BL ≤ BL1`, `E3 ≤ E(P1)`, value. P2 checks:
 S2 payout; P3 found by `tagL == id(P2)` with `BL = BL2`, `longKey = L2`, `BS ≥ BS2`, `E3 ≥ E(P2)`, value. Neither reads
-the other's state.
+the other's state. Since review 3 each pair also requires `tx.daa ≥ S + 4R` on its own clock, P3 carries
+`since = 0` and each remainder its own pair's `S`.
 **T3′ Mutual close** (both listings of one pair cross): in `0` P; out `0` long ≥ `q(n, X − BL)`, `M−1` short ≥
 `q(n, BS − X)`.
 
@@ -393,7 +397,8 @@ in: block `[q, ev)` of liquidated pairs, `ev` evidence `KobAsk`, `tk` its custod
 `i` long 0, `M−1−i` short ≥ `q(n, BS − BL) − fee` (with `n = s`: the whole input value − fee, carrier and excess
 included), remainder continuation (tags 0, `E` kept; it keeps the carrier, excess and rounding slack); the fee is
 the executor's. `fee = min(max(keeperFeeMin, q(n, ⌊a·liqFeeBps/10⁴⌋)), q(n, T − BL))`, `T` the trigger price of
-§4.5b clamped to `[BL, BS]`: the short receives at least `q(n, BS − T)`.
+§4.5b, which lies inside `(BL, BS)` because a pair is liquidatable only when `BL·(10⁴ + mmrBps) < BS·(10⁴ − mmrBps)`
+(§4.5c; the clamp of review 2 is gone): the short receives at least `q(n, BS − T)`.
 Check: `a·(10⁴ − mmrBps) < BL·10⁴`. Short mirrored with a bid.
 
 **T7 Liquidate by transfer.** As T6, but the long's `n` goes to a `KpfOpen` long at `X ≥ a` exactly as T2 (`BL′ ≤ BL`),
@@ -511,7 +516,9 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
 - `mmrBps = 500`. Long liquidatable at ask `a` iff `a·9500 < 9·10¹²`, i.e. `a ≤ 947,368,420` (9.4737 KAS): equity at
   9.47 = 470 KAS < 5 % of 9,470. Short liquidatable at bid `b` iff `1.2·10¹³ < b·10500`, i.e. `b ≥ 1,142,857,143`.
   Liquidating the whole long (§4.5b): the long gets 0, the short 3,000.2 KAS less the fee, at least
-  `q(s, BS − T) + C` with `T = 947,368,421` (2,526.32 KAS + C); at `a = 9.4 KAS` the fee is 47 KAS.
+  `q(s, BS − T) + C` with `T = 947,368,421` (2,526.32 KAS + C); at `a = 9.4 KAS` the fee is 47 KAS. The range is
+  wider than both bands (`9·10500 = 94,500 < 12·9500 = 114,000`, §4.5c), and a T1 at 10 is healthy for both sides
+  (`10·9500 ≥ 9·10⁴`, `12·10⁴ ≥ 10·10500`).
 - `kBps = 10⁴` (k = 1): either liquidation needs a resting order of ≥ 1,000 tokens at the trigger, rested `R`.
 - Close-versus-close with `P2 = (BL2 = 8.5, BS2 = 11.5)` KAS at `X = 10.2`: L1 gets `1000·1.2` = 1,200 KAS, S2 gets
   `1000·1.3` = 1,300 KAS, `P3 = (8.5, 12.0)` holds 3,500 KAS. 3,000 + 3,000 = 1,200 + 1,300 + 3,500. No-downgrade:

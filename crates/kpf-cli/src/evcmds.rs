@@ -21,7 +21,7 @@ use crate::cmds::*;
 use crate::files::*;
 use crate::node::{Node, WsTransport};
 
-const EV_FLAGS: &[&str] = &["evidence", "seller", "evidence-fill", "daa"];
+const EV_FLAGS: &[&str] = &["evidence", "seller", "evidence-fill", "daa", "allow-dead-evidence"];
 
 fn kas(v: i64) -> String {
     fmt_kas(v as i128)
@@ -39,7 +39,7 @@ fn node_daa(node: &mut Node<WsTransport>) -> R<u64> {
 }
 
 /// The DAA score the checks run at: the node's, else `--daa`, else unknown.
-fn now_daa(a: &Args, node: &mut Option<Node<WsTransport>>) -> R<Option<u64>> {
+pub(crate) fn now_daa(a: &Args, node: &mut Option<Node<WsTransport>>) -> R<Option<u64>> {
     if let Some(n) = node {
         return node_daa(n).map(Some);
     }
@@ -47,6 +47,22 @@ fn now_daa(a: &Args, node: &mut Option<Node<WsTransport>>) -> R<Option<u64>> {
         return Ok(Some(int(a, "daa")? as u64));
     }
     Ok(None)
+}
+
+/// The pair's evidence clock and hand-over limit in words (DESIGN 4.5c).
+pub(crate) fn print_clock(name: &str, l: &LivePair, now: Option<u64>) {
+    let s = l.clock();
+    let from = if l.p.since != 0 { format!("since = {}", l.p.since) } else { format!("since = 0: the DAA of this UTXO, {}", l.daa) };
+    let hand = l.handover_from();
+    let wait = match now {
+        Some(n) if n >= hand => format!("allowed now (DAA {n})"),
+        Some(n) => format!("{} DAA from now (DAA {n})", hand - n),
+        None => "give --daa or --node to see how long".into(),
+    };
+    println!(
+        "{name}: evidence clock starts at DAA {s} ({from}); evidence counts only for its rest from then on ({} DAA). A hand-over (transfer, close-versus-close) is allowed from DAA {hand}: {wait}",
+        l.p.m.min_rest_daa
+    );
 }
 
 fn load_kob(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<KobFile> {
@@ -60,11 +76,15 @@ fn load_kob(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Net
     Ok(f)
 }
 
-fn evidence_use(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network, scale: i64) -> R<EvidenceUse> {
+fn evidence_use(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network, scale: i64, now: Option<u64>) -> R<EvidenceUse> {
     let order = load_kob(a, "evidence", node, net)?.evidence()?;
     let seller = if a.has("seller") { Some(load_kob(a, "seller", node, net)?.live_token()?) } else { None };
     let fill = if a.has("evidence-fill") { Some(tokens(a, "evidence-fill", scale)?) } else { None };
-    Ok(EvidenceUse { order, fill, seller })
+    let allow_dead = a.has("allow-dead-evidence");
+    if allow_dead {
+        println!("WARNING: --allow-dead-evidence: a soft-expired order is accepted as evidence. Use it only to sweep a dead order in a test; a dead order is a past quote nobody can trade at (DESIGN 4.5c)");
+    }
+    Ok(EvidenceUse { order, fill, seller, now, allow_dead })
 }
 
 /// The evidence report in words.
@@ -79,10 +99,12 @@ fn print_report(r: &EvidenceReport, m: &Market, daa: Option<u64>) {
         m.k_bps
     );
     println!(
-        "          rested since DAA {}; counts as evidence from DAA {} (rest {} DAA){}",
+        "          rested since DAA {}{}; counts as evidence from DAA {} (rest {} DAA); conforming matchers fill it until DAA {}{}",
         r.exposed,
+        r.clock.map(|c| format!(" on the pair's clock (clock start DAA {c})")).unwrap_or_default(),
         r.rest_end,
         m.min_rest_daa,
+        r.live_until,
         daa.map(|d| format!("; DAA now {d}")).unwrap_or_default()
     );
     for p in &r.problems {
@@ -90,6 +112,9 @@ fn print_report(r: &EvidenceReport, m: &Market, daa: Option<u64>) {
     }
     for w in &r.waiting {
         println!("  NOT YET: {w}");
+    }
+    for d in &r.dead {
+        println!("  DEAD: {d}");
     }
     for n in &r.notes {
         println!("  note: {n}");
@@ -101,9 +126,9 @@ fn print_report(r: &EvidenceReport, m: &Market, daa: Option<u64>) {
 
 /// What the builders refuse before the engine does, for the time: the lock time proves a DAA the chain may not have
 /// reached.
-fn lock_guard(a: &Args, built: &Built, now: Option<u64>) -> R<()> {
+pub(crate) fn lock_guard(a: &Args, built: &Built, now: Option<u64>) -> R<()> {
     let lock = built.tx.lock_time;
-    println!("lock time {lock}: the transaction proves DAA {lock} (the evidence's rest window ends then); it is valid from that DAA on");
+    println!("lock time {lock}: the transaction proves DAA {lock} (the latest of the bounds it needs: the evidence's rest on each pair's clock, the hand-over limit S + 4R, an order's activeFrom); it is valid from that DAA on");
     if let Some(n) = now {
         if lock > n {
             let msg = format!("the lock time {lock} is ahead of the DAA now ({n}) by {} DAA: a node refuses the transaction until then", lock - n);
@@ -182,9 +207,10 @@ pub fn close_cmd(a: &Args) -> R<()> {
     let l = load_obj(a, "pair", &mut node, net)?.live_pair()?;
     let sd = side(a.need("side")?)?;
     let n = tokens(a, "n", l.p.m.scale)?;
-    let eu = evidence_use(a, &mut node, net, l.p.m.scale)?;
     let now = now_daa(a, &mut node)?;
-    print_report(&check_evidence(&eu.order, &l.p.m, now), &l.p.m, now);
+    let eu = evidence_use(a, &mut node, net, l.p.m.scale, now)?;
+    print_clock("pair", &l, now);
+    print_report(&check_evidence_on(&eu.order, &l.p.m, Some(l.clock()), now), &l.p.m, now);
     let fk = funder_and_keys(a, true)?.expect("funder");
     let owner = if sd == LONG { l.p.long_key } else { l.p.short_key };
     println!("unilateral close of {} by the {}: the owner's key {} must sign (--key)", short_part(&l, n), if sd == LONG { "long" } else { "short" }, to_hex(&owner));
@@ -214,9 +240,12 @@ pub fn liquidate_cmd(a: &Args) -> R<()> {
     let pairs = load_pairs(a, &mut node, net)?;
     let parts = parts_of(a, &pairs)?;
     let m = pairs[0].p.m.clone();
-    let eu = evidence_use(a, &mut node, net, m.scale)?;
     let now = now_daa(a, &mut node)?;
-    print_report(&check_evidence(&eu.order, &m, now), &m, now);
+    let eu = evidence_use(a, &mut node, net, m.scale, now)?;
+    for (i, (p, _)) in parts.iter().enumerate() {
+        print_clock(&format!("pair {i}"), p, now);
+        print_report(&check_evidence_on(&eu.order, &m, Some(p.clock()), now), &m, now);
+    }
     let fk = funder_and_keys(a, true)?.expect("funder");
     let loser = if eu.order.is_ask() { "long" } else { "short" };
     for (p, n) in &parts {
@@ -249,9 +278,10 @@ pub fn liquidate_transfer_cmd(a: &Args) -> R<()> {
     let entrant = load_obj(a, "entrant-order", &mut node, net)?.live_open()?;
     let m = l.p.m.clone();
     let n = if a.has("n") { tokens(a, "n", m.scale)? } else { l.p.size };
-    let eu = evidence_use(a, &mut node, net, m.scale)?;
     let now = now_daa(a, &mut node)?;
-    print_report(&check_evidence(&eu.order, &m, now), &m, now);
+    let eu = evidence_use(a, &mut node, net, m.scale, now)?;
+    print_clock("pair", &l, now);
+    print_report(&check_evidence_on(&eu.order, &m, Some(l.clock()), now), &m, now);
     let sd = if eu.order.is_ask() { LONG } else { SHORT };
     let x = if a.has("x") { price(a, "x")? } else { p7_default_x(&l.p, sd, eu.order.quote(), &entrant.o).map_err(e)? };
     let k = int_or(a, "k", 0)?;
@@ -283,7 +313,7 @@ pub fn liquidate_transfer_cmd(a: &Args) -> R<()> {
 // ---------------------------------------------------------------- evidence (the check)
 
 pub fn evidence_cmd(a: &Args) -> R<()> {
-    a.only(&["order", "pair", "daa", "node", "json"])?;
+    a.only(&["order", "pair", "daa", "node", "json", "allow-dead-evidence"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let file = load_kob(a, "order", &mut node, net)?;
@@ -291,7 +321,7 @@ pub fn evidence_cmd(a: &Args) -> R<()> {
     let now = now_daa(a, &mut node)?;
     let m = &l.p.m;
     let ev = file.evidence()?;
-    let rep = check_evidence(&ev, m, now);
+    let rep = check_evidence_on(&ev, m, Some(l.clock()), now);
     let mut problems = rep.problems.clone();
     if let Err(w) = supports_token_program(m) {
         problems.push(w);
@@ -303,13 +333,15 @@ pub fn evidence_cmd(a: &Args) -> R<()> {
             "{}",
             serde_json::to_string_pretty(&json!({
                 "kind": rep.kind, "quote": rep.quote, "capacity": rep.capacity, "covers": rep.covers, "exposed": rep.exposed, "restEnd": rep.rest_end,
-                "usable": problems.is_empty() && rep.waiting.is_empty(), "problems": problems, "waiting": rep.waiting, "notes": rep.notes, "pair": v,
+                "clockStart": l.clock(), "since": l.p.since, "handoverFrom": l.handover_from(), "liveUntil": rep.live_until, "dead": rep.dead,
+                "usable": problems.is_empty() && rep.waiting.is_empty() && rep.dead.is_empty(), "problems": problems, "waiting": rep.waiting, "notes": rep.notes, "pair": v,
             }))
             .expect("json")
         );
     } else {
         let mut r2 = rep.clone();
         r2.problems = problems.clone();
+        print_clock("pair", &l, now);
         print_report(&r2, m, now);
         println!("what it lets this pair do ({} tokens, range {} .. {} KAS):", fmt_units(l.p.size as i128, m.scale as i128), kas(l.p.bl), kas(l.p.bs));
         for v in &verdicts {
@@ -319,10 +351,13 @@ pub fn evidence_cmd(a: &Args) -> R<()> {
             "the executor funds the evidence fill itself: for an ask it pays the ask's price for every token it takes (and keeps the tokens); for a bid it sells tokens of its own (--seller). See docs/TESTNET.md."
         );
     }
-    if problems.is_empty() && rep.waiting.is_empty() {
+    let dead_ok = rep.dead.is_empty() || a.has("allow-dead-evidence");
+    if problems.is_empty() && rep.waiting.is_empty() && dead_ok {
         Ok(())
+    } else if problems.is_empty() && rep.waiting.is_empty() {
+        Err("this order is dead (soft-expired): it is refused as evidence (pass --allow-dead-evidence only to sweep it in a test)".into())
     } else {
-        Err("this order cannot serve as evidence for this pair's market now".into())
+        Err("this order cannot serve as evidence for this pair now".into())
     }
 }
 
@@ -340,7 +375,7 @@ pub fn kob_file_cmd(a: &Args) -> R<()> {
     let mut o = ObjFile {
         op,
         amount: if a.has("amount") { int(a, "amount")? as u64 } else { 0 },
-        daa: if a.has("daa") { int(a, "daa")? as u64 } else { 0 },
+        daa: if a.has("daa") { Some(int(a, "daa")? as u64) } else { None },
         covenant_id: match a.get("covenant-id") {
             Some(h) => kaspa_consensus_core::Hash::from_bytes(hex32(h).map_err(e)?),
             None => Default::default(),
@@ -349,8 +384,8 @@ pub fn kob_file_cmd(a: &Args) -> R<()> {
     };
     if let Some(n) = &mut node {
         refresh(n, &mut o, net)?;
-    } else if !a.has("amount") {
-        return Err("give --amount (sompi), --daa and --covenant-id of the UTXO, or --node to read them from the node".into());
+    } else if !a.has("amount") || !a.has("daa") {
+        return Err("give --amount (sompi), --daa and --covenant-id of the UTXO, or --node to read them from the node (the DAA is not assumed: the evidence rest depends on it)".into());
     }
     let custody = match a.get("custody") {
         Some(c) => Some(ObjFile::load(c)?),

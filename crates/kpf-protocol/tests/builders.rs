@@ -30,8 +30,12 @@ fn opts() -> Opts {
     Opts::default()
 }
 
-/// Sign, verify (this is what `apply_signed` does) and apply.
+/// Sign, verify (this is what `apply_signed` does) and apply. A transaction whose lock time is ahead of the chain (a
+/// hand-over waits S + 4R, DESIGN 4.5c) is applied once the chain reaches it, as a user would wait.
 fn run(chain: &mut Chain, b: &Built) -> Vec<Live> {
+    if b.tx.lock_time > chain.daa {
+        chain.advance(b.tx.lock_time - chain.daa);
+    }
     let s = b.sign(&keys()).expect("sign");
     let v = verify(&s.tx, &s.entries);
     assert!(v.is_ok(), "verify failed: {:?}", v.errors());

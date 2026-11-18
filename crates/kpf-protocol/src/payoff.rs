@@ -4,6 +4,10 @@
 //! contracts' behaviour in the engine tests: a builder pays each party exactly the least value its covenant accepts.
 //! Arithmetic is done in `i128` and checked into `i64`, so a result the contract would overflow on is a panic here
 //! (`q`) or an error (`q_checked`), never a wrong number.
+//!
+//! Evidence clock (DESIGN 4.5c). The output builders copy `since` from the pair they are given into every output
+//! that does not change hands (remainders, continuations), so they must be given the pair as [`Pair::clocked`] by
+//! its UTXO's DAA score; the parts that change hands (P3, P7, P4's re-paired output) are written with `since = 0`.
 
 use kaspa_consensus_core::Hash;
 
@@ -40,22 +44,25 @@ pub fn fee_of(m: &Market, n: i64, quote: i64) -> i64 {
     q(n, quote * m.liq_fee_bps / 10_000, m.scale, 0).max(m.keeper_fee_min)
 }
 
-/// The trigger price T of a loser `side` (DESIGN 4.5b), from the pair's own state, clamped to [bl, bs]:
-/// `floor(bl * 10^4 / (10^4 - mmrBps))` for a long, `ceil(bs * 10^4 / (10^4 + mmrBps))` for a short.
+/// The trigger price T of a loser `side` (DESIGN 4.5b), from the pair's own state:
+/// `floor(bl * 10^4 / (10^4 - mmrBps))` for a long, `ceil(bs * 10^4 / (10^4 + mmrBps))` for a short. Not clamped
+/// (DESIGN 4.5c): a pair that passes [`Pair::range_ok`] has T strictly inside (bl, bs), and no other pair is liquidatable.
 pub fn trigger_of(p: &Pair, side: i64) -> i64 {
     let m = p.m.mmr_bps;
     let t = if side == LONG { p.bl * 10_000 / (10_000 - m) } else { (p.bs * 10_000 + 10_000 + m - 1) / (10_000 + m) };
-    t.clamp(p.bl, p.bs)
+    t
 }
 
-/// Whether the long is liquidatable at an evidence ask `a`: `a * (10^4 - mmrBps) < bl * 10^4` (DESIGN 3.6).
+/// Whether the long is liquidatable at an evidence ask `a`: `a * (10^4 - mmrBps) < bl * 10^4` (DESIGN 3.6) and the
+/// range is wider than both maintenance bands (DESIGN 4.5c).
 pub fn long_liquidatable(p: &Pair, ask: i64) -> bool {
-    (ask as i128) * ((10_000 - p.m.mmr_bps) as i128) < (p.bl as i128) * 10_000
+    p.range_ok() && (ask as i128) * ((10_000 - p.m.mmr_bps) as i128) < (p.bl as i128) * 10_000
 }
 
-/// Whether the short is liquidatable at an evidence bid `b`: `bs * 10^4 < b * (10^4 + mmrBps)`.
+/// Whether the short is liquidatable at an evidence bid `b`: `bs * 10^4 < b * (10^4 + mmrBps)` and the range is
+/// wider than both maintenance bands.
 pub fn short_liquidatable(p: &Pair, bid: i64) -> bool {
-    (p.bs as i128) * 10_000 < (bid as i128) * ((10_000 + p.m.mmr_bps) as i128)
+    p.range_ok() && (p.bs as i128) * 10_000 < (bid as i128) * ((10_000 + p.m.mmr_bps) as i128)
 }
 
 /// The maintenance slice of n for a loser `side`: `q(n, T - bl)` (long), `q(n, bs - T)` (short).
@@ -202,6 +209,8 @@ pub fn transfer_out(p: &Pair, value: u64, t: &TransferSpec) -> TransferOut {
 /// `KpfPair.handOver` (P3 and P7) for a payee owed `pay`.
 pub fn hand_over_out(p: &Pair, value: u64, t: &TransferSpec, pay: i64) -> TransferOut {
     let mut part = p.rest_of(t.n);
+    // The part changes hands: its evidence clock restarts at its own UTXO (DESIGN 4.5c).
+    part.since = 0;
     let mut pay = pay;
     let leaver = if t.side == LONG {
         part.bl = t.nb;
@@ -260,6 +269,8 @@ pub fn close_out(h: &Pair, hvalue: u64, d: &Pair, dvalue: u64, did: Hash, c: &Cl
     p3.long_key = d.long_key;
     (p3.long_ask, p3.long_min, p3.long_tip) = d.long_window();
     p3.tag_l = did;
+    // The re-paired output restarts its evidence clock (DESIGN 4.5c).
+    p3.since = 0;
     let mut hpay = owed(c.n, c.x - h.bl, h.long_tip, sc);
     let mut hkeep = hvalue as i64 - h.range_of(c.n);
     if hpay < PLAIN_DUST {

@@ -23,7 +23,7 @@
 use kaspa_consensus_core::Hash;
 
 use crate::artifacts::pair_template;
-use crate::error::{invalid, Error, Result};
+use crate::error::{invalid, kas_str, Error, Result};
 use crate::payoff::*;
 use crate::state::*;
 use crate::tx::*;
@@ -74,6 +74,49 @@ fn req(ok: bool, msg: impl FnOnce() -> String) -> Result<()> {
     } else {
         Err(Error::Invalid(msg()))
     }
+}
+
+/// Health at entry of a new pair (DESIGN 4.5c, review 3 F2, F4; `KpfOpen.fill`): neither side liquidatable at its entry
+/// price x, and the range wider than both maintenance bands.
+pub(crate) fn check_open_health(m: &Market, x: i64, bl: i64, bs: i64) -> Result<()> {
+    let pct = |b: i64| format!("{}.{:02} %", b / 100, b % 100);
+    req(long_healthy_at(m, bl, x), || {
+        format!(
+            "the long would be born liquidatable: its margin rate {} KAS is below the {} maintenance margin of the entry price {} KAS (KpfOpen refuses; a liquidation forfeits the whole margin)",
+            kas_str((x - bl) as i128),
+            pct(m.mmr_bps),
+            kas_str(x as i128)
+        )
+    })?;
+    req(short_healthy_at(m, bs, x), || {
+        format!(
+            "the short would be born liquidatable: its margin rate {} KAS is below the {} maintenance margin of the entry price {} KAS (KpfOpen refuses)",
+            kas_str((bs - x) as i128),
+            pct(m.mmr_bps),
+            kas_str(x as i128)
+        )
+    })?;
+    req(range_ok(m, bl, bs), || {
+        format!(
+            "the range {} .. {} KAS is narrower than both maintenance bands ({} each): bl * (1 + mmr) must be below bs * (1 - mmr), else the side owed the pair could forfeit it (DESIGN 4.5c)",
+            kas_str(bl as i128),
+            kas_str(bs as i128),
+            pct(m.mmr_bps)
+        )
+    })
+}
+
+/// Health at entry of an entrant of `side` with bound `nb` at price x (DESIGN 4.5c; `KpfPair.handOver`, `KpfOpen.take`).
+pub(crate) fn check_entrant_health(m: &Market, side: i64, nb: i64, x: i64) -> Result<()> {
+    req(healthy_at(m, side, nb, x), || {
+        format!(
+            "the entrant would enter liquidatable: its bound {} KAS leaves a margin rate of {} KAS at the price {} KAS, below the {} bps maintenance margin (the pair refuses; a liquidation forfeits the whole margin)",
+            kas_str(nb as i128),
+            kas_str((if side == LONG { x - nb } else { nb - x }) as i128),
+            kas_str(x as i128),
+            m.mmr_bps
+        )
+    })
 }
 
 // ---------------------------------------------------------------- orders
@@ -131,6 +174,7 @@ fn pair_state_template(m: &Market, n: i64, bl: i64, bs: i64, x: i64, lk: [u8; 32
         short_tip: 0,
         tag_l: tl,
         tag_s: ts,
+        since: 0,
     }
 }
 
@@ -165,11 +209,14 @@ pub fn open_orders(lo: &LiveOpen, so: &LiveOpen, n: i64, x: i64, funding: &Fundi
     req(bl >= 0 && bs <= lo.o.m.price_max, || format!("range [{bl}, {bs}] is outside 0..=priceMax"))?;
     req(bs - x >= lo.o.min_counter_rate, || format!("the short's margin rate {} is below the long's minCounterRate {}", bs - x, lo.o.min_counter_rate))?;
     req(x - bl >= so.o.min_counter_rate, || format!("the long's margin rate {} is below the short's minCounterRate {}", x - bl, so.o.min_counter_rate))?;
+    check_open_health(&lo.o.m, x, bl, bs)?;
     let p = pair_state_template(&lo.o.m, n, bl, bs, x, lo.o.owner, so.o.owner, lo.id, so.id);
     p.validate()?;
     let t = pair_template();
     let fa = |ck: &[u8; 32], ct: Hash| vec![iv(2), iv(n), iv(x), iv(bl), iv(bs), bv(ck), bv(&ct.as_bytes()), bv(&t.prefix), bv(&t.suffix)];
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    // Each order is fillable only from its activeFrom (CLTV).
+    d.lock = lo.o.active_from.max(so.o.active_from).max(0) as u64;
     d.add_open_in(lo, "fill", fa(&so.o.owner, so.id), "long order (fill)");
     d.add_open_in(so, "fill", fa(&lo.o.owner, lo.id), "short order (fill)");
     let first = d.fund_inputs(funding)?;
@@ -197,11 +244,13 @@ pub fn open_taker(order: &LiveOpen, n: i64, x: i64, taker_rate: i64, taker_key: 
         (x - taker_rate, x + o.my_rate, *taker_key, o.owner, ZERO, order.id)
     };
     req(bl >= 0 && bs <= o.m.price_max, || format!("range [{bl}, {bs}] is outside 0..=priceMax"))?;
+    check_open_health(&o.m, x, bl, bs)?;
     let p = pair_state_template(&o.m, n, bl, bs, x, lk, sk, tl, ts);
     p.validate()?;
     let t = pair_template();
     let args = vec![iv(1), iv(n), iv(x), iv(bl), iv(bs), bv(taker_key), bv(&ZERO.as_bytes()), bv(&t.prefix), bv(&t.suffix)];
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    d.lock = o.active_from.max(0) as u64;
     d.add_open_in(order, "fill", args, "order (fill)");
     let first = d.fund_inputs(funding)?;
     order_output(&mut d, order, 0, n);
@@ -225,7 +274,8 @@ fn owner_of(p: &Pair, side: i64) -> Result<[u8; 32]> {
 pub fn amend(l: &LivePair, side: i64, window: (i64, i64, i64), funding: &Funding, opts: &Opts) -> Result<Built> {
     let owner = owner_of(&l.p, side)?;
     req(window.0 >= 0 && window.0 <= l.p.m.price_max && window.1 >= 0 && window.2 >= 0, || "listing values out of range".into())?;
-    let mut n = l.p.cleared();
+    // The continuation keeps the evidence clock S (DESIGN 4.5c).
+    let mut n = l.clocked().cleared();
     if side == LONG {
         (n.long_ask, n.long_min, n.long_tip) = window;
     } else {
@@ -244,7 +294,7 @@ pub fn amend(l: &LivePair, side: i64, window: (i64, i64, i64), funding: &Funding
 pub fn add_margin(l: &LivePair, side: i64, delta: i64, funding: &Funding, opts: &Opts) -> Result<Built> {
     let owner = owner_of(&l.p, side)?;
     req(delta > 0, || "delta must be > 0".into())?;
-    let mut n = l.p.cleared();
+    let mut n = l.clocked().cleared();
     if side == LONG {
         n.bl -= delta;
     } else {
@@ -316,8 +366,15 @@ pub fn transfer(l: &LivePair, side: i64, n: i64, x: i64, ent: &Entrant, k: i64, 
     } else {
         req(t.nb >= p.bs && t.nb <= p.m.price_max, || format!("the entrant's bound {} would lower bs below {} (no-downgrade)", t.nb, p.bs))?;
     }
-    let to = transfer_out(p, l.value, &t);
+    check_entrant_health(&p.m, side, t.nb, x)?;
+    let to = transfer_out(&l.clocked(), l.value, &t);
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    // The hand-over rate limit (DESIGN 4.5c) and an entrant order's activeFrom are lower bounds on the lock time.
+    d.lock = l.handover_from();
+    if let Entrant::Open(lo) = ent {
+        d.lock = d.lock.max(lo.o.active_from.max(0) as u64);
+    }
+    req((d.lock as i64) < LOCK_TIME_THRESHOLD, || "the hand-over limit is above the lock-time threshold".into())?;
     d.add_pair_in(l, "transfer", vec![iv(side), iv(n), iv(x), iv(t.nb), bv(&t.ek), bv(&t.et.as_bytes()), iv(k)], "pair (transfer)");
     let leaver_label = if side == LONG { "leaver (long) paid" } else { "leaver (short) paid" };
     d.add_plain(to.pay as u64, &to.leaver, leaver_label);
@@ -371,10 +428,13 @@ pub fn close_vs_close(h: &LivePair, d: &LivePair, c: &CloseSpec, funding: &Fundi
     req(dp.bl <= hp.bl, || format!("no-downgrade: the donor's bl {} must be <= the host's bl {}", dp.bl, hp.bl))?;
     req(hp.bs >= dp.bs, || format!("no-downgrade: the host's bs {} must be >= the donor's bs {}", hp.bs, dp.bs))?;
     req(dp.entry <= c.e3 && c.e3 <= hp.entry, || format!("e3 = {} must be within [{}, {}] (the donor's and the host's entry)", c.e3, dp.entry, hp.entry))?;
-    let co = close_out(hp, h.value, dp, d.value, d.id, c);
+    let co = close_out(&h.clocked(), h.value, &d.clocked(), d.value, d.id, c);
     let w = dp.long_window();
     let w2 = hp.short_window();
     let mut dr = Draft::new(opts.fee_rate, opts.fee_mode);
+    // The hand-over rate limit of both pairs (DESIGN 4.5c).
+    dr.lock = h.handover_from().max(d.handover_from());
+    req((dr.lock as i64) < LOCK_TIME_THRESHOLD, || "the hand-over limit is above the lock-time threshold".into())?;
     dr.add_pair_in(
         h,
         "closeHost",
@@ -414,7 +474,7 @@ pub fn mutual_close(l: &LivePair, n: i64, x: i64, funding: &Funding, opts: &Opts
     req(n > 0 && n <= p.size && n >= p.m.min_size && (p.size - n == 0 || p.size - n >= p.m.min_size), || format!("n = {n} is not a valid part of size {}", p.size))?;
     req(n >= p.long_min || n == p.size, || "n is below the long's smallest part".into())?;
     req(n >= p.short_min || n == p.size, || "n is below the short's smallest part".into())?;
-    let mo = mutual_out(p, l.value, n, x);
+    let mo = mutual_out(&l.clocked(), l.value, n, x);
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
     d.add_pair_in(l, "mutualClose", vec![iv(n), iv(x)], "pair (mutual close)");
     d.fund_inputs(funding)?;

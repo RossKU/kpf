@@ -323,9 +323,13 @@ fn t1_counter_rate_below_minimum_is_refused() {
     sp.pair_value = sp.pair.floor() as u64;
     let (tx, e) = t1(&sp);
     accept(&tx, &e);
-    // The long posts 0.4 KAS; the short wants 0.5.
+    // The long posts 0.59999999 KAS; the short wants 0.6. Premise changed by review 3 (DESIGN 4.5c): the long used to
+    // post 0.4 against a wish of 0.5, but a rate below 5 % of x = 10 is now refused by both orders (neither side may be
+    // born liquidatable), so the counter-rate rule is shown above the maintenance margin.
     let mut sp = spec();
-    sp.l.my_rate = 40_000_000;
+    sp.s.min_counter_rate = 60_000_000;
+    sp.vs = sp.s.escrow() as u64;
+    sp.l.my_rate = 59_999_999;
     sp.vl = sp.l.escrow() as u64;
     sp.bl = sp.x - sp.l.my_rate;
     sp.pair.bl = sp.bl;

@@ -133,6 +133,7 @@ pub fn generate() -> Vec<(String, String)> {
         short_tip: 0,
         tag_l: kaspa_hash([0x1a; 32]),
         tag_s: kaspa_hash([0x1b; 32]),
+        since: 0,
     };
     let pair = compile("KpfPair", &pair_src, &sample_pair.ctor_with(&kc));
     let (pt, _, _) = facts(&pair);

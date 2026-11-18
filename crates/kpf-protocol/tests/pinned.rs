@@ -66,7 +66,7 @@ fn templates_and_hashes_agree_with_the_manifest() {
 #[test]
 fn state_lengths_are_the_contracts() {
     let p = pair(pubkey(1), pubkey(2));
-    assert_eq!(p.state_bytes().len(), 429);
+    assert_eq!(p.state_bytes().len(), 438);
     assert_eq!(p.state_bytes().len(), pair_template().state_len);
     let o = long_order(pubkey(1));
     assert_eq!(o.state_bytes().len(), 321);

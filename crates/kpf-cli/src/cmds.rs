@@ -102,7 +102,7 @@ pub(crate) fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Networ
         .find(|u| u.op == o.op)
         .ok_or_else(|| format!("UTXO {}:{} is not at the node (spent, or not accepted yet)", o.op.transaction_id, o.op.index))?;
     o.amount = u.amount;
-    o.daa = u.daa;
+    o.daa = Some(u.daa);
     if let Some(c) = u.covenant_id {
         o.covenant_id = c;
     }
@@ -188,12 +188,12 @@ pub(crate) fn finish(a: &Args, title: &str, built: Built, keys: &kpf_protocol::t
     if !a.has("no-save") {
         let made = s.created_utxos();
         for (op, entry, obj) in &made {
-            let of = ObjFile { op: *op, amount: entry.amount, daa: 0, covenant_id: entry.covenant_id.unwrap_or_default(), redeem: obj.redeem() };
+            let of = ObjFile { op: *op, amount: entry.amount, daa: None, covenant_id: entry.covenant_id.unwrap_or_default(), redeem: obj.redeem() };
             // An ask continued by an evidence fill comes with the custody that holds its remaining tokens.
             let custody = match obj {
                 Obj::Kob(kpf_protocol::kob::KobObj::Ask(_)) => made.iter().find_map(|(cop, ce, co)| match co {
                     Obj::Kob(kpf_protocol::kob::KobObj::Token(t)) if t.scheme == kpf_protocol::kob::SCHEME_COVID && Some(Hash::from_bytes(t.owner)) == entry.covenant_id => {
-                        Some(ObjFile { op: *cop, amount: ce.amount, daa: 0, covenant_id: ce.covenant_id.unwrap_or_default(), redeem: co.redeem() })
+                        Some(ObjFile { op: *cop, amount: ce.amount, daa: None, covenant_id: ce.covenant_id.unwrap_or_default(), redeem: co.redeem() })
                     }
                     _ => None,
                 }),
@@ -241,8 +241,9 @@ pub fn keygen(a: &Args) -> R<()> {
     if a.has("show-secret") {
         println!("secret key  {}", to_hex(&k.secret));
     } else {
-        println!("The secret key is in the file only (mode 600 / current user). Back it up; whoever has the file controls the funds.");
+        println!("The secret key is in the file only. Back it up; whoever has the file controls the funds.");
     }
+    println!("permissions: {}", k.permissions);
     println!("{TESTNET_ONLY}: fund this address with testnet-10 coins only.");
     Ok(())
 }
@@ -330,6 +331,14 @@ pub fn inspect(a: &Args) -> R<()> {
             println!("long   {}   listing ask {} (min part {}, tip {})", to_hex(&p.long_key), fmt_kas(p.long_ask as i128), p.long_min, fmt_kas(p.long_tip as i128));
             println!("short  {}   listing bid {} (min part {}, tip {})", to_hex(&p.short_key), fmt_kas(p.short_bid as i128), p.short_min, fmt_kas(p.short_tip as i128));
             println!("tags   long {}  short {}", short_hash(&p.tag_l), short_hash(&p.tag_s));
+            match (p.since, obj.as_ref().and_then(|o| o.daa)) {
+                (0, Some(d)) => println!("evidence clock  since 0: starts at this UTXO's DAA {d}; a hand-over is allowed from DAA {}", d as i64 + 4 * p.m.min_rest_daa),
+                (0, None) => println!("evidence clock  since 0: starts at this UTXO's DAA (unknown here)"),
+                (s, _) => println!("evidence clock  since {s}; a hand-over is allowed from DAA {}", s + 4 * p.m.min_rest_daa),
+            }
+            if !p.range_ok() {
+                println!("WARNING: the range is narrower than both maintenance bands (DESIGN 4.5c): neither side can be liquidated");
+            }
             println!("idle settle after {} DAA ({:.1} days)", p.m.idle_daa, p.m.idle_daa as f64 / 864_000.0);
         }
         Decoded::Open(o) => {
@@ -363,9 +372,13 @@ pub fn inspect(a: &Args) -> R<()> {
         fmt_kas(m.carrier as i128)
     );
     if let Some(o) = &obj {
-        println!("utxo {}:{}  {} KAS  DAA {}  covenant id {}", o.op.transaction_id, o.op.index, fmt_kas(o.amount as i128), o.daa, short_hash(&o.covenant_id));
+        println!("utxo {}:{}  {} KAS  DAA {}  covenant id {}", o.op.transaction_id, o.op.index, fmt_kas(o.amount as i128), daa_str(o.daa), short_hash(&o.covenant_id));
     }
     Ok(())
+}
+
+pub(crate) fn daa_str(d: Option<u64>) -> String {
+    d.map(|x| x.to_string()).unwrap_or_else(|| "unknown".into())
 }
 
 pub(crate) fn short_hash(h: &Hash) -> String {
@@ -556,6 +569,7 @@ pub fn create_order_cmd(a: &Args) -> R<()> {
     };
     o.validate().map_err(e)?;
     println!("order: {} {} ({}), escrow {} KAS", if o.side == LONG { "long" } else { "short" }, fmt_units(o.size_left as i128, sc as i128), units_of(sc), fmt_kas(o.escrow() as i128));
+    order_ticket(&o);
     let mut node = connect(a)?;
     let opts = fee_opts(a)?;
     let b = build_funded(a, net, &mut node, &fk.key, &|f| create_order(&o, f, &opts))?;
@@ -647,10 +661,13 @@ pub fn add_margin_cmd(a: &Args) -> R<()> {
 }
 
 pub fn transfer_cmd(a: &Args) -> R<()> {
-    only_with(a, &["pair", "side", "n", "x", "entrant-order", "rate", "k"])?;
+    only_with(a, &["pair", "side", "n", "x", "entrant-order", "rate", "k", "daa"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let l = load_obj(a, "pair", &mut node, net)?.live_pair()?;
+    let now = crate::evcmds::now_daa(a, &mut node)?;
+    crate::evcmds::print_clock("pair", &l, now);
+    println!("the part that changes hands starts a fresh evidence clock (since = 0); the remainder keeps DAA {}", l.clock());
     let sd = side(a.need("side")?)?;
     let (n, x) = (tokens(a, "n", l.p.m.scale)?, price(a, "x")?);
     let k = int_or(a, "k", 0)?;
@@ -662,21 +679,26 @@ pub fn transfer_cmd(a: &Args) -> R<()> {
     };
     let opts = fee_opts(a)?;
     let b = build_funded(a, net, &mut node, &fk.key, &|f| transfer(&l, sd, n, x, &ent, k, f, &opts))?;
+    crate::evcmds::lock_guard(a, &b, now)?;
     finish(a, if matches!(ent, Entrant::Open(_)) { "transfer (order takes the listing)" } else { "transfer (signing taker)" }, b, &fk.keys, net, &mut node)
 }
 
 pub fn close_vs_close_cmd(a: &Args) -> R<()> {
-    only_with(a, &["host", "donor", "n", "x", "e3"])?;
+    only_with(a, &["host", "donor", "n", "x", "e3", "daa"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let h = load_obj(a, "host", &mut node, net)?.live_pair()?;
     let d = load_obj(a, "donor", &mut node, net)?.live_pair()?;
+    let now = crate::evcmds::now_daa(a, &mut node)?;
+    crate::evcmds::print_clock("host", &h, now);
+    crate::evcmds::print_clock("donor", &d, now);
     let (n, x) = (tokens(a, "n", h.p.m.scale)?, price(a, "x")?);
     let e3 = price_or(a, "e3", h.p.entry)?;
     let fk = funder_and_keys(a, true)?.expect("funder");
     let opts = fee_opts(a)?;
     let c = CloseSpec { n, x, e3 };
     let b = build_funded(a, net, &mut node, &fk.key, &|f| close_vs_close(&h, &d, &c, f, &opts))?;
+    crate::evcmds::lock_guard(a, &b, now)?;
     finish(a, "close versus close", b, &fk.keys, net, &mut node)
 }
 
@@ -798,7 +820,7 @@ pub fn utxos_cmd(a: &Args) -> R<()> {
     println!("{addr}: {} UTXOs, {} KAS", list.len(), fmt_kas(total as i128));
     let arr: Vec<Value> = list
         .iter()
-        .map(|u| json!({"txid": u.op.transaction_id.to_string(), "index": u.op.index, "amount": u.amount, "daa": u.daa, "covenantId": u.covenant_id.map(|c| c.to_string())}))
+        .map(|u| json!({"txid": u.op.transaction_id.to_string(), "index": u.op.index, "amount": u.amount, "daa": u.daa, "covenantId": u.covenant_id.map(|c| c.to_string()), "scriptPublicKey": u.spk.as_ref().map(spk_hex)}))
         .collect();
     for u in &list {
         println!("  {}:{}  {} KAS  DAA {}", u.op.transaction_id, u.op.index, fmt_kas(u.amount as i128), u.daa);
@@ -819,7 +841,7 @@ pub fn status_cmd(a: &Args) -> R<()> {
         let mut o = ObjFile::load(f)?;
         match refresh(&mut node, &mut o, net) {
             Ok(()) => {
-                println!("{f}: LIVE  {} KAS  DAA {}  covenant id {}", fmt_kas(o.amount as i128), o.daa, short_hash(&o.covenant_id));
+                println!("{f}: LIVE  {} KAS  DAA {}  covenant id {}", fmt_kas(o.amount as i128), daa_str(o.daa), short_hash(&o.covenant_id));
                 if a.has("update") {
                     write_json(Path::new(f), &o.to_json(net))?;
                     println!("  updated {f}");
@@ -841,4 +863,37 @@ pub fn daa_cmd(a: &Args) -> R<()> {
     let p = node.t_call("getBlockDagInfo")?;
     println!("network {}   virtual DAA score {}", p.get("network").and_then(Value::as_str).unwrap_or("?"), p.get("virtualDaaScore").map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default());
     Ok(())
+}
+
+/// What an order ticket must say (review 3 F4, DESIGN 4.5c): a liquidation forfeits the whole margin, where the order's
+/// own side is liquidatable at its limit, and whether the order can be filled at its limit at all.
+pub(crate) fn order_ticket(o: &Open) {
+    let m = &o.m;
+    let at_limit = if o.side == LONG { o.limit - o.my_rate } else { o.limit + o.my_rate };
+    let trig = if o.side == LONG {
+        (at_limit as i128 * BPS as i128 / (BPS - m.mmr_bps) as i128) as i64
+    } else {
+        ((at_limit as i128 * BPS as i128 + (BPS + m.mmr_bps) as i128 - 1) / (BPS + m.mmr_bps) as i128) as i64
+    };
+    println!(
+        "NOTE: a liquidation forfeits the whole margin (DESIGN 4.5b). Filled at its limit {} KAS this {} gets the bound {} KAS and is liquidatable once a resting {} {} {} KAS has rested {} DAA on the pair's clock. Keep the limit within your margin rate less maintenance of the market.",
+        fmt_kas(o.limit as i128),
+        if o.side == LONG { "long" } else { "short" },
+        fmt_kas(at_limit as i128),
+        if o.side == LONG { "ask" } else { "bid" },
+        if o.side == LONG { "below" } else { "above" },
+        fmt_kas(trig as i128),
+        m.min_rest_daa
+    );
+    if !healthy_at(m, o.side, at_limit, o.limit) {
+        println!(
+            "WARNING: the margin rate {} KAS is below the {} bps maintenance of the limit {} KAS: KpfOpen refuses a fill at the limit (a side may not be born liquidatable, DESIGN 4.5c); it fills only where its rate covers the maintenance",
+            fmt_kas(o.my_rate as i128),
+            m.mmr_bps,
+            fmt_kas(o.limit as i128)
+        );
+    }
+    if o.active_from > 0 {
+        println!("the order is fillable from DAA {} (activeFrom; the builders set the lock time to it)", o.active_from);
+    }
 }

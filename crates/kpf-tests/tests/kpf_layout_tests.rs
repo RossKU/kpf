@@ -11,9 +11,9 @@ use kpf::*;
 fn pair_state_span_and_windows() {
     let base = pair_base();
     let c = &base.contracts.values().next().unwrap().compiled;
-    // The state starts at redeem-script byte 1 and is 429 bytes: market block 207, size..tags 222.
+    // The state starts at redeem-script byte 1 and is 438 bytes: market block 207, size..tags 222, since 9 (review 3).
     assert_eq!(c.state_span.offset, 1);
-    assert_eq!(c.state_span.len, 429);
+    assert_eq!(c.state_span.len, 438);
     let p = pair(&keypair(1), &keypair(2));
     let bc = bytecode(base);
     let rd = |at: usize| i64::from_le_bytes(bc[at..at + 8].try_into().unwrap());
@@ -28,6 +28,9 @@ fn pair_state_span_and_windows() {
     assert_eq!(bc[364], 0x20);
     assert_eq!(&bc[365..397], &p.tag_l.as_bytes());
     assert_eq!(&bc[398..430], &p.tag_s.as_bytes());
+    // The since window [430..439) (KpfPair STATE_END = 439).
+    assert_eq!(bc[430], 0x08);
+    assert_eq!(rd(431), p.since);
 }
 
 #[test]
