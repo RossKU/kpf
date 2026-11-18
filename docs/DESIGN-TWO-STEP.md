@@ -5,6 +5,11 @@ challenged close is cancelled, not re-settled at the counter quote), and with th
 The rest of this note is kept as the record of the proposal. Cited as `D§n` (DESIGN), `TM` (THREAT_MODEL), `R3`
 (review 3). Section 4.5c is taken as the current rules. Numbers marked *(estimate)* are not measured.
 
+**Changed since this note:** a refuted claim restores the part with `since = S` (the pair's clock start at the
+proposal), not `since = 0` as this note proposes (sections 2.2, 2.6, 5 (d) and 7, item 4): with `since = 0` a side that
+refutes its own claim restarted the clock and delayed its own liquidation each cycle. A refuted quote that is still
+fillable can therefore be proposed again at once, at the cost of a bond per round (DESIGN 4.5d, residual risks 2 and 3).
+
 ## 1. Problem and idea
 
 A covenant proves only lower bounds on time (lock time, a UTXO's DAA score, a UTXO's age). "This evidence order is
@@ -48,7 +53,7 @@ evidence block `n_ev ≥ ⌈k·Σn⌉`, the trigger, the range rule of 4.5c, the
   with `n = s` it inherits the pair's carrier and any excess, with `n < s` the proposer funds a carrier `C`, and
   `refund = B + C`;
 - the **remainder** `(s − n)` exactly as on every split today (keeps `since = S`, the old carrier and the slack).
-`propose` computes `restoreHash` = the part as a `KpfPair` with every field unchanged, tags 0 and `since = 0`;
+`propose` computes `restoreHash` = the part as a `KpfPair` with every field unchanged, tags 0 and `since = 0` (*superseded: DESIGN 4.5d restores with `since = S`, see the status note*);
 `cureHash` = the same with the loser's bound moved to `cureBound` and `since = S` (kind 2 only); `forfeitHash` = the
 part with the loser's key replaced by the winner's, both sides unlisted, tags 0, `since = 0` (kind 2 only).
 `cureBound`: long loser `BL* = ⌊p·(10⁴ − mmrBps)/10⁴⌋`, short loser `BS* = ⌈p·(10⁴ + mmrBps)/10⁴⌉`, the nearest bound

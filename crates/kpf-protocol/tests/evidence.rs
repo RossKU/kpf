@@ -288,7 +288,7 @@ fn p6_liquidation_proposed_then_forfeited_then_closed_by_the_winner() {
 // ---------------------------------------------------------------- challenge and cure
 
 /// A stale proposal (an ask at 9.40 while the market is at 10) is refuted by a third-party bid at 9.80 that rests R on
-/// the proposal's clock: the part is restored with a fresh clock and the bond lands in the challenger's change.
+/// the proposal's clock: the part is restored with the pair's clock S kept and the bond lands in the challenger's change.
 #[test]
 fn a_stale_proposal_is_refuted_by_a_challenge() {
     let mut w = W::new();
@@ -310,7 +310,7 @@ fn a_stale_proposal_is_refuted_by_a_challenge() {
     assert_outputs_are_least(&b);
     let (s, live) = w.run(&b);
     let restored = pairs_of(&live).remove(0);
-    assert_eq!((restored.p.since, restored.p.long_key, restored.p.bl), (0, pubkey(L), l.p.bl));
+    assert_eq!((restored.p.since, restored.p.long_key, restored.p.bl), (l.clock(), pubkey(L), l.p.bl));
     assert_eq!(restored.value as i64, wp.value as i64 - wp.w.bond);
     assert_eq!(w.chain.balance(&pubkey(23)), 0, "the refuted proposer gets nothing");
     let _ = (before, s);
@@ -638,7 +638,7 @@ fn the_check_says_why_an_order_cannot_serve_and_the_contracts_agree() {
     let e = ask_with(&mut w, |_, _| {});
     let r = check_evidence(&e, &w.m, None);
     assert!(r.usable(), "{:?}", r.reasons());
-    assert_eq!(r.rest_end, e.daa() + 600);
+    assert_eq!(r.rest_end, e.daa() + w.m.min_rest_daa as u64);
     assert_eq!(r.covers, 1_500_000_000, "k = 1: a fill of all of it covers parts of the same total");
 }
 
@@ -646,27 +646,29 @@ fn the_check_says_why_an_order_cannot_serve_and_the_contracts_agree() {
 fn the_rest_window_is_reported_against_the_daa_asked_about() {
     let mut w = W::new();
     let e = w.ask(LIQ_ASK, 1_500_000_000);
-    let r = check_evidence(&e, &w.m, Some(1_599));
+    let end = 1_000 + w.m.min_rest_daa as u64;
+    let r = check_evidence(&e, &w.m, Some(end - 1));
     assert!(r.problems.is_empty());
     assert_eq!(r.waiting.len(), 1);
-    assert!(r.waiting[0].contains("has not rested long enough") && r.waiting[0].contains("1600"), "{:?}", r.waiting);
-    assert!(check_evidence(&e, &w.m, Some(1_600)).usable());
+    assert!(r.waiting[0].contains("has not rested long enough") && r.waiting[0].contains(&end.to_string()), "{:?}", r.waiting);
+    assert!(check_evidence(&e, &w.m, Some(end)).usable());
     // A transaction one DAA early is refused by the pair (the lock time proves less than the rest).
     let l = w.pair(0x31);
     w.rest();
     let f = w.funding();
     let b = propose_liquidate(&[(l, N)], &pubkey(F), &eu(e, None), &f, &opts()).unwrap();
-    assert_eq!(b.tx.lock_time, 1_600);
-    refused(&b, 0, |m| m.tx.lock_time = 1_599);
+    assert_eq!(b.tx.lock_time, end);
+    refused(&b, 0, |m| m.tx.lock_time = end - 1);
     // Past the soft expiry the contract may still accept it within the pair's clock (the residual of DESIGN 4.5c), but the
     // check reports it dead and the builders refuse it unless `allow_dead` is set. Premise changed by review 3 (F1): this
     // was only a note ("use it now or not at all").
     let mut w = W::new();
     // The order lives through the end of its rest plus the evidence life L (DESIGN 4.5d), then dies.
     let life = w.m.min_evidence_life;
-    let e = ask_with(&mut w, |a, _| a.expiry_daa = 1_000 + 600 + life + 2_000);
-    let later = (1_000 + 600 + life + 5_000) as u64;
-    let r = check_evidence(&e, &w.m, Some(1_000 + 600 + 864_000 + 5_000));
+    let rest = w.m.min_rest_daa;
+    let e = ask_with(&mut w, |a, _| a.expiry_daa = 1_000 + rest + life + 2_000);
+    let later = (1_000 + rest + life + 5_000) as u64;
+    let r = check_evidence(&e, &w.m, Some(later));
     assert!(!r.usable() && r.problems.is_empty() && r.dead.iter().any(|n| n.contains("dead") && n.contains("soft expiry")), "{:?}", r.dead);
     let l = w.pair(0x31);
     w.rest();
@@ -704,15 +706,15 @@ fn what_the_evidence_lets_a_pair_do() {
 /// (name, txid, sha256 of the RPC JSON) of each shape: fixed TEST-ONLY keys and fixed inputs give fixed transactions
 /// (signing is deterministic). `KPF_GOLDEN=print` shows the values after an intended change.
 const GOLDEN: &[(&str, &str, &str)] = &[
-    ("propose: the long closes 1,000 at a 10 KAS bid", "e35ae05d9eeaccfcd94b9267fe55e34def468988cbc8766969c998211b1595ff", "7c28b627bdad4beee6dbfd5fbe4de67df12d763003f47d30f2d204f29e45e248"),
-    ("finalize: the long's close", "abe4a75977fa7c383463ee1fcdd61bf1b526cab59c7eeea4bbd7e86752f5988b", "e9a202cdeef04cf40b72ad9e334318314943540fdca8f3a5e489d66bbc3623af"),
-    ("propose: the short closes 400 at a 10.5 KAS ask", "d9f3495f67a3563460ad2883f30262f92533b5121e94488921b4db2371583297", "a9829cfdf25c964a006b5eb1c7a9a2894f919946431353ca568ca404fdc16a50"),
-    ("propose: a long's liquidation at a 9.4 KAS ask", "7d35c44728a973e852ab716a4b9f35f6c895a2e00d6f62ccde8e374a803d5845", "9879865a53e2a3da2d1f41f4039090a18a21f2382690afcfe50f849747dbc65a"),
-    ("cure: the long moves bl to 8.93", "f8b706bf9abf935f5686576a47c38609d776a5dc18013be41810738cafa20e24", "7031a9b3d60cadea40d516196bbbcd3f95387f9e6b52397d6cb1d72d0fa6c1f2"),
-    ("challenge: a 9.80 KAS bid refutes it", "33d63949374e81c53952d423594cec43aefd377831bd4c54af454ac8457629e5", "5aeca24da1033b941a5ce66f0e0100f19dbda66c38933e233c5c9560cf2da4f0"),
-    ("finalize: forfeit and keep", "39b97aae5958d5c0fda2c4ddda3becb24074475b8019eb5cae63bb48d525024b", "5322b49e20c34038e47bdd90f192bb2815788f1f6923e79e2ab59147c15c1f0a"),
-    ("propose: a short's liquidation at an 11.5 KAS bid", "86c06f28d6407649554cb8d597891dbb41b9b69df931d19a5e76d302fbeeb1d3", "44ef8ceafedd97d4fec138cd690c024986430ed46bbd628d35cbe519f888550b"),
-    ("propose: a block of 3 longs on one 9.4 KAS ask", "4d73acdd9c0f78352bc2a7e0a2814620816a6ddf2ae3264af2f19fc09951b49e", "0065812c2fe359305576a133ebb0497f151a58a72825924f48d98029b5216e7c"),
+    ("propose: the long closes 1,000 at a 10 KAS bid", "6b5fdde8e1372b591a227ba813f71f0bac9042a7f2d0e60043d701d7dd07c477", "06c15f6f971e5127631d29e358454935b6fc9b36c31e4ce88e54bc800bf91f5f"),
+    ("finalize: the long's close", "a5a0700b5d497457e53997a6d5a686ead386a2cf2de527286265500c1186d2b2", "b45368e995306d06e9527d060da9eeada617e7919205e8093a13a029594f2f93"),
+    ("propose: the short closes 400 at a 10.5 KAS ask", "cec810b3a5ca96eca71fe817a1cb85277dbb186a8ba975e834e314581298b806", "f6cf6eeede59349e46954648252f1ea73a19b9d303f109f0141f562b6b14c293"),
+    ("propose: a long's liquidation at a 9.4 KAS ask", "e3a9a85a089e887cc068dbfd96ac977c80b68d06011e17c8815017e53bfc4bcf", "8e126efb11703f2c95b2d4df1ea456af3538f24eb9872f341386469b7fdbfbe8"),
+    ("cure: the long moves bl to 8.93", "9543dcb462d79d559fe05cc5bb50514dcd718a734dbdd85b96ef47fb5281df45", "1a5fa7c15f4e1083ebcca6191f50d77c3526e57f6ff63fc19af38d42bf456842"),
+    ("challenge: a 9.80 KAS bid refutes it", "0070085689b5eb604b0ca44e476e719064ebd2cd5d36aa6efb70e963fcc700d2", "ac57873b914926aaff3851d16f8d0943c678768ab1f3b8bcb4f2d866644bf44a"),
+    ("finalize: forfeit and keep", "97f0133276e91e7b650990019162c0eb07b536dde6747e8d88a8c81279bc0cae", "47c69138e039d8864c5df24e81db7e295b56be15af4ec00b8e61dd08502f479b"),
+    ("propose: a short's liquidation at an 11.5 KAS bid", "e53d74ec20f6d9fb852116dccd56e5be41c71cb59b5d8b64c833d06a0de35d06", "35ccaa3875d62120088d4db855e3cf2c9db455fc01bbbd7baadbeb7ba85bcf39"),
+    ("propose: a block of 3 longs on one 9.4 KAS ask", "f2fd59d57afb1fcfd983d80487074c75b207bd71972f34b999cae0ac46efb723", "3f3a8aa49cd8258cf405b1de55f91270e8621481d98fe129c2d8888d516da557"),
 ];
 
 fn sha(v: &serde_json::Value) -> String {

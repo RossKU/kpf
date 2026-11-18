@@ -271,10 +271,10 @@ impl Sim {
             let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
             let src = auth.and_then(|a| in_pos.iter().find(|s| s.idx == a));
             match src {
-                // A refuted claim restores the part with a fresh clock (DESIGN 4.5d).
+                // A refuted claim restores the part with the clock S the pending part recorded (DESIGN 4.5d).
                 Some(s) if s.restore.as_ref() == Some(p) => {
-                    assert_eq!(p.since, 0, "output {idx}: the restored part restarts its clock");
-                    self.st.clock_restarted += 1;
+                    assert_eq!(p.since, s.clock, "output {idx}: the restored part keeps the clock S");
+                    self.st.clock_kept += 1;
                 }
                 Some(s) if s.p.long_key == p.long_key && s.p.short_key == p.short_key => {
                     assert_eq!(p.since, s.clock, "output {idx}: a pair output that changes no hands keeps the clock S");

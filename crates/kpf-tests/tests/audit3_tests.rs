@@ -9,7 +9,7 @@
 //! Premise changed by DESIGN 4.5d: an evidence entry now proposes (the clock and fillability rules are the same, and
 //! the order must stay fillable for the market's evidence life L after its rest: the boundaries below move by L), and
 //! P7 is gone. Its tests are converted: R3-F3's health check now binds the ordinary transfer by which the winner sells a
-//! forfeited side, and the clock restart of the T7 part is that of the forfeited and the restored part.
+//! forfeited side, and the clock restart of the T7 part is that of the forfeited part (a restored part keeps S).
 
 mod common;
 mod kpf;
@@ -328,7 +328,7 @@ fn holds_evidence_that_died_before_it_rested_on_the_clock_is_refused() {
 /// an output with since 0 (a restart) or S + 1 is refused by the pair. The parts that change hands carry since 0 and
 /// one with since = S (no restart) is refused. Listed: P1, P2, P3 (remainder), P4 (host and donor remainders), P4'
 /// (remainder), and the remainders of the proposals of P5 and P6 (DESIGN 4.5d; P7 is gone). The pending part records S
-/// itself (the cure keeps it, the restore and the forfeit restart: `holds_the_clock_restarts_on_each_hand_over`).
+/// itself (the cure and the restore keep it, the forfeit restarts: `holds_the_clock_restarts_on_each_hand_over`).
 #[test]
 fn holds_the_clock_is_kept_by_every_output_that_changes_no_hands() {
     let mut second = listed();
@@ -371,6 +371,7 @@ fn holds_the_clock_is_kept_by_every_output_that_changes_no_hands() {
         check(&d, 0, "P6 liquidation");
         assert_eq!(d.pendings[0].1.since, s, "the pending part records S");
         assert_eq!(d.pendings[0].1.cure_pair().unwrap().since, s, "a cure keeps S");
+        assert_eq!(d.pendings[0].1.restore_pair().unwrap().since, s, "a restore keeps S");
     }
 }
 
@@ -429,18 +430,19 @@ fn holds_the_clock_restarts_on_each_hand_over() {
     assert_eq!(p3.p.since, 0, "P3 restarts its clock");
     let bid = placed(Evidence::bid(1_150_000_000, N), 2_100);
     refused(&locked(&ev_draft(&[liq(&p3, N, SHORT)], &bid, &fk(), 25), 4_400 + R - 1), 0);
-    // DESIGN 4.5d (in place of T7): the forfeited part and the restored part restart their clocks too; the same live
-    // ask counts against them only R after their own UTXO.
+    // DESIGN 4.5d (in place of T7): the forfeited part restarts its clock too; the same live ask counts against it only
+    // R after its own UTXO. The restored part changes no hands and keeps S (2,000): the same ask counts at once.
     let e = placed(Evidence::ask(940_000_000, N), 2_100);
     let fp = forfeited(&l, SHORT, 1_150_000_000, 9_000);
     assert_eq!(fp.p.since, 0);
+    refused(&locked(&ev_draft(&[liq(&fp, N, LONG)], &e, &fk(), 28), 9_000 + R - 1), 0);
+    accept(&locked(&ev_draft(&[liq(&fp, N, LONG)], &e, &fk(), 28), 9_000 + R));
     let w = pend(&liq(&l, N, LONG), 940_000_000);
     let cd = ch_draft(&[w], &Evidence::bid(966_315_790, N), &fk(), 26);
     let tx = accept(&cd);
     let restored = live_pairs(&tx, &cd).remove(0).at(9_000);
-    assert_eq!(restored.p.since, 0);
-    refused(&locked(&ev_draft(&[liq(&restored, N, LONG)], &e, &fk(), 27), 9_000 + R - 1), 0);
-    accept(&locked(&ev_draft(&[liq(&restored, N, LONG)], &e, &fk(), 27), 9_000 + R));
+    assert_eq!(restored.p.since, 2_000);
+    accept(&locked(&ev_draft(&[liq(&restored, N, LONG)], &e, &fk(), 27), 9_000));
 }
 
 // ---------------------------------------------------------------- the hand-over rate limit

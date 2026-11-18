@@ -122,18 +122,18 @@ challenger. A liquidation victim may instead cure (bound moved to the cure bound
 refused, dead or short-lived counter-evidence is refused, a close is compared on clamped prices, `k_c` coverage is
 enforced, a challenge after `W` but before a finalize is accepted. R: the defence must be online: an offline victim
 depends on a funded watcher acting within `W`; a victim within `g` of its trigger cannot refute, only cure; on an empty
-opposite book stale closes stand and stale liquidations are stopped only by a cure. `since = 0` on restore kills only
-quotes that die before `restore + R + L`: a library quote still live requalifies after `R`. T: Y5 (watcher latency),
+opposite book stale closes stand and stale liquidations are stopped only by a cure. A restore keeps the clock `S`: a
+refuted quote still live can be proposed again at once, each round costing the proposer its bond. T: Y5 (watcher latency),
 Y7 (evidence supply under `L`).
 
-**A8 Self-refuted claim restarts the clock (exploit, D§4.5d residual 2).**
+**A8 Self-refuted claim restarts the clock (holds since the restore keeps `S`, D§4.5d residual 2).**
 V: a truly liquidatable long proposes its own close at a fake bid (rested `R`, self-filled), refutes it itself with its
 own ask rested `R` after `P`, and recovers its bond. P: a thin book (the fake bid and ask cost only fees). I: while
-pending no liquidation can be proposed; after the restore (`since = 0`) the keeper's live ask counts only `R` later, so
-each cycle delays the liquidation by at least `2R`; the winner carries the price move meanwhile. M: the cost per cycle
-is two fees and two self-fills of `k·n` and `k_c·n`. R: accepted by the engine
-(`exploit_self_refuted_claim_restarts_the_clock`). Restoring with `since = P` instead of 0 would remove the second `R`
-but keep every refuted live quote usable from `P`: open for decision, not implemented. T: the exploit test.
+pending (about `R`) no liquidation can be proposed; the restored part keeps `S`, so the keeper's ask that rested on `S`
+is accepted in the very next proposal, and the keeper's ask also refutes the fake close from `P + R`, taking the
+loser's bond. M: the cost per cycle is two fees and two self-fills of `k·n` and `k_c·n`. R: what remains is the race
+of B1. T: `holds_self_refuted_claim_does_not_delay_the_liquidation` and the other clock tests of
+`two_step_attack_tests`.
 
 **A9 Proposal spam (freeze).**
 V: propose against a part with a 4.5c-valid quote to freeze it. I: neither side can close, transfer, list or add margin
@@ -172,7 +172,7 @@ fee table vs `keeperFeeMin`; liveness drill with only the winner as keeper.
 **B3 Evidence liveness and bad debt.**
 V: the price gaps past bankruptcy faster than evidence of `k·n` can rest. P: thin book, large pair. I: winner's payout
 capped at the loser's margin (`[L] docs/plan.md:909`); the gap is lost to the winner. M: partial liquidation; per-pair
-`maxSize`; M2 pool pays the gap first. Since D§4.5d every liquidation settles at least `W` (6,000 DAA on testnet)
+`maxSize`; M2 pool pays the gap first. Since D§4.5d every liquidation settles at least `W` (600 DAA, 60 seconds, on testnet)
 after the proposal, and the winner carries the gap risk of that delay on top of the evidence rest; the parameter
 bound `W ≥ R` keeps refutation possible, and `W` should stay below the time in which the maintenance band absorbs a
 move. R: inherent to an evidence-only design. T: A2 simulation.

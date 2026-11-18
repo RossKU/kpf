@@ -239,12 +239,24 @@ fn describe_claim(w: &LivePending) -> String {
     }
 }
 
+/// DAA scores per second on testnet-10 and mainnet (10 blocks per second).
+const DAA_PER_SEC: u64 = 10;
+
+/// A DAA span with its time at 10 DAA per second: "50 DAA, 5 s", "55 DAA, 5.5 s".
+fn daa_secs(d: u64) -> String {
+    if d % DAA_PER_SEC == 0 {
+        format!("{d} DAA, {} s", d / DAA_PER_SEC)
+    } else {
+        format!("{d} DAA, {}.{} s", d / DAA_PER_SEC, d % DAA_PER_SEC)
+    }
+}
+
 /// The time left before a pending part can be finalized, in words.
 fn finalize_words(w: &LivePending, now: Option<u64>) -> String {
     let from = w.finalize_from();
     match now {
         Some(n) if n >= from => format!("finalize is possible now (from DAA {from}); a challenge or a cure is still accepted until a finalize lands"),
-        Some(n) => format!("finalize from DAA {from}: {} DAA from now (DAA {n})", from - n),
+        Some(n) => format!("finalize from DAA {from}: {} from now (DAA {n})", daa_secs(from - n)),
         None => format!("finalize from DAA {from} (give --daa or --node for the time left)"),
     }
 }
@@ -557,7 +569,10 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             if a.has("json") {
                 entry["pending"].as_array_mut().expect("array").push(json!({
                     "file": wf, "claim": describe_claim(&lw), "threatenedSide": side_word(threatened), "proposalDaa": lw.daa,
-                    "finalizeFrom": lw.finalize_from(), "bond": lw.w.bond, "refutationBound": bound, "counterKind": if lw.w.counter_is_ask() { "ask" } else { "bid" },
+                    "finalizeFrom": lw.finalize_from(),
+                    "finalizeInDaa": now.map(|n| lw.finalize_from().saturating_sub(n)),
+                    "finalizeInSeconds": now.map(|n| lw.finalize_from().saturating_sub(n) as f64 / DAA_PER_SEC as f64),
+                    "bond": lw.w.bond, "refutationBound": bound, "counterKind": if lw.w.counter_is_ask() { "ask" } else { "bid" },
                     "cureBound": lw.w.can_cure().then_some(lw.w.cure_bound),
                     "refutingOrders": refuters.iter().filter(|r| r.1).map(|r| json!({"order": r.0, "restEnd": r.4.rest_end})).collect::<Vec<_>>(),
                 }));
@@ -567,13 +582,13 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             println!("    {}", finalize_words(&lw, now));
             match bound {
                 Some(b) => println!(
-                    "    refuted by a {} {} {} KAS resting {} DAA from DAA {} (the proposal's clock) and fillable {} DAA after; the challenger receives the bond {} KAS",
+                    "    refuted by a {} {} {} KAS resting {} from DAA {} (the proposal's clock) and fillable {} after; the challenger receives the bond {} KAS",
                     if lw.w.counter_is_ask() { "ask" } else { "bid" },
                     if lw.w.counter_is_ask() { "<=" } else { ">=" },
                     kas(b),
-                    lw.w.m.min_rest_daa,
+                    daa_secs(lw.w.m.min_rest_daa.max(0) as u64),
                     lw.daa,
-                    lw.w.m.min_evidence_life,
+                    daa_secs(lw.w.m.min_evidence_life.max(0) as u64),
                     kas(lw.w.bond)
                 ),
                 None => println!("    no quote refutes it"),
@@ -584,7 +599,7 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             for (of, ok, kind_ok, contra, rep) in &refuters {
                 if *ok {
                     let wait = match now {
-                        Some(n) if n < rep.rest_end => format!(" once it has rested (from DAA {}, {} DAA from now)", rep.rest_end, rep.rest_end - n),
+                        Some(n) if n < rep.rest_end => format!(" once it has rested (from DAA {}, {} from now)", rep.rest_end, daa_secs(rep.rest_end - n)),
                         _ => String::new(),
                     };
                     let seller = if lw.w.counter_is_ask() { String::new() } else { format!(" --seller {}", a.get("seller").unwrap_or("YOUR-TOKENS.json")) };

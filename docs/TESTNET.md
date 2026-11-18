@@ -71,7 +71,7 @@ per whole token, sizes are whole tokens.
 | 4 | `kpf open --long out/1/*-out0-order.json --short out/2/*-out0-order.json --n 10 --x 10 $F $S --out-dir out/4` | a pair: `kpf inspect out/4/*-pair.json` says size 10, range 9 .. 12 KAS, floor 30.2 KAS; the long order continues with 10 tokens; the short order is filled out (its remainder is paid to bob) |
 | 5 | `kpf amend --pair out/4/*-pair.json --side long --price 10 --key $A $F $S --out-dir out/5` | the pair is spent (NOT LIVE) and replaced: long listing 10 |
 | 6 | `kpf amend --pair out/5/*-pair.json --side short --price 10.5 --key $B $F $S --out-dir out/6` | short listing 10.5 |
-| 7 | wait until the DAA the command prints for a hand-over (the pair's clock start + 4 x minRestDaa, about 4 minutes after step 4 with `minRestDaa` 600; the transaction's lock time is that DAA and `kpf` will not submit it earlier), then `kpf transfer --pair out/6/*-pair.json --side short --n 4 --x 10.2 --entrant-order out/3/*-out0-order.json $F $S --out-dir out/7` | two pairs: a part of 4 tokens (short = carol) and a remainder of 6 (short = bob); bob is paid `q(4, 12 - 10.2)` = 7.2 KAS; carol's order continues with 6 tokens |
+| 7 | wait until the DAA the command prints for a hand-over (the pair's clock start + 4 x minRestDaa, 200 DAA, about 20 seconds after step 4 with `minRestDaa` 50; the transaction's lock time is that DAA and `kpf` will not submit it earlier), then `kpf transfer --pair out/6/*-pair.json --side short --n 4 --x 10.2 --entrant-order out/3/*-out0-order.json $F $S --out-dir out/7` | two pairs: a part of 4 tokens (short = carol) and a remainder of 6 (short = bob); bob is paid `q(4, 12 - 10.2)` = 7.2 KAS; carol's order continues with 6 tokens |
 | 8 | `kpf add-margin --pair out/7/*-out3-pair.json --side long --delta 0.1 --key $A $F $S --out-dir out/8` | `bl` 9 -> 8.9, value +0.6 KAS |
 | 9 | `kpf mutual-close --pair out/8/*-pair.json --n 3 --x 10.2 $F $S --out-dir out/9` | both listings cross: alice is paid `q(3, 10.2 - 8.9)` = 3.9 KAS, bob `q(3, 12 - 10.2)` = 5.4 KAS; a remainder of 3 tokens |
 | 10 | `kpf coop-close --pair out/9/*-out1-pair.json --long-pay <half of its value>s --fee-from short --key $A --key $B $S --out-dir out/10` | the pair is spent, nothing replaces it; both keys signed one transaction |
@@ -103,7 +103,7 @@ the short owner of the new pair and its own UTXOs pay the short margin. Close-ve
 | idle settle | 0.0240 | 14,279 | 2,736 |
 
 Script units are small (the largest input uses about 280,000, every input commits the exact budget). The mass is dominated
-by the size of the redeem scripts (a pair's script is now 12,153 bytes, with the two-step evidence of DESIGN 4.5d,
+by the size of the redeem scripts (a pair's script is now 12,155 bytes, with the two-step evidence of DESIGN 4.5d,
 and is revealed on every spend; the table was measured at 11.6 KB). If blocks are contended the
 node may not relay at the floor: raise `--fee-rate` or add `--priority` (which also pays for the storage mass).
 
@@ -133,7 +133,7 @@ node may not relay at the floor: raise `--fee-rate` or add `--priority` (which a
 
 Price evidence works in two steps (DESIGN 4.5d). A unilateral close (P5) or a liquidation (P6) is first **proposed**
 (`KpfPair.propose`): the part moves into a `KpfPending` UTXO with a bond and nothing is paid out. For a window
-`W` (`challengeDaa`, 6,000 DAA, about 10 minutes, on the testnet market) anyone may **challenge** it with fresh
+`W` (`challengeDaa`, 600 DAA, 60 seconds, on the testnet market) anyone may **challenge** it with fresh
 counter-evidence, and the loser of a liquidation may **cure** it; after the window anyone may **finalize** it. Every
 transaction that reads a quote needs a **real KOB order**: a resting `KobAsk` or `KobBid` of the market's token is filled
 in the same transaction (DESIGN 3.3). `kpf propose-close`, `kpf propose-liquidate` and `kpf challenge` build that whole
@@ -152,7 +152,7 @@ What the steps mean for each party:
   against a short's liquidation or a long's close) that has rested `minRestDaa` counted from the pending part's own DAA
   `P` (an older order counts from `P`), stays fillable for the evidence life after its rest, is filled for `k_c` times
   the parts, and lies beyond the claim by the margin `g` (2 %): for a liquidation relative to the loser's trigger, for
-  a close relative to the closer's quote. The part returns to its pair with a fresh evidence clock; the bond goes to
+  a close relative to the closer's quote. The part returns to its pair with its evidence clock unchanged (`since` = `S`, the pair's clock start at the proposal), so a refuted claim gains nobody rest time; the bond goes to
   the challenge's funder. A refuted close is cancelled, not re-settled.
 - **Cure** (liquidations only). The threatened owner signs, moves its bound exactly to the cure bound (the nearest
   bound at which the proposed quote no longer triggers) and pays the margin that takes; the proposer gets its refund,
@@ -176,9 +176,9 @@ What the steps mean for each party:
    token identity: `tokenCovId`, `extensionCommitment` (hex, 32 bytes), `tokenTplHash` =
    `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, `tplPrefixLen` = 1, `tplSuffixLen` = 2802, and
    `scale` = 10^decimals of the token (and `minSize` in base units). `kpf market --check market.json` validates it.
-   `minRestDaa` (default 600, about one minute) is how long an evidence order must have rested. The two-step parameters
+   `minRestDaa` (default 50 DAA, 5 seconds) is how long an evidence order must have rested. The two-step parameters
    (DESIGN 4.5d) are in the same block: `bondBps` 300, `bondMin` 500,000,000 sompi (5 KAS), `kcBps` 10,000 (`k_c` = 1),
-   `gBps` 200, `challengeDaa` 6,000 (the window `W`), `minEvidenceLife` 864,000 (one day, `L`); `kpf market --check`
+   `gBps` 200, `challengeDaa` 600 (the window `W`, 60 seconds), `minEvidenceLife` 864,000 (one day, `L`); the hand-over limit `S + 4 * minRestDaa` is then 200 DAA (20 seconds); `kpf market --check`
    refuses `W < minRestDaa` and `L + minRestDaa > 77,760,000`.
 3. **Resting KOB orders of that token whose templates are byte-identical to the ones pinned in `KpfPair`.** The pair
    authenticates its evidence by the template hash, the prefix length and the suffix length of the order's redeem script:
@@ -260,7 +260,7 @@ exits of section 3.
 Use the pair of section 3, step 4 (size 10 tokens at 10 KAS, range 9 .. 12 KAS) on the market of 7.1, with `F` and `S` as
 there and `--out-dir out/<step>`; dry run first, then `$S`. `P.json` is the pair's latest object file. Time matters: an
 evidence order's quote counts `minRestDaa` DAA after the order was created (and, for an ask, after its custody), **and
-after the pair's own clock start** (its UTXO's DAA for a pair that just changed hands, or that a challenge restored), and
+after the pair's own clock start** (its UTXO's DAA for a pair that just changed hands or was forfeited; a restored or cured part keeps the clock of the pair it came from), and
 only while it stays fillable for the evidence life `L` (one day) after that; a counter order counts `minRestDaa` after
 the pending part's own DAA `P` (an older order counts from `P`). Before that `kpf evidence` says `NOT YET`, and a built
 transaction carries a lock time ahead of the chain, which `kpf` will not submit (`--daa` or `--node` tells it the DAA).
@@ -270,11 +270,11 @@ every later step.
 | # | Command | After it, check |
 |---|---|---|
 | 20 | short proposes to close at a resting ask (10.5 KAS): `kpf propose-close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S --out-dir out/20` | a pending part of 4 tokens holding `q(4, 3)` + 0.2 carrier + 5 KAS bond = 17.2 KAS (refund 5.2 KAS) and the remainder pair of 6 tokens; nothing is paid out; the ask continues (or ends if it was exactly filled); the executor holds 4 tokens bought at 10.5 KAS; `kpf inspect out/20/*-pending.json` prints the DAA from which it can be finalized and the refuting bid (`>= 10.71` KAS) |
-| 21 | wait `challengeDaa` (6,000 DAA, about 10 minutes), then `kpf finalize --pending out/20/*-pending.json $F $S --out-dir out/21` | the short is paid `q(4, 12 - 10.5)` = 6 KAS plus its refund 5.2 KAS; the long receives the rest, 6 KAS; earlier the command says `can be finalized only from DAA N` |
+| 21 | wait `challengeDaa` (600 DAA, 60 seconds), then `kpf finalize --pending out/20/*-pending.json $F $S --out-dir out/21` | the short is paid `q(4, 12 - 10.5)` = 6 KAS plus its refund 5.2 KAS; the long receives the rest, 6 KAS; earlier the command says `can be finalized only from DAA N` |
 | 22 | long proposes to close at a resting bid (10 KAS): `kpf propose-close --pair P.json --side long --n 4 --evidence bid.json --seller seller.json --key $A $F $S --out-dir out/22`, then after the window `kpf finalize --pending out/22/*-pending.json $F $S` | at the proposal the executor's tokens go to the bid's maker and it receives `4 x 10` KAS; at finalize the long is paid `q(4, 10 - 9)` = 4 KAS plus its refund, the short the rest; a fresh ask `<= 9.8` KAS would have refuted it |
 | 23 | the book falls to an ask of 9.4 KAS (the long's trigger is 9.47 KAS: `kpf quote --pair P.json` prints it, with the bond, the refuting bid and the cure bound): `kpf propose-liquidate --pair P.json --evidence ask.json $F $S --out-dir out/23` (`--proposer KEY` to be paid elsewhere; up to 8 pairs of distinct covenant ids: repeat `--pair`, with `--n T` per pair) | figures for a whole 10-token pair on 9 .. 12 (one opened again as in section 3, step 4): a pending part of 30.2 + 5 = 35.2 KAS, fee 0.47 KAS, cure bound 8.93 KAS, refuted by a bid `>= 9.66315790` KAS |
-| 24 | `kpf watch --pair P.json --scan out/23 --order bid.json --node $NODE` | `PENDING ... it threatens the long`, the DAA from which it can be finalized, and for each given order `REFUTES IT` with the exact `kpf challenge` command, or why it does not; also the `kpf cure` and `kpf finalize` commands |
-| 25a | refute it (if the quote is stale): `kpf evidence --order bid.json --pending out/23/*-pending.json --node $NODE`, then `kpf challenge --pending out/23/*-pending.json --evidence bid.json --seller seller.json $F $S --out-dir out/25` | the part returns to its pair (fresh evidence clock, `since` 0) with 30.2 KAS; the funder (the challenger) keeps the 5 KAS bond; several pending parts on one bid: repeat `--pending` |
+| 24 | `kpf watch --pair P.json --scan out/23 --order bid.json --node $NODE` | `PENDING ... it threatens the long`, the DAA from which it can be finalized with the time left in DAA and seconds (10 DAA per second), and for each given order `REFUTES IT` with the exact `kpf challenge` command, or why it does not; also the `kpf cure` and `kpf finalize` commands |
+| 25a | refute it (if the quote is stale): `kpf evidence --order bid.json --pending out/23/*-pending.json --node $NODE`, then `kpf challenge --pending out/23/*-pending.json --evidence bid.json --seller seller.json $F $S --out-dir out/25` | the part returns to its pair (evidence clock unchanged: `since` = the pair's clock start `S`) with 30.2 KAS; the funder (the challenger) keeps the 5 KAS bond; several pending parts on one bid: repeat `--pending` |
 | 25b | or the long cures it: `kpf cure --pending out/23/*-pending.json --key $A $F $S --out-dir out/25` | the pair returns with `bl` 8.93 (0.7 KAS more margin, paid by the funder) and its old clock; the proposer is paid its refund, 5 KAS; the same ask no longer liquidates it |
 | 25c | or nobody acts: after the window `kpf finalize --pending out/23/*-pending.json $F $S --out-dir out/25` | forfeit and keep: a pair with both keys bob's, `bl` 9.047, holding 35.2 - 5 - 0.47 = 29.73 KAS; the proposer receives 5.47 KAS (bond and fee); the long nothing |
 | 26 | after 25c, bob ends the forfeited part: `kpf coop-close --pair out/25/*-pair.json --long-pay 0 --key $B --key $B $S` (or sells the long side: `kpf amend --side long ...`, then `kpf transfer` from `S' + 4 * minRestDaa`, `S'` the forfeited part's DAA) | the whole value goes to bob, less the network fee |
@@ -284,9 +284,9 @@ tokens (`*-token.json`) are written beside the new objects. The continuation is 
 is evidence. The pieces of one split (a part and its remainder, and a pending part and its remainder) share a covenant
 id and each must be the only input of its id, so act on them in separate transactions. While a part is pending its
 pair paths are refused (a second proposal, amend, add margin, idle settle, transfer, close-versus-close); the
-remainder is an ordinary pair. A part that changed hands, was restored by a challenge, or was forfeited starts a fresh
+remainder is an ordinary pair. A part that changed hands or was forfeited starts a fresh
 evidence clock: it cannot be liquidated before an order has rested `minRestDaa` on it, and it cannot be transferred
-again (nor re-paired) before `S + 4 * minRestDaa`. A cured part keeps its clock.
+again (nor re-paired) before `S + 4 * minRestDaa`. A cured or restored part keeps its clock.
 
 **`kpf watch` cannot discover pending parts from the node.** A node lists UTXOs by address only, not by covenant id,
 and a pending part's address depends on its whole state, so `watch` finds pending parts only from object files
@@ -296,7 +296,7 @@ or a KPF one), which does not exist (section 6).
 
 ### 7.4 Measured cost (offline, relay floor 100 sompi per gram)
 
-Every transaction contains the 12,153-byte redeem script of each pair it spends, or the 3,203-byte script of each
+Every transaction contains the 12,155-byte redeem script of each pair it spends, or the 3,203-byte script of each
 pending part, plus KOB's order script and the token program script (2.9 KB) with the custody or the seller's tokens
 when it reads a quote. The storage mass (KIP-9) comes from the small token outputs; the block limit is 500,000 and a
 token output of 0.2 KAS uses 200,000, which is why the builders keep their own outputs generous.

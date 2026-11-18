@@ -253,13 +253,13 @@ impl Market {
     }
 
     /// The testnet defaults of the two-step parameters (DESIGN 4.5d): bond 300 bps of the part's range with a 5 KAS
-    /// floor, `k_c = k`, `g` 200 bps, window 6,000 DAA, evidence life 864,000 DAA (one day).
+    /// floor, `k_c = k`, `g` 200 bps, window 600 DAA (60 s), evidence life 864,000 DAA (one day).
     pub fn with_two_step_defaults(mut self) -> Market {
         self.bond_bps = 300;
         self.bond_min = 500_000_000;
         self.kc_bps = self.k_bps;
         self.g_bps = 200;
-        self.challenge_daa = 6_000;
+        self.challenge_daa = 600;
         self.min_evidence_life = 864_000;
         self
     }

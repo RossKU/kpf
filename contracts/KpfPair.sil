@@ -94,7 +94,8 @@ pragma silverscript ^0.1.0;
 // tx.daa >= exposed' + minRestDaa. The part that changes hands (the part of P3, P4's re-paired output) carries
 // since = 0, so its clock starts at its own UTXO; every other pair output (P1, P2, every remainder) carries
 // since = S. P3 and P4 require tx.daa >= S + 4 * minRestDaa (hand-overs are rate-limited). The pair states fixed
-// by propose: restore since = 0 (a refuted claim restarts the clock), cure since = S, forfeit since = 0.
+// by propose: restore since = S and cure since = S (a refuted or cured claim neither restarts nor moves the clock),
+// forfeit since = 0.
 // Health at entry (4.5c, F3, F4): the entrant of P3 must not be liquidatable at its entry price x. Range (4.5c,
 // F2): a liquidation claim requires bl * (10^4 + mmrBps) < bs * (10^4 - mmrBps).
 contract KpfPair(
@@ -926,7 +927,9 @@ contract KpfPair(
     //
     // The pair states KpfPending can create, each fixed here as a P2SH hash of this script with both tags 0 and the
     // entry price kept (DESIGN 4.5d), so no party can be written out of them:
-    //   restore  the part n with every field unchanged and since = 0 (a successful challenge restarts the clock);
+    //   restore  the part n with every field unchanged and since = S, written explicitly (a successful challenge
+    //            neither restarts nor moves the clock, so a side that refutes its own claim gains no time against
+    //            evidence that already rested on S);
     //   cure     (kind 2) the part with the loser's bound moved to the cure bound and since = S: a long loser
     //            cb = floor(p * (10^4 - mmrBps) / 10^4), a short loser cb = ceil(p * (10^4 + mmrBps) / 10^4), the
     //            nearest bound at which the proposed quote no longer triggers; cure hash 0 (no cure) when cb > priceMax;
@@ -1021,7 +1024,7 @@ contract KpfPair(
                 cb = 0;
             }
         }
-        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, lists, 0);
+        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, lists, clk);
         int bond = quoteOf(n, (bs - bl) * bondBps / BPS, 0);
         if (bond < bondMin) { bond = bondMin; }
         if (bond < PLAIN_DUST) { bond = PLAIN_DUST; }

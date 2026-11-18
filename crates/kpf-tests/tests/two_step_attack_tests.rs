@@ -160,7 +160,7 @@ fn holds_proposer_is_a_party() {
 }
 
 /// The proposer challenges itself to cancel its own claim: it pays the counter fill and the fees and gets its own bond
-/// back; the part is restored (fresh clock). Two colluders passing the bond move value only between themselves.
+/// back; the part is restored (its clock S kept). Two colluders passing the bond move value only between themselves.
 #[test]
 fn holds_self_challenge_only_returns_the_own_bond() {
     let l = lv(0x35, 1_000);
@@ -175,10 +175,12 @@ fn holds_self_challenge_only_returns_the_own_bond() {
 /// The false challenge by the deserving loser on a thin book (DESIGN 4.5d section 5b): the long is truly liquidatable
 /// (the honest keeper's ask at 9.30 rests on the pair's clock), but the long rests its own bid at 9.6632 (above its
 /// trigger by g), fills it itself and refutes the honest claim, collecting the keeper's bond. The engine accepts: on a
-/// book with nobody to sell into that bid, the self-fill costs the loser only fees. The honest keeper loses its bond,
-/// and can re-propose only R after the restored part's fresh clock, where the loser can repeat. On a book with
-/// arbitrageurs the bid is a gift of (9.6632 - market) per token for k_c * n and the attack costs more than the bond.
-/// Residual of the design (it "fails" on testnet-10), recorded as an exploit.
+/// book with nobody to sell into that bid, the self-fill costs the loser only fees. The honest keeper loses its bond;
+/// the restored part keeps the clock S, so the keeper may re-propose at once on the same ask, and the loser may repeat
+/// the false challenge each round (each costs it a fill of k_c * n at its bid and fees, and pays it the keeper's bond).
+/// On a book with arbitrageurs the bid is a gift of (9.6632 - market) per token for k_c * n and the attack costs more
+/// than the bond. This is an accepted economic limit of the design (it "fails" on testnet-10, DESIGN 4.5d residual
+/// risk 1), not a defect to fix: it stays recorded as an exploit.
 #[test]
 fn exploit_false_challenge_by_the_loser_on_a_thin_book() {
     let l = lv(0x36, 1_000);
@@ -187,9 +189,9 @@ fn exploit_false_challenge_by_the_loser_on_a_thin_book() {
     let w = pend(&g, 930_000_000);
     let d = ch_draft(&[w.clone()], &own(Evidence::bid(966_315_790, N), &lk()), &lk(), 2);
     let tx = accept(&d);
-    // The loser's change holds the keeper's bond; the loser's side is back with a fresh clock.
+    // The loser's change holds the keeper's bond; the loser's side is back on the pair's clock S.
     let restored = live_pairs(&tx, &d).remove(0);
-    assert_eq!((restored.p.long_key, restored.p.bl, restored.p.since), (l.p.long_key, l.p.bl, 0));
+    assert_eq!((restored.p.long_key, restored.p.bl, restored.p.since), (l.p.long_key, l.p.bl, l.clock()));
     assert_eq!(d.outs[0].value as i64, w.value as i64 - w.w.bond);
     // The same residual for a close: the long closes honestly at the market bid of 10; on a thin book the short rests its
     // own ask at 9.80 (0.98 of the bid), fills it itself and refutes the close, taking the long's bond. The long keeps
@@ -262,16 +264,30 @@ fn holds_return_states_are_fixed_by_the_pair() {
 
 // ================================================================ the clock and the hand-over limit
 
-/// The loser's self-refuted claim restarts its clock (DESIGN 4.5d resolution 4: the restored part carries since = 0).
-/// A truly liquidatable long (an honest ask at 9.40 rests on the pair's clock) proposes a close of its own at its own
-/// bid of 10.5 (rested R, self-filled) and refutes it itself with its own ask at 10.29 that rested R after the proposal;
-/// it pays two fills to itself and fees, and gets its bond back. The engine accepts every step. While its claim is
-/// pending no liquidation can be proposed (one claim per UTXO), and after the restore the keeper's live ask counts only
-/// from the restored UTXO: the liquidation waits R more. Each cycle delays the liquidation by at least 2R at the cost of
-/// fees (on a thin book; on a liquid book each fake order is a gift to arbitrage for k * n). Residual: since = P (the
-/// proposal's DAA) instead of 0 would remove the second R but keep every refuted dead quote usable from P.
+/// A live pair with both sides listed (long ask 10, short bid 11; no minimum part, no tip): a side may be transferred.
+fn listed_lv(tag: u8, daa: u64) -> Live {
+    let mut p = pair(&lk(), &sk());
+    (p.long_ask, p.long_min, p.long_tip) = (1_000_000_000, 0, 0);
+    (p.short_bid, p.short_min, p.short_tip) = (1_100_000_000, 0, 0);
+    live(&p, tag).at(daa)
+}
+
+/// An ask of `e` that conforming matchers stop filling at DAA `x` (good-till-DAA).
+fn expiring(mut e: Evidence, x: i64) -> Evidence {
+    e.ask.expiry_daa = x;
+    e
+}
+
+/// (a) A self-refuted claim does not delay a liquidation (DESIGN 4.5d: a restore keeps the pair's clock S). A truly
+/// liquidatable long (an honest ask at 9.40 rests on the pair's clock) proposes a close of its own at its own bid of
+/// 10.5 (rested R, self-filled) and refutes it itself with its own ask at 10.29 that rested R after the proposal; it
+/// pays two fills to itself and fees, and gets its bond back. The engine accepts every step. The restored part carries
+/// since = S, so the keeper's ask, which had already rested on S, is accepted in the very next proposal at the
+/// restore's own DAA: the cycle gains the loser no rest time. What remains is the race of B1 (the threat model): while
+/// the fake close is pending no liquidation can be proposed, for about R; and the keeper's own ask at 9.40 refutes the
+/// fake close from P + R (it contradicts a close at 10.5 by more than g), taking the loser's bond instead.
 #[test]
-fn exploit_self_refuted_claim_restarts_the_clock() {
+fn holds_self_refuted_claim_does_not_delay_the_liquidation() {
     let s = 100_000u64;
     let l = lv(0x39, s);
     let keeper_ask = Evidence::ask(940_000_000, N).placed(s + 10);
@@ -279,27 +295,205 @@ fn exploit_self_refuted_claim_restarts_the_clock() {
     let mut k = ev_draft(&[liq(&l, N, LONG)], &keeper_ask, &fk(), 1);
     k.lock = s + 10 + R;
     accept(&k);
-    // The long's own close at its own bid of 10.5, proposed first (it races the keeper, as B1 today).
+    // The long's own close at its own bid of 10.5, proposed first (it races the keeper, B1).
     let fake_bid = own(Evidence::bid(1_050_000_000, N), &lk()).placed(s + 10);
     let mut p = ev_draft(&[close(&l, N, LONG)], &fake_bid, &lk(), 2);
     p.lock = s + 10 + R;
     accept(&p);
     let p_daa = s + 10 + R;
     let w = pend_of(&close(&l, N, LONG), 1_050_000_000, p_daa);
-    // Its own ask at 10.29 rested R after P refutes it; the long is its own challenger.
+    assert_eq!(w.w.since, s as i64, "the pending part records S");
+    // The keeper's own ask refutes the fake close once it has rested R on P (it rested before P, so it counts from P).
+    let mut kc = ch_draft(&[w.clone()], &keeper_ask, &fk(), 5);
+    kc.lock = p_daa + R - 1;
+    refused(&kc, 0);
+    kc.lock = p_daa + R;
+    accept(&kc);
+    // Or the long refutes it first with its own ask at 10.29 rested R after P; it is its own challenger.
     let own_ask = own(Evidence::ask(1_029_000_000, N), &lk()).placed(p_daa);
     let mut c = ch_draft(&[w], &own_ask, &lk(), 3);
     c.lock = p_daa + R;
     let tx = accept(&c);
     let t = p_daa + R;
     let restored = live_pairs(&tx, &c).remove(0).at(t);
-    assert_eq!(restored.p.since, 0);
-    // The keeper's live ask: refused until R after the restored UTXO.
+    assert_eq!((restored.p.since, restored.clock()), (s as i64, s as i64), "the restore keeps S, written explicitly");
+    // The keeper's live ask is accepted in the very next proposal, at the restore's own DAA: no rest restarts.
     let mut k2 = ev_draft(&[liq(&restored, N, LONG)], &keeper_ask, &fk(), 4);
-    k2.lock = t + R - 1;
-    refused(&k2, 0);
-    k2.lock = t + R;
+    k2.lock = t;
     accept(&k2);
+    // A second fake close in the same cycle gains nothing either: its restore keeps S again.
+    let w2 = pend_of(&close(&restored, N, LONG), 1_050_000_000, t);
+    assert_eq!(w2.w.restore_pair().unwrap().since, s as i64);
+}
+
+/// (b) A proposer with stale evidence (the market is at 10 KAS; an ask at 9.40 still rests on the pair's clock S)
+/// re-proposes the same liquidation after each refutation: the restore keeps S, so it may do so at once. Every round
+/// it funds a bond B into the pending part, and every refutation (a fresh bid at 9.80 rested R on P) moves that bond to
+/// the challenger. After n rounds the victim's pair holds exactly what it held before (n = s: the pending part holds
+/// v + B and the restored pair v), its state and its clock are unchanged, the proposer has paid n * B and the
+/// challenger has received n * B (no output pays the proposer).
+#[test]
+fn holds_a_stale_proposer_pays_a_bond_every_round() {
+    let s = 100_000u64;
+    let l0 = lv(0x3e, s);
+    let stale = Evidence::ask(940_000_000, N).placed(s + 10);
+    let proposer = xonly(&proposer_kp());
+    let (mut cur, mut t) = (l0.clone(), s + 10 + R);
+    let (mut paid, mut received) = (0i64, 0i64);
+    for round in 0..3u32 {
+        let mut p = ev_draft(&[liq(&cur, N, LONG)], &stale, &fk(), 10 + round);
+        p.lock = t;
+        let ptx = accept(&p);
+        let w = live_pendings(&ptx, &p).remove(0).at(t);
+        assert_eq!(w.value as i64 - cur.value as i64, w.w.bond, "round {round}: the proposer funds B");
+        paid += w.w.bond;
+        let counter = Evidence::bid(980_000_000, N).placed(t);
+        let mut c = ch_draft(&[w.clone()], &counter, &fk(), 20 + round);
+        c.lock = t + R;
+        let (ctx, e) = c.build();
+        assert_accepted(&ctx, &e);
+        let ch = c.change.expect("the challenger's change");
+        assert!(ctx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&proposer)), "round {round}: nothing to the proposer");
+        // The challenger's change gains the bond over what the counter fill alone leaves it.
+        let leg_in: i64 = e[1..e.len() - 1].iter().map(|u| u.amount as i64).sum();
+        let leg_out: i64 = ctx.outputs.iter().enumerate().filter(|(k, _)| *k != 0 && *k != ch).map(|(_, o)| o.value as i64).sum();
+        let gain = ctx.outputs[ch].value as i64 - (F_FUNDS - FEE) as i64;
+        assert_eq!(gain, w.w.bond + leg_in - leg_out, "round {round}: the bond is the challenger's");
+        received += w.w.bond;
+        let next = live_pairs(&ctx, &c).remove(0).at(t + R);
+        assert_eq!(next.value, l0.value, "round {round}: the victim's pair holds exactly what it held");
+        assert_eq!(next.p, l0.clocked().cleared(), "round {round}: state and clock unchanged (tags cleared, as on every continuation)");
+        cur = next;
+        t += R;
+    }
+    assert_eq!((paid, received), (3 * bond_of(&l0.clocked(), N), paid));
+}
+
+/// (c) The hand-over rate limit S + 4R cannot be bypassed by a propose-and-restore cycle: a part proposed and
+/// restored before S + 4R keeps S, so its transfer is refused at S + 4R - 1 and accepted at S + 4R, exactly as for
+/// the pair that was never proposed against. (No cycle restarts the clock, so none gives a side a fresh clock to hide
+/// behind; only a hand-over does, and it waits for S + 4R.)
+#[test]
+fn holds_propose_and_restore_does_not_bypass_the_hand_over_limit() {
+    let s = 100_000u64;
+    let l = listed_lv(0x3f, s);
+    let p_daa = s + 10 + R;
+    let w = pend_of(&liq(&l, N, LONG), 940_000_000, p_daa);
+    let mut c = ch_draft(&[w], &Evidence::bid(980_000_000, N).placed(p_daa), &fk(), 1);
+    c.lock = p_daa + R;
+    let tx = accept(&c);
+    let restored = live_pairs(&tx, &c).remove(0).at(p_daa + R);
+    assert!(p_daa + R < s + 4 * R);
+    let t = TransferSpec { side: LONG, n: N, x: 1_000_000_000, nb: 900_000_000, ek: xonly(&keypair(16)), et: ZERO, k: 0 };
+    let mut d = transfer_draft(&restored, &t, &Entrant::Direct(keypair(16)), &fk(), 2);
+    assert_eq!(d.lock, s + 4 * R, "the limit is that of the pair's clock S");
+    accept(&d);
+    d.lock = s + 4 * R - 1;
+    refused(&d, 0);
+    // The same for the pair before any proposal.
+    let mut d0 = transfer_draft(&l, &t, &Entrant::Direct(keypair(16)), &fk(), 3);
+    assert_eq!(d0.lock, s + 4 * R);
+    d0.lock -= 1;
+    refused(&d0, 0);
+}
+
+/// (d) Neither a restore nor a cure moves a clock, backwards or forwards. On a pair whose since (1,500) differs from its
+/// UTXO's DAA (7,000), the pending part records S = 1,500, and both its restore and its cure state carry since = S;
+/// a challenge or a cure whose pair output carries since 0 (a restart at its own UTXO), S - 1, S + 1 or the old
+/// UTXO's DAA is refused, for a liquidation and for a close.
+#[test]
+fn holds_restore_and_cure_never_move_the_clock() {
+    let mut p = pair(&lk(), &sk());
+    p.since = 1_500;
+    let l = live(&p, 0x40).at(7_000);
+    assert_eq!(l.clock(), 1_500);
+    let bad = [0i64, 1_499, 1_501, 7_000];
+    for (g, q, counter) in [
+        (liq(&l, N, LONG), 940_000_000, Evidence::bid(966_315_790, N)),
+        (close(&l, N, LONG), 1_050_000_000, Evidence::ask(1_029_000_000, N)),
+    ] {
+        let w = pend(&g, q);
+        assert_eq!(w.w.since, 1_500);
+        let d = ch_draft(&[w.clone()], &counter, &fk(), 1);
+        accept(&d);
+        assert_eq!(d.pairs[0].1.since, 1_500);
+        for b in bad {
+            let mut y = d.pairs[0].1.clone();
+            y.since = b;
+            let mut x = d.clone();
+            x.set_pair(0, &y);
+            refused(&x, 0);
+        }
+        if w.w.kind == KIND_LIQ {
+            let cd = cure_draft(&w, &lk(), &fk(), 2);
+            accept(&cd);
+            assert_eq!(cd.pairs[0].1.since, 1_500);
+            for b in bad {
+                let mut y = cd.pairs[0].1.clone();
+                y.since = b;
+                let mut x = cd.clone();
+                x.set_pair(1, &y);
+                refused(&x, 0);
+            }
+        }
+    }
+}
+
+/// A restore keeps the clock, so it must never carry a part's old evidence to a NEW owner of a side who entered after
+/// that evidence rested. A new owner enters only by a hand-over (T1, P3, P4) or by a forfeit, and each writes since = 0
+/// on the part that changed hands; a proposal on that part records the part's own clock S' (its UTXO's DAA), and its
+/// restore keeps S', never the S of the pair before the hand-over (the pending state copies the clock of the UTXO it
+/// spends, and no entry rewrites it). Shown with an ask that rested on the old clock S and that conforming matchers
+/// stop filling before S' + R + L: it liquidates the old pair, it is refused against the transferred part and against
+/// the forfeited part, and still refused against each of them after a propose-and-restore cycle.
+#[test]
+fn holds_old_evidence_never_reaches_a_new_owner_through_a_restore() {
+    let s = 100_000u64;
+    let life = market().min_evidence_life as u64;
+    let old = expiring(Evidence::ask(940_000_000, N).placed(s + 10), (s + 10 + R + life + 500) as i64);
+    let fresh_ask = |at: u64| Evidence::ask(940_000_000, N).placed(at).other(0xd1);
+    let at_lock = |d: &Draft, lock: u64| {
+        let mut x = d.clone();
+        x.lock = lock;
+        x
+    };
+    // The old pair: the old ask is evidence on S.
+    let l = listed_lv(0x41, s);
+    accept(&at_lock(&ev_draft(&[liq(&l, N, LONG)], &old, &fk(), 1), s + 10 + R));
+    // Case 1, a transfer: a new long enters at S + 4R; the part restarts at its own UTXO S'.
+    let ts = TransferSpec { side: LONG, n: N, x: 1_000_000_000, nb: 900_000_000, ek: xonly(&keypair(16)), et: ZERO, k: 0 };
+    let td = transfer_draft(&l, &ts, &Entrant::Direct(keypair(16)), &fk(), 2);
+    let tx = accept(&td);
+    let s1 = s + 4 * R;
+    let part = live_pairs(&tx, &td).remove(0).at(s1);
+    // Case 2, a forfeit: the short wins the long side (finalize at S + 10 + R + W); the part restarts at S''.
+    let pd = at_lock(&ev_draft(&[liq(&l, N, LONG)], &old, &fk(), 3), s + 10 + R);
+    let ptx = accept(&pd);
+    let w0 = live_pendings(&ptx, &pd).remove(0).at(s + 10 + R);
+    let fd = finalize_draft(&w0, &fk(), 4);
+    let ftx = accept(&fd);
+    let s2 = s + 10 + R + window();
+    let forfeited = live_pairs(&ftx, &fd).remove(0).at(s2);
+    for (name, np, s_new) in [("transfer", part, s1), ("forfeit", forfeited, s2)] {
+        assert_eq!((np.p.since, np.clock()), (0, s_new as i64), "{name}: a fresh clock");
+        refused(&at_lock(&ev_draft(&[liq(&np, N, LONG)], &old, &fk(), 5), s_new + R + 1_000), 0);
+        // A proposal on the new part with fresh evidence (rested R on S'), refuted, restored.
+        let p_daa = s_new + R;
+        let g = liq(&np, N, LONG);
+        accept(&at_lock(&ev_draft(&[g.clone()], &fresh_ask(s_new), &fk(), 6), p_daa));
+        let w = pend_of(&g, 940_000_000, p_daa);
+        assert_eq!(w.w.since, s_new as i64, "{name}: the pending part records the new part's clock");
+        let mut c = ch_draft(&[w], &Evidence::bid(980_000_000, N).placed(p_daa), &fk(), 7);
+        c.lock = p_daa + R;
+        let ctx = accept(&c);
+        let restored = live_pairs(&ctx, &c).remove(0).at(p_daa + R);
+        assert_eq!(restored.p.since, s_new as i64, "{name}: the restore keeps the new part's clock, not the old S");
+        assert_ne!(restored.p.since, s as i64);
+        refused(&at_lock(&ev_draft(&[liq(&restored, N, LONG)], &old, &fk(), 8), p_daa + R + 1_000), 0);
+        // A live quote of the old book still counts, but only from the new part's clock (4.5c), as without the cycle.
+        let live_old = Evidence::ask(940_000_000, N).placed(s + 10).other(0xd2);
+        accept(&at_lock(&ev_draft(&[liq(&restored, N, LONG)], &live_old, &fk(), 9), p_daa + R));
+    }
 }
 
 /// The forfeited part restarts its clock (since = 0), so the winner can sell the forfeited side only after its own

@@ -18,30 +18,30 @@
   "kob_commit": "ed16148",
   "kpf_open": {
     "artifact": "KpfOpen.json",
-    "artifact_sha256": "33e61a3064d755f922df28f0cd3bc79d4341aaf23aa3625207fcb7a05de27633",
+    "artifact_sha256": "96c32cc2d0b8f8cd5e00108d5a9619e8fd14ba89c8cf5679a1798a9eac14732c",
     "prefix_len": 1,
     "source": "contracts/KpfOpen.sil",
     "source_sha256": "94b9a021fe1f2eac9867d0ca495bfdaf58125cf7c8f90d9ffd38f9eae8694fc6",
     "state_len": 375,
     "suffix_len": 2714,
-    "template_hash": "ceb56c5ccabe2671576f226399822709f2a69dd6b11522a36a8ea76e848e6078"
+    "template_hash": "1a4fd00ce95bc70ac12f8137870592dfba203168e6c9d9b3ae3cdee54f6aea64"
   },
   "kpf_pair": {
     "artifact": "KpfPair.json",
-    "artifact_sha256": "a2b38626df93a88b8e0a1a686acbf9439cfd19be4c20530f29a3d91c8aa28e18",
+    "artifact_sha256": "cc28e857ccc8a03b55000e614ef5746a0ac5ff00e9dfd4fd61246bcf7022108a",
     "prefix_len": 1,
     "source": "contracts/KpfPair.sil",
-    "source_sha256": "5d461eb27be4ebd36039a8c6490c4179897ebe4ff2091c919572f5518e6fa8d8",
+    "source_sha256": "b165551f7fe31401698ac2c6ca403293b22dab362e354f374ca1103216e8ab0a",
     "state_len": 492,
-    "suffix_len": 11660,
-    "template_hash": "5bd9cfd749a92ead74368b5da8ad5e3b370e6617b44b059f7904709b0af82d8e"
+    "suffix_len": 11662,
+    "template_hash": "5459323ef6c324d9c15aa01399d6ccf054131c46fdfbe090831d5ca29cbb7345"
   },
   "kpf_pending": {
     "artifact": "KpfPending.json",
     "artifact_sha256": "e5b136260db0bbf7182ba223748fc9df6ef49900d7bd6266a4ccfb2741ac105f",
     "prefix_len": 1,
     "source": "contracts/KpfPending.sil",
-    "source_sha256": "34a1fa232929bb92835f4d4c0de986057a3a1ef83fcd2effb68fb90b03319ee8",
+    "source_sha256": "f2abf9809aa6ee5c1929bb3e8ac686fff390cf4e54309bf8a9bba9734c3d0f17",
     "state_len": 621,
     "suffix_len": 2581,
     "template_hash": "a40a7024507fedb3f1c1824a692e539ff38092ab5bc239d679234773ddebd3b7"

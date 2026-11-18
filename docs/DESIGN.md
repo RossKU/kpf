@@ -530,7 +530,7 @@ owner at any later time (review 3, F1). What a covenant can do is tie the eviden
   the transferred part of T2, the re-paired output of T3 (and the part of T7, removed by §4.5d) — carries
   `since = 0`, so its clock starts at its own UTXO. Every other pair output (the continuation of amend and add
   margin, the remainder of every split, including a proposal's) carries `since = S`: an owner cannot restart the
-  clock by touching the pair. §4.5d adds: a restored part `since = 0`, a cured part `since = S`, a forfeited part
+  clock by touching the pair. §4.5d adds: a restored part `since = S`, a cured part `since = S`, a forfeited part
   `since = 0`. Adding margin needs no restart: it
   moves the trigger, and evidence must satisfy the trigger of the state it is used against.
 - **Hand-overs are rate-limited.** Transfer (T2) and close-versus-close (T3) require `tx.daa ≥ S + 4·minRestDaa`, so
@@ -646,7 +646,7 @@ order creates has live branches).
 | `bondMin` | bond floor, sompi | `0 ≤ bondMin ≤ 2.9·10¹⁸` | 500,000,000 (5 KAS) |
 | `kcBps` | counter-evidence multiple `k_c` | `0 < kcBps ≤ 10⁵` | `= kBps` (10,000) |
 | `gBps` | contradiction margin `g` | `0 < gBps < 10⁴` | 200 |
-| `challengeDaa` | window `W`, earliest finalize (CSV) | `minRestDaa ≤ W < 2³²` | 6,000 DAA (with `R` = 600) |
+| `challengeDaa` | window `W`, earliest finalize (CSV) | `minRestDaa ≤ W < 2³²` | 600 DAA, 60 s (with `R` = 50 DAA, 5 s) |
 | `minEvidenceLife` | evidence life `L` after the rest, for evidence and counter-evidence | `L ≥ 0`, `L + minRestDaa ≤ 77,760,000` | 864,000 DAA (1 day) |
 
 The pair keeps its other evidence checks (`kBps`, `mmrBps`, `liqFeeBps`, `keeperFeeMin`, `minRestDaa`) as before.
@@ -660,7 +660,7 @@ party can be written out of them and no `KpfOpen` can claim them).
 
 | State | Written for | Content | `since` |
 |---|---|---|---|
-| restore | kind 1 and 2 | the part `n` with every field unchanged | 0 |
+| restore | kind 1 and 2 | the part `n` with every field unchanged | `S` |
 | cure | kind 2 (0 if no cure) | the loser's bound moved to `cureBound` | `S` |
 | forfeit | kind 2 | both keys the winner's, both sides unlisted, the loser's bound moved inward by the fee to `fb` | 0 |
 
@@ -673,12 +673,15 @@ party can be written out of them and no `KpfOpen` can claim them).
 | finalize kind 1 | is the closer: payoff at `c(p)` + `refund` | — | the other party `v −` that (carrier, excess, rounding) |
 | finalize kind 2 | `B + fee` (the `C` it funded stays in the part, deviation 5) | — | the winner holds the forfeited part, `v − B − fee`, both sides; the loser 0 |
 
-**Clock rules.** Restore `since = 0`; cure `since = S` (adding margin does not restart the clock, 4.5c); forfeit
-`since = 0`; the remainder of a proposal `since = S`. Counter-evidence counts from `P`, the pending UTXO's DAA score;
+**Clock rules.** Restore `since = S`, the pair's effective clock start at the proposal written explicitly (a refuted
+claim neither restarts nor moves the clock, so a side that refutes its own claim gains no rest time); cure
+`since = S` (adding margin does not restart the clock, 4.5c); forfeit `since = 0`; the remainder of a proposal
+`since = S`. A new owner of a side enters only by a hand-over or a forfeit, each `since = 0`, so a restore never
+carries evidence older than the owner's entry. Counter-evidence counts from `P`, the pending UTXO's DAA score;
 an order resting since before `P` counts from `P`. `minEvidenceLife` applies to evidence and counter-evidence: each
 must stay fillable by conforming matchers through `restEnd + L`. The hand-over rate limit `S + 4R` is unchanged: after
 a forfeit the winner can sell the forfeited side from `S′ + 4R` (`S′` the forfeited part's DAA); after a cure the old
-`S` still counts.
+`S` still counts, and after a restore as well (a propose-and-restore cycle does not bypass it).
 
 **Actions refused on a pending part.** `KpfPending` has only challenge, cure and finalize. A second proposal, amend,
 add margin (other than the cure), idle settle, transfer (P3), close-versus-close (P4) and cooperative close are not
@@ -722,18 +725,18 @@ no-downgrade, the evidence block (a block may mix proposals and challenges on on
 1. **False challenge by the loser on a thin book** (`exploit_false_challenge_by_the_loser_on_a_thin_book`; note §5b
    "fails"). On a book with nobody to sell into its bid, the deserving loser rests its own bid at the refutation
    bound, self-fills it and refutes an honest liquidation, collecting the keeper's bond. On a liquid book the bid is a
-   gift of `(bound − market)·k_c·n`.
-2. **A self-refuted claim restarts the clock** (`exploit_self_refuted_claim_restarts_the_clock`). A truly liquidatable
-   long proposes its own close at a fake bid (rested `R`, self-filled), refutes it itself (its own ask, rested `R`
-   after `P`) and gets its bond back; while pending no liquidation can be proposed, and after the restore
-   (`since = 0`) the keeper's live ask counts only `R` later: each cycle delays the liquidation by at least `2R` at the
-   cost of fees (thin book). Restoring with `since = P` instead of 0 would remove the second `R` but keep every
-   refuted live quote usable from `P`: an open choice, not implemented.
+   gift of `(bound − market)·k_c·n`. An accepted economic limit; the keeper may re-propose at once (the restore keeps
+   `S`) and the loser must pay the fill again each round.
+2. **A self-refuted claim no longer restarts the clock** (`holds_self_refuted_claim_does_not_delay_the_liquidation`).
+   A truly liquidatable long that proposes its own close at a fake bid and refutes it itself gets its bond back, but
+   the restored part keeps `S`: the keeper's ask that had rested on `S` is accepted in the very next proposal. What
+   remains is the race of B1: while the fake close is pending (about `R`) no liquidation can be proposed, and the
+   keeper's own ask refutes the fake close from `P + R`, taking the loser's bond.
 3. **Freeze.** A proposal on a 4.5c-valid quote freezes the part (no close, transfer, listing, margin except cure)
    for `R` against an online victim, up to `W` against an offline one, at the cost of two fees, a self-fill and the
-   bond. The note's claim that `since = 0` makes the same library unusable is only partly true: a library quote that
-   is still live requalifies after `R` on the restored clock; `since = 0` kills only quotes that die before
-   `restore + R + L`.
+   bond. Since the restore keeps `S`, a refuted quote that is still fillable can be proposed again at once; each round
+   costs the proposer its bond, paid to the challenger, and leaves the victim's part exactly as it was
+   (`holds_a_stale_proposer_pays_a_bond_every_round`).
 4. **Liveness.** Every liquidation is delayed by `W`, and the winner carries the gap risk meanwhile. A stale claim
    against an offline victim stands unless a funded watcher refutes it within `W`; on a one-sided or empty opposite
    book stale closes stand and stale liquidations are stopped only by a cure; a token pause blocks every challenge
@@ -752,7 +755,7 @@ defaults). Bond `B = q(10⁹, ⌊3·10⁸·300/10⁴⌋)` = 90 KAS; pending valu
 
 **Size and compute** (measured, `kpf_metrics_tests`; offline).
 
-Script bytes (prefix + state + suffix): `KpfPair` 12,153 (1 + 492 + 11,660; before: 12,115 = 1 + 438 + 11,676, code 16
+Script bytes (prefix + state + suffix): `KpfPair` 12,155 (1 + 492 + 11,662; before: 12,115 = 1 + 438 + 11,676, code 14
 bytes smaller, state 54 bytes larger); `KpfOpen` 3,090 (1 + 375 + 2,714); `KpfPending` 3,203 (1 + 621 + 2,581).
 
 Script units per input: P1 amend 286,906; P2 add margin 274,574; P3 transfer (part) 302,769; `KpfOpen` take 151,588;
@@ -785,8 +788,9 @@ one-step liquidations used 1,651,150 script units, compute mass 130,644, 104,934
 transactions and locks `B` for `W` (90 KAS per 1,000-token pair of the example: 300 bps of the part's range, at least
 5 KAS).
 
-**Tests.** `kpf_two_step_tests` (35: every path positive and negative), `two_step_attack_tests` (12: ten holds, two
-exploits), X6 (`kpf_x6_conservation_tests`: proposes, challenges, cures, finalizes and coop-closes forfeited parts; no
+**Tests.** `kpf_two_step_tests` (35: every path positive and negative), `two_step_attack_tests` (16: fifteen holds, one
+exploit; the clock rule of the restore: self-refute, stale re-proposal, hand-over limit, no clock moved, no old
+evidence against a new owner), X6 (`kpf_x6_conservation_tests`: proposes, challenges, cures, finalizes and coop-closes forfeited parts; no
 sompi created, a party that did not act loses value only through a finalized unrefuted proposal, every bond ends with
 exactly one of proposer or challenger, the clock rules), and the converted tests (`kpf_evidence_tests`, `audit2_tests`,
 `audit3_tests`, `audit_tag_tests`, `kpf_metrics_tests`, `kpf_layout_tests`, the library's tests, the CLI lifecycle).
@@ -831,10 +835,10 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
   wider than both bands (`9·10500 = 94,500 < 12·9500 = 114,000`, §4.5c), and a T1 at 10 is healthy for both sides
   (`10·9500 ≥ 9·10⁴`, `12·10⁴ ≥ 10·10500`).
 - `kBps = 10⁴` (k = 1): either liquidation needs a resting order of ≥ 1,000 tokens at the trigger, rested `R`.
-- Two-step (§4.5d, testnet defaults `bondBps` 300, `bondMin` 5 KAS, `gBps` 200, `W` 6,000 DAA): every claim on the
+- Two-step (§4.5d, testnet defaults `bondBps` 300, `bondMin` 5 KAS, `gBps` 200, `W` 600 DAA): every claim on the
   whole pair carries `B = q(10⁹, ⌊3·10⁸·300/10⁴⌋)` = 90 KAS; the pending part holds 3,090.2 KAS. A liquidation of the
-  long at `a = 9.4` is refuted by a bid `≥ 9.66315790` (`b·9,500 ≥ 9·10,200·10⁸`, rested 600 DAA from `P`), cured by
-  moving `BL` to 8.93 (70 KAS), or finalized after 6,000 DAA: the proposer receives 90 + 47 = 137 KAS and the short
+  long at `a = 9.4` is refuted by a bid `≥ 9.66315790` (`b·9,500 ≥ 9·10,200·10⁸`, rested `R` (50 DAA) from `P`), cured by
+  moving `BL` to 8.93 (70 KAS), or finalized after 600 DAA: the proposer receives 90 + 47 = 137 KAS and the short
   holds the forfeited part `[9.047, 12]` (`1,000·(12 − 9.047) + 47 = 3,000`) with 2,953.2 KAS, both sides. A short's
   liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20` (cure bound 12.075); a long's close at a bid of 10.5 by
   an ask `≤ 10.29`; a short's close at an ask of 11 by a bid `≥ 11.22`.

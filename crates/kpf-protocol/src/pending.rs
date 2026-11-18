@@ -63,11 +63,10 @@ pub fn forfeit_bound_of(p: &Pair, n: i64, side: i64, fee: i64) -> i64 {
     }
 }
 
-/// The restore state (`KpfPair.propose`): the part `n` of `p` with every field unchanged, tags 0 and `since = 0`.
+/// The restore state (`KpfPair.propose`): the part `n` of `p` with every field unchanged, tags 0 and `since = S`
+/// (`p` clocked, i.e. [`Pair::clocked`]): a refuted claim neither restarts nor moves the pair's clock (DESIGN 4.5d).
 pub fn restore_state(p: &Pair, n: i64) -> Pair {
-    let mut r = p.rest_of(n);
-    r.since = 0;
-    r
+    p.rest_of(n)
 }
 
 /// The cure state: the part with the loser's bound moved to `cb` and `since = S` (`s` the pair's clock start).

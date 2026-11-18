@@ -30,7 +30,9 @@ pub fn keyset(seeds: &[u8]) -> KeySet {
     k
 }
 
-/// The worked-example market of DESIGN 5 (arbitrary fixed token identity; evidence is not exercised here).
+/// The worked-example market of DESIGN 5 (arbitrary fixed token identity; evidence is not exercised here) with the
+/// testnet defaults: rest `minRestDaa` 50 DAA (5 s), window `challengeDaa` 600 DAA (60 s), `minEvidenceLife` 864,000
+/// DAA, `gBps` 200, `bondBps` 300 with `bondMin` 5 KAS; the hand-over limit `S + 4R` is then 200 DAA.
 pub fn market() -> Market {
     Market {
         token_cov_id: Hash::from_bytes([0xc1; 32]),
@@ -41,7 +43,7 @@ pub fn market() -> Market {
         scale: SCALE,
         mmr_bps: 500,
         k_bps: 10_000,
-        min_rest_daa: 600,
+        min_rest_daa: 50,
         liq_fee_bps: 50,
         keeper_fee_min: 1_000_000,
         min_size: 1_000_000,
@@ -52,7 +54,7 @@ pub fn market() -> Market {
         bond_min: 500_000_000,
         kc_bps: 10_000,
         g_bps: 200,
-        challenge_daa: 6_000,
+        challenge_daa: 600,
         min_evidence_life: 864_000,
     }
 }

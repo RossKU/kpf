@@ -525,7 +525,7 @@ fn evidence_lifecycle_with_a_kob_book() {
     let seller_file = kob_file(&h, "seller.json", &seller, None);
 
     // Too early: the order has not rested for minRestDaa.
-    let early = (now + 100).to_string();
+    let early = (now + 10).to_string();
     let err = h.fail(&["evidence", "--order", &bid_file, "--pair", &pair, "--daa", &early]);
     assert!(err.contains("cannot serve"), "{err}");
     let out = h.run(&["evidence", "--order", &bid_file, "--pair", &pair, "--daa", &early]).1;
@@ -599,7 +599,7 @@ fn evidence_lifecycle_with_a_kob_book() {
     let scan = std::path::Path::new(&pending).parent().unwrap().display().to_string();
     let out = h.ok(&["watch", "--pair", &rest, "--scan", &scan, "--order", &counter_file, "--order", &high_file, "--daa", &h.chain.daa.to_string()]);
     assert!(out.contains("PENDING") && out.contains("threatens the long") && out.contains("REFUTES IT") && out.contains("kpf challenge --pending"), "{out}");
-    assert!(out.contains("once it has rested") && out.contains("kpf cure --pending") && out.contains("kpf finalize --pending"), "{out}");
+    assert!(out.contains(" s from now") && out.contains("once it has rested") && out.contains("kpf cure --pending") && out.contains("kpf finalize --pending"), "{out}");
     let err = h.fail(&["evidence", "--order", &high_file, "--pending", &pending, "--daa", &h.chain.daa.to_string()]);
     assert!(err.contains("does not refute"), "{err}");
     h.chain.advance(650);
@@ -609,7 +609,7 @@ fn evidence_lifecycle_with_a_kob_book() {
     let restored = refuted.iter().find(|p| object_kind(p) == "pair").cloned().expect("the restored pair");
     assert_eq!(object_size(&restored), 600_000_000);
 
-    // A new proposal against the restored pair waits R on its fresh clock; then the long cures it with KAS.
+    // The restored pair keeps its clock S, so the same ask counts again at once; then the long cures it with KAS.
     h.chain.advance(650);
     let fund = h.funding("f", &f);
     let claimed = h.step(&["propose-liquidate", "--pair", &restored, "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund]);

@@ -10,7 +10,7 @@ pragma silverscript ^0.1.0;
 // spent with the remainder of its own split, or with a second part of the same id:
 //   challenge(nb, qb, ev, tk)  anyone, with counter-evidence at input ev that rested minRestDaa from this UTXO's DAA
 //                              score P and contradicts the claim by the margin g: the part returns to the pair
-//                              state `restoreHash` (since = 0) with value >= v - B; the bond is what no output must
+//                              state `restoreHash` (since = S) with value >= v - B; the bond is what no output must
 //                              hold, the challenge executor's. No upper bound in time: valid until a finalize lands.
 //   cure(s)                    kind 2 only, the loser's owner (signature s): the part returns to `cureHash` (the
 //                              loser's bound moved to cureBound, since = S) with the added margin, and the proposer

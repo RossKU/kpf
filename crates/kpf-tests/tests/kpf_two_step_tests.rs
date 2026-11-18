@@ -138,7 +138,7 @@ fn propose_writes_the_claim_and_the_three_return_states() {
     assert_eq!(w.fee, liq_fee(&l.p, HALF, LIQ_ASK, LONG));
     assert_eq!((w.since, w.proposer_key), (s, xonly(&proposer_kp())));
     let r = w.restore_pair().unwrap();
-    assert_eq!((r.size, r.bl, r.bs, r.since, r.tag_l, r.tag_s), (HALF, l.p.bl, l.p.bs, 0, ZERO, ZERO));
+    assert_eq!((r.size, r.bl, r.bs, r.since, r.tag_l, r.tag_s), (HALF, l.p.bl, l.p.bs, s, ZERO, ZERO));
     let c = w.cure_pair().unwrap();
     assert_eq!((c.bl, c.bs, c.since, c.long_key), (893_000_000, l.p.bs, s, l.p.long_key));
     let f = w.forfeit_pair().unwrap();
@@ -357,7 +357,7 @@ fn propose_evidence_needs_the_evidence_life() {
 /// A stale proposal refuted (review 3 F1 under the two-step rule): the market is at 10 KAS; the short holds an ask
 /// at 9.40 that rested on the pair's clock (still fillable, but nobody would sell there now). Under 4.5c it
 /// liquidated the long at once; now it only proposes, and any fresh bid at or above 9.6632 that rested R on the
-/// proposal's clock refutes it. The bond goes to the challenger and the part returns with a fresh clock.
+/// proposal's clock refutes it. The bond goes to the challenger and the part returns with the pair's clock S kept.
 #[test]
 fn stale_proposal_is_refuted() {
     let l = lv(0x3b);
@@ -370,13 +370,14 @@ fn stale_proposal_is_refuted() {
     let tx = accept(&d);
     assert_eq!(d.outs[0].value as i64, w.value as i64 - w.w.bond, "the restored pair holds the value less the bond");
     let restored = live_pairs(&tx, &d).remove(0);
-    assert_eq!((restored.p.since, restored.p.bl, restored.p.long_key), (0, l.p.bl, l.p.long_key));
-    // The same stale ask against the restored pair counts only from its new clock: R after the restore.
+    assert_eq!((restored.p.since, restored.p.bl, restored.p.long_key), (l.clock(), l.p.bl, l.p.long_key));
+    // The restored pair keeps the clock S: the same stale ask (rested on S) may be proposed again at once, and is
+    // refuted again (`holds_a_stale_proposer_pays_a_bond_every_round`).
     let t = NOW + 100;
     let r = restored.at(t);
     let mut d = ev_draft(&[liq(&r, FULL, LONG)], &stale, &fk(), 3);
-    d.lock = t + rest_daa() - 1;
-    refused(&d, 0);
+    d.lock = t;
+    accept(&d);
 }
 
 /// A truthful liquidation (the market really is below the trigger): no counter bid in the market contradicts it by g,
@@ -488,14 +489,17 @@ fn challenge_restored_value_or_state_wrong_is_refused() {
             let mut x = d.clone();
             x.outs[0].value -= 1;
             refused(&x, 0);
-            // The restored state with the old clock S (the attacker's library would live on), or with a key changed.
+            // The restored state keeps S exactly: a restart (since 0), a clock moved forwards or backwards by one, or a
+            // key changed is refused.
             let r = d.pairs[0].1.clone();
-            for m in 0..2 {
+            assert_eq!(r.since, l.clock());
+            for m in 0..4 {
                 let mut y = r.clone();
-                if m == 0 {
-                    y.since = l.clock();
-                } else {
-                    y.short_key = xonly(&keypair(13));
+                match m {
+                    0 => y.since = 0,
+                    1 => y.since = l.clock() + 1,
+                    2 => y.since = l.clock() - 1,
+                    _ => y.short_key = xonly(&keypair(13)),
                 }
                 let mut x = d.clone();
                 x.set_pair(0, &y);
