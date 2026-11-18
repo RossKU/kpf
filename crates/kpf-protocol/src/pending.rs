@@ -127,8 +127,16 @@ pub fn script_hash(p: &Pair) -> [u8; 32] {
 
 /// The pending state `KpfPair.propose` writes for a claim on the part `n` of `p` (the pair with `since` = its clock
 /// start S, i.e. [`Pair::clocked`]). `kind` 1 close (side = the closer; the proposer is the closer), 2 liquidation
-/// (side = the loser).
+/// (side = the loser). The claim has `visibleUntil` 0 and no offer, so it can never be guaranteed (DESIGN 4.5f): a
+/// builder of a real proposal uses [`pending_with`] with the evidence order's [`crate::kob::Evidence::live_until`].
 pub fn pending_of(p: &Pair, n: i64, kind: i64, side: i64, quote: i64, proposer: [u8; 32]) -> Pending {
+    pending_with(p, n, kind, side, quote, proposer, 0, 0)
+}
+
+/// [`pending_of`] with the two fields of guaranteed fast settlement `KpfPair.propose` writes (DESIGN 4.5f): the last DAA
+/// at which the evidence order is fillable by conforming matchers, and the proposer's offer to a guarantor.
+#[allow(clippy::too_many_arguments)]
+pub fn pending_with(p: &Pair, n: i64, kind: i64, side: i64, quote: i64, proposer: [u8; 32], visible_until: i64, offer: i64) -> Pending {
     let s = p.since;
     let restore = restore_state(p, n);
     let (mut cure_bound, mut cure_hash, mut forfeit_hash, mut fee) = (0, [0u8; 32], [0u8; 32], 0);
@@ -163,6 +171,8 @@ pub fn pending_of(p: &Pair, n: i64, kind: i64, side: i64, quote: i64, proposer: 
         fee,
         bond,
         refund: refund_of(p, n),
+        visible_until,
+        offer,
         entry: p.entry,
         long_key: p.long_key,
         short_key: p.short_key,
@@ -190,9 +200,11 @@ pub struct ProposeOut {
     pub fb: i64,
 }
 
-/// `KpfPair.propose` on the part `n` of `p` (clocked) in a UTXO of `value` sompi.
-pub fn propose_out(p: &Pair, value: u64, n: i64, kind: i64, side: i64, quote: i64, proposer: [u8; 32]) -> ProposeOut {
-    let w = pending_of(p, n, kind, side, quote, proposer);
+/// `KpfPair.propose` on the part `n` of `p` (clocked) in a UTXO of `value` sompi, on an evidence order fillable by
+/// conforming matchers until `visible_until`, with the proposer's guarantee offer `offer`.
+#[allow(clippy::too_many_arguments)]
+pub fn propose_out(p: &Pair, value: u64, n: i64, kind: i64, side: i64, quote: i64, proposer: [u8; 32], visible_until: i64, offer: i64) -> ProposeOut {
+    let w = pending_with(p, n, kind, side, quote, proposer, visible_until, offer);
     let v = value as i64;
     let part = p.range_of(n);
     let fb = if kind == KIND_LIQ { forfeit_bound_of(p, n, side, w.fee) } else if side == LONG { p.bl } else { p.bs };

@@ -12,7 +12,7 @@ use kaspa_consensus_core::Hash;
 
 use crate::error::{invalid, Error, Result};
 use crate::state::{Open, Pair};
-use crate::tx::{p2pk_key, KeyUtxo, LiveOpen, LivePair, LivePending, Obj, Signed};
+use crate::tx::{p2pk_key, KeyUtxo, LiveLock, LiveOpen, LivePair, LivePending, Obj, Signed};
 use crate::verify::verify;
 
 #[derive(Default)]
@@ -76,6 +76,7 @@ impl Chain {
         match obj {
             Obj::Pair(p) => Live::Pair(LivePair { p, value, id, op, daa }),
             Obj::Open(o) => Live::Open(LiveOpen { o, value, id, op, daa }),
+            Obj::Lock(l) => Live::Lock(LiveLock { l, value, op, daa }),
             Obj::Pending(w) => Live::Pending(LivePending { w, value, id, op, daa }),
             Obj::Kob(k) => Live::Kob(KobLive { obj: k, value, id, op, daa }),
         }
@@ -145,6 +146,7 @@ impl Chain {
                         Obj::Pair(p) => Live::Pair(LivePair { p, value, id, op: *op, daa }),
                         Obj::Open(o) => Live::Open(LiveOpen { o, value, id, op: *op, daa }),
                         Obj::Pending(w) => Live::Pending(LivePending { w, value, id, op: *op, daa }),
+                        Obj::Lock(l) => Live::Lock(LiveLock { l, value, op: *op, daa }),
                         Obj::Kob(k) => Live::Kob(KobLive { obj: k, value, id, op: *op, daa }),
                     },
                 ))
@@ -219,6 +221,7 @@ impl Chain {
                     Obj::Pair(p) => Live::Pair(LivePair { p: p.clone(), value, id: cid, op, daa }),
                     Obj::Open(o) => Live::Open(LiveOpen { o: o.clone(), value, id: cid, op, daa }),
                     Obj::Pending(w) => Live::Pending(LivePending { w: w.clone(), value, id: cid, op, daa }),
+                    Obj::Lock(l) => Live::Lock(LiveLock { l: l.clone(), value, op, daa }),
                     Obj::Kob(k) => Live::Kob(KobLive { obj: k.clone(), value, id: cid, op, daa }),
                 }
             })
@@ -232,6 +235,8 @@ pub enum Live {
     Pair(LivePair),
     Open(LiveOpen),
     Pending(LivePending),
+    /// A guarantor's lock (DESIGN 4.5f).
+    Lock(LiveLock),
     Kob(KobLive),
 }
 
@@ -283,6 +288,12 @@ impl Live {
         match self {
             Live::Pending(w) => w,
             _ => panic!("expected a pending part"),
+        }
+    }
+    pub fn lock(self) -> LiveLock {
+        match self {
+            Live::Lock(l) => l,
+            _ => panic!("expected a lock"),
         }
     }
     pub fn kob(self) -> KobLive {
@@ -337,4 +348,19 @@ pub fn covenant_of(chain: &Chain, op: &TransactionOutpoint) -> Option<Hash> {
 /// Decodes the pending part spent by input `idx` of a transaction, from its signature script.
 pub fn spent_pending(tx: &Transaction, idx: usize) -> Option<crate::state::Pending> {
     crate::state::Pending::decode_redeem(&redeem_of_input(&tx.inputs[idx].signature_script)?).ok()
+}
+
+/// Decodes the lock spent by input `idx` of a transaction, from its signature script (DESIGN 4.5f).
+pub fn spent_lock(tx: &Transaction, idx: usize) -> Option<crate::state::Lock> {
+    crate::state::Lock::decode_redeem(&redeem_of_input(&tx.inputs[idx].signature_script)?).ok()
+}
+
+impl Chain {
+    pub fn live_lock(&self, op: &TransactionOutpoint) -> Result<LiveLock> {
+        let e = self.utxos.get(op).ok_or_else(|| Error::Invalid(format!("no UTXO {}:{}", op.transaction_id, op.index)))?;
+        match self.objs.get(op) {
+            Some(Obj::Lock(l)) => Ok(LiveLock { l: l.clone(), value: e.amount, op: *op, daa: e.block_daa_score }),
+            _ => invalid("not a known lock"),
+        }
+    }
 }

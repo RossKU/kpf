@@ -1,17 +1,19 @@
 //! KPF protocol core (testnet-10 research prototype).
 //!
-//! Everything that encodes, builds, signs or checks a transaction of the three KPF contracts, shared by the
+//! Everything that encodes, builds, signs or checks a transaction of the four KPF contracts, shared by the
 //! command line (`kpf-cli`) and the engine tests (`kpf-tests`).
 //!
 //! - [`artifacts`]: the pinned compiled contracts (`contracts/artifacts/`), templates, template hashes.
-//! - [`state`]: state structs and codecs of `KpfPair`, `KpfOpen` and `KpfPending`, validation against the contracts' bounds.
+//! - [`state`]: state structs and codecs of `KpfPair`, `KpfOpen`, `KpfPending` and `KpfLock`, validation against the contracts' bounds.
 //! - [`payoff`]: the pure payoff math (DESIGN 3.1, 4.5, 5): `q`, payouts, trigger prices, fees, floor values.
 //! - [`network`]: testnet-10 addresses (mainnet is refused).
 //! - [`tx`]: the transaction model, signing (Schnorr, SIGHASH_ALL), fee and mass, JSON forms.
 //! - [`build`]: the builders of every evidence-free path.
 //! - [`kob`]: KOB order and token codecs, the evidence check.
-//! - [`evidence`]: the builders of the two-step evidence paths (DESIGN 4.5d): propose (P5, P6), challenge, cure, finalize.
+//! - [`evidence`]: the builders of the two-step evidence paths (DESIGN 4.5d): propose (P5, P6), challenge, cure, finalize; and of
+//!   guaranteed fast settlement (DESIGN 4.5f): guarantee, dispute, release.
 //! - [`pending`]: the pure math of the two-step paths: bond, cure and forfeit bounds, the pending state, what each branch pays.
+//! - [`lock`]: guaranteed fast settlement (DESIGN 4.5f): the cover, the lock a guarantee needs, what a dispute and a release pay.
 //! - [`verify`]: every input through the rusty-kaspa v2.1.0 script engine, with consensus metering.
 //!
 //! # The evidence paths
@@ -35,6 +37,7 @@ pub mod error;
 pub mod evidence;
 pub mod fixtures;
 pub mod kob;
+pub mod lock;
 pub mod network;
 pub mod payoff;
 pub mod pending;

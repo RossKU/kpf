@@ -130,6 +130,21 @@ impl Evidence {
         }
     }
 
+    /// The last DAA at which conforming matchers fill this order (`KpfPair.propose` writes it as the pending part's
+    /// visibleUntil, DESIGN 4.5f): the earliest of its expiryDaa, its IOC/FOK kill and its 90-day idle limit.
+    pub fn visible_until(&self) -> i64 {
+        let (exp, tif, act) = match self.kind {
+            Kind::Ask => (self.ask.expiry_daa, self.ask.tif, self.ask.active_from),
+            Kind::Bid => (self.bid.expiry_daa, self.bid.tif, self.bid.active_from),
+        };
+        let ud = self.daa as i64;
+        let mut v = exp.min(ud + 77_760_000);
+        if tif != 0 {
+            v = v.min(ud.max(act) + 600);
+        }
+        v
+    }
+
     /// This order with another covenant id, outpoint tag and maker: a second, independent order.
     pub fn other(mut self, tag: u8) -> Evidence {
         self.id = Hash::from_bytes([tag; 32]);
@@ -280,6 +295,8 @@ pub struct PendLeg {
 pub enum Member {
     P(PairLeg),
     W(PendLeg),
+    /// A lock that is disputed (DESIGN 4.5f), naming block start `q`.
+    L(LiveLk, i64),
 }
 
 #[allow(unused_imports)]
@@ -295,11 +312,11 @@ pub fn no_sig() -> Arg {
     bv(&[])
 }
 
-/// Arguments of KpfPair.propose: (nb, qb, kind, s, side, ev, tk, fb, pk, k, pPre, pSuf).
+/// Arguments of KpfPair.propose: (nb, qb, kind, s, side, ev, tk, fb, pk, k, offer, pPre, pSuf), with no offer.
 #[allow(clippy::too_many_arguments)]
 pub fn propose_args(n: i64, qq: i64, kind: i64, s: Arg, side: i64, ev: i64, tk: i64, fb: i64, pk: &[u8; 32], k: i64) -> Vec<Arg> {
     let t = kpf_protocol::artifacts::pending_template();
-    vec![bv(&sm8(n)), bv(&sm8(qq)), iv(kind), s, iv(side), iv(ev), iv(tk), iv(fb), bv(pk), iv(k), bv(&t.prefix), bv(&t.suffix)]
+    vec![bv(&sm8(n)), bv(&sm8(qq)), iv(kind), s, iv(side), iv(ev), iv(tk), iv(fb), bv(pk), iv(k), iv(0), bv(&t.prefix), bv(&t.suffix)]
 }
 
 /// Arguments of KpfPending.challenge: (nb, qb, ev, tk).
@@ -313,12 +330,19 @@ pub const ARG_SIDE: usize = 4;
 pub const ARG_FB: usize = 7;
 pub const ARG_PK: usize = 8;
 pub const ARG_K: usize = 9;
-pub const ARG_PRE: usize = 10;
+pub const ARG_OFFER: usize = 10;
+pub const ARG_PRE: usize = 11;
 
-/// The pending part (with its least value) and remainder a proposal leg writes.
+/// The pending part (with its least value) and remainder a proposal leg writes, on the evidence fixtures' visibility
+/// (a GTC order of DAA `NOW - R - 50`: visible until that DAA + 90 days) and with no offer.
 pub fn propose_of(g: &PairLeg, quote: i64) -> ProposeOut {
+    propose_of_on(g, quote, fixture_visible_until())
+}
+
+/// [`propose_of`] on evidence visible until `vis` (what `KpfPair.propose` writes as visibleUntil).
+pub fn propose_of_on(g: &PairLeg, quote: i64, vis: i64) -> ProposeOut {
     let (kind, side) = g.act.kind_side();
-    propose_out(&g.l.clocked(), g.l.value, g.n, kind, side, quote, g.act.proposer())
+    propose_out(&g.l.clocked(), g.l.value, g.n, kind, side, quote, g.act.proposer(), vis, 0)
 }
 
 /// The evidence transaction: the pair block `legs` at inputs [0, B), the evidence at B.
@@ -358,6 +382,8 @@ pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair,
     let mut ins: Vec<In> = vec![];
     let mut pos: Vec<TransactionOutput> = vec![];
     let mut extra: Vec<TransactionOutput> = vec![];
+    // Reverse slots (by input index): the burn of a disputed lock lands at M - 1 - i.
+    let mut tail: Vec<Option<TransactionOutput>> = vec![];
     let mut pairs = vec![];
     let mut pendings = vec![];
     for (j, g) in members.iter().enumerate() {
@@ -373,7 +399,7 @@ pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair,
                     Act::Close { signer, .. } => Arg::Sig(*signer),
                     _ => no_sig(),
                 };
-                let po = propose_of(g, p);
+                let po = propose_of_on(g, p, e.visible_until());
                 let a = propose_args(g.n, g.q, kind, s, side, ev as i64, tk_arg, po.fb, &g.act.proposer(), 0);
                 ins.push(pair_input(&g.l, "propose", a));
                 pendings.push((i, po.pending.clone()));
@@ -391,6 +417,18 @@ pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair,
                 pairs.push((i, r.clone()));
                 pos.push(out(g.w.w.restore_value(g.w.value) as u64, p2sh(&r.art()), bind(i as u16, g.w.id)));
             }
+            Member::L(l, q) => {
+                ins.push(lock_input(l, "dispute", challenge_args(l.l.n, *q, ev as i64, tk_arg)));
+                let pay = l.l.victim_pay(p);
+                pos.push(if pay > 0 { out(pay as u64, p2pk_x(&l.l.victim), None) } else { out(1_000_000, p2pk_spk(f), None) });
+                let burn = l.l.burn(l.value, p);
+                if burn > 0 {
+                    while tail.len() <= i {
+                        tail.push(None);
+                    }
+                    tail[i] = Some(out(burn as u64, kpf_protocol::lock::burn_spk(), None));
+                }
+            }
         }
     }
     if ev_at >= b {
@@ -403,6 +441,14 @@ pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair,
     let mut outs = pos;
     outs.extend(extra);
     outs.extend(ev_extra);
+    if !tail.is_empty() {
+        while outs.len() < n_in {
+            outs.push(out(1_000_000, p2pk_spk(f), None));
+        }
+        for t in tail.into_iter().rev() {
+            outs.push(t.unwrap_or_else(|| out(1_000_000, p2pk_spk(f), None)));
+        }
+    }
     let mut d = Draft::new(ins, outs, Some(fi));
     d.lock = NOW;
     d.pairs = pairs;
@@ -468,4 +514,86 @@ pub fn finalize_draft(w: &LivePend, f: &Keypair, fn_: u32) -> Draft {
     }
     d.seqs = vec![window(), 0];
     d
+}
+
+/// The visibleUntil of the default evidence fixtures (a GTC order of DAA `NOW - R - 50`, 90 days idle).
+pub fn fixture_visible_until() -> i64 {
+    Evidence::ask(1, 1).visible_until()
+}
+
+// ---------------------------------------------------------------- guaranteed fast settlement (DESIGN 4.5f)
+
+/// The default guarantor (owner of the lock).
+pub fn guarantor_kp() -> Keypair {
+    keypair(88)
+}
+
+/// The cure grace G of the test market: the sequence a guarantee of a liquidation needs.
+pub fn grace() -> u64 {
+    market().grace_daa as u64
+}
+
+/// The dispute window D of the test market: the sequence a release needs.
+pub fn dispute_window() -> u64 {
+    market().dispute_daa as u64
+}
+
+/// Arguments of KpfPending.guarantee: (j, gk, lPre, lSuf).
+pub fn guarantee_args(j: i64, gk: &[u8; 32]) -> Vec<Arg> {
+    let t = kpf_protocol::artifacts::lock_template();
+    vec![iv(j), bv(gk), bv(&t.prefix), bv(&t.suffix)]
+}
+
+/// Guarantee of the pending part `w` by `gk`, the lock holding exactly its least value. A close: out 0 the long, 1 the
+/// lock, 2 change, then the short at M - 1. A liquidation: out 0 the proposer, 1 the forfeited pair, 2 the lock, 3
+/// change. A liquidation's input carries the grace as its sequence.
+pub fn guarantee_draft(w: &LivePend, gk: &[u8; 32], f: &Keypair, fn_: u32) -> Draft {
+    let lock = w.w.lock_of(*gk, w.id, w.daa, w.value);
+    let lv = w.w.lock_min(w.value) as u64;
+    let mut d;
+    if w.w.kind == KIND_CLOSE {
+        let (lp, sp) = w.w.guarantee_close(w.value);
+        let ins = vec![pending_input(w, "guarantee", guarantee_args(1, gk)), funder(f, fn_, F_FUNDS)];
+        let mut outs = vec![out(lp.max(0) as u64, p2pk_x(&w.w.long_key), None), out(lv, p2sh(&lock.art()), None), out(0, p2pk_spk(f), None)];
+        if sp > 0 {
+            outs.push(out(sp as u64, p2pk_x(&w.w.short_key), None));
+        }
+        d = Draft::new(ins, outs, Some(2));
+        d.locks.push((1, lock));
+    } else {
+        let fp = w.w.forfeit_pair().expect("forfeit state matches its hash");
+        let (fv, pay) = w.w.guarantee_forfeit(w.value);
+        let ins = vec![pending_input(w, "guarantee", guarantee_args(2, gk)), funder(f, fn_, F_FUNDS)];
+        let outs = vec![
+            out(pay as u64, p2pk_x(&w.w.proposer_key), None),
+            out(fv as u64, p2sh(&fp.art()), bind(0, w.id)),
+            out(lv, p2sh(&lock.art()), None),
+            out(0, p2pk_spk(f), None),
+        ];
+        d = Draft::new(ins, outs, Some(3));
+        d.pairs.push((1, fp));
+        d.locks.push((2, lock));
+        d.seqs = vec![grace(), 0];
+    }
+    d
+}
+
+/// The disputes of the locks `ls` (each naming block start 0) on the counter-evidence `e`.
+pub fn dp_draft(ls: &[LiveLk], e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
+    let m: Vec<Member> = ls.iter().map(|l| Member::L(l.clone(), 0)).collect();
+    blk_draft_at(&m, m.len(), e, f, fn_)
+}
+
+/// Release at age D: in 0 the lock, 1 F. out 0 the owner (the whole value), 1 change.
+pub fn release_draft(l: &LiveLk, f: &Keypair, fn_: u32) -> Draft {
+    let ins = vec![lock_input(l, "release", vec![]), funder(f, fn_, F_FUNDS)];
+    let outs = vec![out(l.value, p2pk_x(&l.l.owner), None), out(0, p2pk_spk(f), None)];
+    let mut d = Draft::new(ins, outs, Some(1));
+    d.seqs = vec![dispute_window(), 0];
+    d
+}
+
+/// The lock a guarantee of `w` writes, as a live UTXO of DAA score `daa` (F).
+pub fn lock_of(w: &LivePend, gk: &[u8; 32], daa: u64) -> LiveLk {
+    LiveLk { l: w.w.lock_of(*gk, w.id, w.daa, w.value), value: w.w.lock_min(w.value) as u64, op: outpoint(w.op.index as u8 ^ 0x40), daa }
 }

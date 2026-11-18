@@ -84,7 +84,8 @@ impl ObjFile {
         match self.decoded()? {
             Decoded::Pair(p) => Ok(LivePair { p, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Open(_) => Err("this object is an order, not a pair".into()),
-            Decoded::Pending(_) => Err("this object is a pending part (a claim on it awaits its challenge window, DESIGN 4.5d), not a pair: use challenge, cure or finalize".into()),
+            Decoded::Pending(_) => Err("this object is a pending part (a claim on it awaits its challenge window, DESIGN 4.5d), not a pair: use challenge, cure, finalize or guarantee".into()),
+            Decoded::Lock(_) => Err("this object is a guarantor's lock (DESIGN 4.5f), not a pair: use dispute or release".into()),
         }
     }
 
@@ -93,6 +94,7 @@ impl ObjFile {
             Decoded::Open(o) => Ok(LiveOpen { o, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Pair(_) => Err("this object is a pair, not an order".into()),
             Decoded::Pending(_) => Err("this object is a pending part, not an order".into()),
+            Decoded::Lock(_) => Err("this object is a guarantor's lock, not an order".into()),
         }
     }
 
@@ -101,6 +103,14 @@ impl ObjFile {
         match self.decoded()? {
             Decoded::Pending(w) => Ok(LivePending { w, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             _ => Err("this object is not a pending part (a KpfPending written by a proposal)".into()),
+        }
+    }
+
+    /// The live lock of this file (DESIGN 4.5f).
+    pub fn live_lock(&self) -> Result<LiveLock, String> {
+        match self.decoded()? {
+            Decoded::Lock(l) => Ok(LiveLock { l, value: self.amount, op: self.op, daa: self.known_daa()? }),
+            _ => Err("this object is not a lock (a KpfLock written by a guarantee)".into()),
         }
     }
 
@@ -113,6 +123,7 @@ impl ObjFile {
             Ok(Decoded::Pair(p)) => ("pair", p.to_json()),
             Ok(Decoded::Open(o)) => ("order", o.to_json()),
             Ok(Decoded::Pending(w)) => ("pending", w.to_json()),
+            Ok(Decoded::Lock(l)) => ("lock", l.to_json()),
             Err(_) => match kpf_protocol::kob::KobObj::decode(&self.redeem) {
                 Ok(kpf_protocol::kob::KobObj::Ask(a)) => ("ask", a.to_json()),
                 Ok(kpf_protocol::kob::KobObj::Bid(b)) => ("bid", b.to_json()),

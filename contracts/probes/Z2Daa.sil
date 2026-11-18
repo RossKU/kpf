@@ -1,0 +1,35 @@
+pragma silverscript ^0.1.0;
+
+// Probe Z2 (docs/DESIGN-ORACLE.md 1.4, 6): what a contract reads of time. OpTxInputDaaScore(i) is the DAA score of
+// input i's UTXO entry; this.ageDaa >= a is a CSV on this input's sequence; tx.daa >= t is a CLTV on the lock time.
+// The late-submission rule of guaranteed fast settlement (KpfPending.guarantee: P <= visibleUntil) is `atMost`.
+contract Z2Daa(int init_tag) {
+    int tag = init_tag;
+
+    // The DAA score of this input's UTXO is exactly `expect`.
+    entry own(int expect) {
+        require(OpTxInputDaaScore(this.activeInputIndex) == expect);
+    }
+
+    // The DAA score of input j's UTXO is exactly `expect`.
+    entry other(int j, int expect) {
+        require(OpTxInputDaaScore(j) == expect);
+    }
+
+    // The late-submission rule: this UTXO was accepted at or before `limit`, and its DAA score is known (>= 0).
+    entry atMost(int limit) {
+        int p = OpTxInputDaaScore(this.activeInputIndex);
+        require(p >= 0);
+        require(p <= limit);
+    }
+
+    // A relative lower bound: this UTXO is at least `a` DAA old (CSV on this input's sequence).
+    entry age(int a) {
+        require(this.ageDaa >= a);
+    }
+
+    // An absolute lower bound: the transaction lands at or after DAA `t` (CLTV on the lock time).
+    entry after(int t) {
+        require(tx.daa >= t);
+    }
+}

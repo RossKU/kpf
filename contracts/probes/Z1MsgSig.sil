@@ -1,0 +1,57 @@
+pragma silverscript ^0.1.0;
+
+// Probe Z1 (docs/DESIGN-ORACLE.md 6, DESIGN 8 X10): the cost of the data-signature builtin checkMsgSig
+// (OpCheckSigFromStack) against the transaction signature checkSig (OpCheckSig), with 1, 2, 4 and 8 signatures in one
+// input. Every entry verifies its signatures over one 32-byte digest d; the keys are arguments.
+contract Z1MsgSig(int init_tag) {
+    int tag = init_tag;
+
+    entry msg1(datasig s0, byte[32] d, pubkey k0) {
+        require(checkMsgSig(s0, d, k0));
+    }
+
+    entry msg2(datasig s0, datasig s1, byte[32] d, pubkey k0, pubkey k1) {
+        require(checkMsgSig(s0, d, k0));
+        require(checkMsgSig(s1, d, k1));
+    }
+
+    entry msg4(datasig s0, datasig s1, datasig s2, datasig s3, byte[32] d, pubkey k0, pubkey k1, pubkey k2, pubkey k3) {
+        require(checkMsgSig(s0, d, k0));
+        require(checkMsgSig(s1, d, k1));
+        require(checkMsgSig(s2, d, k2));
+        require(checkMsgSig(s3, d, k3));
+    }
+
+    entry msg8(datasig s0, datasig s1, datasig s2, datasig s3, datasig s4, datasig s5, datasig s6, datasig s7, byte[32] d,
+               pubkey k0, pubkey k1, pubkey k2, pubkey k3, pubkey k4, pubkey k5, pubkey k6, pubkey k7) {
+        require(checkMsgSig(s0, d, k0));
+        require(checkMsgSig(s1, d, k1));
+        require(checkMsgSig(s2, d, k2));
+        require(checkMsgSig(s3, d, k3));
+        require(checkMsgSig(s4, d, k4));
+        require(checkMsgSig(s5, d, k5));
+        require(checkMsgSig(s6, d, k6));
+        require(checkMsgSig(s7, d, k7));
+    }
+
+    entry tx1(sig s0, pubkey k0) {
+        require(checkSig(s0, k0));
+    }
+
+    entry tx8(sig s0, sig s1, sig s2, sig s3, sig s4, sig s5, sig s6, sig s7,
+              pubkey k0, pubkey k1, pubkey k2, pubkey k3, pubkey k4, pubkey k5, pubkey k6, pubkey k7) {
+        require(checkSig(s0, k0));
+        require(checkSig(s1, k1));
+        require(checkSig(s2, k2));
+        require(checkSig(s3, k3));
+        require(checkSig(s4, k4));
+        require(checkSig(s5, k5));
+        require(checkSig(s6, k6));
+        require(checkSig(s7, k7));
+    }
+
+    // The same digest checks without any signature: the baseline the signature checks add to.
+    entry none(byte[32] d, pubkey k0) {
+        require(d != byte[32](k0));
+    }
+}

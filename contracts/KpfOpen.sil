@@ -51,6 +51,9 @@ contract KpfOpen(
     int init_gBps,
     int init_challengeDaa,
     int init_minEvidenceLife,
+    int init_lockBps,
+    int init_disputeDaa,
+    int init_graceDaa,
     int init_side,
     pubkey init_ownerKey,
     int init_sizeLeft,
@@ -62,7 +65,7 @@ contract KpfOpen(
     int init_activeFrom,
     int init_expiryDaa
 ) {
-    // Market block (state [0..261)), byte for byte the pair's.
+    // Market block (state [0..288)), byte for byte the pair's.
     byte[32] tokenCovId = init_tokenCovId;
     byte[32] tokenTplHash = init_tokenTplHash;
     byte[32] extensionCommitment = init_extensionCommitment;
@@ -84,7 +87,10 @@ contract KpfOpen(
     int gBps = init_gBps;
     int challengeDaa = init_challengeDaa;
     int minEvidenceLife = init_minEvidenceLife;
-    // Order (state [261..375)).
+    int lockBps = init_lockBps;
+    int disputeDaa = init_disputeDaa;
+    int graceDaa = init_graceDaa;
+    // Order (state [288..402)).
     int side = init_side;                    // 1 long, 2 short
     pubkey ownerKey = init_ownerKey;         // maker (x-only)
     int sizeLeft = init_sizeLeft;            // * base units still to open
@@ -116,11 +122,13 @@ contract KpfOpen(
     byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
     // One empty listing window.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
-    // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..262), sizeLeft
-    // payload [305..313).
+    // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..289), sizeLeft
+    // payload [332..340).
     int constant MARKET_AT = 1;
-    int constant MARKET_LEN = 261;
-    int constant LEFT_AT = 305;
+    int constant MARKET_LEN = 288;
+    // The largest lock ratio lambda (DESIGN 4.5f): 3.
+    int constant LOCK_BPS_MAX = 30000;
+    int constant LEFT_AT = 332;
 
     // As KpfPair.quoteOf.
     function quoteOf(int n, int r, int c) : int {
@@ -182,6 +190,20 @@ contract KpfOpen(
         require(challengeDaa < CSV_LIMIT);
         require(minEvidenceLife >= 0);
         require(minEvidenceLife + minRestDaa <= MAX_IDLE);
+        // Guaranteed fast settlement (DESIGN 4.5f).
+        // DESIGN: the note (DESIGN-ORACLE 1.8) makes lambda (and the disputer share) deployment constants; here lambda, the
+        // window D and the cure grace G are market parameters, and the disputer's reward is (lambda - 1) x cover.
+        // lambda in [1, 3] (the product cover * lockBps stays in 63 bits in its split form for every cover up to the KAS
+        // supply); the window D leaves the disputer slack as W does:
+        // counter-evidence counts from P at P + R, a lock is liable for evidence resting by F + D - R with F >= P, so
+        // D >= 2R; the cure grace G of a fast liquidation is at most the window W (with G = W the fast path gives a
+        // liquidation no time over finalize, with G = 0 a pending liquidation can be fast-settled at once).
+        require(lockBps >= BPS);
+        require(lockBps <= LOCK_BPS_MAX);
+        require(disputeDaa >= 2 * minRestDaa);
+        require(disputeDaa < CSV_LIMIT);
+        require(graceDaa >= 0);
+        require(graceDaa <= challengeDaa);
         require(myRate > 0);
         require(minCounterRate >= 0);
         require(tip >= 0);

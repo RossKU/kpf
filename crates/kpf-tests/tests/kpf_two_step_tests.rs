@@ -805,13 +805,14 @@ fn forfeit_and_keep_then_the_winner_sells_the_side() {
 
 // ================================================================ actions against a pending part
 
-/// The pending part has only challenge, cure and finalize (DESIGN 4.5d section 5e): a second proposal, a transfer, an
+/// The pending part has only challenge, cure, finalize and (DESIGN 4.5f) guarantee (DESIGN 4.5d section 5e): a second
+/// proposal, a transfer, an
 /// amend, an add margin, a close-versus-close half and an idle settle all spend it with the pair's script, which is not
 /// its script; and its own ABI has no such entry. The remainder of the same split is an ordinary pair and keeps them.
 #[test]
 fn pair_paths_against_a_pending_part_are_refused() {
     let entries: Vec<String> = kpf_protocol::artifacts::pending_base().contracts.values().next().unwrap().entries.keys().cloned().collect();
-    assert_eq!(entries, vec!["challenge".to_string(), "cure".to_string(), "finalize".to_string()]);
+    assert_eq!(entries, vec!["challenge".to_string(), "cure".to_string(), "finalize".to_string(), "guarantee".to_string()]);
     let l = lv(0x54);
     let g = liq(&l, HALF, LONG);
     let d = ev_draft(&[g.clone()], &ask(LIQ_ASK, HALF), &fk(), 1);

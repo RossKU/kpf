@@ -15,7 +15,7 @@ use kaspa_txscript::pay_to_script_hash_script;
 use serde_json::{json, Value};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact};
 
-use crate::artifacts::{self, kob_consts, open_template, pair_template, pending_template};
+use crate::artifacts::{self, kob_consts, lock_template, open_template, pair_template, pending_template};
 use crate::error::{invalid, to_hex, Error, Result};
 use crate::payoff::q;
 
@@ -36,6 +36,8 @@ pub const MAX_IDLE: u64 = 77_760_000;
 pub const PLAIN_DUST: i64 = 2_000_000;
 /// The largest bond floor (`KpfOpen.BOND_MIN_MAX`, 10,000 KAS; DESIGN 4.5e).
 pub const BOND_MIN_MAX: i64 = 1_000_000_000_000;
+/// The largest lock ratio (`KpfOpen.LOCK_BPS_MAX`, `KpfPending.LOCK_BPS_MAX`; DESIGN 4.5f): 3.
+pub const LOCK_BPS_MAX: i64 = 30_000;
 /// Kinds of a pending claim (DESIGN 4.5d).
 pub const KIND_CLOSE: i64 = 1;
 pub const KIND_LIQ: i64 = 2;
@@ -169,6 +171,12 @@ pub struct Market {
     pub g_bps: i64,
     pub challenge_daa: i64,
     pub min_evidence_life: i64,
+    /// Guaranteed fast settlement (DESIGN 4.5f): the lock ratio lambda (a lock holds at least `lockBps / 10^4` times
+    /// the value it covers), the dispute window D after a fast settlement (also the release age of its lock), and the
+    /// cure grace G a pending liquidation reaches before it can be fast-settled.
+    pub lock_bps: i64,
+    pub dispute_daa: i64,
+    pub grace_daa: i64,
 }
 
 impl Market {
@@ -195,6 +203,9 @@ impl Market {
             F::I(self.g_bps),
             F::I(self.challenge_daa),
             F::I(self.min_evidence_life),
+            F::I(self.lock_bps),
+            F::I(self.dispute_daa),
+            F::I(self.grace_daa),
         ]
     }
 
@@ -221,6 +232,9 @@ impl Market {
             g_bps: c.int()?,
             challenge_daa: c.int()?,
             min_evidence_life: c.int()?,
+            lock_bps: c.int()?,
+            dispute_daa: c.int()?,
+            grace_daa: c.int()?,
         })
     }
 
@@ -252,6 +266,13 @@ impl Market {
             self.min_evidence_life >= 0 && self.min_evidence_life.saturating_add(self.min_rest_daa) <= MAX_IDLE as i64,
             "minEvidenceLife must be >= 0 with minEvidenceLife + minRestDaa <= 77,760,000",
         )?;
+        // Guaranteed fast settlement (DESIGN 4.5f; KpfOpen.checkMarket, KpfPending.guarantee).
+        req(self.lock_bps >= BPS && self.lock_bps <= LOCK_BPS_MAX, "lockBps must be in 10^4..=3*10^4 (a lock ratio of 1 to 3)")?;
+        req(
+            self.dispute_daa >= self.min_rest_daa.saturating_mul(2) && self.dispute_daa < CSV_LIMIT,
+            "disputeDaa must be in 2 * minRestDaa..2^32 (a disputer whose evidence rested in time has R to land, DESIGN 4.5f)",
+        )?;
+        req(self.grace_daa >= 0 && self.grace_daa <= self.challenge_daa, "graceDaa must be in 0..=challengeDaa")?;
         Ok(())
     }
 
@@ -264,6 +285,18 @@ impl Market {
         self.g_bps = 200;
         self.challenge_daa = 600;
         self.min_evidence_life = 864_000;
+        self.with_guarantee_defaults()
+    }
+
+    /// The testnet defaults of guaranteed fast settlement (DESIGN 4.5f), from the window W and the rest R already set:
+    /// lambda 1.1 (11,000 bps; DESIGN-ORACLE 6, the smallest first version: a refuted claim then costs its guarantor
+    /// 1.1 times what it moved, more than the 3 % bond the slow path risks), the dispute window D = W + R (counter-evidence
+    /// must have rested by F + D - R >= P + W, so a victim has at least the slow path's window W from P), and the cure
+    /// grace G = 2R (an online loser has 2R to cure before its liquidation can be fast-settled; at most W).
+    pub fn with_guarantee_defaults(mut self) -> Market {
+        self.lock_bps = 11_000;
+        self.dispute_daa = self.challenge_daa.saturating_add(self.min_rest_daa);
+        self.grace_daa = self.min_rest_daa.saturating_mul(2).min(self.challenge_daa);
         self
     }
 
@@ -298,6 +331,9 @@ impl Market {
             g_bps: int("gBps")?,
             challenge_daa: int("challengeDaa")?,
             min_evidence_life: int("minEvidenceLife")?,
+            lock_bps: int("lockBps")?,
+            dispute_daa: int("disputeDaa")?,
+            grace_daa: int("graceDaa")?,
         };
         m.validate()?;
         Ok(m)
@@ -317,6 +353,7 @@ impl Market {
             "carrier": self.carrier, "idleDaa": self.idle_daa, "priceMax": self.price_max,
             "bondBps": self.bond_bps, "bondMin": self.bond_min, "kcBps": self.kc_bps, "gBps": self.g_bps,
             "challengeDaa": self.challenge_daa, "minEvidenceLife": self.min_evidence_life,
+            "lockBps": self.lock_bps, "disputeDaa": self.dispute_daa, "graceDaa": self.grace_daa,
         })
     }
 }
@@ -719,6 +756,11 @@ pub struct Pending {
     pub bond: i64,
     /// `bond`, plus the carrier the proposer funded when the part is smaller than the pair.
     pub refund: i64,
+    /// Guaranteed fast settlement (DESIGN 4.5f): the last DAA at which the proposal's evidence order was fillable by
+    /// conforming matchers (`KpfPending.guarantee` requires the part's DAA score P to be at most this), and the part of
+    /// its own payout the proposer gives a guarantor (0 ..= bond - 0.02 KAS).
+    pub visible_until: i64,
+    pub offer: i64,
     /// The pair's entry, keys, listings and clock start S when the claim was proposed (self-describing state; only
     /// the keys are read by the contract).
     pub entry: i64,
@@ -752,6 +794,8 @@ impl Pending {
             F::I(self.fee),
             F::I(self.bond),
             F::I(self.refund),
+            F::I(self.visible_until),
+            F::I(self.offer),
             F::I(self.entry),
             F::B(self.long_key),
             F::B(self.short_key),
@@ -770,18 +814,20 @@ impl Pending {
         f
     }
 
-    /// The canonical encoded state (621 bytes).
+    /// The canonical encoded state (666 bytes).
     pub fn state_bytes(&self) -> Vec<u8> {
         encode(&self.fields())
     }
 
     /// The constructor arguments: the pinned KOB evidence constants, then the state.
     pub fn ctor(&self) -> Vec<ArtifactValue> {
-        self.ctor_with(&kob_consts())
+        self.ctor_with(&kob_consts(), lock_template().hash)
     }
 
-    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
+    /// [`Pending::ctor`] with explicit KOB constants and `KpfLock` template hash (the artifact generator).
+    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts, lock_tpl: [u8; 32]) -> Vec<ArtifactValue> {
         let mut a = kob_args(k);
+        a.push(ArtifactValue::Bytes(lock_tpl.to_vec()));
         a.extend(to_args(&self.fields()));
         a
     }
@@ -817,6 +863,8 @@ impl Pending {
             fee: c.int()?,
             bond: c.int()?,
             refund: c.int()?,
+            visible_until: c.int()?,
+            offer: c.int()?,
             entry: c.int()?,
             long_key: c.b32()?,
             short_key: c.b32()?,
@@ -857,10 +905,127 @@ impl Pending {
             "kind": if self.kind == KIND_CLOSE { "close" } else { "liquidate" },
             "side": if self.side == LONG { "long" } else { "short" },
             "n": self.n, "bl": self.bl, "bs": self.bs, "quote": self.quote, "cureBound": self.cure_bound,
-            "fee": self.fee, "bond": self.bond, "refund": self.refund,
+            "fee": self.fee, "bond": self.bond, "refund": self.refund, "visibleUntil": self.visible_until, "offer": self.offer,
             "longKey": to_hex(&self.long_key), "shortKey": to_hex(&self.short_key), "proposerKey": to_hex(&self.proposer_key),
             "restoreHash": to_hex(&self.restore_hash), "cureHash": to_hex(&self.cure_hash), "forfeitHash": to_hex(&self.forfeit_hash),
             "challengeDaa": self.m.challenge_daa,
+        })
+    }
+}
+
+// ---------------------------------------------------------------- KpfLock
+
+/// The bond status of a lock (the only one `KpfPending.guarantee` writes, DESIGN 4.5f).
+pub const STATUS_LOCK: i64 = 1;
+
+/// The guarantor's lock of a guaranteed fast settlement (DESIGN 4.5f), written by `KpfPending.guarantee` and immutable.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lock {
+    /// The guarantor: a release pays it.
+    pub owner: [u8; 32],
+    /// [`STATUS_LOCK`].
+    pub status: i64,
+    /// The pending part's market block.
+    pub m: Market,
+    /// The covenant id of the pending part the lock settled.
+    pub claim_id: Hash,
+    pub kind: i64,
+    pub side: i64,
+    pub n: i64,
+    pub bl: i64,
+    pub bs: i64,
+    pub quote: i64,
+    /// P, the pending part's DAA score: the clock of the counter-evidence.
+    pub clock: i64,
+    /// V, the value the fast settlement moved away from the victim.
+    pub cover: i64,
+    /// The party the claim could wrong: the loser of a liquidation, the other party of a close.
+    pub victim: [u8; 32],
+}
+
+impl Lock {
+    fn fields(&self) -> Vec<F> {
+        let mut f = vec![F::B(self.owner), F::I(self.status)];
+        f.extend(self.m.fields());
+        f.extend([
+            F::B(self.claim_id.as_bytes()),
+            F::I(self.kind),
+            F::I(self.side),
+            F::I(self.n),
+            F::I(self.bl),
+            F::I(self.bs),
+            F::I(self.quote),
+            F::I(self.clock),
+            F::I(self.cover),
+            F::B(self.victim),
+        ]);
+        f
+    }
+
+    /// The canonical encoded state (468 bytes).
+    pub fn state_bytes(&self) -> Vec<u8> {
+        encode(&self.fields())
+    }
+
+    /// The constructor arguments: the pinned KOB evidence constants, then the state.
+    pub fn ctor(&self) -> Vec<ArtifactValue> {
+        self.ctor_with(&kob_consts())
+    }
+
+    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
+        let mut a = kob_args(k);
+        a.extend(to_args(&self.fields()));
+        a
+    }
+
+    pub fn redeem(&self) -> Vec<u8> {
+        lock_template().redeem(&self.state_bytes())
+    }
+
+    pub fn art(&self) -> SilAbiArtifact {
+        artifacts::splice(artifacts::lock_base(), &self.state_bytes())
+    }
+
+    pub fn spk(&self) -> ScriptPublicKey {
+        pay_to_script_hash_script(&self.redeem())
+    }
+
+    pub fn decode_redeem(redeem: &[u8]) -> Result<Lock> {
+        Lock::decode_state(lock_template().state_of(redeem)?)
+    }
+
+    pub fn decode_state(state: &[u8]) -> Result<Lock> {
+        let mut c = Cursor { b: state, at: 0 };
+        let owner = c.b32()?;
+        let status = c.int()?;
+        let m = Market::read(&mut c)?;
+        let l = Lock {
+            owner,
+            status,
+            m,
+            claim_id: c.hash()?,
+            kind: c.int()?,
+            side: c.int()?,
+            n: c.int()?,
+            bl: c.int()?,
+            bs: c.int()?,
+            quote: c.int()?,
+            clock: c.int()?,
+            cover: c.int()?,
+            victim: c.b32()?,
+        };
+        c.done()?;
+        Ok(l)
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "contract": "KpfLock", "owner": to_hex(&self.owner), "status": self.status, "market": self.m.to_json(),
+            "claimId": to_hex(&self.claim_id.as_bytes()),
+            "kind": if self.kind == KIND_CLOSE { "close" } else { "liquidate" },
+            "side": if self.side == LONG { "long" } else { "short" },
+            "n": self.n, "bl": self.bl, "bs": self.bs, "quote": self.quote, "clock": self.clock, "cover": self.cover,
+            "victim": to_hex(&self.victim), "disputeDaa": self.m.dispute_daa, "lockBps": self.m.lock_bps,
         })
     }
 }
@@ -871,9 +1036,11 @@ pub enum Decoded {
     Pair(Pair),
     Open(Open),
     Pending(Pending),
+    /// A guarantor's lock (DESIGN 4.5f).
+    Lock(Lock),
 }
 
-/// Decodes a redeem script as a pair, an order or a pending part.
+/// Decodes a redeem script as a pair, an order, a pending part or a lock.
 pub fn decode_redeem(redeem: &[u8]) -> Result<Decoded> {
     let pe = match Pair::decode_redeem(redeem) {
         Ok(p) => return Ok(Decoded::Pair(p)),
@@ -883,8 +1050,12 @@ pub fn decode_redeem(redeem: &[u8]) -> Result<Decoded> {
         Ok(o) => return Ok(Decoded::Open(o)),
         Err(e) => e,
     };
-    match Pending::decode_redeem(redeem) {
-        Ok(p) => Ok(Decoded::Pending(p)),
-        Err(we) => Err(Error::Decode(format!("not a KpfPair ({pe}), not a KpfOpen ({oe}) and not a KpfPending ({we})"))),
+    let we = match Pending::decode_redeem(redeem) {
+        Ok(p) => return Ok(Decoded::Pending(p)),
+        Err(e) => e,
+    };
+    match Lock::decode_redeem(redeem) {
+        Ok(l) => Ok(Decoded::Lock(l)),
+        Err(le) => Err(Error::Decode(format!("not a KpfPair ({pe}), not a KpfOpen ({oe}), not a KpfPending ({we}) and not a KpfLock ({le})"))),
     }
 }

@@ -24,7 +24,7 @@ pragma silverscript ^0.1.0;
 //   idleSettle()                            P8  anyone, age >= idleDaa: settle all at entryPrice clamped to [bl, bs]
 //   coopClose(sl, ss)                       P9  both owners sign; any split, the pair ends
 // Entry on price evidence (DESIGN 3.3, 3.6, 4.4 evidence block, 4.5d two-step evidence), one entry for both claims:
-//   propose(nb, qb, kind, s, side, ev, tk, fb, pk, k, pPre, pSuf), n = int(nb)
+//   propose(nb, qb, kind, s, side, ev, tk, fb, pk, k, offer, pPre, pSuf), n = int(nb)
 //     kind 1  P5  the owner of `side` (signature s) proposes to close n at the adverse bound: a long at a resting
 //                 bid, a short at a resting ask (its custody at tk)
 //     kind 2  P6  anyone (payout key pk) proposes that the loser `side` is liquidatable at the evidence quote (a long
@@ -32,8 +32,11 @@ pragma silverscript ^0.1.0;
 //   Nothing settles here. The part n moves into a KpfPending (template pPre || state || pSuf, whose template hash is
 //   the build constant PENDING_TPL) under this pair's covenant id, with a bond, at ordinal k of the two outputs of
 //   the id when n < s; the remainder (s - n) continues this pair as on every split. KpfPending is challenged,
-//   cured or finalized (contracts/KpfPending.sil); every pair it can return to is fixed here, as the P2SH hash of
-//   this script with the position written by `propose` (restore, cure, forfeit), so KpfPending never rebuilds a pair.
+//   cured, finalized or fast-settled by a guarantor (contracts/KpfPending.sil, DESIGN 4.5f; `offer` is what the
+//   proposer gives up from its own payout to a guarantor that fast-settles it, and visibleUntil, the last DAA at which
+//   the evidence order was fillable by conforming matchers, is written for that path); every pair it can return to
+//   is fixed here, as the P2SH hash of this script with the position written by `propose` (restore, cure, forfeit),
+//   so KpfPending never rebuilds a pair.
 //
 // Evidence (DESIGN 3.3). Input ev is a plain resting KobAsk or KobBid of this market, authenticated as KobCondAsk
 // authenticates its trigger evidence: template hash and P2SH of its redeem script, its signature script starting
@@ -127,6 +130,9 @@ contract KpfPair(
     int init_gBps,
     int init_challengeDaa,
     int init_minEvidenceLife,
+    int init_lockBps,
+    int init_disputeDaa,
+    int init_graceDaa,
     int init_size,
     int init_bl,
     int init_bs,
@@ -143,7 +149,7 @@ contract KpfPair(
     byte[32] init_tagS,
     int init_since
 ) {
-    // Market block (state [0..261)): identical in every pair and open order of one market.
+    // Market block (state [0..288)): identical in every pair, open order, pending part and lock of one market.
     byte[32] tokenCovId = init_tokenCovId;
     byte[32] tokenTplHash = init_tokenTplHash;
     byte[32] extensionCommitment = init_extensionCommitment;
@@ -166,7 +172,11 @@ contract KpfPair(
     int gBps = init_gBps;                // contradiction margin g, 0 < gBps < 10^4
     int challengeDaa = init_challengeDaa; // window W: earliest finalize, age of the pending part (CSV)
     int minEvidenceLife = init_minEvidenceLife; // L: evidence fillable through its rest end + L
-    // Position (state [261..492)). Mutable fields are marked *.
+    // Guaranteed fast settlement (DESIGN 4.5f), copied into every KpfPending and read by KpfPending.guarantee.
+    int lockBps = init_lockBps;          // lambda: a lock holds at least lockBps / 10^4 times the value it covers
+    int disputeDaa = init_disputeDaa;    // D: the window after a fast settlement in which its lock is disputable
+    int graceDaa = init_graceDaa;        // G: the age a pending liquidation reaches before it can be fast-settled
+    // Position (state [288..519)). Mutable fields are marked *.
     int size = init_size;                // * s, base units
     int bl = init_bl;                    // * long bankruptcy price
     int bs = init_bs;                    // * short bankruptcy price
@@ -195,18 +205,18 @@ contract KpfPair(
     // A plain payout below 0.02 KAS is not created (DESIGN 4.6); its value goes to the other party.
     int constant PLAIN_DUST = 2000000;
     // Redeem-script offsets. The state starts at byte 1 (one prefix byte, checked by the tests against the
-    // compiled artifact); the market block is [1..262). Payload windows: bl [272..280), bs [281..289); the two
-    // listing windows with their push opcodes [364..418), the long's [364..391) and the short's [391..418).
-    int constant MARKET_END = 262;
-    int constant BL_AT = 272;
-    int constant BS_AT = 281;
-    int constant LISTS_AT = 364;
-    int constant LISTS_END = 418;
+    // compiled artifact); the market block is [1..289). Payload windows: bl [299..307), bs [308..316); the two
+    // listing windows with their push opcodes [391..445), the long's [391..418) and the short's [418..445).
+    int constant MARKET_END = 289;
+    int constant BL_AT = 299;
+    int constant BS_AT = 308;
+    int constant LISTS_AT = 391;
+    int constant LISTS_END = 445;
     int constant LIST_LEN = 27;
-    // size payload [263..271); the tag window ends at 484, the since push is [484..493) and the whole position
-    // state ends at 493.
-    int constant SIZE_AT = 263;
-    int constant STATE_END = 493;
+    // size payload [290..298); the tag window ends at 511, the since push is [511..520) and the whole position
+    // state ends at 520.
+    int constant SIZE_AT = 290;
+    int constant STATE_END = 520;
     // An empty listing window (ask, minPart, tip all zero) with its push opcodes.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
     // Two-step evidence (DESIGN 4.5d): the kinds of a claim and the CSV range of challengeDaa.
@@ -272,7 +282,7 @@ contract KpfPair(
         return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
     }
 
-    // Both tags zero with their push opcodes: the tag window [364..430) of a continuation that hands over no side.
+    // Both tags zero with their push opcodes: the tag window [445..511) of a continuation that hands over no side.
     // Built from an 8-byte zero (OP_NUM2BIN) rather than a 66-byte constant, which would be inlined at every use.
     function noTags() : byte[] {
         byte[] z = byte[](zero32());
@@ -285,7 +295,7 @@ contract KpfPair(
         return byte[32](z8 + z8 + z8 + z8);
     }
 
-    // An 8-byte integer state field with its push opcode (the since window [484..493), a KpfPending field).
+    // An 8-byte integer state field with its push opcode (the since window [511..520), a KpfPending field).
     function i9(int c) : byte[] {
         return byte[](0x08) + byte[](c as byte[8]);
     }
@@ -819,7 +829,10 @@ contract KpfPair(
     // rested before the clock started, or that died before it had rested minRestDaa on the clock, is refused.
     // Evidence life (DESIGN 4.5d): the order must stay fillable by conforming matchers through
     // restEnd + minEvidenceLife, so a quote used within L of its rest end is still live; L >= 600 excludes IOC/FOK.
-    function evQuote(int ask, int ev, int tk, byte[8] qb, int clk) : int {
+    // Returns (quote, visibleUntil): the last DAA at which conforming matchers still fill the order, the earliest of
+    // its expiryDaa, its IOC/FOK kill (when not GTC) and its 90-day idle limit (DESIGN 4.5f; KpfPending.guarantee
+    // requires the pending part to have been accepted by then).
+    function evQuote(int ask, int ev, int tk, byte[8] qb, int clk) : (int, int) {
         require(minRestDaa >= 0);
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int nev = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
@@ -871,15 +884,18 @@ contract KpfPair(
         // not past its soft expiry, not past the IOC/FOK kill (on chain every tif but GTC has it), not past 90 days
         // idle, each read from the order's own state as KobAsk.settle and KobBid.refund compute them.
         int live = restEnd + minEvidenceLife;
-        require(int(byte[8](qs.slice(54, 62))) >= live);
+        int vis = int(byte[8](qs.slice(54, 62)));
+        require(vis >= live);
         if (int(byte[8](qs.slice(36, 44))) != 0) {
             int kill = ud;
             if (act > kill) { kill = act; }
             require(kill + IOC_LIFE >= live);
+            if (kill + IOC_LIFE < vis) { vis = kill + IOC_LIFE; }
         }
         require(live <= ud + MAX_IDLE);
+        if (ud + MAX_IDLE < vis) { vis = ud + MAX_IDLE; }
         evBlock(ev, nev, qb);
-        return int(byte[8](qs.slice(18, 26)));
+        return (int(byte[8](qs.slice(18, 26))), vis);
     }
 
     // Header of propose: the single-input guard, the pair bounds, n = int(nb) a part of this pair, and this
@@ -942,7 +958,7 @@ contract KpfPair(
     //            moved inward to fb, the nearest bound with q(n, narrowed range) + fee <= q(n, bs - bl): fb is an
     //            argument and is required to be that bound (it fits, and one tick wider does not, unless it is the
     //            loser's own bound), so the forfeited part still holds its range after the fee leaves.
-    entry propose(byte[8] nb, byte[8] qb, int kind, byte[] s, int side, int ev, int tk, int fb, byte[32] pk, int k, byte[] pPre, byte[] pSuf) {
+    entry propose(byte[8] nb, byte[8] qb, int kind, byte[] s, int side, int ev, int tk, int fb, byte[32] pk, int k, int offer, byte[] pPre, byte[] pSuf) {
         int n = evEntry(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -985,7 +1001,7 @@ contract KpfPair(
             }
         }
         int clk = clockStart();
-        int p = evQuote(ask, ev, tk, qb, clk);
+        (int p, int vis) = evQuote(ask, ev, tk, qb, clk);
         byte[] rs = ownRs();
         // Every pair state the pending part may become is unlisted (DESIGN 4.5e): a listing its owner could not
         // withdraw while the part was pending is not live again without the owner's signature.
@@ -1047,12 +1063,20 @@ contract KpfPair(
         if (bond < PLAIN_DUST) { bond = PLAIN_DUST; }
         int refund = bond;
         if (n < size) { refund = bond + carrier; }
+        // The proposer's offer to a guarantor (DESIGN 4.5f): paid out of the proposer's own payout if the claim is
+        // fast-settled, so it is at most the bond less the plain dust (the proposer is still paid at least 0.02 KAS).
+        // DESIGN: the note (DESIGN-ORACLE) leaves the guarantor's fee open; a fee taken from any other party would take
+        // from a party that did not consent, so the only fee is this offer, set by the proposer (the closer's signature
+        // covers it for a close) and carried in the lock.
+        require(offer >= 0);
+        require(offer <= bond - PLAIN_DUST);
         // The KpfPending state (contracts/KpfPending.sil): this market block, then kind, side, n, bl, bs, quote,
-        // cure bound, fee, bond, refund, this pair's entry, keys and listings (one slice), the clock S, the proposer,
-        // and the restore, cure and forfeit hashes. The entry, the listings and S are not read by KpfPending; they
-        // make the state self-describing, so a tool rebuilds the three pair states from the pending UTXO alone.
+        // cure bound, fee, bond, refund, visibleUntil, offer, this pair's entry, keys and listings (one slice), the clock
+        // S, the proposer, and the restore, cure and forfeit hashes. The entry, the listings and S are not read by
+        // KpfPending; they make the state self-describing, so a tool rebuilds the three pair states from the pending
+        // UTXO alone.
         byte[] st = rs.slice(1, MARKET_END) + i9(kind) + i9(side) + i9(n) + i9(bl) + i9(bs) + i9(p) + i9(cb) + i9(fee)
-            + i9(bond) + i9(refund) + rs.slice(BS_AT + 8, LISTS_END) + i9(clk) + byte[](0x20) + byte[](prop)
+            + i9(bond) + i9(refund) + i9(vis) + i9(offer) + rs.slice(BS_AT + 8, LISTS_END) + i9(clk) + byte[](0x20) + byte[](prop)
             + byte[](0x20) + byte[](rh) + byte[](0x20) + byte[](ch) + byte[](0x20) + byte[](fh);
         require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDING_TPL);
         byte[] pend = byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf));

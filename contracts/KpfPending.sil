@@ -20,8 +20,13 @@ pragma silverscript ^0.1.0;
 //                              DESIGN 4.4 (the long at i, the short at M - 1 - i). kind 2 (forfeit and keep): the
 //                              part becomes `forfeitHash` (both sides the winner's) with value >= v - B - fee, and the
 //                              proposer is paid B + fee at output i.
-// Every branch ends in an ordinary KpfPair or in plain outputs, and finalize needs no key and no evidence, so no
-// pending part is locked: anyone ends it after challengeDaa.
+//   guarantee(j, gk, lPre, lSuf)  guaranteed fast settlement (DESIGN 4.5f): anyone, at any time while the part is
+//                              pending (a liquidation once graceDaa old), settles exactly as finalize does, the
+//                              proposer paid less its offer, if output j is a KpfLock of the guarantor gk naming
+//                              this claim with at least lockBps / 10^4 times the cover plus the offer.
+// Every branch ends in an ordinary KpfPair or in plain outputs (and, for guarantee, a KpfLock that ends by dispute or
+// release), and finalize needs no key and no evidence, so no pending part is locked: anyone ends it after
+// challengeDaa.
 //
 // Counter-evidence (DESIGN 4.5d section 3). A plain resting KobAsk or KobBid of this market, read exactly as the pair
 // reads evidence (template hash and P2SH, its fill n_ev as the first push, token covenant id, scale, extension
@@ -48,6 +53,7 @@ contract KpfPending(
     byte[32] BID_TPL,
     int BID_PRE,
     int BID_SUF,
+    byte[32] LOCK_TPL,
     byte[32] init_tokenCovId,
     byte[32] init_tokenTplHash,
     byte[32] init_extensionCommitment,
@@ -69,6 +75,9 @@ contract KpfPending(
     int init_gBps,
     int init_challengeDaa,
     int init_minEvidenceLife,
+    int init_lockBps,
+    int init_disputeDaa,
+    int init_graceDaa,
     int init_kind,
     int init_side,
     int init_n,
@@ -79,6 +88,8 @@ contract KpfPending(
     int init_fee,
     int init_bond,
     int init_refund,
+    int init_visibleUntil,
+    int init_offer,
     int init_entryPrice,
     pubkey init_longKey,
     pubkey init_shortKey,
@@ -94,7 +105,7 @@ contract KpfPending(
     byte[32] init_cureHash,
     byte[32] init_forfeitHash
 ) {
-    // The pair's market block (state [0..261)), byte for byte.
+    // The pair's market block (state [0..288)), byte for byte.
     byte[32] tokenCovId = init_tokenCovId;
     byte[32] tokenTplHash = init_tokenTplHash;
     byte[32] extensionCommitment = init_extensionCommitment;
@@ -116,7 +127,10 @@ contract KpfPending(
     int gBps = init_gBps;
     int challengeDaa = init_challengeDaa;
     int minEvidenceLife = init_minEvidenceLife;
-    // The claim (state [261..621)).
+    int lockBps = init_lockBps;
+    int disputeDaa = init_disputeDaa;
+    int graceDaa = init_graceDaa;
+    // The claim (state [288..666)).
     int kind = init_kind;                // 1 close (P5), 2 liquidation (P6)
     int side = init_side;                // kind 1: the closer; kind 2: the loser
     int n = init_n;                      // size of the part
@@ -127,6 +141,11 @@ contract KpfPending(
     int fee = init_fee;                  // kind 2: keeper fee, to the proposer at finalize
     int bond = init_bond;                // B
     int refund = init_refund;            // B, plus the carrier the proposer funded when n < s
+    // Guaranteed fast settlement (DESIGN 4.5f): the last DAA at which the proposal's evidence order was fillable by
+    // conforming matchers (the earliest of its expiryDaa, IOC/FOK kill and 90-day idle limit), and the part of its own
+    // payout the proposer gives a guarantor that fast-settles the claim (0 <= offer <= bond - 0.02 KAS, KpfPair.propose).
+    int visibleUntil = init_visibleUntil;
+    int offer = init_offer;
     // The pair's entry, keys and listings and its clock start S when the claim was proposed. Only the keys are read
     // here; the rest makes the state self-describing (a tool rebuilds the restore, cure and forfeit pairs from it).
     int entryPrice = init_entryPrice;
@@ -154,6 +173,16 @@ contract KpfPending(
     int constant BID_STATE_LEN = 285;
     int constant IOC_LIFE = 600;
     int constant MAX_IDLE = 77760000;
+    // Guaranteed fast settlement (DESIGN 4.5f): the market block ends at redeem byte 289 (the state starts at byte 1),
+    // the claim kind, side, n, bl, bs, quote follow it as six 9-byte pushes; the largest lock ratio; a lock holds at
+    // least 0.1 KAS (above the 0.08 KAS covenant-output minimum, and enough for the dust rules of KpfLock.dispute);
+    // the CSV range; the bond status of a lock.
+    int constant MARKET_END = 289;
+    int constant CLAIM_LEN = 54;
+    int constant LOCK_BPS_MAX = 30000;
+    int constant LOCK_FLOOR = 10000000;
+    int constant CSV_LIMIT = 4294967296;
+    int constant STATUS_LOCK = 1;
 
     // As KpfPair.quoteOf.
     function quoteOf(int x, int r, int c) : int {
@@ -365,23 +394,27 @@ contract KpfPending(
         payTo(self, proposerKey, refund);
     }
 
-    // Finalize (DESIGN 4.5d). Anyone, once this UTXO is challengeDaa old (CSV, a relative lower bound; propose checked
-    // 0 <= challengeDaa < 2^32). No evidence.
+    // The settlement of finalize, with `off` taken from the proposer's own payout (0 at finalize, the offer at a
+    // guarantee; KpfPair.propose bounds it by bond - 0.02 KAS, so the proposer is still paid at least the dust bound).
     // kind 1: the closer is owed q(n, c(quote) - bl) (long) or q(n, bs - c(quote)) (short) plus `refund`, the other
     // party this UTXO's value less that (carrier and excess included when n = s); the long is paid at output i, the
     // short at M - 1 - i (at least the input count). A payout below dust is not created and goes to the closer.
     // kind 2 (forfeit and keep): one output of this id with forfeitHash and at least this UTXO's value less the bond
     // and the fee, and the proposer B + fee at output i.
+    // Returns the cover of a guarantee (DESIGN 4.5f), the value this settlement moves away from the party the claim
+    // could wrong: kind 1 what the closer is paid beyond its refund (so at most what the other party could have kept),
+    // kind 2 the part's range q(n, bs - bl) (the most the loser's side can be worth at any price).
+    // DESIGN: the note (DESIGN-ORACLE 1.1) covers every claim by the part's range; for a close the value moved away from
+    // the other party is at most the closer's payoff (the other party keeps the rest in every case), so that is the cover.
     // DESIGN: 4.5d pays the proposer `refund` (B + C) and leaves V - refund - fee in the forfeited part; when n < s the
     // forfeited part would then lack its carrier, which no party but the proposer has funded. The proposer's carrier
     // therefore stays in the forfeited part (it is the new pair the proposer's claim creates) and the proposer is paid
     // B + fee.
-    entry finalize() {
+    function settle(int off) : int {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
-        require(OpCovInputCount(selfId) == 1);
-        require(this.ageDaa >= challengeDaa);
         int v = tx.inputs[self].value;
+        int cover = 0;
         if (kind == KIND_CLOSE) {
             require(OpCovOutputCount(selfId) == 0);
             int c = clampP(quote);
@@ -393,6 +426,8 @@ contract KpfPending(
                 me = v;
                 other = 0;
             }
+            cover = me - refund;
+            me = me - off;
             int lp = me;
             int sp = other;
             if (side == SIDE_SHORT) {
@@ -407,7 +442,83 @@ contract KpfPending(
             }
         } else {
             only(forfeitHash, v - bond - fee);
-            payTo(self, proposerKey, bond + fee);
+            payTo(self, proposerKey, bond + fee - off);
+            cover = quoteOf(n, bs - bl, 0);
         }
+        return cover;
+    }
+
+    // Finalize (DESIGN 4.5d). Anyone, once this UTXO is challengeDaa old (CSV, a relative lower bound; propose checked
+    // 0 <= challengeDaa < 2^32). No evidence. The settlement above, the proposer paid in full.
+    entry finalize() {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        require(this.ageDaa >= challengeDaa);
+        int cover = settle(0);
+        require(cover >= 0);
+    }
+
+    // This input's redeem script (the last push of its signature script), as KpfPair.ownRs.
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    // An 8-byte integer state field with its push opcode.
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // Guarantee: guaranteed fast settlement (DESIGN 4.5f). Anyone, in a transaction that creates at output j a KpfLock
+    // (template lPre || state || lSuf, whose template hash is the build constant LOCK_TPL) owned by the guarantor key gk,
+    // naming this claim, with at least ceil(cover * lockBps / 10^4) + offer (and 0.1 KAS). The claim settles at once
+    // exactly as finalize settles it, without the window, the proposer paid less its offer (which rides in the lock and
+    // returns to the guarantor with it). The lock is disputable for disputeDaa with exactly the counter-evidence a
+    // challenge of this part would have needed (KpfLock.dispute), and a successful dispute pays the wronged party from
+    // the lock; otherwise it is released to gk.
+    //   - this part is the only input of its id (OpCovInputCount == 1); a challenge, cure or finalize spends the same
+    //     UTXO, so exactly one of them lands, and a part challenged or cured no longer exists to be guaranteed;
+    //   - P, this UTXO's DAA score (exact once accepted, experiment Z2), is known (>= 0) and at most visibleUntil: the
+    //     proposal's evidence was still fillable by conforming matchers when the proposal filled it, so a dead order
+    //     (review 3 F1) never settles on the path that has no challenge window;
+    //   - a liquidation is at least graceDaa old (CSV): the loser keeps a cure right for graceDaa (DESIGN 4.5f);
+    //   - lockBps in [10^4, 3 * 10^4] and disputeDaa in the CSV range are checked again here, so not even a look-alike
+    //     part creates a lock whose reward overflows or whose release is dead.
+    // The lock state: gk, status 1, this market block, this id, the claim kind, side, n, bl, bs, quote (one slice of
+    // this script), P, the cover and the victim's key (the loser of a liquidation, the other party of a close).
+    // DESIGN: the note (DESIGN-ORACLE 1.5) gives the loser of a fast-settled liquidation no cure; here a liquidation
+    // can be guaranteed only once it is graceDaa old, so an online loser within g of its trigger can still cure (the
+    // trade-off of DESIGN 4.5f), at the cost of delaying a fast liquidation by graceDaa.
+    entry guarantee(int j, byte[32] gk, byte[] lPre, byte[] lSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        require(p <= visibleUntil);
+        require(lockBps >= BPS);
+        require(lockBps <= LOCK_BPS_MAX);
+        require(disputeDaa >= 0);
+        require(disputeDaa < CSV_LIMIT);
+        require(offer >= 0);
+        byte[32] victim = byte[32](longKey);
+        if (kind == KIND_CLOSE) {
+            if (side == SIDE_LONG) { victim = byte[32](shortKey); }
+        } else {
+            require(this.ageDaa >= graceDaa);
+            if (side == SIDE_SHORT) { victim = byte[32](shortKey); }
+        }
+        int cover = settle(offer);
+        require(cover >= 0);
+        require(cover <= tx.inputs[self].value);
+        int need = (cover / BPS) * lockBps + ((cover % BPS) * lockBps + BPS - 1) / BPS + offer;
+        if (need < LOCK_FLOOR) { need = LOCK_FLOOR; }
+        byte[] rs = ownRs();
+        byte[] st = byte[](0x20) + byte[](gk) + i9(STATUS_LOCK) + rs.slice(1, MARKET_END) + byte[](0x20) + byte[](selfId)
+            + rs.slice(MARKET_END, MARKET_END + CLAIM_LEN) + i9(p) + i9(cover) + byte[](0x20) + byte[](victim);
+        require(blake3(byte[](lPre.length as byte[8]) + lPre + byte[](lSuf.length as byte[8]) + lSuf) == LOCK_TPL);
+        require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(lPre + st + lSuf)));
+        require(tx.outputs[j].value >= need);
     }
 }

@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use kpf_protocol::artifacts::{template_hash_of, KobConsts};
-use kpf_protocol::state::{Market, Open, Pair, Pending, KIND_LIQ, LONG};
+use kpf_protocol::state::{Lock, Market, Open, Pair, Pending, KIND_LIQ, LONG};
 use kpf_protocol::tx::pubkey_of;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -72,6 +72,9 @@ fn sample_market() -> Market {
         g_bps: 200,
         challenge_daa: 6_000,
         min_evidence_life: 864_000,
+        lock_bps: 11_000,
+        dispute_daa: 6_600,
+        grace_daa: 1_200,
     }
 }
 
@@ -96,6 +99,7 @@ pub fn generate() -> Vec<(String, String)> {
     let pair_src = read_norm(&r.join("contracts/KpfPair.sil"));
     let open_src = read_norm(&r.join("contracts/KpfOpen.sil"));
     let pending_src = read_norm(&r.join("contracts/KpfPending.sil"));
+    let lock_src = read_norm(&r.join("contracts/KpfLock.sil"));
     let m = sample_market();
 
     // KobAsk / KobBid: any valid constructor; the template does not depend on the state.
@@ -123,7 +127,25 @@ pub fn generate() -> Vec<(String, String)> {
     let kc = KobConsts { ask_tpl: at, ask_pre: ap, ask_suf: asf, bid_tpl: bt, bid_pre: bp, bid_suf: bsf };
 
     let (k1, k2, k3) = (pubkey_of(&[1; 32]).unwrap(), pubkey_of(&[2; 32]).unwrap(), pubkey_of(&[3; 32]).unwrap());
-    // KpfPending first: its template hash is a build constant of KpfPair (DESIGN 4.5d; no cycle, it needs no pair
+    // KpfLock first: its template hash is a build constant of KpfPending (DESIGN 4.5f; it needs no pending template).
+    let sample_lock = Lock {
+        owner: k3,
+        status: 1,
+        m: m.clone(),
+        claim_id: kaspa_hash([0x2d; 32]),
+        kind: KIND_LIQ,
+        side: LONG,
+        n: 1_000_000_000,
+        bl: 900_000_000,
+        bs: 1_200_000_000,
+        quote: 940_000_000,
+        clock: 1,
+        cover: 300_000_000_000,
+        victim: k1,
+    };
+    let lock = compile("KpfLock", &lock_src, &sample_lock.ctor_with(&kc));
+    let (lt, _, _) = facts(&lock);
+    // KpfPending next: its template hash is a build constant of KpfPair (DESIGN 4.5d; no cycle, it needs no pair
     // template).
     let sample_pending = Pending {
         m: m.clone(),
@@ -137,6 +159,8 @@ pub fn generate() -> Vec<(String, String)> {
         fee: 4_700_000_000,
         bond: 9_000_000_000,
         refund: 9_000_000_000,
+        visible_until: 87_000_000,
+        offer: 0,
         entry: 1_000_000_000,
         long_key: k1,
         short_key: k2,
@@ -152,7 +176,7 @@ pub fn generate() -> Vec<(String, String)> {
         cure_hash: [0x2b; 32],
         forfeit_hash: [0x2c; 32],
     };
-    let pending = compile("KpfPending", &pending_src, &sample_pending.ctor_with(&kc));
+    let pending = compile("KpfPending", &pending_src, &sample_pending.ctor_with(&kc, lt));
     let (wt, _, _) = facts(&pending);
     let sample_pair = Pair {
         m: m.clone(),
@@ -190,13 +214,14 @@ pub fn generate() -> Vec<(String, String)> {
     let open = compile("KpfOpen", &open_src, &sample_open.ctor_with(pt));
 
     let json = |a: &SilAbiArtifact| format!("{}\n", serde_json::to_string(a).expect("artifact json"));
-    let (pair_json, open_json, pending_json) = (json(&pair), json(&open), json(&pending));
+    let (pair_json, open_json, pending_json, lock_json) = (json(&pair), json(&open), json(&pending), json(&lock));
     let contract = |src: &str, file: &str, a: &SilAbiArtifact, art_json: &str| {
         let c = &a.contracts.values().next().expect("one contract").compiled;
         let (hash, pre, suf) = facts(a);
         let text = match file {
             "KpfPair.json" => &pair_src,
             "KpfOpen.json" => &open_src,
+            "KpfLock.json" => &lock_src,
             _ => &pending_src,
         };
         json!({
@@ -218,15 +243,18 @@ pub fn generate() -> Vec<(String, String)> {
         "kpf_pair": contract("contracts/KpfPair.sil", "KpfPair.json", &pair, &pair_json),
         "kpf_open": contract("contracts/KpfOpen.sil", "KpfOpen.json", &open, &open_json),
         "kpf_pending": contract("contracts/KpfPending.sil", "KpfPending.json", &pending, &pending_json),
+        "kpf_lock": contract("contracts/KpfLock.sil", "KpfLock.json", &lock, &lock_json),
     });
     let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
     let sums = [
         ("KpfPair.sil", pair_src.clone()),
         ("KpfOpen.sil", open_src.clone()),
         ("KpfPending.sil", pending_src.clone()),
+        ("KpfLock.sil", lock_src.clone()),
         ("artifacts/KpfPair.json", pair_json.clone()),
         ("artifacts/KpfOpen.json", open_json.clone()),
         ("artifacts/KpfPending.json", pending_json.clone()),
+        ("artifacts/KpfLock.json", lock_json.clone()),
         ("artifacts/manifest.json", manifest_text.clone()),
     ]
     .iter()
@@ -236,6 +264,7 @@ pub fn generate() -> Vec<(String, String)> {
         ("artifacts/KpfPair.json".into(), pair_json),
         ("artifacts/KpfOpen.json".into(), open_json),
         ("artifacts/KpfPending.json".into(), pending_json),
+        ("artifacts/KpfLock.json".into(), lock_json),
         ("artifacts/manifest.json".into(), manifest_text),
         ("artifacts/SHA256SUMS".into(), sums),
     ]

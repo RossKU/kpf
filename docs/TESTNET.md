@@ -7,7 +7,7 @@ network yet: the tooling was only exercised offline (engine tests, and the CLI a
 What this exercise covers: every evidence-free path of `KpfOpen` and `KpfPair` (create order, open, list, transfer,
 add margin, mutual close, cooperative close, idle settle, plus cancel, refund, open against a signing taker and
 close-versus-close). Price evidence (unilateral close, liquidation, in two steps: propose, then challenge, cure or
-finalize) is a separate exercise: section 7.
+finalize) is a separate exercise: section 7; guaranteed fast settlement (guarantee, dispute, release) is section 8.
 
 ## 1. What must exist before
 
@@ -103,7 +103,8 @@ the short owner of the new pair and its own UTXOs pay the short margin. Close-ve
 | idle settle | 0.0240 | 14,279 | 2,736 |
 
 Script units are small (the largest input uses about 280,000, every input commits the exact budget). The mass is dominated
-by the size of the redeem scripts (a pair's script is now 12,155 bytes, with the two-step evidence of DESIGN 4.5d,
+by the size of the redeem scripts (a pair's script is now 12,370 bytes, with the two-step evidence of DESIGN 4.5d and the
+fast-settlement parameters of 4.5f,
 and is revealed on every spend; the table was measured at 11.6 KB). If blocks are contended the
 node may not relay at the floor: raise `--fee-rate` or add `--priority` (which also pays for the storage mass).
 
@@ -179,7 +180,9 @@ What the steps mean for each party:
    `minRestDaa` (default 50 DAA, 5 seconds) is how long an evidence order must have rested. The two-step parameters
    (DESIGN 4.5d) are in the same block: `bondBps` 300, `bondMin` 500,000,000 sompi (5 KAS), `kcBps` 10,000 (`k_c` = 1),
    `gBps` 200, `challengeDaa` 600 (the window `W`, 60 seconds), `minEvidenceLife` 864,000 (one day, `L`); the hand-over limit `S + 4 * minRestDaa` is then 200 DAA (20 seconds); `kpf market --check`
-   refuses `W < 2 * minRestDaa` (DESIGN 4.5e), `bondMin` above 10,000 KAS and `L + minRestDaa > 77,760,000`.
+   refuses `W < 2 * minRestDaa` (DESIGN 4.5e), `bondMin` above 10,000 KAS and `L + minRestDaa > 77,760,000`. Guaranteed
+   fast settlement (DESIGN 4.5f, section 8) adds `lockBps` 11,000 (`λ` = 1.1), `disputeDaa` 650 (`D`, 65 seconds) and
+   `graceDaa` 100 (`G`, 10 seconds); `kpf market --check` refuses `λ` outside 1..3, `D < 2 * minRestDaa` and `G > W`.
 3. **Resting KOB orders of that token whose templates are byte-identical to the ones pinned in `KpfPair`.** The pair
    authenticates its evidence by the template hash, the prefix length and the suffix length of the order's redeem script:
 
@@ -296,7 +299,7 @@ or a KPF one), which does not exist (section 6).
 
 ### 7.4 Measured cost (offline, relay floor 100 sompi per gram)
 
-Every transaction contains the 12,155-byte redeem script of each pair it spends, or the 3,203-byte script of each
+Every transaction contains the 12,370-byte redeem script of each pair it spends, or the 4,338-byte script of each
 pending part, plus KOB's order script and the token program script (2.9 KB) with the custody or the seller's tokens
 when it reads a quote. The storage mass (KIP-9) comes from the small token outputs; the block limit is 500,000 and a
 token output of 0.2 KAS uses 200,000, which is why the builders keep their own outputs generous.
@@ -305,31 +308,31 @@ The command line (`crates/kpf-cli/tests/lifecycle.rs`, the evidence lifecycle):
 
 | step | fee (KAS) | compute mass | storage mass |
 |---|---|---|---|
-| propose-close | 0.04129 | 30,215 | 400,059 (two token outputs of the bid fill) |
-| finalize (close) | 0.00727 | 5,715 | |
-| propose-liquidate | 0.04097 | 29,884 | 404,022 |
-| challenge | 0.01783 | 13,815 | 400,027 |
-| cure | 0.00747 | 6,826 | |
-| finalize (forfeit) | 0.00734 | 5,760 | |
-| coop-close of the forfeited part | 0.02499 | 15,053 | |
+| propose-close | 0.04391 | 31,623 | 400,059 (two token outputs of the bid fill) |
+| finalize (close) | 0.00954 | 6,850 | |
+| propose-liquidate | 0.04358 | 31,192 | 404,022 |
+| challenge | 0.02010 | 14,950 | 400,027 |
+| cure | 0.00974 | 8,061 | |
+| finalize (forfeit) | 0.00961 | 6,895 | |
+| coop-close of the forfeited part | 0.02542 | 15,270 | |
 
 The engine metrics (`kpf_metrics_tests`; parts of 400 tokens; limits compute 500,000, storage 500,000, 250,000 bytes):
 
 | transaction | inputs | script units | compute mass | storage mass | bytes | fee (sompi) |
 |---|---|---|---|---|---|---|
-| propose close long at a bid | 4 | 705,225 | 29,452 | 203,474 | 20,452 | 4,090,400 |
-| propose close short at an ask | 4 | 646,543 | 28,486 | 200,056 | 20,356 | 4,071,200 |
-| propose liquidate long at an ask | 4 | 779,010 | 29,721 | 200,056 | 20,291 | 4,058,200 |
-| propose liquidate short at a bid | 4 | 837,770 | 30,687 | 203,205 | 20,387 | 4,077,400 |
-| challenge (ask counter) | 4 | 214,979 | 12,086 | 200,035 | 8,626 | 1,725,200 |
-| challenge (bid counter) | 4 | 273,660 | 13,052 | 203,255 | 8,722 | 1,744,400 |
-| finalize close | 2 | 107,236 | 5,715 | 31 | 3,635 | 727,000 |
-| finalize forfeit | 2 | 107,084 | 5,760 | 215 | 3,670 | 734,000 |
-| cure | 2 | 207,967 | 6,826 | 308 | 3,736 | 747,200 |
-| 8 proposals on one ask (8 x 500 tokens) | 11 | 5,122,461 | 183,660 | 200,408 | 125,550 | 25,110,000 |
-| 8 challenges on one bid | 11 | 457,008 | 40,646 | 203,890 | 32,326 | 6,465,200 |
+| propose close long at a bid | 4 | 710,305 | 30,860 | 203,474 | 21,760 | 4,352,000 |
+| propose close short at an ask | 4 | 651,623 | 29,894 | 200,056 | 21,664 | 4,332,800 |
+| propose liquidate long at an ask | 4 | 789,015 | 31,129 | 200,056 | 21,599 | 4,319,800 |
+| propose liquidate short at a bid | 4 | 847,763 | 32,095 | 203,205 | 21,695 | 4,339,000 |
+| challenge (ask counter) | 4 | 217,249 | 13,221 | 200,035 | 9,761 | 1,952,200 |
+| challenge (bid counter) | 4 | 275,930 | 14,187 | 203,255 | 9,857 | 1,971,400 |
+| finalize close | 2 | 109,550 | 6,850 | 31 | 4,770 | 954,000 |
+| finalize forfeit | 2 | 109,497 | 6,895 | 215 | 4,805 | 961,000 |
+| cure | 2 | 210,248 | 8,061 | 306 | 4,871 | 974,200 |
+| 8 proposals on one ask (8 x 500 tokens) | 11 | 5,202,501 | 194,924 | 200,408 | 136,014 | 27,202,800 |
+| 8 challenges on one bid | 11 | 475,168 | 49,726 | 203,890 | 41,406 | 8,281,200 |
 
-The largest input is a proposing pair (457,197 to 619,781 script units; every input commits the exact budget). A block
+The largest input is a proposing pair (462,277 to 629,786 script units; every input commits the exact budget). A block
 of 8 proposals fits (the scan's maximum). Before the two-step change 8 one-step liquidations used 1,651,150 script
 units, compute mass 130,644 and 104,934 bytes. Besides the fees, a proposal locks its bond for at least `W`: 5 KAS for
 the pairs of this exercise, 300 bps of the part's range in general.
@@ -352,3 +355,73 @@ the pairs of this exercise, 300 bps of the part's range in general.
   proposal and a long's liquidation proposal at one ask, proposals and challenges on one print); `kpf` exposes one
   path per command.
 - **Discovery of pending parts** from the node (see 7.3): `kpf watch` reads object files only.
+
+## 8. Guaranteed fast settlement: guarantee, dispute, release
+
+Optional (DESIGN 4.5f); the slow path of section 7 stays the default. A pending claim (a proposal of section 7) can be
+settled **at once**, exactly as `kpf finalize` would settle it after the window, by a **guarantor** that locks KAS for
+it: `kpf guarantee` spends the pending part and creates a `KpfLock` output holding at least `λ` (1.1 on the testnet
+market) times the **cover** (the value the settlement moves away from the party it could wrong: the part's range for a
+liquidation, the closer's payoff for a close) plus the proposer's **offer**. For `D` (`disputeDaa`, 650 DAA, 65 seconds)
+after the guarantee anyone may **dispute** the lock with exactly the counter order a challenge would have needed
+(resting `minRestDaa` from the claim's DAA `P`, done resting within the window); the wronged party is then paid what its
+side was worth at the counter quote from the lock, the disputer keeps `(λ - 1)` times the cover, and the rest is burned.
+After `D` anyone **releases** the lock to its owner. A liquidation can be guaranteed only once its pending part is
+`graceDaa` (100 DAA, 10 seconds) old, so the loser can still cure. Nothing of this has been run on a network.
+
+What each party sees:
+- **Proposer.** `--offer KAS` on `propose-close` / `propose-liquidate` (at most the bond less 0.02 KAS) is what it gives
+  up from its own payout if a guarantor fast-settles its claim; with no offer a guarantor earns nothing on chain. A
+  guarantee pays the proposer its finalize payout less the offer, at once.
+- **Guarantor.** Locks `λ × cover + offer` for `D`; gets it back (the offer included) with `kpf release` if nobody
+  disputes; loses all of it if the book refutes the claim. It should guarantee only where a mispriced order at the
+  refutation bound would be arbitraged within `minRestDaa`: on a book without arbitrage the deserving loser can place
+  that order itself and take the lock (DESIGN 4.5f, residual risk 1).
+- **Wronged party** (the loser of a liquidation, the other party of a close). Paid in cash, its side's value at the
+  refuting quote, from the lock; it does not get its position back. It must dispute (or a watcher must) within `D`.
+- **Winner.** Holds the forfeited part at once and may close or sell it while the lock is disputable; a later dispute
+  never touches the part.
+
+### 8.1 The exercise
+
+On the market of 7.1 (with the parameters of 7.1, item 2) and the pair of section 7.3, `$G` = the guarantor's key flags
+(`--funder guarantor.key.json`, its funding or `--node`).
+
+| # | Command | After it, check |
+|---|---|---|
+| 30 | a stale liquidation proposed with an offer: `kpf propose-liquidate --pair P.json --evidence ask.json --offer 1 $F $S --out-dir out/30` | the pending part as in 7.3 step 23, with `offer` 1 KAS in its state (`kpf inspect`) |
+| 31 | within 100 DAA: `kpf guarantee --pending out/30/*-pending.json $G --node $NODE --submit` | refused: `a liquidation can be guaranteed only once its pending part is 100 DAA old (the loser's cure grace)` |
+| 32 | after it: `kpf guarantee --pending out/30/*-pending.json --pair P.json $G $S --out-dir out/32` | the proposer receives 5.47 - 1 = 4.47 KAS at once; the short holds the forfeited part; a lock of 33 + 1 = 34 KAS (the 10-token pair's range 30 KAS times 1.1, plus the offer); `kpf inspect out/32/*-lock.json` prints the dispute bound (`>= 9.66315790` KAS) and the DAA from which it can be released |
+| 33 | `kpf watch --pair P.json --scan out/32 --order bid.json --node $NODE` | `FAST-SETTLED ... against the long`, the DAA by which counter-evidence must have rested and the release DAA with the time left, and for each given order `DISPUTES IT` with the exact `kpf dispute` command and the restitution, or why not |
+| 34a | refute it (a bid of 9.80 placed after the claim, rested): `kpf dispute --lock out/32/*-lock.json --evidence bid.json --seller seller.json $F $S --out-dir out/34` | the long is paid `q(10, 9.80 - 9)` = 8 KAS from the lock; the funder keeps 3 KAS; 23 KAS are burned (a P2SH of `OP_RETURN`) |
+| 34b | or nobody disputes: after 650 DAA `kpf release --lock out/32/*-lock.json $G $S --out-dir out/34` | the guarantor receives the 34 KAS lock; before 650 DAA the command says `can be released only from DAA N` |
+| 35 | a close guaranteed at once: `kpf propose-close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S --out-dir out/35`, then `kpf guarantee --pending out/35/*-pending.json $G $S` | the short is paid at once what 7.3 step 21 pays after the window; the lock holds 1.1 times the short's payoff |
+
+`kpf quote --pair P.json` states, besides section 7's figures, the lock a guarantee of a liquidation or of a close at
+the entry needs, the reward of a disputer, and that the guarantor earns only the proposer's offer. `kpf watch` finds
+locks, like pending parts, only from object files (`--lock FILE` or `--scan DIR`): a lock's address depends on its
+whole state.
+
+### 8.2 Measured cost (offline, relay floor 100 sompi per gram)
+
+The command line (`crates/kpf-cli/tests/lifecycle.rs`, `fast_settlement_lifecycle_with_a_kob_book`):
+
+| step | fee (KAS) | compute mass | storage mass |
+|---|---|---|---|
+| guarantee (liquidation) | 0.01397 | 9,947 | 94 |
+| dispute (bid counter) | 0.01619 | 12,786 | 200,025 (the token output of the bid fill) |
+| guarantee (close) | 0.01390 | 9,902 | 22 |
+| release | 0.00588 | 4,659 | 0 |
+
+The engine metrics (`kpf_metrics_tests`, parts of 400 tokens): guarantee 152,390 to 152,559 script units, 6,952 to 6,987
+bytes; dispute 213,906 (ask counter) to 272,656 (bid counter) script units, about 8,000 bytes; release 105,372 script
+units, 2,939 bytes; 8 disputes on one bid 449,376 script units, compute mass 38,518, 27,318 bytes. The `KpfLock` script is
+2,559 bytes, the `KpfPending` script 4,338. Besides the fees, the guarantor's lock is held for at least `D`.
+
+### 8.3 What is not built
+
+- **Several locks for one claim** (the note's lock block): one guarantor per claim.
+- **A data-signature guarantee** (a guarantor signing a claim digest instead of funding the lock in the transaction):
+  not needed (experiment Z1, DESIGN 4.5f).
+- **Discovery of locks** from the node: object files only (as for pending parts).
+- **Stake, a registry, unbonding, markets without an order book**: not in this stage.

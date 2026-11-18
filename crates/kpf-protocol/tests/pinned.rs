@@ -32,6 +32,8 @@ fn manifest_matches_sources_and_embedded_artifacts() {
     assert_eq!(m.kpf_open.artifact_sha256, sha(norm(open_artifact_text()).as_bytes()));
     assert_eq!(m.kpf_pending.source_sha256, sha(source("KpfPending.sil").as_bytes()), "contracts/KpfPending.sil changed: regenerate the artifacts");
     assert_eq!(m.kpf_pending.artifact_sha256, sha(norm(pending_artifact_text()).as_bytes()));
+    assert_eq!(m.kpf_lock.source_sha256, sha(source("KpfLock.sil").as_bytes()), "contracts/KpfLock.sil changed: regenerate the artifacts");
+    assert_eq!(m.kpf_lock.artifact_sha256, sha(norm(lock_artifact_text()).as_bytes()));
 }
 
 #[test]
@@ -44,14 +46,14 @@ fn sha256sums_cover_every_pinned_file() {
         assert_eq!(h, sha(text.as_bytes()), "{path}");
         seen += 1;
     }
-    assert_eq!(seen, 7, "KpfPair.sil, KpfOpen.sil, KpfPending.sil, the three artifacts and the manifest");
+    assert_eq!(seen, 9, "KpfPair.sil, KpfOpen.sil, KpfPending.sil, KpfLock.sil, the four artifacts and the manifest");
     assert!(sums.contains("artifacts/manifest.json"));
 }
 
 #[test]
 fn templates_and_hashes_agree_with_the_manifest() {
     let m = manifest();
-    for (t, c) in [(pair_template(), &m.kpf_pair), (open_template(), &m.kpf_open), (pending_template(), &m.kpf_pending)] {
+    for (t, c) in [(pair_template(), &m.kpf_pair), (open_template(), &m.kpf_open), (pending_template(), &m.kpf_pending), (lock_template(), &m.kpf_lock)] {
         assert_eq!(t.prefix.len(), c.prefix_len);
         assert_eq!(t.suffix.len(), c.suffix_len);
         assert_eq!(t.state_len, c.state_len);
@@ -60,6 +62,7 @@ fn templates_and_hashes_agree_with_the_manifest() {
     }
     assert_ne!(pair_template().hash, open_template().hash);
     assert_ne!(pair_template().hash, pending_template().hash);
+    assert_ne!(pending_template().hash, lock_template().hash);
     // The KOB evidence templates are the ones KOB itself pins in KobCondAsk (vendor/kob/contracts/orders/KobCondAsk.ctor.json).
     let k = kob_consts();
     assert_eq!(k.ask_tpl[..4], [7, 11, 179, 178]);
@@ -69,28 +72,34 @@ fn templates_and_hashes_agree_with_the_manifest() {
 #[test]
 fn state_lengths_are_the_contracts() {
     let p = pair(pubkey(1), pubkey(2));
-    assert_eq!(p.state_bytes().len(), 492);
+    assert_eq!(p.state_bytes().len(), 519);
     assert_eq!(p.state_bytes().len(), pair_template().state_len);
     let o = long_order(pubkey(1));
-    assert_eq!(o.state_bytes().len(), 375);
+    assert_eq!(o.state_bytes().len(), 402);
     assert_eq!(o.state_bytes().len(), open_template().state_len);
-    // The market block is the first 261 bytes of all three, byte for byte (the contracts compare and copy them).
-    assert_eq!(p.state_bytes()[..261], o.state_bytes()[..261]);
+    // The market block is the first 288 bytes of the pair, the order and the pending part, byte for byte (the contracts
+    // compare and copy them), and bytes [42..330) of a lock (after its bond header).
+    assert_eq!(p.state_bytes()[..288], o.state_bytes()[..288]);
     let w = kpf_protocol::pending::pending_of(&p, p.size, KIND_LIQ, LONG, 940_000_000, pubkey(3));
-    assert_eq!(w.state_bytes().len(), 621);
+    assert_eq!(w.state_bytes().len(), 666);
     assert_eq!(w.state_bytes().len(), pending_template().state_len);
-    assert_eq!(p.state_bytes()[..261], w.state_bytes()[..261]);
+    assert_eq!(p.state_bytes()[..288], w.state_bytes()[..288]);
+    let l = w.lock_of(pubkey(4), kaspa_consensus_core::Hash::from_bytes([9; 32]), 1_000, (p.floor() + w.bond) as u64);
+    assert_eq!(l.state_bytes().len(), 468);
+    assert_eq!(l.state_bytes().len(), lock_template().state_len);
+    assert_eq!(p.state_bytes()[..288], l.state_bytes()[42..330]);
 }
 
 #[test]
 fn the_pinned_sample_instance_decodes_and_re_encodes() {
-    for base in [pair_base(), open_base(), pending_base()] {
+    for base in [pair_base(), open_base(), pending_base(), lock_base()] {
         let c = &base.contracts.values().next().unwrap().compiled;
         let d = decode_redeem(&c.bytecode).expect("sample decodes");
         let again = match d {
             Decoded::Pair(p) => p.redeem(),
             Decoded::Open(o) => o.redeem(),
             Decoded::Pending(w) => w.redeem(),
+            Decoded::Lock(l) => l.redeem(),
         };
         assert_eq!(again, c.bytecode);
     }

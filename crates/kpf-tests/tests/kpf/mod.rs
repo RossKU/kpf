@@ -20,7 +20,7 @@ use crate::common::*;
 pub use kpf_protocol::artifacts::splice;
 pub use kpf_protocol::payoff::q;
 #[allow(unused_imports)]
-pub use kpf_protocol::state::{Market, Open, Pair, Pending, LONG, SHORT, ZERO};
+pub use kpf_protocol::state::{Lock, Market, Open, Pair, Pending, LONG, SHORT, ZERO};
 
 pub const SCALE: i64 = 1_000_000; // 6 decimals (DESIGN 5 worked example)
 pub const C: i64 = 20_000_000; // 0.2 KAS carrier
@@ -62,6 +62,9 @@ pub fn market_of(token_tpl_hash: Hash, tpl_prefix_len: i64, tpl_suffix_len: i64)
         g_bps: 200,
         challenge_daa: 6_000,
         min_evidence_life: 864_000,
+        lock_bps: 11_000,
+        dispute_daa: 6_600,
+        grace_daa: 1_200,
     }
 }
 

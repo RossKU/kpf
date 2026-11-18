@@ -137,6 +137,10 @@ fn constrained(label: &str) -> bool {
         || label.starts_with("evidence ask continuation")
         || label.starts_with("evidence ask custody rest")
         || label.starts_with("evidence bid continuation")
+        || label.starts_with("lock of the guarantor")
+        || label.contains("restitution to the wronged party")
+        || label.contains(": burned")
+        || label.starts_with("the guarantor's lock returned")
 }
 
 /// Every party output one sompi lower is refused by an input (the change absorbs the sompi, so the transaction stays
@@ -175,7 +179,7 @@ fn refused(b: &Built, who: usize, f: impl Fn(&mut Built)) {
 
 fn set_arg(b: &mut Built, input: usize, arg: usize, a: Arg) {
     match &mut b.plans[input] {
-        Plan::Pair { args, .. } | Plan::Kob { args, .. } | Plan::Open { args, .. } | Plan::Pending { args, .. } => args[arg] = a,
+        Plan::Pair { args, .. } | Plan::Kob { args, .. } | Plan::Open { args, .. } | Plan::Pending { args, .. } | Plan::Lock { args, .. } => args[arg] = a,
         _ => panic!("not a contract input"),
     }
 }
@@ -295,7 +299,7 @@ fn a_stale_proposal_is_refuted_by_a_challenge() {
     let l = w.pair(0x31);
     let e = w.ask(LIQ_ASK, 1_500_000_000);
     w.rest();
-    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer: 0, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
     // The counter bid: placed after the proposal, rests R.
     let cb = w.bid_id(980_000_000, 1_500_000_000, 0xe7);
     let seller = w.tokens(1_500_000_000);
@@ -319,7 +323,7 @@ fn a_stale_proposal_is_refuted_by_a_challenge() {
     let l = w.pair(0x32);
     let e = w.ask(LIQ_ASK, 1_500_000_000);
     w.rest();
-    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer: 0, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
     let cb = w.bid_id(960_000_000, 1_500_000_000, 0xe7);
     let seller = w.tokens(1_500_000_000);
     w.rest();
@@ -334,7 +338,7 @@ fn a_cure_moves_the_bound_and_repays_the_proposer() {
     let l = w.pair(0x31);
     let e = w.ask(LIQ_ASK, 1_500_000_000);
     w.rest();
-    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: 400_000_000, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: 400_000_000, offer: 0, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
     let f = w.funding();
     let b = cure(&wp, &f, &opts()).unwrap();
     assert_outputs_are_least(&b);
@@ -350,7 +354,7 @@ fn a_cure_moves_the_bound_and_repays_the_proposer() {
     let l = w.pair(0x33);
     let e = w.ask(1_050_000_000, 1_500_000_000);
     w.rest();
-    let (_, wc, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, act: Act::Close { side: SHORT } }), e, None);
+    let (_, wc, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer: 0, act: Act::Close { side: SHORT } }), e, None);
     let f = w.funding();
     assert!(cure(&wc, &f, &opts()).unwrap_err().to_string().contains("only a pending liquidation"));
 }
@@ -591,7 +595,7 @@ fn assert_unusable(w: &mut W, ev: Evidence, word: &str) {
     w.rest();
     let f = w.funding();
     let eu = EvidenceUse { order: ev, fill: None, seller: Some(seller), now: None, allow_dead: false };
-    let leg = Member::Propose(Leg { pair: l, n: N, act: Act::Liq { side: if eu.order.is_ask() { LONG } else { SHORT }, proposer: pubkey(F) } });
+    let leg = Member::Propose(Leg { pair: l, n: N, offer: 0, act: Act::Liq { side: if eu.order.is_ask() { LONG } else { SHORT }, proposer: pubkey(F) } });
     // The builder refuses it, in the same words.
     let e = evidence_tx(std::slice::from_ref(&leg), &eu, &f, &opts()).err().expect("the builder refuses").to_string();
     assert!(e.contains("cannot serve as evidence") && e.contains(word), "{e}");
@@ -708,15 +712,21 @@ fn what_the_evidence_lets_a_pair_do() {
 /// (name, txid, sha256 of the RPC JSON) of each shape: fixed TEST-ONLY keys and fixed inputs give fixed transactions
 /// (signing is deterministic). `KPF_GOLDEN=print` shows the values after an intended change.
 const GOLDEN: &[(&str, &str, &str)] = &[
-    ("propose: the long closes 1,000 at a 10 KAS bid", "61f43883e7d2abb65dcda4b8b968bcdba582d23330d258dbef1e1270a2cdcce4", "cd3cadc58dfab9a106307ac1eab9357f90d59fbfc037b6ab847c853e45143ffb"),
-    ("finalize: the long's close", "575beb51550d10711b75f6d4126b568a4ad7c582383ef3d137ccd5a6cd0c504a", "1363dcd3b073243cb464d75ee5704aab2d9e042d34aa9ee41e4b6578fabd737b"),
-    ("propose: the short closes 400 at a 10.5 KAS ask", "535e5e7b4b06fedffb757a7ac9e114d8ffd0e318c13fe47eb33aa9b2348274e6", "c293d088690937b346c5f19412bf75fdddedf37be76350caed6e7b04023a7b18"),
-    ("propose: a long's liquidation at a 9.4 KAS ask", "4db5c85fcaf382f6c629f207e0c741f3b4519a3671600e4f2bafb0737134d366", "b69178c896f01c8021c432715040cf2a673d0a871aaf5b86d4db51a67c32fb5f"),
-    ("cure: the long moves bl to 8.7514", "34482a0b246c8b4b373f37e0e05e102cce0e58cdda4ff012af5b7f6a894663a9", "953d71b5de82866c0b73fc4e1835895be9e1ffcd7e322420b161c344aa5769fa"),
-    ("challenge: a 9.80 KAS bid refutes it", "efc8de70e4336211800f5ac42bdc269dded843f24195d69306ac7729a0bc7ebf", "9b8edbc4812eaf611c94a2040b17aa16ca33f9df6b868bae7d7aa9bccbf5862e"),
-    ("finalize: forfeit and keep", "b579c2fbc0203cd4a062601c34f6d16fe5979cdc37515539208be757901cdd65", "0826d9bc994ff6ce7ae85e611ec893607c4d46210b7ed36e0fb6e092f83b9fcf"),
-    ("propose: a short's liquidation at an 11.5 KAS bid", "d835b83b3644041e9b62689c12c4be7b8f363620a10ea17c90357e1758abff8b", "fd6d225bb61165fd85c5b1cb9e6fedf53e10c5effad5af1808b162780bfd0ece"),
-    ("propose: a block of 3 longs on one 9.4 KAS ask", "4f4c2f332287759df9c250b4f97c746cd6c4eac4247494307101b1beff114760", "3df7252ae3a29f09d193ca435dc668c6721b9498f9c3716693b9e752432c7dd6"),
+    ("propose: the long closes 1,000 at a 10 KAS bid", "0881f391bfbf12ffed438584e3f29151193031977c25792acd9686a494b82e00", "004605d4431842b29616ed700e6dde8adb02646a31a12b6e61991e3e7174a804"),
+    ("finalize: the long's close", "3003da59a1c0217c509a4cb0286172585d114e3d7ec81909096dcc3f1922738c", "06f42c24d3053034cb7391759d5802bf25c379c0d661b582d06796c97e15ea29"),
+    ("propose: the short closes 400 at a 10.5 KAS ask", "331fa9ea5ee20077eaa64ab4b2385cc941ff7696764d3761cd655800470773fd", "0511a59374058c7e38de926e7ea67d8a5def9140d3bc52ba2f44d812c19f5584"),
+    ("propose: a long's liquidation at a 9.4 KAS ask", "93afb8709880492694a05f24257c5d5d8970c68837efaaf7d193987d106218ff", "5793d63005d285e27ed73cb5734d3f746a1257a52d3110119aa6c7df173803d2"),
+    ("cure: the long moves bl to 8.7514", "22d3248d5c4671351acb2361594a2eb48ad2c82500cd8bb9c453ecb2cca4af85", "d83e96187f0fffd4d2d652f3178854328255e39e54a46ec99c1ce6eca51dc5a9"),
+    ("challenge: a 9.80 KAS bid refutes it", "adeb7e7a3e9beee24ca4819f5885e8f10aaf006cbf45c0115fb662dd7c7a87d6", "80f31840a5eda7fbe4754126411f24e5686138c4dbf75b4c80f9dd894f507339"),
+    ("finalize: forfeit and keep", "226add649ef3b1b0773f67df90952c0025c65e19a4a18a9e4831efdaa4fcc8c5", "12528b08b2426b90f84f367f4032f869aa9b9ea62039b1d1b0cef5191fb3ea89"),
+    ("propose: a short's liquidation at an 11.5 KAS bid", "4e9f37fd9126341ea930b938642ce561b27325acdef81c4cba12bdc5459717d0", "47a8e2b67d7c2bca235bdc6df8830a1105bc9bf84d2c4af0630a49506aec9a89"),
+    ("propose: a block of 3 longs on one 9.4 KAS ask", "5f59f22fa2b84b3e121bd9c1e00e9f3ed359bace909e9e50a6569a7152a03a2c", "b7a68142d8453e1bc78be1142e210e6e27243698ac157fad4db8a55cd3f2561b"),
+    ("propose: a long's liquidation at 9.4 KAS with a 10 KAS offer", "622b4085722ce4be218e51acda0c80d3791c87809ddfecef7ef3d18008ff29da", "b57b20aa1a6dce5e77d0ae35e2e301be514e03369284f5a4bbc40a7ef5ec55a4"),
+    ("guarantee: the liquidation settles at once, lock 3,310 KAS", "bfaa02cc022f2140f56cf3d553098ae639bbb3203fa3bd48ddd514ca7ab70aef", "6114a82871eb52b30c6de3742834e8b628bc01b54fd796bf367ce161e4a4f61d"),
+    ("dispute: a 9.80 KAS bid refutes it, the long is paid 800 KAS", "57636aac738bd179bc4f1855c051d1793ea1b3c2609a5a21c0aef11507a8fecc", "61ad95e6e6ea7424c3ed6d860a96d548846e06fa26d125b97d47d2197b36c7d7"),
+    ("propose: the long closes 1,000 at a 10 KAS bid (to guarantee)", "0881f391bfbf12ffed438584e3f29151193031977c25792acd9686a494b82e00", "004605d4431842b29616ed700e6dde8adb02646a31a12b6e61991e3e7174a804"),
+    ("guarantee: the close settles at once", "d0db5a438d6f25e6962359039d5c622d256db431d6ad9caf7e7ccedd45f392ea", "b9be05a959dc367f1985a83f4e512cf50bb5cf8fd0be472383313c19e20d12f9"),
+    ("release: the lock returns to the guarantor", "79332f711649dfcef35b6d8a763c6a4f7fee9f3c94fb44bf131ba79a00b58acc", "8cd47ed45d9e53633f55c3974ee576eaa68dab69af2c36413eacc0656ac015c6"),
 ];
 
 fn sha(v: &serde_json::Value) -> String {
@@ -795,6 +805,47 @@ fn golden_evidence_paths() {
         let f = w.funding();
         add("propose: a block of 3 longs on one 9.4 KAS ask", &propose_liquidate(&pairs, &pk, &eu(e, None), &f, &opts()).unwrap());
     }
+    // Guaranteed fast settlement (DESIGN 4.5f): a liquidation with an offer, guaranteed after the grace and disputed; a
+    // close guaranteed at once and released after the window.
+    {
+        let mut w = W::new();
+        let l = w.pair(0x31);
+        let e = w.ask(LIQ_ASK, 1_500_000_000);
+        w.rest();
+        let f = w.funding();
+        let m = Member::Propose(Leg { pair: l.clone(), n: N, offer: 1_000_000_000, act: Act::Liq { side: LONG, proposer: pk } });
+        let s = add("propose: a long's liquidation at 9.4 KAS with a 10 KAS offer", &evidence_tx(&[m], &eu(e, None), &f, &opts()).unwrap());
+        let live = w.chain.apply_signed(&s).unwrap();
+        let wp = pendings_of(&live).remove(0);
+        w.chain.advance(w.m.grace_daa as u64);
+        let f = w.funding();
+        let s = add("guarantee: the liquidation settles at once, lock 3,310 KAS", &guarantee(&wp, &pubkey(25), &f, &opts()).unwrap());
+        let live = w.chain.apply_signed(&s).unwrap();
+        let lock = locks_of(&live).remove(0);
+        let cb = w.bid_id(980_000_000, 1_500_000_000, 0xe7);
+        let seller = w.tokens(1_500_000_000);
+        w.rest();
+        let f = w.funding();
+        add("dispute: a 9.80 KAS bid refutes it, the long is paid 800 KAS", &dispute(&[lock], &eu(cb, Some(seller)), &f, &opts()).unwrap());
+    }
+    {
+        let mut w = W::new();
+        let l = w.pair(0x31);
+        let e = w.bid(1_000_000_000, 1_500_000_000);
+        let seller = w.tokens(1_500_000_000);
+        w.rest();
+        let f = w.funding();
+        let s = add("propose: the long closes 1,000 at a 10 KAS bid (to guarantee)", &propose_close(&l, LONG, N, &eu(e, Some(seller)), &f, &opts()).unwrap());
+        let live = w.chain.apply_signed(&s).unwrap();
+        let wp = pendings_of(&live).remove(0);
+        let f = w.funding();
+        let s = add("guarantee: the close settles at once", &guarantee(&wp, &pubkey(25), &f, &opts()).unwrap());
+        let live = w.chain.apply_signed(&s).unwrap();
+        let lock = locks_of(&live).remove(0);
+        w.chain.advance(w.m.dispute_daa as u64);
+        let f = w.funding();
+        add("release: the lock returns to the guarantor", &release(&lock, &f, &opts()).unwrap());
+    }
     if std::env::var("KPF_GOLDEN").as_deref() == Ok("print") {
         for (n, id, h) in &rows {
             println!("    (\"{n}\", \"{id}\", \"{h}\"),");
@@ -819,8 +870,8 @@ fn one_print_serves_a_block_of_proposals_and_one_of_challenges() {
     w.rest();
     let f = w.funding();
     let legs = [
-        Member::Propose(Leg { pair: a, n: N, act: Act::Close { side: SHORT } }),
-        Member::Propose(Leg { pair: b, n: 400_000_000, act: Act::Liq { side: LONG, proposer: pubkey(F) } }),
+        Member::Propose(Leg { pair: a, n: N, offer: 0, act: Act::Close { side: SHORT } }),
+        Member::Propose(Leg { pair: b, n: 400_000_000, offer: 0, act: Act::Liq { side: LONG, proposer: pubkey(F) } }),
     ];
     let built = evidence_tx(&legs, &eu(e, None), &f, &opts()).unwrap();
     assert_outputs_are_least(&built);
@@ -845,4 +896,123 @@ fn one_print_serves_a_block_of_proposals_and_one_of_challenges() {
     assert_outputs_are_least(&b);
     let (_, live) = w.run(&b);
     assert_eq!(pairs_of(&live).len(), 2);
+}
+
+// ---------------------------------------------------------------- guaranteed fast settlement (DESIGN 4.5f)
+
+fn locks_of(live: &[Live]) -> Vec<LiveLock> {
+    live.iter().filter_map(|l| if let Live::Lock(x) = l { Some(x.clone()) } else { None }).collect()
+}
+
+/// A liquidation proposed with an offer, guaranteed after the cure grace, then disputed by a third-party bid placed
+/// after the claim: the proposer is paid bond + fee less the offer at once, the lock holds lambda x cover + offer, the
+/// long is paid its side at the bid from the lock, the burn output is P2SH(OP_RETURN), the executor keeps the reward.
+/// Everything passes the full verification (scripts with committed budgets, mass, fee floor) on the in-memory chain.
+#[test]
+fn a_guaranteed_liquidation_is_disputed_on_the_chain() {
+    let mut w = W::new();
+    let l = w.pair(0x31);
+    let e = w.ask(LIQ_ASK, 1_500_000_000);
+    w.rest();
+    let offer = 1_000_000_000;
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
+    assert_eq!(wp.w.offer, offer);
+    assert!(wp.w.guaranteeable_at(wp.daa));
+    // Before the grace the chain refuses the guarantee (its relative lock has not matured).
+    let f = w.funding();
+    let b = guarantee(&wp, &pubkey(25), &f, &opts()).unwrap();
+    let s = b.sign(&keys()).unwrap();
+    assert!(w.chain.apply_signed(&s).is_err(), "a liquidation is guaranteed only after the cure grace");
+    w.chain.advance(w.m.grace_daa as u64);
+    let f = w.funding();
+    let b = guarantee(&wp, &pubkey(25), &f, &opts()).unwrap();
+    assert_outputs_are_least(&b);
+    let (s, live) = w.run(&b);
+    let (_, pp) = out_of(&s, "proposer paid");
+    assert_eq!(pp.value as i64, wp.w.bond + wp.w.fee - offer);
+    let lock = locks_of(&live).remove(0);
+    assert_eq!(lock.value as i64, kpf_protocol::lock::ratio_up(q(N, 300_000_000, w.m.scale, 0), w.m.lock_bps) + offer);
+    assert_eq!((lock.l.owner, lock.l.victim, lock.l.claim_id), (pubkey(25), pubkey(L), wp.id));
+    assert!(pairs_of(&live).iter().any(|p| p.p.long_key == pubkey(S) && p.p.short_key == pubkey(S)), "the forfeited part, both sides the short's");
+    // The dispute: a third-party bid at 9.80 placed after the claim, rested R from it.
+    let cb = w.bid_id(980_000_000, 1_500_000_000, 0xe7);
+    let seller = w.tokens(1_500_000_000);
+    w.rest();
+    let f = w.funding();
+    let b = dispute(&[lock.clone()], &eu(cb, Some(seller)), &f, &opts()).unwrap();
+    assert_outputs_are_least(&b);
+    let before = w.chain.balance(&pubkey(L));
+    let (s, _) = w.run(&b);
+    let h = q(N, 980_000_000 - 900_000_000, w.m.scale, 0);
+    assert_eq!(w.chain.balance(&pubkey(L)) - before, h as u64, "the long is paid its side at 9.80: 800 KAS");
+    let (_, burn) = out_of(&s, "burned");
+    assert_eq!(burn.script_public_key, kpf_protocol::lock::burn_spk());
+    assert_eq!(burn.value as i64, lock.value as i64 - h - lock.l.reward());
+}
+
+/// A close guaranteed at once (no grace), then released after the window; a release before it is refused by the chain,
+/// and a dispute whose counter order rested only after the window is refused by the builder (and by the lock).
+#[test]
+fn a_guaranteed_close_is_released_after_the_window() {
+    let mut w = W::new();
+    let l = w.pair(0x31);
+    let e = w.bid(1_000_000_000, 1_500_000_000);
+    let seller = w.tokens(1_500_000_000);
+    w.rest();
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer: 0, act: Act::Close { side: LONG } }), e, Some(seller));
+    let f = w.funding();
+    let b = guarantee(&wp, &pubkey(25), &f, &opts()).unwrap();
+    assert_outputs_are_least(&b);
+    let (s, live) = w.run(&b);
+    let (_, lp) = out_of(&s, "long paid");
+    assert_eq!(lp.value as i64, q(N, 100_000_000, w.m.scale, 0) + wp.w.refund, "the long's payoff at 10 plus its refund, at once");
+    let lock = locks_of(&live).remove(0);
+    let f = w.funding();
+    let b = release(&lock, &f, &opts()).unwrap();
+    let s = b.sign(&keys()).unwrap();
+    assert!(w.chain.apply_signed(&s).is_err(), "a release before the window is refused");
+    // A counter ask that rests only after the window cannot dispute it.
+    w.chain.advance(w.m.dispute_daa as u64);
+    let ca = w.ask_id(950_000_000, 1_500_000_000, 0xe8);
+    w.rest();
+    let f = w.funding();
+    let err = dispute(&[lock.clone()], &eu(ca, None), &f, &opts()).unwrap_err().to_string();
+    assert!(err.contains("after the dispute window"), "{err}");
+    let f = w.funding();
+    let b = release(&lock, &f, &opts()).unwrap();
+    assert_outputs_are_least(&b);
+    let before = w.chain.balance(&pubkey(25));
+    w.run(&b);
+    assert_eq!(w.chain.balance(&pubkey(25)) - before, lock.value, "the whole lock back to the guarantor");
+}
+
+/// The builders refuse what the contracts refuse: an offer above the bond less 0.02 KAS; a guarantee of a part accepted
+/// after its evidence died; a dispute one tick short of the margin.
+#[test]
+fn guarantee_builders_refuse_what_the_contracts_refuse() {
+    let mut w = W::new();
+    let l = w.pair(0x31);
+    let e = w.ask(LIQ_ASK, 1_500_000_000);
+    w.rest();
+    let f = w.funding();
+    let bond = kpf_protocol::pending::bond_of(&l.p, N);
+    let m = Member::Propose(Leg { pair: l.clone(), n: N, offer: bond - PLAIN_DUST + 1, act: Act::Liq { side: LONG, proposer: pubkey(23) } });
+    let err = evidence_tx(&[m], &eu(e.clone(), None), &f, &opts()).unwrap_err().to_string();
+    assert!(err.contains("offer"), "{err}");
+    let (_, wp, _) = proposed(&mut w, &l, Member::Propose(Leg { pair: l.clone(), n: N, offer: 0, act: Act::Liq { side: LONG, proposer: pubkey(23) } }), e, None);
+    let mut late = wp.clone();
+    late.daa = (wp.w.visible_until + 1) as u64;
+    let err = guarantee(&late, &pubkey(25), &f, &opts()).unwrap_err().to_string();
+    assert!(err.contains("slow path"), "{err}");
+    w.chain.advance(w.m.grace_daa as u64);
+    let f = w.funding();
+    let (_, live) = w.run(&guarantee(&wp, &pubkey(25), &f, &opts()).unwrap());
+    let lock = locks_of(&live).remove(0);
+    let bound = lock.l.contradiction_bound().unwrap();
+    let cb = w.bid_id(bound - 1, 1_500_000_000, 0xe9);
+    let seller = w.tokens(1_500_000_000);
+    w.rest();
+    let f = w.funding();
+    let err = dispute(&[lock], &eu(cb, Some(seller)), &f, &opts()).unwrap_err().to_string();
+    assert!(err.contains("does not contradict"), "{err}");
 }

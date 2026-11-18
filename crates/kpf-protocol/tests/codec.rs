@@ -74,7 +74,7 @@ fn decoding_is_strict() {
     assert!(Pair::decode_state(&bad).is_err());
     // Negative zero is not canonical.
     let mut nz = s.clone();
-    nz[371] = 0x80; // longAsk = 0 with the sign bit: "negative zero"
+    nz[398] = 0x80; // longAsk = 0 with the sign bit: "negative zero"
     assert!(Pair::decode_state(&nz).is_err());
     // A redeem script of another template, or of the wrong length.
     let mut rs = p.redeem();
@@ -264,4 +264,31 @@ fn quote_table_matches_the_design_worked_example() {
     assert_eq!(liq_fee(&p, 1_000_000_000, 940_000_000, LONG), 1_000 * 4_700_000);
     assert_eq!(slice_of(&p, 1_000_000_000, LONG), 1_000 * 47_368_421);
     assert_eq!(winner_at_trigger(&p, 1_000_000_000, LONG), 1_000 * (1_200_000_000 - 947_368_421));
+}
+
+/// The lock of a guaranteed fast settlement (DESIGN 4.5f): its state round-trips, its redeem script decodes as a lock
+/// (and as nothing else), and the lock a guarantee writes names the claim, its clock and its victim.
+#[test]
+fn lock_codec_round_trips() {
+    let mut r = Lcg(77);
+    for _ in 0..50 {
+        let mut p = pair(pubkey(1 + (r.next() % 5) as u8), pubkey(6 + (r.next() % 5) as u8));
+        p.size = r.range(p.m.min_size, 1_000_000_000_000);
+        p.bs = r.range(2, 10_000_000_000);
+        p.bl = r.range(0, p.bs - 1);
+        let n = p.size;
+        let kind = if r.next() % 2 == 0 { KIND_CLOSE } else { KIND_LIQ };
+        let side = if r.next() % 2 == 0 { LONG } else { SHORT };
+        let w = kpf_protocol::pending::pending_with(&p.clocked(5), n, kind, side, p.bl + 1, pubkey(3), 1_000_000, 0);
+        let value = (p.floor() + w.bond) as u64;
+        let l = w.lock_of(pubkey(4), Hash::from_bytes([9; 32]), r.range(0, 10_000_000) as u64, value);
+        assert_eq!(l.state_bytes().len(), 468);
+        assert_eq!(Lock::decode_state(&l.state_bytes()).unwrap(), l);
+        assert_eq!(Lock::decode_redeem(&l.redeem()).unwrap(), l);
+        assert!(matches!(decode_redeem(&l.redeem()), Ok(Decoded::Lock(_))));
+        assert!(Pending::decode_redeem(&l.redeem()).is_err() && Pair::decode_redeem(&l.redeem()).is_err());
+        assert_eq!((l.victim, l.claim_id, l.kind, l.side, l.n), (w.defender_key(), Hash::from_bytes([9; 32]), kind, side, n));
+        assert!(l.cover >= 0 && l.cover <= value as i64);
+        assert!(w.lock_min(value) >= kpf_protocol::lock::LOCK_FLOOR);
+    }
 }

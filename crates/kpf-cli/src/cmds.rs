@@ -311,6 +311,7 @@ pub fn inspect(a: &Args) -> R<()> {
         Decoded::Pair(p) => ("pair", p.to_json(), kpf_protocol::artifacts::pair_template().hash),
         Decoded::Open(o) => ("order", o.to_json(), kpf_protocol::artifacts::open_template().hash),
         Decoded::Pending(w) => ("pending", w.to_json(), kpf_protocol::artifacts::pending_template().hash),
+        Decoded::Lock(l) => ("lock", l.to_json(), kpf_protocol::artifacts::lock_template().hash),
     };
     let mut doc = json!({
         "kind": kind, "network": net.name(), "address": p2sh_address(&rs, net), "redeemBytes": rs.len(),
@@ -377,11 +378,27 @@ pub fn inspect(a: &Args) -> R<()> {
                 println!("WARNING: the pair states this part may become do not match the state it describes: not written by the pinned KpfPair (a look-alike)");
             }
         }
+        Decoded::Lock(l) => {
+            let sc = l.m.scale;
+            let side = if l.side == LONG { "long" } else { "short" };
+            let claim = if l.kind == KIND_CLOSE { format!("the {side} closed at {} KAS", fmt_kas(l.quote as i128)) } else { format!("the {side} was liquidated (evidence quote {} KAS)", fmt_kas(l.quote as i128)) };
+            println!("LOCK of a guaranteed fast settlement (DESIGN 4.5f): {claim} on {} tokens of the range {} .. {} KAS", fmt_units(l.n as i128, sc as i128), fmt_kas(l.bl as i128), fmt_kas(l.bs as i128));
+            println!("guarantor {}   wronged party if refuted {}   cover {} KAS   claim id {}   clock P {}", to_hex(&l.owner), to_hex(&l.victim), fmt_kas(l.cover as i128), short_hash(&l.claim_id), l.clock);
+            match l.contradiction_bound() {
+                Some(b) => println!("disputed by a fresh {} {} {} KAS resting {} DAA from P and done resting by F + {} DAA", if l.counter_is_ask() { "ask" } else { "bid" }, if l.counter_is_ask() { "<=" } else { ">=" }, fmt_kas(b as i128), l.m.min_rest_daa, l.m.dispute_daa - l.m.min_rest_daa),
+                None => println!("no quote in 0..=priceMax disputes it"),
+            }
+            match obj.as_ref().and_then(|o| o.daa) {
+                Some(d) => println!("release from DAA {} (this UTXO's DAA F = {d} + the window {})", l.release_from(d), l.m.dispute_daa),
+                None => println!("release once this UTXO is {} DAA old", l.m.dispute_daa),
+            }
+        }
     }
     let m = match &d {
         Decoded::Pair(p) => &p.m,
         Decoded::Open(o) => &o.m,
         Decoded::Pending(w) => &w.m,
+        Decoded::Lock(l) => &l.m,
     };
     println!(
         "market token {}  template {}  maintenance {} bps  evidence k {} bps  rest {} DAA  liquidation fee {} bps (min {} KAS)  carrier {} KAS",
@@ -402,6 +419,10 @@ pub fn inspect(a: &Args) -> R<()> {
         m.g_bps,
         m.challenge_daa,
         m.min_evidence_life
+    );
+    println!(
+        "guaranteed fast settlement (DESIGN 4.5f): lock ratio lambda {} bps, dispute window {} DAA after the settlement, cure grace of a liquidation {} DAA",
+        m.lock_bps, m.dispute_daa, m.grace_daa
     );
     if let Some(o) = &obj {
         println!("utxo {}:{}  {} KAS  DAA {}  covenant id {}", o.op.transaction_id, o.op.index, fmt_kas(o.amount as i128), daa_str(o.daa), short_hash(&o.covenant_id));
@@ -487,6 +508,15 @@ pub fn quote(a: &Args) -> R<()> {
     let refute_short = claim(KIND_LIQ, SHORT, liq_short.limit).contradiction_bound();
     let cure_long = kpf_protocol::pending::cure_bound_of(&p.m, LONG, liq_long.limit);
     let cure_short = kpf_protocol::pending::cure_bound_of(&p.m, SHORT, liq_short.limit);
+    // Guaranteed fast settlement (DESIGN 4.5f): what a guarantor locks for a claim on this part and what it earns.
+    let lam = p.m.lock_bps;
+    let liq_cover = part.range_of(n);
+    let ec = p.entry.clamp(p.bl, p.bs);
+    let close_long_cover = kpf_protocol::payoff::q(n, ec - p.bl, sc, 0);
+    let close_short_cover = kpf_protocol::payoff::q(n, p.bs - ec, sc, 0);
+    let lock_for = |cover: i64| kpf_protocol::lock::ratio_up(cover, lam).max(kpf_protocol::lock::LOCK_FLOOR);
+    let reward_for = |cover: i64| kpf_protocol::lock::ratio_down(cover, lam - kpf_protocol::state::BPS);
+    let max_offer = (bond - kpf_protocol::state::PLAIN_DUST).max(0);
     if a.has("json") {
         let r: Vec<Value> = rows
             .iter()
@@ -504,9 +534,16 @@ pub fn quote(a: &Args) -> R<()> {
             "liquidationOfTheLongRefutedByABidAtLeast": refute_long, "liquidationOfTheShortRefutedByAnAskAtMost": refute_short,
             "cureBoundLongAtExtremeQuote": cure_long, "cureBoundShortAtExtremeQuote": cure_short,
         });
+        let guarantee = json!({
+            "lockBps": lam, "disputeDaa": p.m.dispute_daa, "graceDaa": p.m.grace_daa,
+            "liquidation": {"cover": liq_cover, "lock": lock_for(liq_cover), "disputerReward": reward_for(liq_cover)},
+            "closeOfTheLongAtEntry": {"cover": close_long_cover, "lock": lock_for(close_long_cover), "disputerReward": reward_for(close_long_cover)},
+            "closeOfTheShortAtEntry": {"cover": close_short_cover, "lock": lock_for(close_short_cover), "disputerReward": reward_for(close_short_cover)},
+            "guarantorEarnsTheOfferUpTo": max_offer, "offerIsAddedToTheLock": true,
+        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor(), "liquidation": liq, "twoStep": two_step}))
+            serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor(), "liquidation": liq, "twoStep": two_step, "guarantee": guarantee}))
                 .expect("json")
         );
         return Ok(());
@@ -569,6 +606,24 @@ pub fn quote(a: &Args) -> R<()> {
         opt(refute_short)
     );
     println!("  the threatened owner may cure instead: the long to bl {}, the short to bs {} (at the extreme quotes)", opt(cure_long), opt(cure_short));
+    println!(
+        "Guaranteed fast settlement (DESIGN 4.5f, lambda {} bps): a guarantor may settle a pending claim at once by locking KAS for {} DAA after the settlement (a liquidation once the claim is {} DAA old: the loser's cure grace). It locks lambda times the value the settlement moves away from the party it could wrong, plus the proposer's offer:",
+        lam, p.m.dispute_daa, p.m.grace_daa
+    );
+    println!("  a liquidation of {} tokens covers the part's range {} KAS: lock {} KAS", fmt_units(n as i128, sc as i128), fmt_kas(liq_cover as i128), fmt_kas(lock_for(liq_cover) as i128));
+    println!(
+        "  a close at the entry {} KAS covers the closer's payoff: the long's {} KAS (lock {} KAS), the short's {} KAS (lock {} KAS)",
+        fmt_kas(p.entry as i128),
+        fmt_kas(close_long_cover as i128),
+        fmt_kas(lock_for(close_long_cover) as i128),
+        fmt_kas(close_short_cover as i128),
+        fmt_kas(lock_for(close_short_cover) as i128)
+    );
+    println!(
+        "  the guarantor earns the proposer's offer (0 to {} KAS, set at the proposal, returned with the lock after the window) and risks the whole lock: if the book refutes the claim within the window, the wronged party is paid from it, a disputer keeps (lambda - 1) x cover ({} KAS for the liquidation) and the rest is burned",
+        fmt_kas(max_offer as i128),
+        fmt_kas(reward_for(liq_cover) as i128)
+    );
     Ok(())
 }
 

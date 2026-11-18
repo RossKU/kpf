@@ -119,6 +119,7 @@ impl H {
                 Ok(Decoded::Pair(p)) => Obj::Pair(p),
                 Ok(Decoded::Open(o)) => Obj::Open(o),
                 Ok(Decoded::Pending(w)) => Obj::Pending(w),
+                Ok(Decoded::Lock(l)) => Obj::Lock(l),
                 // A KOB order or a token holder an evidence transaction created: the chain knows it as a UTXO.
                 Err(_) => continue,
             }));
@@ -666,4 +667,122 @@ fn evidence_lifecycle_with_a_kob_book() {
         let err = h.fail(&[gone, "--pair", &pair]);
         assert!(err.contains("unknown command"), "{err}");
     }
+}
+
+/// Guaranteed fast settlement through the binary (DESIGN 4.5f): a stale liquidation of a pair (an ask at 9.40 while the
+/// market is at 10) is proposed with a 10 KAS offer; the guarantee is refused within the cure grace and built after it;
+/// `inspect` shows the lock, `watch` finds the fast-settled claim and a refuting bid with the exact command; the dispute
+/// pays the long from the lock. A truthful close is then guaranteed and its lock released after the window (a release
+/// before it is refused). `quote` states what a guarantor locks and earns.
+#[test]
+fn fast_settlement_lifecycle_with_a_kob_book() {
+    use kpf_protocol::fixtures::{ask_of, bid_escrow, bid_of, kob_market};
+    use kpf_protocol::kob::*;
+
+    let mut h = H::new("guarantee");
+    let m = kob_market();
+    let market = h.p("market.json");
+    std::fs::write(&market, serde_json::to_string(&m.to_json()).unwrap()).unwrap();
+    h.ok(&["market", "--check", &market]);
+    let (lk, l) = h.key("long");
+    let (sk, _s) = h.key("short");
+    let (fk, f) = h.key("executor");
+    let (gk, g) = h.key("guarantor");
+    let (_mk, maker) = h.key("maker");
+    for _ in 0..3 {
+        h.chain.mint(&f, 100_000 * KAS);
+    }
+    h.chain.mint(&g, 100_000 * KAS);
+    let fund = h.funding("f", &f);
+    let lo = h.step(&[
+        "create-order", "--market", &market, "--side", "long", "--size", "2000", "--limit", "10.5", "--rate", "1", "--min-counter-rate", "1.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &lk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let so = h.step(&[
+        "create-order", "--market", &market, "--side", "short", "--size", "1000", "--limit", "9.5", "--rate", "2", "--min-counter-rate", "0.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &sk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let opened = h.step(&["open", "--long", &lo[0], "--short", &so[0], "--n", "1000", "--x", "10", "--funder", &fk, "--funding", &fund]);
+    let pair = opened.iter().find(|p| object_kind(p) == "pair").cloned().expect("pair");
+    let q = h.ok(&["quote", "--pair", &pair]);
+    assert!(q.contains("Guaranteed fast settlement") && q.contains("lock 3300 KAS") && q.contains("earns the proposer's offer"), "{q}");
+
+    // The stale ask and the proposal with an offer.
+    let now = h.chain.daa;
+    let ask_id = kaspa_consensus_core::Hash::from_bytes([0xe1; 32]);
+    let ask = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 940_000_000, 1_500_000_000)), 10 * KAS, ask_id, now);
+    let custody = h.chain.mint_kob(KobObj::Token(TokenState::covid(1_500_000_000, ask_id, m.ext)), 20_000_000, m.token_cov_id, now);
+    let custody_file = kob_file(&h, "custody.json", &custody, None);
+    let ask_file = kob_file(&h, "ask.json", &ask, Some(&custody_file));
+    h.chain.advance(650);
+    let fund = h.funding("f", &f);
+    let claimed = h.step(&["propose-liquidate", "--pair", &pair, "--evidence", &ask_file, "--offer", "10", "--funder", &fk, "--funding", &fund]);
+    let pending = claimed.iter().find(|p| object_kind(p) == "pending").cloned().expect("pending");
+    // Within the cure grace the guarantee is refused with --submit.
+    let fund = h.funding("g", &g);
+    let err = h.fail(&["guarantee", "--pending", &pending, "--funder", &gk, "--funding", &fund, "--daa", &h.chain.daa.to_string(), "--submit", "--out-dir", &h.p("nope")]);
+    assert!(err.contains("cure grace"), "{err}");
+    h.chain.advance(m.grace_daa as u64);
+    let fund = h.funding("g", &g);
+    let settled = h.step(&["guarantee", "--pending", &pending, "--pair", &pair, "--funder", &gk, "--funding", &fund]);
+    let lock = settled.iter().find(|p| object_kind(p) == "lock").cloned().expect("the lock");
+    assert!(settled.iter().any(|p| object_kind(p) == "pair"), "the forfeited part");
+    let out = h.ok(&["inspect", &lock]);
+    assert!(out.contains("LOCK of a guaranteed fast settlement") && out.contains("release from DAA"), "{out}");
+    // The long's watcher: a third-party bid at 9.80 placed after the claim refutes it.
+    let now = h.chain.daa;
+    let cb = bid_of(&m, maker, 980_000_000);
+    let counter = h.chain.mint_kob(KobObj::Bid(cb.clone()), bid_escrow(&cb, 1_500_000_000), kaspa_consensus_core::Hash::from_bytes([0xe7; 32]), now);
+    let counter_file = kob_file(&h, "counter-bid.json", &counter, None);
+    let seller = h.chain.mint_kob(KobObj::Token(TokenState::p2pk(1_000_000_000, f, m.ext)), 20_000_000, m.token_cov_id, now);
+    let seller_file = kob_file(&h, "seller.json", &seller, None);
+    h.chain.advance(60);
+    let scan = std::path::Path::new(&lock).parent().unwrap().display().to_string();
+    let out = h.ok(&["watch", "--pair", &pair, "--scan", &scan, "--order", &counter_file, "--daa", &h.chain.daa.to_string()]);
+    assert!(out.contains("FAST-SETTLED") && out.contains("DISPUTES IT") && out.contains("kpf dispute --lock"), "{out}");
+    let json_out = h.ok(&["watch", "--pair", &pair, "--lock", &lock, "--order", &counter_file, "--daa", &h.chain.daa.to_string(), "--json"]);
+    let v: Value = serde_json::from_str(&json_out).unwrap();
+    assert_eq!(v["pairs"][0]["locks"][0]["disputingOrders"][0]["restitution"], 80_000_000_000i64);
+    let before = h.chain.balance(&l);
+    let fund = h.funding("f", &f);
+    h.step(&["dispute", "--lock", &lock, "--evidence", &counter_file, "--seller", &seller_file, "--funder", &fk, "--funding", &fund]);
+    assert_eq!(h.chain.balance(&l) - before, 800 * KAS, "the long is paid its side at 9.80 from the lock");
+
+    // A truthful close by the short of a fresh pair at an ask of 11, guaranteed at once and released after the window.
+    let fund = h.funding("f", &f);
+    let lo = h.step(&[
+        "create-order", "--market", &market, "--side", "long", "--size", "1000", "--limit", "10.5", "--rate", "1", "--min-counter-rate", "1.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &lk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let so = h.step(&[
+        "create-order", "--market", &market, "--side", "short", "--size", "1000", "--limit", "9.5", "--rate", "2", "--min-counter-rate", "0.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &sk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let opened = h.step(&["open", "--long", &lo[0], "--short", &so[0], "--n", "1000", "--x", "10", "--funder", &fk, "--funding", &fund]);
+    let pair2 = opened.iter().find(|p| object_kind(p) == "pair").cloned().expect("pair");
+    let now = h.chain.daa;
+    let a2 = kaspa_consensus_core::Hash::from_bytes([0xe5; 32]);
+    let ask2 = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 1_100_000_000, 1_500_000_000)), 10 * KAS, a2, now);
+    let c2 = h.chain.mint_kob(KobObj::Token(TokenState::covid(1_500_000_000, a2, m.ext)), 20_000_000, m.token_cov_id, now);
+    let c2_file = kob_file(&h, "custody2.json", &c2, None);
+    let ask2_file = kob_file(&h, "ask2.json", &ask2, Some(&c2_file));
+    h.chain.advance(650);
+    let fund = h.funding("f", &f);
+    let claimed = h.step(&["propose-close", "--pair", &pair2, "--side", "short", "--evidence", &ask2_file, "--key", &sk, "--funder", &fk, "--funding", &fund]);
+    let pending = claimed.iter().find(|p| object_kind(p) == "pending").cloned().expect("pending");
+    let fund = h.funding("g", &g);
+    let settled = h.step(&["guarantee", "--pending", &pending, "--funder", &gk, "--funding", &fund]);
+    let lock = settled.iter().find(|p| object_kind(p) == "lock").cloned().expect("the lock");
+    let fund = h.funding("g", &g);
+    let err = h.fail(&["release", "--lock", &lock, "--funder", &gk, "--funding", &fund, "--daa", &h.chain.daa.to_string(), "--submit", "--out-dir", &h.p("nope2")]);
+    assert!(err.contains("can be released only from DAA"), "{err}");
+    h.chain.advance(m.dispute_daa as u64);
+    let before = h.chain.balance(&g);
+    let fund = h.funding("g", &g);
+    h.step(&["release", "--lock", &lock, "--funder", &gk, "--funding", &fund]);
+    assert!(h.chain.balance(&g) > before, "the guarantor has its lock back");
 }

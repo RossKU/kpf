@@ -637,6 +637,13 @@ fn bad_markets() -> Vec<(&'static str, Market)> {
     add("challengeDaa at 2^32", &|x| x.challenge_daa = 4_294_967_296);
     add("minEvidenceLife negative", &|x| x.min_evidence_life = -1);
     add("minEvidenceLife + minRestDaa above 90 days", &|x| x.min_evidence_life = 77_760_000 - x.min_rest_daa + 1);
+    // DESIGN 4.5f: guaranteed fast settlement.
+    add("lockBps below 10^4", &|x| x.lock_bps = 9_999);
+    add("lockBps above 3 * 10^4", &|x| x.lock_bps = 30_001);
+    add("disputeDaa one below 2 minRestDaa", &|x| x.dispute_daa = 2 * x.min_rest_daa - 1);
+    add("disputeDaa at 2^32", &|x| x.dispute_daa = 4_294_967_296);
+    add("graceDaa negative", &|x| x.grace_daa = -1);
+    add("graceDaa above challengeDaa", &|x| x.grace_daa = x.challenge_daa + 1);
     v
 }
 
@@ -649,9 +656,11 @@ fn edge_markets() -> Vec<Market> {
     let mut a = m.clone();
     (a.k_bps, a.mmr_bps, a.liq_fee_bps, a.keeper_fee_min, a.min_rest_daa) = (100_000, 4_999, 10_000, 0, 0);
     (a.bond_bps, a.bond_min, a.kc_bps, a.g_bps, a.min_evidence_life) = (10_000, 1_000_000_000_000, 100_000, 9_999, 77_760_000);
+    (a.lock_bps, a.dispute_daa, a.grace_daa) = (30_000, 0, 0);
     let mut b = m.clone();
     (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 76_896_000);
     (b.bond_bps, b.bond_min, b.kc_bps, b.g_bps, b.challenge_daa) = (0, 0, 1, 1, 2 * 76_896_000);
+    (b.lock_bps, b.dispute_daa, b.grace_daa) = (10_000, 2 * 76_896_000, 2 * 76_896_000);
     vec![a, b]
 }
 

@@ -76,14 +76,19 @@ pub enum Act {
 pub struct Leg {
     pub pair: LivePair,
     pub n: i64,
+    /// What the proposer gives up from its own payout to a guarantor that fast-settles the claim (DESIGN 4.5f):
+    /// `0 ..= bond - 0.02 KAS`, written into the pending part.
+    pub offer: i64,
     pub act: Act,
 }
 
-/// One member of an evidence block: a pair that proposes, or a pending part that is challenged.
+/// One member of an evidence block: a pair that proposes, a pending part that is challenged, or a guarantor's lock that
+/// is disputed (DESIGN 4.5f; a lock is judged by the same counter-evidence a challenge of its claim would have needed).
 #[derive(Clone, Debug)]
 pub enum Member {
     Propose(Leg),
     Challenge(LivePending),
+    Dispute(LiveLock),
 }
 
 /// The evidence order and the executor's side of its fill.
@@ -119,16 +124,27 @@ fn side_name(side: i64) -> &'static str {
     }
 }
 
-/// `KpfPair.propose(nb, qb, kind, s, side, ev, tk, fb, pk, k, pPre, pSuf)`.
+/// `KpfPair.propose(nb, qb, kind, s, side, ev, tk, fb, pk, k, offer, pPre, pSuf)`.
 #[allow(clippy::too_many_arguments)]
-pub fn propose_args(n: i64, q: i64, kind: i64, s: Arg, side: i64, ev: usize, tk: i64, fb: i64, pk: &[u8; 32], k: i64) -> Vec<Arg> {
+pub fn propose_args(n: i64, q: i64, kind: i64, s: Arg, side: i64, ev: usize, tk: i64, fb: i64, pk: &[u8; 32], k: i64, offer: i64) -> Vec<Arg> {
     let t = pending_template();
-    vec![bv(&sm8(n)), bv(&sm8(q)), iv(kind), s, iv(side), iv(ev as i64), iv(tk), iv(fb), bv(pk), iv(k), bv(&t.prefix), bv(&t.suffix)]
+    vec![bv(&sm8(n)), bv(&sm8(q)), iv(kind), s, iv(side), iv(ev as i64), iv(tk), iv(fb), bv(pk), iv(k), iv(offer), bv(&t.prefix), bv(&t.suffix)]
 }
 
 /// `KpfPending.challenge(nb, qb, ev, tk)`.
 pub fn challenge_args(n: i64, q: i64, ev: usize, tk: i64) -> Vec<Arg> {
     vec![bv(&sm8(n)), bv(&sm8(q)), iv(ev as i64), iv(tk)]
+}
+
+/// `KpfLock.dispute(nb, qb, ev, tk)` (DESIGN 4.5f).
+pub fn dispute_args(n: i64, q: i64, ev: usize, tk: i64) -> Vec<Arg> {
+    challenge_args(n, q, ev, tk)
+}
+
+/// `KpfPending.guarantee(j, gk, lPre, lSuf)` (DESIGN 4.5f): the lock at output `j`, owned by `gk`.
+pub fn guarantee_args(j: usize, gk: &[u8; 32]) -> Vec<Arg> {
+    let t = crate::artifacts::lock_template();
+    vec![iv(j as i64), bv(gk), bv(&t.prefix), bv(&t.suffix)]
 }
 
 /// The least fill that covers `kBps * sum / 10^4` (the evidence block rule of DESIGN 4.4, exact as in the contracts).
@@ -267,6 +283,8 @@ enum Kind {
     Pair(Pair, (u16, Hash)),
     Kob(KobObj, Option<(u16, Hash)>),
     Pending(Pending, (u16, Hash)),
+    /// The burn output of a dispute (DESIGN 4.5f).
+    Burn,
 }
 
 fn emit(d: &mut Draft, p: Pend) -> usize {
@@ -275,6 +293,7 @@ fn emit(d: &mut Draft, p: Pend) -> usize {
         Kind::Pair(pr, b) => d.add_pair_out(&pr, p.value, Some(b), p.label),
         Kind::Kob(o, b) => d.add_kob_out(o, p.value, b, p.label),
         Kind::Pending(w, b) => d.add_pending_out(&w, p.value, Some(b), p.label),
+        Kind::Burn => d.add_out(p.value, crate::lock::burn_spk(), None, p.label),
     }
 }
 
@@ -432,6 +451,60 @@ pub fn check_challenge(w: &Pending, is_ask: bool, quote: i64, ev_name: &str) -> 
     Ok(())
 }
 
+/// Whether `ll` is a lock `KpfPending.guarantee` can have written: status 1, a market that passes the bounds, a cover the
+/// lock covers. A lock is created only in the transaction that spends its pending part, so whether it is the lock of a
+/// real claim can be told only from that transaction (`kpf watch` checks it from object files); a look-alike is the KAS of
+/// whoever made it and can only pay its own victim or owner.
+pub fn check_lock(ll: &LiveLock) -> Result<()> {
+    let l = &ll.l;
+    if l.status != STATUS_LOCK {
+        return invalid(format!("the lock has status {}, not 1 (a lock): it was not written by KpfPending.guarantee", l.status));
+    }
+    l.m.validate()?;
+    if l.cover < 0 || (ll.value as i128) < crate::lock::ratio_up(l.cover, l.m.lock_bps).max(crate::lock::LOCK_FLOOR) as i128 {
+        return invalid(format!(
+            "the lock holds {} KAS, less than lambda x its cover ({} KAS): it was not written by a guarantee",
+            kas_str(ll.value as i128),
+            kas_str(l.cover as i128)
+        ));
+    }
+    Ok(())
+}
+
+/// Why a dispute of `ll` at the counter quote of `ev` is refused before anything is built: the counter-evidence must be of
+/// the opposite kind, contradict the claim by g, and have finished its rest (on the clock P) by the window's end
+/// `F + disputeDaa - minRestDaa`.
+pub fn check_dispute(ll: &LiveLock, ev: &Evidence, rest_end: u64) -> Result<()> {
+    let l = &ll.l;
+    let (is_ask, quote) = (ev.is_ask(), ev.quote());
+    if l.counter_is_ask() != is_ask {
+        return invalid(format!(
+            "this claim is refuted by {}, but the evidence is {} {}",
+            if l.counter_is_ask() { "an ask" } else { "a bid" },
+            if is_ask { "an" } else { "a" },
+            ev.name()
+        ));
+    }
+    if !l.contradicts(quote) {
+        let bound = l.contradiction_bound().map(|b| format!("{} {} KAS", if l.counter_is_ask() { "at most" } else { "at least" }, kas_str(b as i128)));
+        return invalid(format!(
+            "the {} {} KAS does not contradict the claim by the margin g = {} bps: a dispute needs {} {}",
+            ev.name(),
+            kas_str(quote as i128),
+            l.m.g_bps,
+            if l.counter_is_ask() { "an ask" } else { "a bid" },
+            bound.unwrap_or_else(|| "a quote no order can have".into())
+        ));
+    }
+    let deadline = ll.rest_deadline();
+    if rest_end as i128 > deadline as i128 {
+        return invalid(format!(
+            "the counter order finishes its rest at DAA {rest_end}, after the dispute window of this lock ends for evidence (DAA {deadline} = F + disputeDaa - minRestDaa): the lock is no longer liable for it"
+        ));
+    }
+    Ok(())
+}
+
 fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, opts: &Opts, checked: bool) -> Result<(Built, FillFacts)> {
     if members.is_empty() {
         return invalid("nothing to do: no pair or pending part given");
@@ -442,6 +515,7 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
     let m = match &members[0] {
         Member::Propose(g) => g.pair.p.m.clone(),
         Member::Challenge(w) => w.w.m.clone(),
+        Member::Dispute(l) => l.l.m.clone(),
     };
     supports_token_program(&m).map_err(Error::Invalid)?;
     let ev = &eu.order;
@@ -460,14 +534,16 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
     let mut lock = rep.rest_end;
     for (j, g) in members.iter().enumerate() {
         let (mm, id, n, clock) = match g {
-            Member::Propose(l) => (&l.pair.p.m, l.pair.id, l.n, l.pair.clock()),
+            Member::Propose(l) => (&l.pair.p.m, Some(l.pair.id), l.n, l.pair.clock()),
             // The counter-evidence clock is the pending UTXO's own DAA score P (DESIGN 4.5d).
-            Member::Challenge(w) => (&w.w.m, w.id, w.w.n, w.daa as i64),
+            Member::Challenge(w) => (&w.w.m, Some(w.id), w.w.n, w.daa as i64),
+            // A lock's clock is the P its claim had (DESIGN 4.5f); a lock has no covenant id.
+            Member::Dispute(l) => (&l.l.m, None, l.l.n, l.l.clock),
         };
         if *mm != m {
             return invalid(format!("block member {j} is of another market than member 0"));
         }
-        if !seen.insert(id) {
+        if id.is_some_and(|id| !seen.insert(id)) {
             return invalid(format!(
                 "block member {j} has the covenant id of an earlier member (the same pair twice, or a pending part and a remainder of one split, which share an id): every KpfPair and KpfPending must be the only input of its covenant id"
             ));
@@ -482,6 +558,14 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
                 any_pair = true;
                 if checked {
                     check_claim(&l.pair.p, l.n, &l.act, is_ask, quote, ev.name()).map_err(|e| Error::Invalid(format!("pair {j}: {e}")))?;
+                    let most = bond_of(&l.pair.p, l.n) - PLAIN_DUST;
+                    if l.offer < 0 || l.offer > most {
+                        return invalid(format!(
+                            "pair {j}: the offer to a guarantor must be in 0..={} KAS (the bond less 0.02 KAS: the proposer is still paid at least that), not {} KAS",
+                            kas_str(most as i128),
+                            kas_str(l.offer as i128)
+                        ));
+                    }
                 }
             }
             Member::Challenge(w) => {
@@ -489,6 +573,13 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
                 if checked {
                     check_pending(w).map_err(|e| Error::Invalid(format!("pending part {j}: {e}")))?;
                     check_challenge(&w.w, is_ask, quote, ev.name()).map_err(|e| Error::Invalid(format!("pending part {j}: {e}")))?;
+                }
+            }
+            Member::Dispute(l) => {
+                any_pending = true;
+                if checked {
+                    check_lock(l).map_err(|e| Error::Invalid(format!("lock {j}: {e}")))?;
+                    check_dispute(l, ev, on.rest_end).map_err(|e| Error::Invalid(format!("lock {j}: {e}")))?;
                 }
             }
         }
@@ -539,10 +630,10 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
                     Act::Close { side } => (KIND_CLOSE, *side, Arg::Sig(if *side == LONG { lp.long_key } else { lp.short_key }), [0u8; 32]),
                     Act::Liq { side, proposer } => (KIND_LIQ, *side, bv(&[]), *proposer),
                 };
-                let po = propose_out(&lp, l.pair.value, l.n, kind, side, quote, pk);
+                let po = propose_out(&lp, l.pair.value, l.n, kind, side, quote, pk, ev.live_until(), l.offer);
                 member_ins.push((
                     j,
-                    propose_args(l.n, 0, kind, s, side, ev_i, tk_arg, po.fb, &pk, 0),
+                    propose_args(l.n, 0, kind, s, side, ev_i, tk_arg, po.fb, &pk, 0, l.offer),
                     format!("pair {j} (propose {} of the {})", if kind == KIND_CLOSE { "close" } else { "liquidation" }, side_name(side)),
                 ));
                 pos_members.push(Pend {
@@ -562,6 +653,22 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
                     kind: Kind::Pair(r, (j as u16, w.id)),
                     label: format!("pending part {j}: restored pair (the bond {} KAS goes to the challenger)", kas_str(w.w.bond as i128)),
                 });
+            }
+            Member::Dispute(l) => {
+                // DESIGN 4.5f: the victim at this member's own index, the burn at the reverse slot M - 1 - j, the reward
+                // (what no output must hold) in the executor's change.
+                member_ins.push((j, dispute_args(l.l.n, 0, ev_i, tk_arg), format!("lock {j} (dispute)")));
+                let pay = l.l.victim_pay(quote);
+                pos_members.push(if pay > 0 {
+                    plain(pay as u64, &l.l.victim, format!("lock {j}: restitution to the wronged party"))
+                } else {
+                    filler(&exec, "a dispute with no restitution")
+                });
+                let burn = l.l.burn(l.value, quote);
+                if burn > 0 {
+                    // A burn of a small lock is raised to the party floor (storage mass, KIP-9): the executor pays the difference.
+                    set_tail(&mut tail, j, Pend { value: (burn as u64).max(PARTY_FLOOR), kind: Kind::Burn, label: format!("lock {j}: burned (the lock less the restitution and the reward)") });
+                }
             }
         }
     }
@@ -689,6 +796,7 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
         match &members[j] {
             Member::Propose(l) => d.add_pair_in(&l.pair, "propose", args, label),
             Member::Challenge(w) => d.add_pending_in(w, "challenge", args, label),
+            Member::Dispute(l) => d.add_lock_in(l, "dispute", args, label),
         };
     }
     let (w, e, op, redeem, name, args, label) = ev_input;
@@ -732,14 +840,14 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
 /// at a resting bid and a short at a resting ask. The executor funds the bond (and the carrier of a part); the closer is
 /// paid at finalize, unless the claim is refuted.
 pub fn propose_close(l: &LivePair, side: i64, n: i64, eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
-    evidence_tx(&[Member::Propose(Leg { pair: l.clone(), n, act: Act::Close { side } })], eu, funding, opts)
+    evidence_tx(&[Member::Propose(Leg { pair: l.clone(), n, offer: 0, act: Act::Close { side } })], eu, funding, opts)
 }
 
 /// Propose a P6 liquidation (kind 2) of up to 8 pairs, whole or in parts, on one evidence: an ask liquidates longs, a
 /// bid shorts. At finalize the winner keeps the loser's side (forfeit and keep) and `proposer` gets the bond and the fee.
 pub fn propose_liquidate(parts: &[(LivePair, i64)], proposer: &[u8; 32], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
     let side = if eu.order.is_ask() { LONG } else { SHORT };
-    let m: Vec<Member> = parts.iter().map(|(p, n)| Member::Propose(Leg { pair: p.clone(), n: *n, act: Act::Liq { side, proposer: *proposer } })).collect();
+    let m: Vec<Member> = parts.iter().map(|(p, n)| Member::Propose(Leg { pair: p.clone(), n: *n, offer: 0, act: Act::Liq { side, proposer: *proposer } })).collect();
     evidence_tx(&m, eu, funding, opts)
 }
 
@@ -804,5 +912,91 @@ pub fn finalize(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Buil
         d.add_pair_out(&f, fv as u64, Some((0, lw.id)), format!("forfeited part (both sides the {}'s)", if w.side == LONG { "short" } else { "long" }));
         d.add_change(&funding.change_key);
     }
+    d.finish()
+}
+
+// ---------------------------------------------------------------- guaranteed fast settlement (DESIGN 4.5f)
+
+/// Why a guarantee of `lw` by `owner` is refused before anything is built.
+pub fn check_guarantee(lw: &LivePending, owner: &[u8; 32]) -> Result<()> {
+    check_pending(lw)?;
+    let w = &lw.w;
+    secp256k1::XOnlyPublicKey::from_slice(owner).map_err(|_| Error::Invalid("the guarantor key is not a valid x-only public key".into()))?;
+    if !w.guaranteeable_at(lw.daa) {
+        return invalid(format!(
+            "the pending part was accepted at DAA {} after its proposal's evidence order stopped being fillable by conforming matchers (DAA {}): it can only take the slow path (challenge window, then finalize)",
+            lw.daa, w.visible_until
+        ));
+    }
+    if w.kind == KIND_LIQ && w.forfeit_pair().is_none() {
+        return invalid("the pending part's forfeit hash does not match the pair its own state describes");
+    }
+    Ok(())
+}
+
+/// Guarantee (`KpfPending.guarantee`, DESIGN 4.5f): settle the pending claim `lw` at once, exactly as finalize would
+/// after the window, with a lock of at least `lambda x cover + offer` owned by `owner`, funded by `funding` (the
+/// guarantor's KAS; the proposer's offer rides in the lock). A liquidation needs the pending part to be `graceDaa` old
+/// (the loser's cure grace). The lock is disputable for `disputeDaa` with the counter-evidence a challenge would have
+/// needed; a successful dispute pays the wronged party from it, otherwise it returns to `owner` by [`release`].
+pub fn guarantee(lw: &LivePending, owner: &[u8; 32], funding: &Funding, opts: &Opts) -> Result<Built> {
+    check_guarantee(lw, owner)?;
+    let w = &lw.w;
+    let lock = w.lock_of(*owner, lw.id, lw.daa, lw.value);
+    let lock_value = w.lock_min(lw.value) as u64;
+    let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    let pi = d.add_pending_in(lw, "guarantee", vec![], "pending part (guarantee)");
+    if w.kind == KIND_LIQ {
+        d.ins[pi].sequence = w.m.grace_daa.max(0) as u64;
+    }
+    d.fund_inputs(funding)?;
+    let j;
+    if w.kind == KIND_CLOSE {
+        let (lp, sp) = w.guarantee_close(lw.value);
+        if lp > 0 {
+            d.add_plain(lp as u64, &w.long_key, if w.side == LONG { "long paid (closer, with the refund, less the offer)" } else { "long paid" });
+        } else {
+            d.add_plain(FILLER_VALUE, &funding.change_key, "filler (the long is owed nothing)");
+        }
+        j = d.add_lock_out(&lock, lock_value, format!("lock of the guarantor ({} KAS, disputable for {} DAA)", kas_str(lock_value as i128), w.m.dispute_daa));
+        d.add_change(&funding.change_key);
+        if sp > 0 {
+            while d.outs.len() < d.ins.len() {
+                d.add_plain(DUST_OUTPUT_MIN, &funding.change_key, "filler (keeps the reverse payout slot clear of the inputs)");
+            }
+            d.add_plain(sp as u64, &w.short_key, if w.side == SHORT { "short paid (closer, with the refund, less the offer)" } else { "short paid" });
+        }
+    } else {
+        let f = w.forfeit_pair().ok_or_else(|| Error::Invalid("the pending part's forfeit hash does not match the pair its own state describes".into()))?;
+        let (fv, pay) = w.guarantee_forfeit(lw.value);
+        d.add_plain(pay as u64, &w.proposer_key, "proposer paid (bond and fee, less the offer)");
+        d.add_pair_out(&f, fv as u64, Some((0, lw.id)), format!("forfeited part (both sides the {}'s)", if w.side == LONG { "short" } else { "long" }));
+        j = d.add_lock_out(&lock, lock_value, format!("lock of the guarantor ({} KAS, disputable for {} DAA)", kas_str(lock_value as i128), w.m.dispute_daa));
+        d.add_change(&funding.change_key);
+    }
+    if let Plan::Pending { args, .. } = &mut d.ins[pi].plan {
+        *args = guarantee_args(j, owner);
+    }
+    d.finish()
+}
+
+/// Dispute up to 8 locks (with pending parts to challenge and proposals in the same block, if wanted) on one
+/// counter-evidence fill (`KpfLock.dispute`, DESIGN 4.5f): each pays its wronged party the restitution at the counter
+/// quote, burns what is neither restitution nor reward, and leaves the reward to the executor (the disputer).
+pub fn dispute(locks: &[LiveLock], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let m: Vec<Member> = locks.iter().map(|l| Member::Dispute(l.clone())).collect();
+    evidence_tx(&m, eu, funding, opts)
+}
+
+/// Release (`KpfLock.release`, DESIGN 4.5f): anyone, once the lock is `disputeDaa` old; its whole value goes to its
+/// owner, the fee comes from `funding`.
+pub fn release(ll: &LiveLock, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let l = &ll.l;
+    let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    let i = d.add_lock_in(ll, "release", vec![], "lock (release)");
+    d.ins[i].sequence = l.m.dispute_daa.max(0) as u64;
+    d.fund_inputs(funding)?;
+    d.add_plain(ll.value, &l.owner, "the guarantor's lock returned");
+    d.add_change(&funding.change_key);
     d.finish()
 }

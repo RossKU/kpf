@@ -59,6 +59,10 @@ fn open_len() -> usize {
     bytecode(open_base()).len()
 }
 
+fn lock_len() -> usize {
+    bytecode(kpf_protocol::artifacts::lock_base()).len()
+}
+
 fn pending_len() -> usize {
     bytecode(kpf_protocol::artifacts::pending_base()).len()
 }
@@ -209,6 +213,23 @@ fn metrics_every_path() {
             measure(&mut rows, &format!("KpfPending cure {name}"), &tx, &en, 0, pending_len());
             txs.push(tx_row(&format!("cure {name}"), &tx, &en));
         }
+        // Guaranteed fast settlement (DESIGN 4.5f): the guarantee, a dispute of its lock with the same counter-evidence a
+        // challenge needs, and the release.
+        let gk = xonly(&keypair(88));
+        let d = filled(guarantee_draft(&w, &gk, &fk, 15));
+        let (tx, en) = d.build();
+        measure(&mut rows, &format!("KpfPending guarantee {name}"), &tx, &en, 0, pending_len());
+        txs.push(tx_row(&format!("guarantee {name}"), &tx, &en));
+        let lock = live_locks(&tx, &d).remove(0).at(w.daa + if w.w.kind == KIND_LIQ { grace() } else { 1 });
+        let mut dd = filled(dp_draft(&[lock.clone()], &c, &fk, 16));
+        dd.lock = dd.lock.max(lock.daa);
+        let (tx, en) = dd.build();
+        measure(&mut rows, &format!("KpfLock dispute {name}"), &tx, &en, 0, lock_len());
+        txs.push(tx_row(&format!("dispute {name} ({:?})", c.kind), &tx, &en));
+        let d = filled(release_draft(&lock, &fk, 17));
+        let (tx, en) = d.build();
+        measure(&mut rows, &format!("KpfLock release {name}"), &tx, &en, 0, lock_len());
+        txs.push(tx_row(&format!("release {name}"), &tx, &en));
     }
 
     let d = idle_draft(&l, &fk, 10);
@@ -241,7 +262,18 @@ fn metrics_every_path() {
     let (tx, e) = build(&ins, vec![out(ro.value, p2pk_x(&ro.o.owner), None), out(F_FUNDS - FEE, p2pk_spk(&fk), None)]);
     measure(&mut rows, "KpfOpen refund", &tx, &e, 0, open_len());
 
-    println!("state bytes: KpfPair {}, KpfOpen {}, KpfPending {}", l.p.state_bytes().len(), lo.o.state_bytes().len(), pend(&liq(&l, n, LONG), 940_000_000).w.state_bytes().len());
+    let wl = pend(&liq(&l, n, LONG), 940_000_000);
+    println!(
+        "state bytes: KpfPair {}, KpfOpen {}, KpfPending {}, KpfLock {}; script bytes: KpfPair {}, KpfOpen {}, KpfPending {}, KpfLock {}",
+        l.p.state_bytes().len(),
+        lo.o.state_bytes().len(),
+        wl.w.state_bytes().len(),
+        wl.w.lock_of([7; 32], wl.id, wl.daa, wl.value).state_bytes().len(),
+        pair_len(),
+        open_len(),
+        pending_len(),
+        lock_len()
+    );
     println!("{:<44} {:>7} {:>10} {:>13} {:>6}", "path (input)", "script", "sigscript", "script units", "stack");
     for r in &rows {
         println!("{:<44} {:>7} {:>10} {:>13} {:>6}", r.name, r.script, r.sigscript, r.units, r.stack);
@@ -292,5 +324,25 @@ fn metrics_largest_proposal_block() {
     assert_accepted(&tx, &e);
     let r = tx_row("8 challenges on one counter-evidence", &tx, &e);
     println!("8 challenges: {} inputs, script units {}, compute {}, storage {}, bytes {}, fee {}", r.inputs, r.units, r.compute, r.storage, r.bytes, r.fee);
+    assert!(fits(&r));
+}
+
+/// DESIGN 4.5f: the largest dispute block, 8 locks on one counter fill (each with its victim payout and its burn).
+#[test]
+fn metrics_largest_dispute_block() {
+    let n = 500_000_000;
+    let gk = xonly(&keypair(88));
+    let ls: Vec<LiveLk> = (0..8)
+        .map(|i| {
+            let w = pend(&liq(&live(&base(), 0x70 + i as u8).at(1_000), n, LONG), 940_000_000);
+            lock_of(&w, &gk, w.daa + grace())
+        })
+        .collect();
+    let mut d = filled(dp_draft(&ls, &Evidence::bid(1_000_000_000, 8 * n), &f(), 3));
+    d.lock = d.lock.max(ls[0].daa);
+    let (tx, e) = d.build();
+    assert_accepted(&tx, &e);
+    let r = tx_row("8 disputes on one counter-evidence", &tx, &e);
+    println!("8 disputes: {} inputs, {} outputs, script units {}, compute {}, storage {}, bytes {}, fee {}", r.inputs, tx.outputs.len(), r.units, r.compute, r.storage, r.bytes, r.fee);
     assert!(fits(&r));
 }

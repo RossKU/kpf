@@ -132,13 +132,15 @@ pub struct Draft {
     pub pairs: Vec<(usize, Pair)>,
     /// The KpfPending parts written to outputs (DESIGN 4.5d).
     pub pendings: Vec<(usize, Pending)>,
+    /// The KpfLock outputs written (DESIGN 4.5f).
+    pub locks: Vec<(usize, Lock)>,
     /// The KpfOpen continuations written to outputs.
     pub opens: Vec<(usize, Open)>,
 }
 
 impl Draft {
     pub fn new(ins: Vec<In>, outs: Vec<TransactionOutput>, change: Option<usize>) -> Draft {
-        Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change, pairs: vec![], pendings: vec![], opens: vec![] }
+        Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change, pairs: vec![], pendings: vec![], locks: vec![], opens: vec![] }
     }
 
     pub fn build(&self) -> (Transaction, Vec<UtxoEntry>) {
@@ -445,6 +447,38 @@ pub fn live_opens(tx: &Transaction, d: &Draft) -> Vec<LiveOpen> {
         .map(|(idx, o)| {
             let (op, u) = utxo_of(tx, *idx);
             LiveOpen { o: o.clone(), value: u.amount, id: u.covenant_id.expect("order output has an id"), op }
+        })
+        .collect()
+}
+
+/// A live KpfLock UTXO (DESIGN 4.5f). A lock carries no covenant id.
+#[derive(Clone, Debug)]
+pub struct LiveLk {
+    pub l: Lock,
+    pub value: u64,
+    pub op: TransactionOutpoint,
+    /// F, the lock's DAA score.
+    pub daa: u64,
+}
+
+impl LiveLk {
+    pub fn at(mut self, daa: u64) -> LiveLk {
+        self.daa = daa;
+        self
+    }
+}
+
+pub fn lock_input(l: &LiveLk, entry: &'static str, args: Vec<Arg>) -> In {
+    In { outpoint: l.op, utxo: UtxoEntry::new(l.value, p2sh(&l.l.art()), l.daa, false, None), spend: Spend::Signed { art: l.l.art(), entry, args } }
+}
+
+/// The locks an accepted draft creates, as live UTXOs (DAA score 0; set it with `at`).
+pub fn live_locks(tx: &Transaction, d: &Draft) -> Vec<LiveLk> {
+    d.locks
+        .iter()
+        .map(|(idx, l)| {
+            let (op, u) = utxo_of(tx, *idx);
+            LiveLk { l: l.clone(), value: u.amount, op, daa: u.block_daa_score }
         })
         .collect()
 }

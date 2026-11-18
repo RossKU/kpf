@@ -36,9 +36,9 @@ use secp256k1::{Keypair, Secp256k1};
 use serde_json::{json, Value};
 use silverscript_abi::{encode_contract_entry_sig_script, ArtifactValue};
 
-use crate::artifacts::{contract_name, open_base, open_template, pair_base, pair_template, pending_base};
+use crate::artifacts::{contract_name, lock_base, open_base, open_template, pair_base, pair_template, pending_base};
 use crate::error::{from_hex, hex32, invalid, to_hex, Error, Result};
-use crate::state::{Open, Pair, Pending};
+use crate::state::{Lock, Open, Pair, Pending};
 
 /// SIGHASH_ALL, the only signature hash type the contracts accept (`SIGHASH_ALL = 0x01`).
 pub const SIGHASH_ALL: u8 = 0x01;
@@ -149,6 +149,29 @@ impl LivePending {
     }
 }
 
+/// A live `KpfLock` UTXO (DESIGN 4.5f). It carries no covenant id: a lock never continues itself.
+#[derive(Clone, Debug)]
+pub struct LiveLock {
+    pub l: Lock,
+    pub value: u64,
+    pub op: TransactionOutpoint,
+    /// F, the lock's DAA score: the dispute window and the release age count from it.
+    pub daa: u64,
+}
+
+impl LiveLock {
+    pub fn entry(&self) -> UtxoEntry {
+        UtxoEntry::new(self.value, self.l.spk(), self.daa, false, None)
+    }
+    /// The first DAA score at which this lock can be released.
+    pub fn release_from(&self) -> u64 {
+        self.l.release_from(self.daa)
+    }
+    /// The last rest end a dispute's counter-evidence may have.
+    pub fn rest_deadline(&self) -> i64 {
+        self.l.rest_deadline(self.daa)
+    }
+}
 
 impl LiveOpen {
     pub fn entry(&self) -> UtxoEntry {
@@ -163,6 +186,8 @@ pub enum Obj {
     Open(Open),
     /// A part with a pending claim (DESIGN 4.5d).
     Pending(Pending),
+    /// A guarantor's lock (DESIGN 4.5f).
+    Lock(Lock),
     /// A KOB order or token holder the transaction creates (an evidence transaction's continuations and deliveries).
     Kob(crate::kob::KobObj),
 }
@@ -173,6 +198,7 @@ impl Obj {
             Obj::Pair(p) => p.redeem(),
             Obj::Open(o) => o.redeem(),
             Obj::Pending(w) => w.redeem(),
+            Obj::Lock(l) => l.redeem(),
             Obj::Kob(k) => k.redeem(),
         }
     }
@@ -181,6 +207,7 @@ impl Obj {
             Obj::Pair(_) => "pair",
             Obj::Open(_) => "order",
             Obj::Pending(_) => "pending",
+            Obj::Lock(_) => "lock",
             Obj::Kob(k) => k.kind(),
         }
     }
@@ -283,6 +310,8 @@ pub enum Plan {
     Open { redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
     /// A `KpfPending` input calling `entry(args)` (DESIGN 4.5d).
     Pending { redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
+    /// A `KpfLock` input calling `entry(args)` (DESIGN 4.5f).
+    Lock { redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
     /// A KOB order or KCC-20 token input of an evidence transaction calling `entry(args)`.
     Kob { which: KobWhich, redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
 }
@@ -292,7 +321,7 @@ impl Plan {
     pub fn signers(&self) -> Vec<[u8; 32]> {
         match self {
             Plan::P2pk { key } => vec![*key],
-            Plan::Pair { args, .. } | Plan::Open { args, .. } | Plan::Pending { args, .. } | Plan::Kob { args, .. } => {
+            Plan::Pair { args, .. } | Plan::Open { args, .. } | Plan::Pending { args, .. } | Plan::Lock { args, .. } | Plan::Kob { args, .. } => {
                 args.iter().filter_map(|a| if let Arg::Sig(k) | Arg::LeaderSig(k) = a { Some(*k) } else { None }).collect()
             }
         }
@@ -304,6 +333,7 @@ impl Plan {
             Plan::Pair { entry, .. } => format!("KpfPair.{entry}"),
             Plan::Open { entry, .. } => format!("KpfOpen.{entry}"),
             Plan::Pending { entry, .. } => format!("KpfPending.{entry}"),
+            Plan::Lock { entry, .. } => format!("KpfLock.{entry}"),
             Plan::Kob { which, entry, .. } => format!("{}.{entry}", which.name()),
         }
     }
@@ -328,6 +358,7 @@ impl Plan {
             Plan::Pair { redeem, entry, args } => enc(pair_base(), contract_name(pair_base()), redeem, entry, args),
             Plan::Open { redeem, entry, args } => enc(open_base(), contract_name(open_base()), redeem, entry, args),
             Plan::Pending { redeem, entry, args } => enc(pending_base(), contract_name(pending_base()), redeem, entry, args),
+            Plan::Lock { redeem, entry, args } => enc(lock_base(), contract_name(lock_base()), redeem, entry, args),
             Plan::Kob { which, redeem, entry, args } => enc(which.base(), contract_name(which.base()), redeem, entry, args),
         }
     }
@@ -491,6 +522,16 @@ impl Draft {
 
     pub(crate) fn add_pending_in(&mut self, l: &LivePending, entry: &'static str, args: Vec<Arg>, label: impl Into<String>) -> usize {
         self.add_in(l.op, l.entry(), Plan::Pending { redeem: l.w.redeem(), entry, args }, label)
+    }
+
+    pub(crate) fn add_lock_in(&mut self, l: &LiveLock, entry: &'static str, args: Vec<Arg>, label: impl Into<String>) -> usize {
+        self.add_in(l.op, l.entry(), Plan::Lock { redeem: l.l.redeem(), entry, args }, label)
+    }
+
+    pub(crate) fn add_lock_out(&mut self, l: &Lock, value: u64, label: impl Into<String>) -> usize {
+        let i = self.add_out(value, l.spk(), None, label);
+        self.outs[i].obj = Some(Obj::Lock(l.clone()));
+        i
     }
 
     pub(crate) fn add_open_in(&mut self, l: &LiveOpen, entry: &'static str, args: Vec<Arg>, label: impl Into<String>) -> usize {

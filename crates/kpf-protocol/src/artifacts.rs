@@ -1,4 +1,4 @@
-//! The pinned compiled artifacts of `KpfPair` and `KpfOpen`.
+//! The pinned compiled artifacts of `KpfPair`, `KpfOpen`, `KpfPending` and `KpfLock`.
 //!
 //! The compiler is not a dependency of this crate. `contracts/artifacts/` holds the compiler's output (the
 //! `SilAbiArtifact` JSON of each contract compiled with a fixed sample state), a manifest with source and artifact
@@ -20,6 +20,7 @@ const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.
 const PAIR_JSON: &str = include_str!("../../../contracts/artifacts/KpfPair.json");
 const OPEN_JSON: &str = include_str!("../../../contracts/artifacts/KpfOpen.json");
 const PENDING_JSON: &str = include_str!("../../../contracts/artifacts/KpfPending.json");
+const LOCK_JSON: &str = include_str!("../../../contracts/artifacts/KpfLock.json");
 // KOB's published artifacts (the read-only checkout `vendor/kob`, never copied): the evidence orders and the reference
 // KCC-20 token program. Their ABIs build the signature scripts of the KOB and token inputs of an evidence transaction;
 // their templates decode live orders. `tests/pinned.rs` pins their digests and checks the template hashes against the
@@ -103,6 +104,7 @@ pub struct Manifest {
     pub kpf_pair: ManifestContract,
     pub kpf_open: ManifestContract,
     pub kpf_pending: ManifestContract,
+    pub kpf_lock: ManifestContract,
 }
 
 /// The parsed manifest.
@@ -260,4 +262,21 @@ pub fn bid_template() -> &'static Template {
 pub fn token_template() -> &'static Template {
     static T: OnceLock<Template> = OnceLock::new();
     T.get_or_init(|| Template::of("KCC20Ref", token_base()))
+}
+
+/// The embedded lock artifact, as text (DESIGN 4.5f).
+pub fn lock_artifact_text() -> &'static str {
+    LOCK_JSON
+}
+
+/// The pinned `KpfLock` artifact (DESIGN 4.5f).
+pub fn lock_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(LOCK_JSON).expect("contracts/artifacts/KpfLock.json"))
+}
+
+/// The `KpfLock` template (its hash is the `LOCK_TPL` constant of `KpfPending`).
+pub fn lock_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KpfLock", lock_base()))
 }

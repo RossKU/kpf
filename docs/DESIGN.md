@@ -264,10 +264,12 @@ spread, tips and rounding slack go to the executor (`[K] contracts/orders/KobIfd
 | `KpfPair` | one pair (position): both margins, both owners, both listings; `propose` moves a part into `KpfPending` |
 | `KpfPending` | a part of a pair against which a claim on price evidence is pending (§4.5d): challenge, cure, finalize; a second template under the pair's covenant id (one id, two templates, X12); pinned in `KpfPair` as `PENDING_TPL` |
 | `KpfOpen` | resting open order of one side (KAS escrow); takes an opposite `KpfOpen` (open) or a same-side listing (transfer, P3). No liquidation by transfer (removed, §4.5d) |
+| `KpfLock` | a guarantor's lock of a guaranteed fast settlement (§4.5f): created by `KpfPending.guarantee`, disputed with counter-evidence (the wronged party paid, the rest burned) or released to its owner after `D`; pinned in `KpfPending` as `LOCK_TPL`; no covenant id |
 | KOB `KobAsk` / `KobBid` (existing, v3) | evidence and counter-evidence only; template hash, prefix, suffix pinned as constants, as KobCondAsk does (`[K] contracts/orders/KobCondAsk.sil:27-30`, `:191-246`) |
 
 No other UTXO type. No registry, pool, or oracle in M1. `KpfPending` never needs the pair's template: `propose`
-precomputes the pair states it may return to (§4.5d), so there is no template-hash cycle.
+precomputes the pair states it may return to (§4.5d), so there is no template-hash cycle; `KpfLock` needs neither
+(§4.5f): the pin graph is `KpfOpen → KpfPair → KpfPending → KpfLock`.
 
 ### 4.2 State layouts
 
@@ -280,6 +282,7 @@ precomputes the pair states it may return to (§4.5d), so there is no template-h
 | mmrBps, kBps, minRestDaa, liqFeeBps, keeperFeeMin | 8 ×5 | maintenance, evidence multiple `k`, rest `R`, liquidation fee, fee floor |
 | minSize, carrier, idleDaa, priceMax | 8 ×4 | smallest part, `C`, idle timeout, upper price bound |
 | bondBps, bondMin, kcBps, gBps, challengeDaa, minEvidenceLife | 8 ×6 | two-step evidence (§4.5d): bond rate and floor, counter-evidence multiple `k_c`, contradiction margin `g`, window `W`, evidence life `L` |
+| lockBps, disputeDaa, graceDaa | 8 ×3 | guaranteed fast settlement (§4.5f): lock ratio `λ`, dispute window `D` after a fast settlement, cure grace `G` of a fast liquidation |
 | size* | 8 | `s`, base units |
 | BL*, BS* | 8 ×2 | bankruptcy prices, sompi per whole token, `0 ≤ BL < BS ≤ priceMax` |
 | entry* | 8 | `E`, last price both parties consented to (§4.5a) |
@@ -289,11 +292,12 @@ precomputes the pair states it may return to (§4.5d), so there is no template-h
 | tagL*, tagS* | 32 ×2 | covenant id of the input that handed the long / short over in the transaction that created this UTXO (0 if none; no entry copies it, §4.4) |
 | since* | 8 | evidence clock start `S` (0: the DAA score of this UTXO); kept by every output that changes no hands, 0 on a part that changes hands (§4.5c) |
 
-492 B of state, each field with its push byte (the market block 261 B, state `[0..261)`, redeem bytes `[1..262)`;
-the position 231 B, unchanged; `KpfOpen` 375 B; `KpfPending` 621 B; measured, `kpf_layout_tests`). Before §4.5d: 438 B
-(market block 207 B) and `KpfOpen` 321 B. Redeem offsets of the pair: `size` 263, `BL` 272, `BS` 281, entry payload
-290, keys 299 and 332, listings `[364, 418)`, tags 419 and 452, `since` push 484, state end 493. The market block is
-identical in every pair, open order and pending part of a market; a reader compares it byte for byte.
+519 B of state, each field with its push byte (the market block 288 B, state `[0..288)`, redeem bytes `[1..289)`;
+the position 231 B, unchanged; `KpfOpen` 402 B; `KpfPending` 666 B; `KpfLock` 468 B; measured, `kpf_layout_tests`).
+Before §4.5f: 492 B (market block 261 B), `KpfOpen` 375 B, `KpfPending` 621 B; before §4.5d: 438 B (market block 207 B)
+and `KpfOpen` 321 B. Redeem offsets of the pair: `size` 290, `BL` 299, `BS` 308, entry payload 317, keys 326 and 359,
+listings `[391, 445)`, tags 446 and 479, `since` push 511, state end 520. The market block is identical in every pair,
+open order, pending part and lock of a market; a reader compares it byte for byte.
 
 `KpfOpen`.
 
@@ -322,12 +326,13 @@ Escrow = value ≥ `q(sizeLeft, myRate + tip) + C + carrier`. The market block s
 | cureBound | 8 | kind 2: the loser's bound after a cure (0: no cure) |
 | fee | 8 | kind 2: keeper fee, to the proposer at finalize |
 | bond, refund | 8 ×2 | `B`; `refund` = `B`, plus the carrier `C` the proposer funded when `n < s` |
+| visibleUntil, offer | 8 ×2 | §4.5f: the last DAA at which the proposal's evidence order was fillable by conforming matchers (a guarantee needs `P ≤` it); what the proposer gives up from its payout to a guarantor (`0 ≤ offer ≤ B − 0.02 KAS`) |
 | entry, longKey, shortKey, listings | 8, 32 ×2, 8 ×6 | the pair's, copied as one slice of the pair's script |
 | since | 8 | the pair's clock `S` at the proposal |
 | proposerKey | 32 | receives `refund` (cure) or `B + fee` (finalize of a liquidation); the closer's key for kind 1 |
 | restoreHash, cureHash, forfeitHash | 32 ×3 | P2SH script hashes of the pair states the part may become (§4.5d; `cureHash` 0: no cure) |
 
-621 B (the note estimated about 420). `KpfPending` reads only the market block, the claim, the keys and the hashes;
+666 B (621 B before §4.5f; the note estimated about 420). `KpfPending` reads only the market block, the claim, the keys and the hashes;
 the entry, the listings and `since` make the state self-describing: a tool rebuilds the three pair states from the
 pending UTXO alone and checks them against the hashes.
 
@@ -358,6 +363,11 @@ Not in M1: margin withdrawal (needs the adverse bound: bid for a long, ask for a
 | W1 | challenge | anyone | counter-evidence of the opposite kind, rested `R` on the clock `P`, contradicting by `g` | one output of the id, P2SH(`restoreHash`), value `≥ v − B`; the bond is the challenge executor's |
 | W2 | cure (kind 2 only) | the loser's owner (sig) | none | one output P2SH(`cureHash`) with the added margin; proposer repaid `≥ refund` |
 | W3 | finalize | anyone, `age ≥ challengeDaa` (CSV) | none | kind 1: payouts at the clamped quote, no output of the id; kind 2: P2SH(`forfeitHash`) `≥ v − B − fee`, proposer `≥ B + fee` |
+| W4 | guarantee (§4.5f) | anyone; a liquidation at `age ≥ graceDaa` (CSV) | none | W3's settlement now, the proposer paid less its offer; a `KpfLock` output naming this claim `≥ max(⌈λ·cover⌉ + offer, 0.1 KAS)`; `P ≤ visibleUntil` |
+
+`KpfLock` paths (§4.5f): L1 dispute (anyone, counter-evidence as W1 on the claim's clock `P`, done resting by
+`F + D − R`: the wronged party `≥ H` at output `i`, the burn at `M − 1 − i`, the reward to the executor) and L2 release
+(anyone, `age ≥ D`: the owner `≥` the lock at output `i`).
 
 `KpfOpen` paths: `fill` (anyone; `OpCovInputCount(selfId) == 1`; the pair output it funds must carry
 `tagL`/`tagS == selfId`), `cancel` (owner sig),
@@ -756,7 +766,7 @@ defaults). Bond `B = q(10⁹, ⌊3·10⁸·300/10⁴⌋)` = 90 KAS; pending valu
   §4.5e).
 - A long's close at a bid of 10.5 is refuted by an ask `≤ 10.29`; a short's close at an ask of 11 by a bid `≥ 11.22`.
 
-**Size and compute** (measured, `kpf_metrics_tests`; offline).
+**Size and compute** (measured, `kpf_metrics_tests`; offline; the figures as of §4.5e: §4.5f grew the market block by 27 bytes and the pending state by 18, and gives the current figures).
 
 Script bytes (prefix + state + suffix), measured after the §4.5e fixes: `KpfPair` 12,201 (1 + 492 + 11,708; before
 §4.5e 12,155 = 1 + 492 + 11,662; before §4.5d 12,115 = 1 + 438 + 11,676); `KpfOpen` 3,090 (1 + 375 + 2,714, unchanged
@@ -844,6 +854,236 @@ Boundaries that depended on `restEnd` move by `L`; the `R = 124,999,999,999` edg
   `watch` refuse a pending part whose hashes do not match its state or whose value is below `q(n, BS − BL) + refund`,
   and with `--pair` one whose covenant id or keys are not that pair's; `cure` states the funder's total.
 
+### 4.5f Guaranteed fast settlement (book-backed markets; adds to 4.5d-4.5e, changes nothing there)
+
+Source: the design note `DESIGN-ORACLE.md` (cited `O§n`), its book-backed part (3a) and its "build first" recommendation
+(O§6), shaped as the first status of the shared bond template of `DESIGN-ORACLE-2.md` §7, with the resolutions and
+deviations below. Code: `contracts/KpfLock.sil`, `contracts/KpfPending.sil` (`guarantee`), `contracts/KpfPair.sil`
+(`propose` writes `visibleUntil` and the offer), `contracts/KpfOpen.sil` (`checkMarket`), library
+`crates/kpf-protocol/src/lock.rs`, `evidence.rs` (`guarantee`, `dispute`, `release`), command line `kpf guarantee`,
+`dispute`, `release`, `watch`, `quote`.
+
+**What it is.** A pending claim (4.5d: a close or a liquidation, proposed with a bond) may be settled at once, without
+waiting for the window `W`, by anyone who locks KAS for it: `KpfPending.guarantee` settles exactly as `finalize`
+would, provided the same transaction creates a `KpfLock` output that names the claim and holds at least `λ` times the
+value the settlement moves away from the party it could wrong (the *cover*), plus the proposer's *offer*. For a window
+`D` after the settlement the lock is disputable with exactly the counter-evidence that would have refuted the claim by
+a challenge (same clock `P`, rest `R`, life `L`, coverage `k_c` over the evidence block, margin `g`, opposite kind). A
+successful dispute pays the wronged party its restitution from the lock, the disputer keeps a stated reward, the rest
+is burned. Otherwise anyone releases the lock to its owner after `D`. The judge is the order book, never a vote; one
+guarantor is enough; there is no bond registry, no unbonding delay, no quorum.
+
+**What it leaves alone.** The slow path (propose, challenge, cure, finalize, every rule of 4.5d and 4.5e) is unchanged
+and remains the default: nothing settles early unless a guarantor pays for it. A guarantee spends the same pending
+UTXO as challenge, cure and finalize, so exactly one of them lands: a challenged or cured claim no longer exists to be
+guaranteed, and a guaranteed one no longer exists to be challenged (its refutation is now a dispute of the lock). A
+refuted fast settlement is **not undone**: the winner keeps what the settlement gave it, and the wronged party is paid
+in cash (its side's value at the refuting quote), it does not get its position back.
+
+**The two experiments of the note** (engine tests `z_experiments_tests`).
+
+| # | Question | Measured | Decision |
+|---|---|---|---|
+| Z1 | cost of `checkMsgSig` (`OpCheckSigFromStack`) in script units and sig-ops, 1, 2, 4, 8 in one input | 101,720 / 201,951 / 402,409 / 803,321 script units, i.e. exactly one sig-op charge (100,000 units) per data signature plus about 115 units of opcodes, as `checkSig` (101,673 for one, 803,056 for eight). The static sig-op bound of an input (the 15-per-P2SH-input rule) counts `OpCheckSig` only: the probe's 15 data-signature checks count 0 | not needed: a guarantor consents by spending its own KAS into the lock output with an ordinary SIGHASH_ALL transaction signature; the claimant reads the lock *output*. A data signature spends nothing, so one stake could back many claims (O§1.3, attack 13) |
+| Z2 | is a UTXO's DAA score exact enough for the late-submission rule | `OpTxInputDaaScore(i)` returns the UTXO entry's DAA score exactly (any value), -1 for a parent the mempool has not seen accepted; CSV and CLTV check only the committed sequence and lock time (the node enforces them against the accepting block's DAA score), so they are lower bounds and nothing a script reads bounds *now* | exact enough: `P` (the pending part's score, the accepting chain block's DAA, the same on every node and never below the proposal's lock time) is fixed once accepted; a later acceptance only raises `P` and makes `P <= visibleUntil` stricter. What no script can bound is the time of the guarantee itself, so the lock's liability is measured on UTXO scores (`P`, `F`), never on the lock time |
+| Z7 | an unspendable burn output | P2SH of the redeem script `OP_RETURN` (0x6a): a standard P2SH script public key (script class `ScriptHash`), and every spend of it fails | the burn of `KpfLock.dispute` |
+
+**Cover, lock, offer.** With `c(x) = min(max(x, bl), bs)`:
+- a **close** (kind 1): the cover is what the closer is paid beyond its refund: `q(n, c(p) - bl)` for a long closer,
+  `q(n, bs - c(p))` for a short one (or the whole part less the refund when the other party's payout falls below dust
+  and goes to the closer). The other party could have kept at most that much: in the worst case the true price is the
+  closer's bankruptcy bound, where the closer is owed nothing. Whole and partial parts use the same formula (a part's
+  refund includes the carrier its proposer funded, which the closer gets back either way);
+- a **liquidation** (kind 2, forfeit and keep): the cover is the part's range `q(n, bs - bl)`, the most the loser's side
+  can be worth at any price, all of which the forfeiture moves to the winner; whole or partial alike;
+- the **lock** holds at least `max(ceil(cover * lockBps / 10^4) + offer, 0.1 KAS)` (split product, exact for any cover
+  up to the KAS supply at `λ <= 3`);
+- the **offer** (`0 <= offer <= bond - 0.02 KAS`, a `propose` argument written into the pending state) is what the
+  proposer gives up from its own payout if its claim is guaranteed: the guarantee pays the proposer (the closer, or
+  the keeper of a liquidation) its finalize payout less the offer, and the offer rides in the lock, so it is the
+  guarantor's fee if the lock is released and is burned with it if the claim is refuted. Finalize ignores it. The
+  offer is the only fee: no party who did not set it pays anything (the other party of a close and the winner of a
+  liquidation are settled exactly as at finalize).
+
+**Restitution, reward, burn** (`KpfLock.dispute`).
+
+| Claim | Counter quote | Wronged party | Restitution `H` |
+|---|---|---|---|
+| close long at `b0` | ask `a` | the short | `cover - q(n, c(a) - bl)` |
+| close short at `a0` | bid `b` | the long | `cover - q(n, bs - c(b))` |
+| liquidate long | bid `b` | the long | `q(n, c(b) - bl)` |
+| liquidate short | ask `a` | the short | `q(n, bs - c(a))` |
+
+`0 <= H <= cover <= lock`. The wronged party is paid `H` at the lock's own output index (a restitution below 0.02 KAS
+is paid as 0.02 KAS) and ends with exactly what its side was worth at the counter quote, to the sompi: for a
+liquidation the loser's payout at `c`; for a close what the settlement paid it plus `H` equals the pending part's value
+less the closer's refund and the closer's payoff at `c`, i.e. its payout had the close been at `c`. The **reward** `R =
+floor(cover * (lockBps - 10^4) / 10^4)` is what no output must hold, the dispute's executor's (as the bond of a
+challenge is). The **burn** output, P2SH(`OP_RETURN`) at the reverse slot `M - 1 - i`, holds the lock less `H` less `R`
+(not created below 0.02 KAS). Why a disputer cannot profit from a dispute it could have avoided: whoever could have
+avoided it is the coalition that made the false claim (proposer, winner, guarantor). Disputing itself first, it keeps
+the loser's side (worth `H` at the counter quote) and the reward and loses the lock, at least `cover + R`: net
+`H + R - lock <= H - cover <= 0`, so a lie is never a free option (O§1.7); a guarantor alone recovers `R < lock - H`.
+The burn, not a fee, carries the rest: a fee could be taken by a miner who is the liar. A victim that disputes its own
+lock is paid `H + R`; it is rewarded for doing a watcher's work, and cannot manufacture the refutation, which needs a
+real counter order filled for `k_c * n` (but see the thin-book exposure below).
+
+**The window, release, clocks.** `F` is the lock's own DAA score. A dispute needs counter-evidence that finished its
+rest on the clock `P` by `F + disputeDaa - minRestDaa` (`restEnd + R <= F + D`); the lock is released by anyone from
+age `D` (CSV), its whole value to its owner at output `i`, the fee from the releaser's input. So the guarantor's
+liability is the fixed window `[P, F + D - R]` whenever the release lands, and a disputer whose evidence rested in time
+has `R` to land before a release can. `P <= visibleUntil` (written by `propose` as the evidence order's earliest of
+`expiryDaa`, IOC/FOK kill and 90-day idle limit) keeps dead orders (review 3 F1) off the path that has no challenge
+window; a liquidation needs the pending part to be `graceDaa` old (the cure grace).
+
+**Market parameters** (in the market block, bounds in `KpfOpen.checkMarket` and `Market::validate`; `KpfPending.guarantee`
+re-checks the first two ranges, so not even a look-alike part creates a lock whose reward overflows or whose release
+is dead).
+
+| Parameter | Meaning | Bound | Testnet default and why |
+|---|---|---|---|
+| `lockBps` (`λ`) | lock ratio | `10^4 <= λ <= 3 * 10^4` | 11,000 (1.1): O§6's smallest first version. A refuted claim costs the coalition `λ·cover`; the attack pays only if `p_r < H/(λ·cover) <= 1/λ` (91 %), against 97 % on the slow path with the 3 % bond (O§3.1), for a liquidation |
+| `disputeDaa` (`D`) | window after the settlement; the release age | `2R <= D < 2^32` | 650 = `W + R`: evidence must have rested by `F + D - R >= P + W`, so a victim has at least the slow path's window from `P` (the note's `D = W` with this deadline would have given it `W - R`) |
+| `graceDaa` (`G`) | age before a liquidation can be guaranteed | `0 <= G <= W` | 100 = `2R` (10 s): an online loser can still cure (the trade-off below) |
+
+The engine fixtures use `R` 600, `W` 6,000, `D` 6,600, `G` 1,200.
+
+**State.** The market block is 288 bytes (261 + the three parameters above); `KpfPair` 519 B, `KpfOpen` 402 B; `KpfPending`
+666 B (+ `visibleUntil`, `offer` after `refund`). `KpfLock` (468 B, from redeem byte 1): a bond header shared with the
+later statuses of the oracle-only stage (`ownerKey` 32, `status` 8: 1 = lock, the only status this stage writes and
+which its entries do not read), the pending part's market block (288, byte for byte), the claim id (the pending part's
+covenant id, 32), `kind, side, n, bl, bs, quote` (one 54-byte slice of the pending state), the clock `P`, the cover, the
+victim's key (32). `KpfPending.guarantee` builds it from its own script; the lock never needs the pending template, so
+the pin graph stays acyclic: `KpfOpen → KpfPair → KpfPending → KpfLock` (the lock pins the KOB evidence templates only).
+
+**Paths.**
+
+| # | Path | Who | Evidence | Effect |
+|---|---|---|---|---|
+| W4 | `KpfPending.guarantee(j, gk, lPre, lSuf)` | anyone; a liquidation at age `≥ G` | none | finalize's settlement now, the proposer paid less its offer; output `j` = P2SH(`KpfLock` of owner `gk`, this claim) `≥ max(⌈λ·cover⌉ + offer, 0.1 KAS)`; requires `P ≥ 0`, `P ≤ visibleUntil`, `λ` and `D` in range |
+| L1 | `KpfLock.dispute(nb, qb, ev, tk)` | anyone | counter-evidence as W1, on the clock `P`, rest done by `F + D - R` | the victim `≥ H` at output `i`, the burn `≥ lock - H - R` at `M - 1 - i`; the reward is the executor's |
+| L2 | `KpfLock.release()` | anyone, age `≥ D` (CSV) | none | the owner `≥` the lock at output `i` |
+
+**Transaction shapes.** **T14 Guarantee.** in: `0` W (`guarantee`; sequence `G` for a liquidation), `F` (the guarantor's
+KAS, P2PK, SIGHASH_ALL: its consent). out, a close: `0` the long, the lock, change, the short at `M - 1`; a liquidation:
+`0` the proposer, the forfeited part (W's id), the lock, change. **T15 Dispute** (a block member like W1; up to 8 locks
+and pending parts on one print): in `[q, ev)` the locks (first pushes `n, q`), `ev` the counter order, `tk`, `F`; out per
+lock `i` the victim, KOB's outputs, change, the burns at the reverse slots. **T16 Release.** in `0` the lock (sequence
+`D`), `F`; out `0` the owner, change. The lock has no covenant id: it never continues itself and every payout is
+positional, so two locks in one transaction never share a payout or a burn.
+
+**Every ordering on one claim** (`every_ordering_of_challenge_cure_guarantee_finalize_dispute_release`).
+
+| First | Then | Result |
+|---|---|---|
+| challenge, cure or finalize | guarantee | impossible: the pending UTXO is spent; the restored or cured part is a `KpfPair` (no guarantee entry) |
+| guarantee | challenge, cure, finalize | impossible: the pending UTXO is spent; the refutation is a dispute of the lock |
+| any of the four at age `W` | the others | a race on one UTXO: exactly one lands (GhostDAG decides, as for challenge vs finalize, N§5g) |
+| dispute | release | impossible: the lock is spent; the wronged party was paid once |
+| release | dispute | impossible: the lock is spent; at age `D` both are valid and one lands |
+
+**Resolutions and deviations** (`// DESIGN:` comments of this change).
+1. `KpfPending.guarantee`: **a cure grace** `G`. The note gives the loser of a fast-settled liquidation no cure (O§0.1,
+   attack 17). A loser within `g` above its trigger cannot refute a stale claim (no bid in its band contradicts by `g`)
+   and on the slow path would cure within `W`; without a grace a guarantor could take its residual at once. With `G` it
+   can cure within `G` (2R on testnet), at the cost of delaying every fast liquidation by `G`. `G = 0` is allowed (a
+   market that wants no cure right on the fast path), `G = W` makes the fast path no faster than finalize.
+2. `KpfLock.dispute`: **a bounded window**. The note keeps a lock disputable until a release lands (O§1.5, "D is not a
+   deadline"). Here the counter-evidence must have finished resting by `F + D - R`: the guarantor's exposure is the
+   fixed window, a lock left unreleased is not exposed to every later price, and a disputer whose evidence rested in
+   time has `R` to land.
+3. **The guarantor's fee is the proposer's offer**, set at the proposal and paid out of the proposer's own payout into
+   the lock. The note leaves the fee open; a fee taken from any other party would take from a non-consenting party.
+4. **Cover of a close** = the closer's payoff (beyond its refund), not the part's range as the note's `V` (O§1.1): the
+   value a close moves away from the other party is at most that. For a liquidation the cover is the range, as in the
+   note.
+5. **`λ`, `D` and `G` are market parameters** in the market block (the note makes `λ`, `β` deployment constants), and
+   the reward is `(λ - 1) x cover`, not a separate `βBps` (O§6's `β` = 10 % of `V` at `λ` = 1.1 is the same number).
+6. **Dust**: the lock is at least 0.1 KAS; a restitution below 0.02 KAS is paid as 0.02 KAS (out of the burn); a burn below
+   0.02 KAS is not created (it stays with the executor, at most 0.02 KAS). The note does not say.
+7. **One lock per claim** (`m = 1`, the note's smallest first version); the multi-lock block is not built.
+8. The lock carries no covenant id and its entries do not read its status (one template, one status in this stage).
+
+**Size and compute** (measured, `kpf_metrics_tests`; parts of 400 tokens; limits: compute 500,000, storage 500,000,
+250,000 bytes; relay fee 100 sompi per gram).
+
+Script bytes (prefix + state + suffix): `KpfPair` 12,370 (1 + 519 + 11,850), `KpfOpen` 3,231 (1 + 402 + 2,828),
+`KpfPending` 4,338 (1 + 666 + 3,671), `KpfLock` 2,559 (1 + 468 + 2,090; the note estimated about 3.2 kB).
+
+Script units per new input: guarantee 52,389 to 52,558; dispute 24,564 to 24,628 with an ask counter, 54,677 to 54,747
+with a bid counter; release 5,371. Largest stack 104 of 244.
+
+| Transaction | Inputs | Script units | Compute mass | Storage mass | Bytes | Fee (sompi) |
+|---|---|---|---|---|---|---|
+| guarantee of a close | 2 | 152,459 | 9,902 | 46 | 6,952 | 1,390,400 |
+| guarantee of a liquidation | 2 | 152,390 | 9,947 | 222 | 6,987 | 1,397,400 |
+| dispute (ask counter) | 4 | 213,906 | 11,820 | 200,044 | 8,000 | 1,600,000 |
+| dispute (bid counter) | 4 | 272,601 | 12,786 | 203,731 | 8,096 | 1,619,200 |
+| release | 2 | 105,372 | 4,659 | 0 | 2,939 | 587,800 |
+| 8 disputes on one bid | 11 | 449,376 | 38,518 | 203,811 | 27,318 | 5,463,600 |
+| (for comparison) finalize forfeit | 2 | 109,497 | 6,895 | 215 | 4,805 | 961,000 |
+| (for comparison) propose liquidate long at an ask | 4 | 789,015 | 31,129 | 200,056 | 21,599 | 4,319,800 |
+
+All fit with a wide margin. The proposal grew by the two new pending fields (propose liquidate long 768,934 → 789,015
+script units, 20,339 → 21,599 bytes); 8 proposals on one print still fit (194,924 compute mass, 136,014 bytes).
+
+**Worked example** (the §5 pair, testnet defaults). A long's whole liquidation at an ask of 9.40, guaranteed: the
+cover is the range, 3,000 KAS; the lock 3,300 KAS (plus any offer); the proposer receives 90 + 47 = 137 KAS at once
+(less its offer), the short holds the forfeited part (2,953.2 KAS). If a bid of 10 KAS that rested `R` from `P`
+refutes it within the window, the long is paid `q(1,000, 10 - 9)` = 1,000 KAS from the lock, the disputer keeps 300 KAS,
+2,000 KAS burn; at a bid of 9.6632 (the bound) the long gets 663.16 KAS and 2,336.84 KAS burn. A long's close at a bid
+of 10.5: the cover is the long's payoff 1,500 KAS, the lock 1,650 KAS; the long receives 1,590 KAS and the short
+1,500.2 KAS at once; refuted by an ask of 10.29, the short is paid `1,500 - q(1,000, 10.29 - 9)` = 210 KAS (it then has
+1,710.2 KAS, its payout at 10.29), the disputer 150 KAS, 1,290 KAS burn.
+
+**What a guarantor carries** (O§3.1, unchanged in substance): it loses the whole lock whenever the market itself
+moves past the refutation bound within `[P, F + D - R]` (rebound risk, priced into its offer), and on a thin book
+below; its throughput is its capital over `λ`, per window.
+
+**Residual risks** (the attack results, `guarantee_attack_tests`; holds are listed in `THREAT_MODEL.md` L).
+1. **Thin books** (`exploit_a_deserving_loser_on_a_thin_book_takes_the_guarantors_lock`; the mirror of 4.5d residual
+   risk 1, O§4 attack 6). A true liquidation (market 9.30) guaranteed; on a book with nobody to sell into a bid, the
+   deserving loser rests its own bid at the refutation bound 9.66315790 for `k_c·n` = 1,000 tokens, fills it with its
+   own tokens and disputes: it takes `H` = 663.16 KAS as the victim and `R` = 300 KAS as the executor, 2,336.84 KAS
+   burn, and the guarantor loses its whole 3,300 KAS lock, where the same move on the slow path wins only the 90 KAS
+   bond. Exposure per guaranteed claim on such a book: `λ x cover`. On a book where arbitrage fills (and so re-creates)
+   a mispriced bid within `R` the bid never rests and the dispute is impossible. Guarantors must not guarantee where
+   that arbitrage is absent; the tool says so.
+2. **The cure right** (`exploit_a_band_loser_offline_for_the_grace_forfeits_its_residual`). A loser in the band
+   `[T, T(1 + g))` offline for `G` (instead of `W` on the slow path) loses its residual to a guaranteed stale claim:
+   up to `q(n, T(1 + g) - bl)`, 663 KAS on the example (550 KAS at a true bid of 9.55). The slow path loses the same
+   after `W`; the fast path shortens the loser's time from `W` to `G`. Raising `G` buys back the cure time at the price
+   of the fast path's speed.
+3. **Closes with a small cover.** For a close whose cover is below `B/(λ - 1)` (ten bonds, 30 % of the range at the
+   defaults) the fast path deters a coalition less than the slow path in relative terms (`λ·cover < cover + B`); the
+   absolute gain is at most the cover.
+4. **Cash, not position.** A wronged party is paid its side's value at the refuting quote; it loses the position's
+   option (on the slow path a refuted claim restores the part).
+5. **Liveness and discovery.** A false claim fast-settled against an offline victim stands unless a funded watcher
+   disputes within `D`; `kpf watch` finds locks only from object files (a lock's address depends on its whole state), so
+   discovery on a live network needs an indexer, as for pending parts.
+
+**Tests.** `kpf_guarantee_tests` (18: truthful claims of every kind and side, whole and partial; false claims disputed
+and the victim whole to the sompi; one tick short of the margin; clock, life and coverage; the window and the release
+boundary; a lock one sompi short or of another claim; the exact settlement; the late-submission rule; the cure grace;
+the offer; one lock for two claims; guarantor identities; every ordering; the forfeited part acted on while
+disputable; boundary values up to a part worth the KAS supply at `λ` = 3), `guarantee_attack_tests` (10: eight holds,
+two exploits), `z_experiments_tests` (Z1, Z2, Z7), X6 (`x6_guarantee_random_walk`: proposals with offers, challenges,
+cures, finalizes, guarantees, disputes in and out of the window, releases; no sompi created, a non-acting party loses
+only through an undisputed claim, every lock ends in exactly one of release or payout plus burn and is accounted for
+to the sompi, a wronged party ends with at least its side's value at the counter quote), the layout, metrics, library
+(`a_guaranteed_liquidation_is_disputed_on_the_chain`, `a_guaranteed_close_is_released_after_the_window`, the builders'
+refusals, golden vectors) and command-line (`fast_settlement_lifecycle_with_a_kob_book`) tests.
+
+**Public wording (book-backed markets, with guaranteed fast settlement; from O§5).**
+True: "no admin keys, no operator, no upgrade path"; "no custody: funds move only by covenant rules"; "no trusted
+price feed: prices are fills on the KOB order book, and every claim can be refuted on chain by counter-evidence";
+"optional fast settlement: a settlement is immediate when a guarantor locks KAS at least `λ` times the value it moves;
+if the book refutes it within the window, the wronged party is paid from that lock". False: "decentralized oracle"
+(there is no oracle here); "manipulation-proof" (evidence is economic, TM T5); "insured" or "guaranteed against loss"
+(only refuted claims are paid, only within `D`, and in cash at the refuting quote); "faster liquidations are as safe on
+any book" (not on books without arbitrage, residual risk 1).
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part
@@ -867,6 +1107,7 @@ minimum-fill bound, `[K] docs/spec/matcher.md:221-228`). Every covenant output �
 | bond rate (§4.5d) | `(BS − BL)·bondBps` | `≤ 10¹⁸` for `bondBps ≤ 10⁴` |
 | contradiction (§4.5d) | `BL·(10⁴ + g)`, `a·(10⁴ + m)`, `c(b)·(10⁴ − g)` | `< 2·10¹⁸` for prices `≤ priceMax`, `g < 10⁴` |
 | cure bound (§4.5d, §4.5e) | `p·(10⁴ ± g)`, then `pg·(10⁴ + mmrBps)` with `pg < 2·priceMax` | `≤ 3·10¹⁸`; a short cure bound above `priceMax` means no cure |
+| lock and reward (§4.5f) | `⌊cover/10⁴⌋·lockBps`, `⌊cover/10⁴⌋·(lockBps − 10⁴)` | `≤ 8.7·10¹⁸` for a cover up to the KAS supply (`cover ≤` the pending value is required) and `lockBps ≤ 3·10⁴`; an offer on top of a cover near the supply at `λ` = 3 overflows and the guarantee fails (the slow path stays) |
 
 No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < BS ≤ priceMax`, `0 < n ≤ s`.
 
@@ -890,6 +1131,10 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
   holds the forfeited part `[9.047, 12]` (`1,000·(12 − 9.047) + 47 = 3,000`) with 2,953.2 KAS, both sides. A short's
   liquidation at a bid of 11.5 is refuted by an ask `≤ 11.20` (cure bound 12.3165); a long's close at a bid of 10.5 by
   an ask `≤ 10.29`; a short's close at an ask of 11 by a bid `≥ 11.22`.
+- Guaranteed fast settlement (§4.5f, `λ` 1.1, `D` 650, `G` 100): the long's liquidation at 9.4, guaranteed once the
+  pending part is 100 DAA old, settles at once (the proposer 137 KAS less its offer, the short the forfeited part); the
+  guarantor locks 3,300 KAS (`λ` × the range) for 650 DAA. A bid of 10 that rested from `P` and finished resting by
+  `F + 600` disputes it: the long is paid 1,000 KAS from the lock, the disputer keeps 300 KAS, 2,000 KAS burn.
 - Close-versus-close with `P2 = (BL2 = 8.5, BS2 = 11.5)` KAS at `X = 10.2`: L1 gets `1000·1.2` = 1,200 KAS, S2 gets
   `1000·1.3` = 1,300 KAS, `P3 = (8.5, 12.0)` holds 3,500 KAS. 3,000 + 3,000 = 1,200 + 1,300 + 3,500. No-downgrade:
   `8.5 ≤ 9.0` (S1's counterparty deeper), `12.0 ≥ 11.5` (L2's counterparty deeper).
@@ -951,3 +1196,18 @@ Two-step experiments of the note (`DESIGN-TWO-STEP.md` §6), status after §4.5d
 | Y8 | Conservation fuzz over propose / challenge / cure / finalize | covered: X6 (`kpf_x6_conservation_tests`), `bond_conservation_in_every_branch` |
 | Y9 | Cure at `cureBound`: the same quote no longer triggers; a lower fresh quote does | covered: `cure_exactly_at_and_one_tick_short_of_the_bound`, `cured_pair_is_safe_at_the_claimed_quote_only` |
 | Y10 | Token pause during a pending part | open: token pause not tested |
+
+Experiments of the guaranteed-fast-settlement note (`DESIGN-ORACLE.md` §6), status after §4.5f:
+
+| # | Experiment | Status |
+|---|---|---|
+| Z1 | `checkMsgSig` cost and sig-op count, 1 to 8 in one input | covered: `z1_check_msg_sig_is_priced_like_check_sig_but_not_counted_as_a_sig_op` (100,000 script units each, as `checkSig`; not in the static sig-op bound); not used by this stage |
+| Z2 | a lock's / a pending part's DAA score as a contract reads it; lateness detected | covered: `z2_*` (exact entry score, -1 unaccepted, CSV and CLTV lower bounds only), `a_part_accepted_after_its_evidence_died_cannot_be_guaranteed` |
+| Z3 | SIGHASH flags a covenant can require | not needed: the guarantor's consent is its own funding input; the contracts accept SIGHASH_ALL only where they read a signature |
+| Z4 | mass of a guarantee (1 lock) | covered: `kpf_metrics_tests` (§4.5f table); the multi-lock block is not built |
+| Z5 | a dispute with counter-evidence, 8 locks, burn relayed | covered: `metrics_largest_dispute_block` (8 disputes fit), the burn is a standard P2SH script (Z7) |
+| Z6 | rebound statistics on recorded KOB flow | open |
+| Z7 | an unspendable burn output | covered: `z7_the_burn_output_is_standard_p2sh_and_unspendable` |
+| Z8 | GhostDAG races (T14 vs W1, release vs dispute) | engine: every ordering shown to spend one UTXO (`every_ordering_of_challenge_cure_guarantee_finalize_dispute_release`); not run on a network |
+| Z9 | `KpfStake` | not in this stage |
+| Z10 | watcher latency for lock disputes | open |

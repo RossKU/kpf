@@ -1,0 +1,343 @@
+pragma silverscript ^0.1.0;
+
+// KpfLock: the guarantor's lock of a guaranteed fast settlement (docs/DESIGN.md 4.5f).
+//
+// KpfPending.guarantee settles a pending claim at once, without waiting for the challenge window, when the same
+// transaction creates this output with at least ceil(cover * lockBps / 10^4) + the proposer's offer, cover being the
+// value the settlement moved away from the party the claim could wrong. The lock is the fund that party is paid from
+// if the order book refutes the claim afterwards; nothing here is mutable.
+//
+// State. A bond header first (ownerKey, status), then the claim block. The header is the part the later bond statuses
+// of the oracle-only stage share (docs/DESIGN-ORACLE-2.md 7); this template knows one status, 1 (lock), which
+// KpfPending.guarantee writes, and its entries do not read it.
+//   ownerKey      the guarantor: release pays it
+//   status        1
+//   market block  the pending part's, byte for byte (everything the counter-evidence reader needs; lockBps,
+//                 disputeDaa and graceDaa are its last three fields)
+//   claimId       the covenant id of the pending part the lock settled
+//   kind, side, n, bl, bs, quote   the claim, as in KpfPending
+//   clock         P, the pending part's DAA score: the clock of every counter-evidence, as for a challenge
+//   cover         V, the value the fast settlement moved away from the victim (KpfPending.guarantee):
+//                 a close: what the closer was paid beyond its refund; a liquidation: the part's range q(n, bs - bl)
+//   victimKey     the party the claim could wrong: the loser of a liquidation, the other party of a close
+//
+// Entries (no covenant id is needed or read: a lock never continues itself, and every payout is positional):
+//   dispute(nb, qb, ev, tk)  anyone, with counter-evidence at input ev of the opposite kind, read and judged exactly as
+//                            KpfPending.challenge reads it (clock P, rest minRestDaa, life minEvidenceLife, multiple
+//                            kcBps over the evidence block, margin g), which finished its rest at least minRestDaa
+//                            before the window closes: restEnd + minRestDaa <= F + disputeDaa, F this UTXO's DAA score.
+//                            The victim is paid its restitution H at output i (this input's index), the burn output
+//                            at M - 1 - i receives what is neither H nor the reward, and the reward is what no output
+//                            must hold (the executor's, as the bond of a challenge).
+//   release()                anyone, once this UTXO is disputeDaa old (CSV): the owner at output i, the whole value.
+// A lock therefore always ends, without anybody's cooperation: by a dispute while refutable, by a release after the
+// window. Look-alike locks (any P2SH of this template, from any transaction) are the KAS of whoever made them and can
+// only pay their own victim or their own owner; KpfPending.guarantee counts only the lock output of its own
+// transaction.
+//
+// Restitution H (c the counter quote, c(x) = min(max(x, bl), bs)):
+//   close long at b0, counter ask a     victim the short   H = cover - q(n, c(a) - bl)
+//   close short at a0, counter bid b    victim the long    H = cover - q(n, bs - c(b))
+//   liquidate long, counter bid b       victim the long    H = q(n, c(b) - bl)
+//   liquidate short, counter ask a      victim the short   H = q(n, bs - c(a))
+// i.e. the victim ends with what its side was worth at the counter quote, to the sompi: for a close, the payout it
+// would have had at c(a) (the fast settlement paid it the rest), for a liquidation its side's payout at c(b). H <= cover,
+// so the lock always covers it. Reward R = floor(cover * (lockBps - 10^4) / 10^4), at most the lock less H.
+// DESIGN: a restitution below the plain dust bound (0.02 KAS) is paid as 0.02 KAS (more than owed; the burn carries
+// it), and a burn below 0.02 KAS is not created (it stays with the executor, at most 0.02 KAS); the note leaves both
+// open, and an output below dust could not be relayed.
+// DESIGN: the note (DESIGN-ORACLE 1.5) makes the lock disputable until a release lands, with any counter-evidence
+// resting from P. Here the counter-evidence must have finished resting by F + disputeDaa - minRestDaa: the guarantor's
+// liability is the fixed window [P, F + disputeDaa - minRestDaa], whenever the release lands, and a disputer whose
+// evidence rested in time has minRestDaa DAA to land before a release can (KpfOpen.checkMarket: disputeDaa >= 2R).
+contract KpfLock(
+    byte[32] ASK_TPL,
+    int ASK_PRE,
+    int ASK_SUF,
+    byte[32] BID_TPL,
+    int BID_PRE,
+    int BID_SUF,
+    pubkey init_ownerKey,
+    int init_status,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    byte[32] init_extensionCommitment,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_mmrBps,
+    int init_kBps,
+    int init_minRestDaa,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_priceMax,
+    int init_bondBps,
+    int init_bondMin,
+    int init_kcBps,
+    int init_gBps,
+    int init_challengeDaa,
+    int init_minEvidenceLife,
+    int init_lockBps,
+    int init_disputeDaa,
+    int init_graceDaa,
+    byte[32] init_claimId,
+    int init_kind,
+    int init_side,
+    int init_n,
+    int init_bl,
+    int init_bs,
+    int init_quote,
+    int init_clock,
+    int init_cover,
+    pubkey init_victimKey
+) {
+    // Bond header (state [0..42)).
+    pubkey ownerKey = init_ownerKey;
+    int status = init_status;
+    // The pending part's market block (state [42..330)), byte for byte.
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    byte[32] extensionCommitment = init_extensionCommitment;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;
+    int mmrBps = init_mmrBps;
+    int kBps = init_kBps;
+    int minRestDaa = init_minRestDaa;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int priceMax = init_priceMax;
+    int bondBps = init_bondBps;
+    int bondMin = init_bondMin;
+    int kcBps = init_kcBps;
+    int gBps = init_gBps;
+    int challengeDaa = init_challengeDaa;
+    int minEvidenceLife = init_minEvidenceLife;
+    int lockBps = init_lockBps;          // lambda: the lock is at least cover * lockBps / 10^4
+    int disputeDaa = init_disputeDaa;    // D: the window after the fast settlement, and the release age (CSV)
+    int graceDaa = init_graceDaa;        // the cure grace of a fast liquidation (read by KpfPending only)
+    // The claim block (state [330..468)).
+    byte[32] claimId = init_claimId;
+    int kind = init_kind;                // 1 close, 2 liquidation
+    int side = init_side;                // kind 1: the closer; kind 2: the loser
+    int n = init_n;
+    int bl = init_bl;
+    int bs = init_bs;
+    int quote = init_quote;
+    int clock = init_clock;              // P
+    int cover = init_cover;              // V
+    pubkey victimKey = init_victimKey;
+
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant ASK_STATE_LEN = 276;
+    int constant BID_STATE_LEN = 285;
+    int constant IOC_LIFE = 600;
+    int constant MAX_IDLE = 77760000;
+    // P2SH hash of the redeem script OP_RETURN (0x6a): an output nobody can spend (DESIGN 4.5f, experiment Z7).
+    byte[32] constant BURN = byte[32](0xd379e50f3e2203f9a92584916335bb7cd014b237ceaa8b36f1d3d80d0cc88b32);
+
+    // As KpfPair.quoteOf.
+    function quoteOf(int x, int r, int c) : int {
+        int m = x % scale;
+        int q = x / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    function clampP(int p) : int {
+        int c = p;
+        if (c < bl) { c = bl; }
+        if (c > bs) { c = bs; }
+        return c;
+    }
+
+    // As KpfPair.tplState.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // As KpfPair.blockN.
+    function blockN(int j, byte[8] qb) : int {
+        require(OpTxInputScriptSigSubstr(j, 0, 1) == byte[](0x08));
+        int nj = int(byte[8](OpTxInputScriptSigSubstr(j, 1, 9)));
+        require(nj >= 0);
+        require(OpTxInputScriptSigSubstr(j, 9, 10) == byte[](0x08));
+        require(byte[8](OpTxInputScriptSigSubstr(j, 10, 18)) == qb);
+        return nj;
+    }
+
+    // As KpfPending.evBlock: the evidence block of DESIGN 4.4 with the counter-evidence multiple kcBps. A lock is a
+    // member like a challenged pending part, so one counter print never refutes more than n_ev * 10^4 / kcBps in
+    // total, locks and pending parts together.
+    function evBlock(int ev, int nev, byte[8] qb) {
+        require(kcBps > 0);
+        int self = this.activeInputIndex;
+        int q = int(qb);
+        require(q >= 0);
+        require(q <= self);
+        require(self < ev);
+        int len = ev - q;
+        require(len <= 8);
+        int sum = blockN(q, qb);
+        if (len > 1) { sum = sum + blockN(q + 1, qb); }
+        if (len > 2) { sum = sum + blockN(q + 2, qb); }
+        if (len > 3) { sum = sum + blockN(q + 3, qb); }
+        if (len > 4) { sum = sum + blockN(q + 4, qb); }
+        if (len > 5) { sum = sum + blockN(q + 5, qb); }
+        if (len > 6) { sum = sum + blockN(q + 6, qb); }
+        if (len > 7) { sum = sum + blockN(q + 7, qb); }
+        require(nev >= (sum / BPS) * kcBps + ((sum % BPS) * kcBps + BPS - 1) / BPS);
+    }
+
+    // As KpfPending.evQuote, with the clock clk = P; also returns the rest end exposed' + minRestDaa.
+    function evQuote(int ask, int ev, int tk, byte[8] qb, int clk) : (int, int) {
+        require(minRestDaa >= 0);
+        require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
+        int nev = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
+        require(nev > 0);
+        int pre = BID_PRE;
+        int len = BID_STATE_LEN;
+        int suf = BID_SUF;
+        byte[32] tpl = BID_TPL;
+        int d = 33;
+        int w = 51;
+        if (ask == 1) {
+            pre = ASK_PRE;
+            len = ASK_STATE_LEN;
+            suf = ASK_SUF;
+            tpl = ASK_TPL;
+            d = 0;
+            w = 0;
+        }
+        byte[] o = tplState(ev, pre, len, suf, tpl);
+        require(byte[32](o.slice(34, 66)) == tokenCovId);
+        byte[] qs = o.slice(118 + d, 180 + d);
+        byte[] r = o.slice(190 + w, 216 + w);
+        require(int(byte[8](qs.slice(0, 8))) == scale);
+        require(int(byte[8](r.slice(18, 26))) == 0);
+        int iv = int(byte[8](r.slice(0, 8)));
+        require(iv >= 0);
+        int ud = OpTxInputDaaScore(ev);
+        int exposed = ud + iv;
+        int act = int(byte[8](qs.slice(45, 53)));
+        if (act > exposed) { exposed = act; }
+        if (ask == 1) {
+            require(OpInputCovenantId(tk) == tokenCovId);
+            byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+            require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            require(byte[32](ts.slice(80, 112)) == extensionCommitment);
+            int td = OpTxInputDaaScore(tk);
+            if (td > exposed) { exposed = td; }
+        } else {
+            require(byte[32](o.slice(118, 150)) == extensionCommitment);
+        }
+        if (clk > exposed) { exposed = clk; }
+        int restEnd = exposed + minRestDaa;
+        require(tx.daa >= restEnd);
+        int live = restEnd + minEvidenceLife;
+        require(int(byte[8](qs.slice(54, 62))) >= live);
+        if (int(byte[8](qs.slice(36, 44))) != 0) {
+            int kill = ud;
+            if (act > kill) { kill = act; }
+            require(kill + IOC_LIFE >= live);
+        }
+        require(live <= ud + MAX_IDLE);
+        evBlock(ev, nev, qb);
+        return (int(byte[8](qs.slice(18, 26))), restEnd);
+    }
+
+    // Dispute (DESIGN 4.5f). Anyone, with counter-evidence at input ev (an ask's custody at tk); this input's first two
+    // pushes are nb = n and the block start qb. The counter-evidence is exactly what would have refuted the claim by a
+    // challenge of the pending part (KpfPending.challenge: clock P, opposite kind, the contradiction by g), and it
+    // finished resting minRestDaa before the window closes. The victim is paid H at output i, the burn output at
+    // M - 1 - i holds the lock less H less the reward, the executor keeps the reward.
+    // Why the burn and the reward bound: a guarantor (or its proposer) expecting a dispute could otherwise dispute its
+    // own lock first and recover it; with the burn it recovers at most the reward R = cover * (lambda - 1), so a
+    // self-dispute of a claim that wronged its victim by H costs the coalition lock - R - H >= cover - H >= 0 more than
+    // H, and it never ends ahead of not making the claim (DESIGN 4.5f).
+    entry dispute(byte[8] nb, byte[8] qb, int ev, int tk) {
+        int self = this.activeInputIndex;
+        require(OpTxInputScriptSigSubstr(self, 0, 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(self, 1, 9) == byte[](nb));
+        require(int(nb) == n);
+        require(clock >= 0);
+        int f = OpTxInputDaaScore(self);
+        require(f >= 0);
+        int ask = 0;
+        if (kind == KIND_CLOSE) {
+            if (side == SIDE_LONG) { ask = 1; }
+        } else {
+            if (side == SIDE_SHORT) { ask = 1; }
+        }
+        (int c, int restEnd) = evQuote(ask, ev, tk, qb, clock);
+        require(c >= 0);
+        require(c <= priceMax);
+        // The window: the counter-evidence rested by F + D - R (no upper bound on the transaction's own time exists;
+        // this one is on the evidence's, which its UTXO scores prove).
+        require(restEnd + minRestDaa <= f + disputeDaa);
+        int cc = clampP(c);
+        int h = 0;
+        if (kind == KIND_CLOSE) {
+            int cq = clampP(quote);
+            if (side == SIDE_LONG) {
+                require(cc * BPS <= cq * (BPS - gBps));
+                h = cover - quoteOf(n, cc - bl, 0);
+            } else {
+                require(cc * BPS >= cq * (BPS + gBps));
+                h = cover - quoteOf(n, bs - cc, 0);
+            }
+        } else {
+            if (side == SIDE_LONG) {
+                require(c * (BPS - mmrBps) >= bl * (BPS + gBps));
+                h = quoteOf(n, cc - bl, 0);
+            } else {
+                require(c * (BPS + mmrBps) <= bs * (BPS - gBps));
+                h = quoteOf(n, bs - cc, 0);
+            }
+        }
+        if (h < 0) { h = 0; }
+        if (h > 0) {
+            if (h < PLAIN_DUST) { h = PLAIN_DUST; }
+        }
+        payTo(self, victimKey, h);
+        int extra = lockBps - BPS;
+        int reward = (cover / BPS) * extra + ((cover % BPS) * extra) / BPS;
+        int burn = tx.inputs[self].value - h - reward;
+        if (burn >= PLAIN_DUST) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SH(BURN)));
+            require(tx.outputs[j].value >= burn);
+        }
+    }
+
+    // Release (DESIGN 4.5f). Anyone, once this UTXO is disputeDaa old (CSV; KpfPending.guarantee checked
+    // 0 <= disputeDaa < 2^32, so the release of every lock it counted is live): the whole value to the owner at output
+    // i. The fee comes from the releaser's own input.
+    entry release() {
+        int self = this.activeInputIndex;
+        require(this.ageDaa >= disputeDaa);
+        payTo(self, ownerKey, tx.inputs[self].value);
+    }
+}

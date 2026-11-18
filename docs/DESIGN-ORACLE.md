@@ -1,6 +1,9 @@
 # KPF bonded fast settlement and oracle markets (design note, draft 1)
 
-Status: proposal, nothing implemented. Cited as `D§n` (`DESIGN.md`), `N§n` (`DESIGN-TWO-STEP.md`), `TM x`
+Status: the book-backed part (3a, §1.5, smallest first version of §6) is implemented as `DESIGN.md` 4.5f under the
+name "guaranteed fast settlement", with the resolutions and deviations listed there (a cure grace, a bounded dispute
+window, the proposer's offer as the guarantor's fee, the cover of a close, market parameters); the oracle-only part (3b)
+is a proposal, not implemented. Cited as `D§n` (`DESIGN.md`), `N§n` (`DESIGN-TWO-STEP.md`), `TM x`
 (`THREAT_MODEL.md`). The covenant facts relied on are those the contracts already use: cross-input reads authenticated
 by template hash and P2SH and hand-unrolled scans of at most 8 inputs (D§4.4), signed 64-bit arithmetic that fails on
 overflow (D§5), lower bounds on time only (D§4.5c), at most 15 signature operations per P2SH input and an unused,

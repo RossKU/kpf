@@ -114,6 +114,20 @@ struct Stats {
     within_g_refused: usize,
     beyond_cure_accepted: usize,
     returned_unlisted: usize,
+    /// Guaranteed fast settlement (DESIGN 4.5f): guarantees, disputes accepted and refused, releases; every lock's
+    /// value and where it went.
+    guaranteed_close: usize,
+    guaranteed_liq: usize,
+    offers: usize,
+    disputed: usize,
+    dispute_refused: usize,
+    dispute_out_of_window: usize,
+    released: usize,
+    lock_value_in: i128,
+    lock_released: i128,
+    lock_to_victims: i128,
+    lock_burned: i128,
+    lock_rewards: i128,
 }
 
 #[derive(Clone)]
@@ -121,6 +135,8 @@ struct World {
     pairs: Vec<Live>,
     /// Parts with a pending claim (DESIGN 4.5d), counted in payoffs as the pair they would be restored to.
     pendings: Vec<LivePend>,
+    /// Guarantors' locks (DESIGN 4.5f).
+    locks: Vec<LiveLk>,
     cash: HashMap<[u8; 32], i128>,
 }
 
@@ -138,6 +154,8 @@ struct Sim {
     /// Review 4: every live position (pair or pending part) that keeps the bound of a cure: outpoint -> (loser side, cured
     /// bound, quote of the cured claim).
     cured: HashMap<TransactionOutpoint, (i64, i64, i64)>,
+    /// DESIGN 4.5f: the pending part each live lock settled, and what the settlement paid its victim.
+    lock_src: HashMap<TransactionOutpoint, (LivePend, i64)>,
 }
 
 /// Whether `quote` lies within the margin g of a cured liquidation claim at `claim` of the loser `side` (DESIGN 4.5e):
@@ -196,7 +214,7 @@ impl World {
 impl Sim {
     fn new(seed: u64) -> Sim {
         Sim {
-            w: World { pairs: vec![], pendings: vec![], cash: HashMap::new() },
+            w: World { pairs: vec![], pendings: vec![], locks: vec![], cash: HashMap::new() },
             keys: HashMap::new(),
             rng: Rng(seed),
             ctr: (seed as u32) << 12,
@@ -205,6 +223,7 @@ impl Sim {
             daa: 1_000_000,
             entered: HashMap::new(),
             cured: HashMap::new(),
+            lock_src: HashMap::new(),
         }
     }
 
@@ -391,6 +410,9 @@ impl Sim {
         self.w.pairs.extend(created);
         self.w.pendings.retain(|w| !spent.contains(&w.op));
         self.w.pendings.extend(created_w);
+        let created_l: Vec<LiveLk> = live_locks(&tx, d).into_iter().map(|l| l.at(now)).collect();
+        self.w.locks.retain(|l| !spent.contains(&l.op));
+        self.w.locks.extend(created_l);
         self.daa += self.rng.range(1, 3_000) as u64;
         for l in &self.w.pairs {
             assert!(l.value as i64 >= l.p.floor(), "pair below its floor");
@@ -818,6 +840,17 @@ impl Sim {
         let g = PairLeg { l: l.clone(), n, q: 0, act: act.clone() };
         let mut d = ev_draft(&[g.clone()], &e, &self.f.clone(), fnn);
         d.lock = if stale && self.rng.coin() { e.daa + r } else { rest_end.max(self.daa) + self.rng.range(0, 50) as u64 };
+        // DESIGN 4.5f: half of the proposals offer part of the bond to a guarantor (written into the pending part).
+        if self.rng.coin() {
+            let pidx = d.pendings[0].0;
+            let mut w = d.pendings[0].1.clone();
+            w.offer = self.rng.range(0, w.bond - DUST);
+            let mut a = d.args(0);
+            a[ARG_OFFER] = iv(w.offer);
+            d.set_args(0, a);
+            d.outs[pidx].script_public_key = p2sh(&w.art());
+            d.pendings[0].1 = w;
+        }
         let predicted = expiry >= rest_end as i64 + life && d.lock >= rest_end && !forced_within;
         let (tx0, en0) = d.build();
         let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
@@ -1092,6 +1125,254 @@ impl Sim {
         assert_eq!(gl + gs, l.value as i128, "idle: the pair's whole value goes to its two parties");
         self.st.idle += 1;
     }
+}
+
+impl Sim {
+    /// DESIGN 4.5f: a guarantee of a random pending part by a fresh guarantor (a liquidation once G old). The settlement
+    /// is finalize's with the proposer paid its offer less: the proposer's cash grows by exactly that, the lock holds
+    /// exactly lambda x cover + offer, and every party that did not act is treated as at finalize (the loser forfeits, the
+    /// winner pays at most the fee, the other party of a close keeps its payoff at the quote).
+    fn guarantee(&mut self) {
+        use kpf::evidence::*;
+        let Some(w) = self.pick_pending() else { return };
+        if w.w.kind == KIND_LIQ {
+            self.daa = self.daa.max(w.daa + w.w.m.grace_daa as u64);
+        }
+        assert!(w.w.guaranteeable_at(w.daa), "every part of the walk was accepted while its evidence was visible");
+        let gk = xonly(&self.fresh_key());
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let d = guarantee_draft(&w, &gk, &self.f.clone(), fnn);
+        self.apply(&d, &[]);
+        let lock = self.w.locks.iter().find(|l| l.l.claim_id == w.id && l.l.clock == w.daa as i64).cloned().expect("the lock is live");
+        assert_eq!(lock.value as i64, w.w.lock_min(w.value), "the lock holds exactly lambda x cover + offer");
+        assert_eq!(lock.l.cover, w.w.guarantee_cover(w.value));
+        self.st.lock_value_in += lock.value as i128;
+        self.st.bonds_to_proposers += w.w.bond as i128;
+        if w.w.offer > 0 {
+            self.st.offers += 1;
+        }
+        let pv = w.w.pair_view();
+        let split_dust = |v: i64| if v > 0 && v < DUST { DUST as i128 } else { 0 };
+        let settled;
+        if w.w.kind == KIND_CLOSE {
+            let (lp, sp) = w.w.guarantee_close(w.value);
+            let (closer, other, pay) = if w.w.side == LONG { (w.w.long_key, w.w.short_key, lp) } else { (w.w.short_key, w.w.long_key, sp) };
+            assert_eq!(self.w.cash(&closer) - before.cash(&closer), pay as i128, "the closer is paid its payoff and refund less its offer");
+            if other != closer {
+                let c = w.w.quote.clamp(w.w.bl, w.w.bs);
+                let owed_other = if w.w.side == LONG { q(w.w.n, w.w.bs - c, SCALE, 0) } else { q(w.w.n, c - w.w.bl, SCALE, 0) };
+                self.at_quote(&before, &other, w.w.quote, split_dust(owed_other) + 1);
+            }
+            settled = if w.w.side == LONG { sp } else { lp };
+            self.st.guaranteed_close += 1;
+        } else {
+            let (_, pay) = w.w.guarantee_forfeit(w.value);
+            assert_eq!(self.w.cash(&w.w.proposer_key) - before.cash(&w.w.proposer_key), pay as i128, "the proposer gets bond and fee less its offer");
+            let winner = w.w.winner_key();
+            if winner != w.w.proposer_key {
+                let g = self.grid(&[&pv, &d.pairs[0].1]);
+                let tick = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
+                self.non_consenting(&before, &winner, w.w.fee as i128 + tick + 2, &g);
+            }
+            settled = 0;
+            self.st.guaranteed_liq += 1;
+        }
+        self.lock_src.insert(lock.op, (w, settled));
+    }
+
+    /// DESIGN 4.5f: a dispute of a random lock with a counter quote at or beyond its refutation bound (or one tick short),
+    /// from an order placed before or after P, sometimes short-lived, sometimes resting until after the window. Accepted
+    /// exactly when a challenge of the claim would have been (clock P, rest R, life L, margin g) and the rest ended by
+    /// F + D - R. Then the victim is paid H (and is whole at the counter quote: what the settlement paid it plus H is at
+    /// least what its side was worth there), the lock is exactly H + burn + reward, and nobody else's payoff moves.
+    fn dispute_lock(&mut self) {
+        use kpf::evidence::*;
+        if self.w.locks.is_empty() {
+            return;
+        }
+        let i = self.rng.range(0, self.w.locks.len() as i64 - 1) as usize;
+        let lock = self.w.locks[i].clone();
+        let Some(bound) = lock.l.contradiction_bound() else { return };
+        let m = lock.l.m.clone();
+        let (r, life) = (m.min_rest_daa as u64, m.min_evidence_life);
+        let ask = lock.l.counter_is_ask();
+        let short_of = self.rng.range(0, 4) == 0;
+        let quote = match (ask, short_of) {
+            (true, false) => bound - self.rng.range(0, bound.min(200_000_000)),
+            (true, true) => bound + 1,
+            (false, false) => bound + self.rng.range(0, (PRICE_MAX - bound).min(200_000_000)),
+            (false, true) => bound - 1,
+        };
+        if quote < 1 || quote > PRICE_MAX {
+            return;
+        }
+        let n = lock.l.n;
+        let fill = n * m.kc_bps / 10_000 + if self.rng.coin() { 0 } else { self.rng.range(0, n) };
+        let mut e = if ask { Evidence::ask(quote, fill) } else { Evidence::bid(quote, fill) };
+        let p_clock = lock.l.clock as u64;
+        let deadline = lock.daa as i64 + m.dispute_daa - m.min_rest_daa;
+        let at = match self.rng.range(0, 3) {
+            0 => p_clock.saturating_sub(self.rng.range(0, 3 * r as i64) as u64),
+            1 => (p_clock + self.rng.range(0, r as i64) as u64).max(1),
+            // Near the end of the window: the rest ends a little before or after F + D - R.
+            _ => (deadline - r as i64 + self.rng.range(-3, 3)).max(1) as u64,
+        };
+        (e.daa, e.tok_daa) = (at, at);
+        let rest_end = at.max(p_clock) + r;
+        let short_lived = self.rng.range(0, 3) == 0;
+        let expiry = if short_lived { rest_end as i64 + life - self.rng.range(0, 1) } else { 1_000_000_000_000 };
+        e.ask.expiry_daa = expiry;
+        e.bid.expiry_daa = expiry;
+        let fnn = self.fn_();
+        let mut d = dp_draft(&[lock.clone()], &e, &self.f.clone(), fnn);
+        d.lock = rest_end.max(self.daa) + self.rng.range(0, 50) as u64;
+        let in_window = rest_end as i64 <= deadline;
+        let predicted = !short_of && expiry >= rest_end as i64 + life && in_window;
+        let (tx0, en0) = d.build();
+        let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
+        assert_eq!(ok, predicted, "dispute at {quote} (bound {bound}) by an order of DAA {at} expiring {expiry} on P = {p_clock}, F = {}, window end {deadline}", lock.daa);
+        if !ok {
+            self.st.dispute_refused += 1;
+            if !in_window {
+                self.st.dispute_out_of_window += 1;
+            }
+            return;
+        }
+        let before = self.w.clone();
+        let tx = self.apply(&d, &[]);
+        let (w, settled) = self.lock_src.remove(&lock.op).expect("every lock of the walk comes from a guarantee");
+        let h = lock.l.restitution(quote);
+        let pay = lock.l.victim_pay(quote);
+        let victim = lock.l.victim;
+        assert_eq!(victim, w.w.defender_key());
+        assert_eq!(self.w.cash(&victim) - before.cash(&victim), pay as i128, "the victim is paid the restitution");
+        // Whole at the counter quote: the loser's side of a liquidation, the other party's payout of a close at c.
+        let c = quote.clamp(w.w.bl, w.w.bs);
+        let fair = if w.w.kind == KIND_LIQ {
+            if w.w.side == LONG { q(w.w.n, c - w.w.bl, SCALE, 0) } else { q(w.w.n, w.w.bs - c, SCALE, 0) }
+        } else {
+            let owe = if w.w.side == LONG { q(w.w.n, c - w.w.bl, SCALE, 0) } else { q(w.w.n, w.w.bs - c, SCALE, 0) };
+            w.value as i64 - w.w.refund - owe
+        };
+        assert!(settled + h >= fair, "the wronged party ends with {} < {fair}, what its side was worth at {quote}", settled + h);
+        let burn = lock.l.burn(lock.value, quote);
+        if burn > 0 {
+            assert_eq!(tx.outputs.last().unwrap().script_public_key, kpf_protocol::lock::burn_spk());
+        }
+        let reward = lock.value as i64 - pay - burn;
+        assert!(reward >= lock.l.reward() && reward <= lock.l.reward() + DUST, "the executor keeps the reward (plus a burn below dust)");
+        self.st.lock_to_victims += pay as i128;
+        self.st.lock_burned += burn as i128;
+        self.st.lock_rewards += reward as i128;
+        // Nobody else's payoff moves: a dispute touches no position.
+        let g = self.grid(&[&w.w.pair_view()]);
+        for k in [w.w.long_key, w.w.short_key] {
+            if k != victim {
+                self.non_consenting(&before, &k, 0, &g);
+            }
+        }
+        self.st.disputed += 1;
+    }
+
+    /// DESIGN 4.5f: a release of a random lock once D old: the whole lock to its owner.
+    fn release_lock(&mut self) {
+        use kpf::evidence::*;
+        if self.w.locks.is_empty() {
+            return;
+        }
+        let i = self.rng.range(0, self.w.locks.len() as i64 - 1) as usize;
+        let lock = self.w.locks[i].clone();
+        self.daa = self.daa.max(lock.daa + lock.l.m.dispute_daa as u64);
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let d = release_draft(&lock, &self.f.clone(), fnn);
+        self.apply(&d, &[]);
+        assert_eq!(self.w.cash(&lock.l.owner) - before.cash(&lock.l.owner), lock.value as i128, "the guarantor gets its whole lock back");
+        self.lock_src.remove(&lock.op);
+        self.st.lock_released += lock.value as i128;
+        self.st.released += 1;
+    }
+}
+
+/// The X6 evidence walk with guaranteed fast settlement mixed in (DESIGN 4.5f): proposals (half with an offer),
+/// challenges, cures, finalizes, guarantees, disputes and releases; then every pending part is finalized or guaranteed,
+/// every lock disputed or released, every pair idle-settled. Every bond ends with a proposer or a challenger; every lock
+/// ends in exactly one of release or payout plus burn, and its value is accounted for to the sompi.
+fn walk_guarantee(seed: u64, st_total: &mut Stats) {
+    let mut s = Sim::new(seed ^ 0x6a6a_0000);
+    s.open(None);
+    s.open(None);
+    for _ in 0..18 {
+        match s.rng.range(0, 11) {
+            0 => s.transfer(true, true),
+            1 => s.challenge(),
+            2 => s.cure(),
+            3 => s.finalize(),
+            4 | 5 => s.guarantee(),
+            6 | 7 => s.dispute_lock(),
+            8 => s.release_lock(),
+            _ => s.propose(),
+        }
+        if s.w.pairs.is_empty() {
+            s.open(None);
+        }
+    }
+    while !s.w.pendings.is_empty() {
+        if s.rng.coin() {
+            s.guarantee();
+        } else {
+            s.finalize();
+        }
+    }
+    for _ in 0..4 {
+        s.dispute_lock();
+    }
+    while !s.w.locks.is_empty() {
+        s.release_lock();
+    }
+    while s.w.pairs.iter().any(|l| l.p.long_key == l.p.short_key) {
+        s.coop_forfeited();
+    }
+    while !s.w.pairs.is_empty() {
+        s.idle();
+    }
+    let t = &s.st;
+    assert_eq!(t.bonds_posted, t.bonds_to_proposers + t.bonds_to_challengers, "every bond ends with a proposer or a challenger");
+    assert_eq!(t.guaranteed_close + t.guaranteed_liq, t.disputed + t.released, "every lock ends in exactly one of release or dispute");
+    assert_eq!(t.lock_value_in, t.lock_released + t.lock_to_victims + t.lock_burned + t.lock_rewards, "every sompi of every lock is accounted for");
+    assert!(s.lock_src.is_empty());
+    st_total.guaranteed_close += t.guaranteed_close;
+    st_total.guaranteed_liq += t.guaranteed_liq;
+    st_total.offers += t.offers;
+    st_total.disputed += t.disputed;
+    st_total.dispute_refused += t.dispute_refused;
+    st_total.dispute_out_of_window += t.dispute_out_of_window;
+    st_total.released += t.released;
+    st_total.lock_value_in += t.lock_value_in;
+    st_total.lock_released += t.lock_released;
+    st_total.lock_to_victims += t.lock_to_victims;
+    st_total.lock_burned += t.lock_burned;
+    st_total.lock_rewards += t.lock_rewards;
+    st_total.ev_close += t.ev_close;
+    st_total.ev_liq += t.ev_liq;
+    st_total.challenged += t.challenged;
+    st_total.finalized_close += t.finalized_close;
+    st_total.finalized_liq += t.finalized_liq;
+    st_total.txs += t.txs;
+}
+
+#[test]
+fn x6_guarantee_random_walk() {
+    let mut st = Stats::default();
+    for seed in 1..=16u64 {
+        walk_guarantee(seed, &mut st);
+    }
+    println!("X6 guarantee: {st:?}");
+    assert!(st.guaranteed_close > 0 && st.guaranteed_liq > 0 && st.offers > 0, "{st:?}");
+    assert!(st.disputed > 0 && st.dispute_refused > 0 && st.dispute_out_of_window > 0 && st.released > 0, "{st:?}");
+    assert!(st.lock_burned > 0 && st.lock_rewards > 0 && st.lock_to_victims > 0, "{st:?}");
+    assert_eq!(st.lock_value_in, st.lock_released + st.lock_to_victims + st.lock_burned + st.lock_rewards);
 }
 
 fn walk(seed: u64, st_total: &mut Stats) {

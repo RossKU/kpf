@@ -294,7 +294,7 @@ fn finalize_words(w: &LivePending, now: Option<u64>) -> String {
 
 /// The proposal's bond and the outputs a proposal writes, before signing.
 fn print_proposal(l: &LivePair, n: i64, kind: i64, side: i64, quote: i64, proposer: &[u8; 32]) {
-    let po = kpf_protocol::pending::propose_out(&l.clocked(), l.value, n, kind, side, quote, *proposer);
+    let po = kpf_protocol::pending::propose_out(&l.clocked(), l.value, n, kind, side, quote, *proposer, 0, 0);
     let w = &po.pending;
     println!(
         "propose (DESIGN 4.5d): nothing settles now. {} tokens move into a pending part with a bond of {} KAS (refund {} KAS, funded by the executor); after {} DAA anyone may finalize it, and until then anyone may challenge it",
@@ -323,7 +323,7 @@ fn print_proposal(l: &LivePair, n: i64, kind: i64, side: i64, quote: i64, propos
 }
 
 pub fn propose_close_cmd(a: &Args) -> R<()> {
-    let mut own = vec!["pair", "side", "n"];
+    let mut own = vec!["pair", "side", "n", "offer"];
     own.extend(EV_FLAGS);
     only_with(a, &own)?;
     let net = network(a)?;
@@ -341,7 +341,8 @@ pub fn propose_close_cmd(a: &Args) -> R<()> {
     print_proposal(&l, n, KIND_CLOSE, sd, eu.order.quote(), &owner);
     let opts = fee_opts(a)?;
     let facts = std::cell::RefCell::new(None);
-    let m = Member::Propose(Leg { pair: l.clone(), n, act: Act::Close { side: sd } });
+    let offer = price_or(a, "offer", 0)?;
+    let m = Member::Propose(Leg { pair: l.clone(), n, offer, act: Act::Close { side: sd } });
     let b = build_funded(a, net, &mut node, &fk.key, &|f| {
         let (b, fa) = evidence_tx_facts(std::slice::from_ref(&m), &eu, f, &opts)?;
         *facts.borrow_mut() = Some(fa);
@@ -355,7 +356,7 @@ pub fn propose_close_cmd(a: &Args) -> R<()> {
 }
 
 pub fn propose_liquidate_cmd(a: &Args) -> R<()> {
-    let mut own = vec!["pair", "n", "proposer"];
+    let mut own = vec!["pair", "n", "proposer", "offer"];
     own.extend(EV_FLAGS);
     only_with(a, &own)?;
     let net = network(a)?;
@@ -381,7 +382,8 @@ pub fn propose_liquidate_cmd(a: &Args) -> R<()> {
     }
     let opts = fee_opts(a)?;
     let facts = std::cell::RefCell::new(None);
-    let members: Vec<Member> = parts.iter().map(|(p, n)| Member::Propose(Leg { pair: p.clone(), n: *n, act: Act::Liq { side: sd, proposer } })).collect();
+    let offer = price_or(a, "offer", 0)?;
+    let members: Vec<Member> = parts.iter().map(|(p, n)| Member::Propose(Leg { pair: p.clone(), n: *n, offer, act: Act::Liq { side: sd, proposer } })).collect();
     let b = build_funded(a, net, &mut node, &fk.key, &|f| {
         let (b, fa) = evidence_tx_facts(&members, &eu, f, &opts)?;
         *facts.borrow_mut() = Some(fa);
@@ -519,7 +521,7 @@ fn scan_dir(dir: &str) -> R<Vec<ObjFile>> {
 /// `watch`: for the user's pairs, every pending claim against them (a KpfPending of the pair's covenant id and keys),
 /// how long before it can be finalized, whether one of the given resting orders refutes it now, and the command to do so.
 pub fn watch_cmd(a: &Args) -> R<()> {
-    a.only(&["pair", "pending", "scan", "order", "seller", "node", "daa", "funder", "json"])?;
+    a.only(&["pair", "pending", "lock", "scan", "order", "seller", "node", "daa", "funder", "json"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let now = now_daa(a, &mut node)?;
@@ -543,11 +545,19 @@ pub fn watch_cmd(a: &Args) -> R<()> {
     }
     // The candidate pending parts: given files and every pending object of the scanned directories.
     let mut cands: Vec<(String, ObjFile)> = vec![];
+    // Locks of fast-settled claims (DESIGN 4.5f): given files and every lock object of the scanned directories.
+    let mut lock_cands: Vec<(String, ObjFile)> = vec![];
+    for f in a.all("lock") {
+        lock_cands.push((f.to_string(), ObjFile::load(f)?));
+    }
     for f in a.all("pending") {
         cands.push((f.to_string(), ObjFile::load(f)?));
     }
     for d in a.all("scan") {
         for o in scan_dir(d)? {
+            if matches!(o.decoded(), Ok(Decoded::Lock(_))) {
+                lock_cands.push((format!("{d}/{}:{}", o.op.transaction_id, o.op.index), o.clone()));
+            }
             if matches!(o.decoded(), Ok(Decoded::Pending(_))) {
                 cands.push((format!("{d}/{}:{}", o.op.transaction_id, o.op.index), o));
             }
@@ -572,7 +582,7 @@ pub fn watch_cmd(a: &Args) -> R<()> {
     let mut report: Vec<Value> = vec![];
     let mut found = 0;
     for (pf, o, p, live) in &pairs {
-        let mut entry = json!({"pair": pf, "covenantId": o.covenant_id.to_string(), "live": live, "pending": []});
+        let mut entry = json!({"pair": pf, "covenantId": o.covenant_id.to_string(), "live": live, "pending": [], "locks": []});
         if !a.has("json") {
             println!(
                 "pair {pf}: {} tokens, range {} .. {} KAS{}",
@@ -689,14 +699,16 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             }
             println!("    after the window anyone may end it: kpf finalize --pending {wf} --funder {funder}{node_flag} --submit");
         }
+        found += watch_locks(a, pf, o, p, &lock_cands, &orders, &mut node, net, now, funder, &node_flag, &mut entry)?;
         report.push(entry);
     }
     if a.has("json") {
         println!("{}", serde_json::to_string_pretty(&json!({"daa": now, "pairs": report})).expect("json"));
     } else if found == 0 {
         println!(
-            "no pending claim found against these pairs among {} pending object(s) given. A node lists UTXOs by address only, not by covenant id, so a pending part is found from its object file: pass --pending FILE or --scan DIR (where proposals are written)",
-            cands.len()
+            "no pending claim and no disputable fast-settled claim found against these pairs among {} pending and {} lock object(s) given. A node lists UTXOs by address only, not by covenant id, so a pending part or a lock is found from its object file: pass --pending FILE, --lock FILE or --scan DIR (where proposals and guarantees are written)",
+            cands.len(),
+            lock_cands.len()
         );
     }
     Ok(())
@@ -852,4 +864,272 @@ pub fn kob_file_cmd(a: &Args) -> R<()> {
         None => println!("{}", serde_json::to_string_pretty(&doc).expect("json")),
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- guaranteed fast settlement (DESIGN 4.5f)
+
+fn load_locks(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network) -> R<Vec<(String, LiveLock)>> {
+    let files = a.all("lock");
+    if files.is_empty() {
+        return Err("--lock <file> is required (a KpfLock object, written by the guarantee)".into());
+    }
+    files
+        .iter()
+        .map(|f| {
+            let mut o = ObjFile::load(f)?;
+            if let Some(n) = node {
+                refresh(n, &mut o, net)?;
+            }
+            Ok((f.to_string(), o.live_lock()?))
+        })
+        .collect()
+}
+
+/// The time left in a lock's window, in words.
+fn lock_words(l: &LiveLock, now: Option<u64>) -> String {
+    let deadline = l.rest_deadline();
+    let release = l.release_from();
+    match now {
+        Some(n) if n >= release => format!(
+            "the window is over: a release is valid now (from DAA {release}); a dispute with counter-evidence that had rested by DAA {deadline} is still valid until a release lands"
+        ),
+        Some(n) if (n as i64) > deadline => format!("counter-evidence must have rested by DAA {deadline} (passed); release from DAA {release}, {} from now", daa_secs(release - n)),
+        Some(n) => format!("disputable with counter-evidence resting by DAA {deadline} ({} from now); release from DAA {release}", daa_secs((deadline - n as i64).max(0) as u64)),
+        None => format!("disputable with counter-evidence resting by DAA {deadline}; release from DAA {release} (give --daa or --node for the time left)"),
+    }
+}
+
+pub fn guarantee_cmd(a: &Args) -> R<()> {
+    let own = vec!["pending", "pair", "owner", "daa"];
+    only_with(a, &own)?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let w = load_pending(a, "pending", &mut node, net)?;
+    check_lineage(a, std::slice::from_ref(&w))?;
+    let now = now_daa(a, &mut node)?;
+    let fk = funder_and_keys(a, true)?.expect("funder");
+    let owner = match a.get("owner") {
+        Some(o) => keys::party(o, net)?,
+        None => fk.key,
+    };
+    let cover = w.w.guarantee_cover(w.value);
+    let lock = w.w.lock_min(w.value);
+    println!("pending part: {}; its proposal's clock P is DAA {}", describe_claim(&w), w.daa);
+    println!(
+        "guarantee (DESIGN 4.5f): the claim settles now, exactly as finalize would; the guarantor {} locks {} KAS (lambda {} bps x the cover {} KAS, the value this settlement moves away from the {}, plus the proposer's offer {} KAS) for {} DAA",
+        to_hex(&owner),
+        kas(lock),
+        w.w.m.lock_bps,
+        kas(cover),
+        side_word(if w.w.kind == KIND_CLOSE { 3 - w.w.side } else { w.w.side }),
+        kas(w.w.offer),
+        w.w.m.dispute_daa
+    );
+    if w.w.kind == KIND_CLOSE {
+        let (lp, sp) = w.w.guarantee_close(w.value);
+        println!("  the long receives {} KAS, the short {} KAS now (the closer's payout less its offer)", kas(lp), kas(sp));
+    } else {
+        let (fv, pay) = w.w.guarantee_forfeit(w.value);
+        println!("  forfeit and keep: the {} owns both sides ({} KAS); the proposer receives {} KAS now (bond and fee less its offer)", side_word(3 - w.w.side), kas(fv), kas(pay));
+    }
+    match w.w.contradiction_bound() {
+        Some(b) => println!(
+            "  RISK: if a {} {} {} KAS rests {} DAA from P and finishes resting within the window, anyone disputes the lock: the wronged party is paid up to the cover from it, the disputer keeps (lambda - 1) x cover, the rest is burned. Do not guarantee on a book with nobody to arbitrage an order at that bound within the rest: there the deserving loser can place it itself.",
+            if w.w.counter_is_ask() { "ask" } else { "bid" },
+            if w.w.counter_is_ask() { "<=" } else { ">=" },
+            kas(b),
+            w.w.m.min_rest_daa
+        ),
+        None => println!("  no quote in 0..=priceMax disputes this claim"),
+    }
+    if !w.w.guaranteeable_at(w.daa) {
+        return Err(format!(
+            "this pending part was accepted at DAA {} after its proposal's evidence stopped being fillable by conforming matchers (DAA {}): it cannot be guaranteed, only challenged, cured or finalized",
+            w.daa, w.w.visible_until
+        ));
+    }
+    let from = w.w.guarantee_from(w.daa);
+    if let Some(n) = now {
+        if n < from {
+            let msg = format!("a liquidation can be guaranteed only once its pending part is {} DAA old (the loser's cure grace): from DAA {from}, {} from now", w.w.m.grace_daa, daa_secs(from - n));
+            if a.has("submit") {
+                return Err(msg);
+            }
+            println!("WARNING: {msg}");
+        }
+    }
+    let opts = fee_opts(a)?;
+    let b = build_funded(a, net, &mut node, &fk.key, &|f| kpf_protocol::evidence::guarantee(&w, &owner, f, &opts))?;
+    finish(a, "guaranteed fast settlement of a pending claim (DESIGN 4.5f)", b, &fk.keys, net, &mut node)
+}
+
+pub fn dispute_cmd(a: &Args) -> R<()> {
+    let mut own = vec!["lock"];
+    own.extend(EV_FLAGS);
+    only_with(a, &own)?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let locks = load_locks(a, &mut node, net)?;
+    let m = locks[0].1.l.m.clone();
+    let now = now_daa(a, &mut node)?;
+    let eu = evidence_use(a, &mut node, net, m.scale, now)?;
+    let quote = eu.order.quote();
+    for (f, l) in &locks {
+        check_lock(l).map_err(|e| format!("{f}: {e}"))?;
+        println!("lock {f}: {} KAS of the guarantor {}; {}", kas(l.value as i64), to_hex(&l.l.owner), lock_words(l, now));
+        print_report_k(&check_counter_evidence_on(&eu.order, &m, Some(l.l.clock), now), &m, now, m.kc_bps);
+        println!(
+            "  at the counter quote {} KAS the wronged party {} is paid {} KAS; the executor keeps the reward {} KAS; {} KAS are burned",
+            kas(quote),
+            to_hex(&l.l.victim),
+            kas(l.l.victim_pay(quote)),
+            kas(l.l.reward()),
+            kas(l.l.burn(l.value, quote))
+        );
+    }
+    let fk = funder_and_keys(a, true)?.expect("funder");
+    let opts = fee_opts(a)?;
+    let facts = std::cell::RefCell::new(None);
+    let members: Vec<Member> = locks.iter().map(|(_, l)| Member::Dispute(l.clone())).collect();
+    let b = build_funded(a, net, &mut node, &fk.key, &|f| {
+        let (b, fa) = evidence_tx_facts(&members, &eu, f, &opts)?;
+        *facts.borrow_mut() = Some(fa);
+        Ok(b)
+    })?;
+    if let Some(f) = facts.borrow().as_ref() {
+        describe_fill(f, &eu.order, &m);
+    }
+    lock_guard(a, &b, now)?;
+    finish(a, "dispute of a fast-settled claim (counter-evidence, DESIGN 4.5f)", b, &fk.keys, net, &mut node)
+}
+
+pub fn release_cmd(a: &Args) -> R<()> {
+    let own = vec!["lock", "daa"];
+    only_with(a, &own)?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let locks = load_locks(a, &mut node, net)?;
+    if locks.len() != 1 {
+        return Err("release one lock at a time (--lock FILE)".into());
+    }
+    let (_, l) = &locks[0];
+    let now = now_daa(a, &mut node)?;
+    println!("lock: {} KAS to the guarantor {}; {}", kas(l.value as i64), to_hex(&l.l.owner), lock_words(l, now));
+    if let Some(n) = now {
+        if n < l.release_from() {
+            let msg = format!("this lock can be released only from DAA {} (its UTXO is {} DAA old, the window is {})", l.release_from(), n.saturating_sub(l.daa), l.l.m.dispute_daa);
+            if a.has("submit") {
+                return Err(msg);
+            }
+            println!("WARNING: {msg}");
+        }
+    }
+    let fk = funder_and_keys(a, true)?.expect("funder");
+    let opts = fee_opts(a)?;
+    let b = build_funded(a, net, &mut node, &fk.key, &|f| kpf_protocol::evidence::release(l, f, &opts))?;
+    finish(a, "release of a guarantor's lock (DESIGN 4.5f)", b, &fk.keys, net, &mut node)
+}
+
+/// `watch` for fast-settled claims (DESIGN 4.5f): every lock among the candidates whose claim was cut from one of the
+/// user's pairs (the lock's claim id is the pair's covenant id) and whose wronged party is one of its keys, with the time
+/// left in its window, which of the given resting orders dispute it, and the exact command.
+#[allow(clippy::too_many_arguments)]
+fn watch_locks(
+    a: &Args,
+    pf: &str,
+    o: &ObjFile,
+    p: &Pair,
+    locks: &[(String, ObjFile)],
+    orders: &[(String, kpf_protocol::kob::Evidence)],
+    node: &mut Option<Node<WsTransport>>,
+    net: Network,
+    now: Option<u64>,
+    funder: &str,
+    node_flag: &str,
+    entry: &mut Value,
+) -> R<usize> {
+    let mut found = 0;
+    for (lf, lo) in locks {
+        let Ok(Decoded::Lock(l)) = lo.decoded() else { continue };
+        if l.claim_id != o.covenant_id || (l.victim != p.long_key && l.victim != p.short_key) {
+            continue;
+        }
+        let mut lo = lo.clone();
+        let still = match node {
+            Some(n) => refresh(n, &mut lo, net).is_ok(),
+            None => lo.daa.is_some(),
+        };
+        if !still {
+            if !a.has("json") {
+                println!("  {lf}: a lock of a fast-settled claim on this pair that is no longer live (disputed or released), or whose DAA is unknown");
+            }
+            continue;
+        }
+        let ll = lo.live_lock()?;
+        if let Err(m) = check_lock(&ll) {
+            if !a.has("json") {
+                println!("  {lf}: NOT a lock a guarantee writes, ignored: {m}");
+            }
+            continue;
+        }
+        found += 1;
+        let need = needed_counter_fill(&ll.l.m, ll.l.n);
+        let mut hits = vec![];
+        for (of, ev) in orders {
+            let rep = check_counter_evidence_on(ev, &ll.l.m, Some(ll.l.clock), now);
+            let ok = ev.fill_cap() >= need && rep.problems.is_empty() && rep.dead.is_empty() && check_dispute(&ll, ev, rep.rest_end).is_ok();
+            let why = if ok {
+                String::new()
+            } else if ev.fill_cap() < need {
+                format!("it can fill fewer than the {} tokens a dispute must fill", fmt_units(need as i128, ll.l.m.scale as i128))
+            } else {
+                check_dispute(&ll, ev, rep.rest_end).err().map(|e| e.to_string()).unwrap_or_else(|| rep.problems.iter().chain(rep.dead.iter()).cloned().collect::<Vec<_>>().join("; "))
+            };
+            hits.push((of.clone(), ok, why, ev.quote(), rep.rest_end));
+        }
+        let victim_side = if ll.l.victim == p.long_key { "long" } else { "short" };
+        if a.has("json") {
+            entry["locks"].as_array_mut().expect("array").push(json!({
+                "file": lf, "lockValue": ll.value, "guarantor": to_hex(&ll.l.owner), "victimSide": victim_side, "cover": ll.l.cover,
+                "restDeadline": ll.rest_deadline(), "releaseFrom": ll.release_from(),
+                "disputableForDaa": now.map(|n| (ll.rest_deadline() - n as i64).max(0)),
+                "disputeBound": ll.l.contradiction_bound(), "counterKind": if ll.l.counter_is_ask() { "ask" } else { "bid" },
+                "counterFillNeeded": need,
+                "disputingOrders": hits.iter().filter(|h| h.1).map(|h| json!({"order": h.0, "restitution": ll.l.victim_pay(h.3), "restEnd": h.4})).collect::<Vec<_>>(),
+            }));
+            continue;
+        }
+        println!(
+            "  FAST-SETTLED {lf}: the claim settled at once against the {victim_side} (cover {} KAS); the guarantor's lock holds {} KAS. {}",
+            kas(ll.l.cover),
+            kas(ll.value as i64),
+            lock_words(&ll, now)
+        );
+        if let Some(b) = ll.l.contradiction_bound() {
+            println!(
+                "    disputed by a {} {} {} KAS resting {} from DAA {} (the claim's clock), fillable {} after, done resting by DAA {}; the {victim_side} is then paid what its side was worth at that quote",
+                if ll.l.counter_is_ask() { "ask" } else { "bid" },
+                if ll.l.counter_is_ask() { "<=" } else { ">=" },
+                kas(b),
+                daa_secs(ll.l.m.min_rest_daa.max(0) as u64),
+                ll.l.clock,
+                daa_secs(ll.l.m.min_evidence_life.max(0) as u64),
+                ll.rest_deadline()
+            );
+        }
+        if orders.is_empty() {
+            println!("    no resting orders given (--order ORDER.json): none checked");
+        }
+        for (of, ok, why, q, _) in &hits {
+            if *ok {
+                let seller = if ll.l.counter_is_ask() { String::new() } else { format!(" --seller {}", a.get("seller").unwrap_or("YOUR-TOKENS.json")) };
+                println!("    DISPUTES IT: {of} (the {victim_side} would receive {} KAS). Run:", kas(ll.l.victim_pay(*q)));
+                println!("      kpf dispute --lock {lf} --evidence {of}{seller} --funder {funder}{node_flag} --submit");
+            } else {
+                println!("    {of}: does not dispute it: {why}");
+            }
+        }
+    }
+    let _ = pf;
+    Ok(found)
 }

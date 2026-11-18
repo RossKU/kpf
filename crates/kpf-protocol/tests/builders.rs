@@ -93,6 +93,7 @@ fn world() -> (World, LiveOpen, LiveOpen, LivePair) {
                 Live::Open(o) => lcont = Some(o),
                 Live::Kob(_) => unreachable!("an evidence-free transaction creates no KOB object"),
                 Live::Pending(_) => unreachable!("an evidence-free transaction creates no pending part"),
+                Live::Lock(_) => unreachable!("an evidence-free transaction creates no lock"),
             }
         }
         (pair.expect("pair"), lcont.expect("long continuation"))
@@ -399,6 +400,10 @@ fn assert_args_matter(b: &Built) {
             Plan::Pending { redeem, entry, args } => {
                 let (r, e) = (redeem.clone(), *entry);
                 (args, Box::new(move |a| Plan::Pending { redeem: r.clone(), entry: e, args: a }))
+            }
+            Plan::Lock { redeem, entry, args } => {
+                let (r, e) = (redeem.clone(), *entry);
+                (args, Box::new(move |a| Plan::Lock { redeem: r.clone(), entry: e, args: a }))
             }
             Plan::P2pk { .. } | Plan::Kob { .. } => continue,
         };

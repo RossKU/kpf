@@ -45,11 +45,13 @@ order is filled in every evidence transaction; the funder is the executor: it BU
 KAS, or SELLS its own tokens into the evidence bid. common flags as the builders)
   evidence  --order ORDER.json (--pair P.json | --pending W.json) [--daa N | --node URL] [--json]
             can this KOB order serve as evidence for a pair, or refute a pending claim, and why not
-  propose-close --pair P.json --side long|short [--n T] --evidence ORDER.json [--seller TOKEN.json] [--evidence-fill T] --key OWNER
+  propose-close --pair P.json --side long|short [--n T] --evidence ORDER.json [--seller TOKEN.json] [--evidence-fill T] --key OWNER [--offer KAS]
             P5 unilateral close (a long at a resting bid, a short at a resting ask; the owner's key signs); settles at finalize
-  propose-liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json] [--proposer KEY|HEX|ADDR]
+  propose-liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json] [--proposer KEY|HEX|ADDR] [--offer KAS]
             P6, up to 8 pairs on one evidence (an ask: longs, a bid: shorts); at finalize the winner keeps both sides
             (forfeit and keep) and the proposer (default the funder) receives the bond and the fee
+            (--offer: what the proposer gives up from its own payout to a guarantor that fast-settles the claim, at most
+             the bond less 0.02 KAS; it rides in the guarantor's lock)
   challenge --pending W.json [--pending W.json]... --evidence ORDER.json [--seller TOKEN.json] [--pair P.json]...
             refute pending claims with a counter order of the opposite kind beyond the claim by the margin g, rested from
             the proposal's DAA; the parts return to their pairs (unlisted, the clock kept) and the bonds go to the funder
@@ -58,15 +60,26 @@ KAS, or SELLS its own tokens into the evidence bid. common flags as the builders
   finalize  --pending W.json [--daa N] [--pair P.json]   anyone, once the pending part is challengeDaa old: settle the claim
             (--pair: the pair the part was cut from; the part must carry its covenant id and keys. Every pending part
              must hold its range and refund, or it is refused as a look-alike)
-  watch     --pair P.json [--pair ...] (--pending W.json | --scan DIR)... [--order ORDER.json]... [--node URL | --daa N] [--json]
+  watch     --pair P.json [--pair ...] (--pending W.json | --lock L.json | --scan DIR)... [--order ORDER.json]... [--node URL | --daa N] [--json]
             pending claims against these pairs, the time left before they can be finalized, which of the given resting
-            orders refute them, and the exact command to do so
+            orders refute them, and the exact command to do so; and the fast-settled claims against them that can still be
+            disputed, the time left in the window, which orders dispute them, and the exact command
   kob-file  --redeem HEX --outpoint TXID:INDEX (--node URL | --amount SOMPI --daa N --covenant-id HEX) [--custody FILE] [--out FILE]
             an ORDER.json / TOKEN.json from a KOB order's or a token holder's redeem script
   (--daa N: the DAA the time checks use when there is no --node; a transaction whose lock time is ahead of the node's DAA
    is not submitted. Evidence counts only from the pair's evidence clock start S (counter-evidence from the proposal's DAA)
    and must stay fillable for the market's evidence life after its rest; a dead (soft-expired) order is refused;
    --allow-dead-evidence accepts one, for sweeping tests only)
+
+Guaranteed fast settlement (DESIGN 4.5f; optional, the slow path above stays the default. common flags as the builders)
+  guarantee --pending W.json [--owner KEY|HEX|ADDR] [--pair P.json] [--daa N]
+            settle a pending claim now, exactly as finalize would, by locking lambda x its cover plus the proposer's offer
+            (owner: default the funder; a liquidation once its pending part is graceDaa old, the loser's cure grace)
+  dispute   --lock L.json [--lock L.json]... --evidence ORDER.json [--seller TOKEN.json]
+            refute a fast-settled claim with the counter-evidence a challenge would have needed (rested from the claim's
+            DAA, done resting within the window): the wronged party is paid from the lock, the funder keeps the reward
+            (lambda - 1) x cover, the rest is burned
+  release   --lock L.json [--daa N]                      anyone, once the lock is disputeDaa old: the lock to its owner
 
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)
@@ -110,6 +123,9 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "cure" => evcmds::cure_cmd(&a),
         "finalize" => evcmds::finalize_cmd(&a),
         "watch" => evcmds::watch_cmd(&a),
+        "guarantee" => evcmds::guarantee_cmd(&a),
+        "dispute" => evcmds::dispute_cmd(&a),
+        "release" => evcmds::release_cmd(&a),
 
         "evidence" => evcmds::evidence_cmd(&a),
         "kob-file" => evcmds::kob_file_cmd(&a),
