@@ -6,6 +6,8 @@
 //! arguments.
 #![allow(dead_code)]
 
+pub mod paths;
+
 use std::sync::OnceLock;
 
 use kaspa_consensus_core::Hash;
@@ -31,7 +33,7 @@ pub fn q(n: i64, r: i64, scale: i64, c: i64) -> i64 {
     i64::try_from(v).expect("q fits")
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Market {
     pub token_cov_id: Hash,
     pub token_tpl_hash: Hash,
@@ -129,7 +131,7 @@ impl Market {
 
 // ---------------------------------------------------------------- KpfPair
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pair {
     pub m: Market,
     pub size: i64,
@@ -236,7 +238,7 @@ fn splice(base: &SilAbiArtifact, state: &[u8]) -> SilAbiArtifact {
 pub const LONG: i64 = 1;
 pub const SHORT: i64 = 2;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Open {
     pub m: Market,
     pub side: i64,

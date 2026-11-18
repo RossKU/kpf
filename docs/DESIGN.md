@@ -324,6 +324,13 @@ Not in M1: margin withdrawal (needs the adverse bound: bid for a long, ask for a
   equal its own covenant id. Covenant ids are **not** unique per input: the parts of a same-id split, and the outputs
   of one multi-output genesis group, share an id (experiments X2, X5). Every claimer therefore also requires
   `OpCovInputCount(selfId) == 1`; with that guard two inputs of one transaction cannot both claim one output.
+- **Live-tag guard.** A tag outlives its creating transaction, so the continuation of an older pair whose tag still
+  names a live claimer (a partly filled `KpfOpen`, the remainder of a donor) would satisfy that claimer's hand-over
+  check, and the claimer would pay for a position its party already holds. Every entry that copies a tag into a
+  continuation requires that no input of the transaction carries that tag as its covenant id (found in slice 1b).
+- **Carriers on a split.** The departing part takes exactly `q(n, BS − BL)` out of the pair; the remainder keeps the
+  old carrier, any excess and the rounding slack. The carrier of a new part is funded by the taker (the `KpfOpen`'s
+  per-fill carrier, or the executor's own input), never out of a non-consenting party's margin.
 - **Evidence block.** All pairs that act on evidence input `ev` sit at inputs `[q, ev)`; each carries `(n_i, q)` as the
   first pushes of its signature script (8-byte `n_i`, as KOB evidence carries `n`, `KobCondAsk.sil:220-221`). Each such
   pair reads the first push of every input in `[q, ev)` (≤ 8, unrolled as the stray scan, `KobCondAsk.sil:172-189`),

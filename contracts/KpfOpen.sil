@@ -9,9 +9,12 @@ pragma silverscript ^0.1.0;
 // Entries of this slice:
 //   fill(pairOut, n, x, bl, bs, counterKey, counterTag, cPre, cSuf)
 //          T1 open: n base units at x into the fresh KpfPair at output pairOut. Anyone, once tx.daa >= activeFrom.
+//   take(partOut, n, x, bound, counterKey, counterTag, ca, cm, ct, cPre, cSuf)
+//          T2 transfer: n base units at x take a same-side listing of an existing KpfPair; the part at output
+//          partOut continues that pair's covenant id. Anyone, once tx.daa >= activeFrom.
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
-// Taking a same-side listing (transfer, liquidation by transfer) comes later.
+// Liquidation by transfer (T7) comes later.
 //
 // The order enforces only its own guarantees (KOB option 2). It never reads the counterparty: it rebuilds the
 // whole pair output script from its own market block, its own key, rate and covenant id, and the arguments, and
@@ -86,6 +89,8 @@ contract KpfOpen(
     byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     // The six listing fields of a new pair, all zero (unlisted), with their 0x08 push opcodes.
     byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
+    // One empty listing window.
+    byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
     // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..208), sizeLeft
     // payload [251..259).
     int constant MARKET_AT = 1;
@@ -198,6 +203,93 @@ contract KpfOpen(
             require(tx.outputs[c].value >= tx.inputs[self].value - spend);
         } else {
             // Filled out. The order ends, and what is left of the escrow goes to the owner at output i.
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+            require(tx.outputs[self].value >= tx.inputs[self].value - spend);
+        }
+    }
+
+    // T2 transfer: take a same-side listing. The pair's own transfer entry pays the leaver and enforces the
+    // stayer's guarantees; this order checks only its own, exactly as fill does, on the part at output partOut:
+    // the KpfPair template, this order's market block, size n, entry x, its owner as its side's key, its side's
+    // bound from its own rate (long bl = x - myRate, short bs = x + myRate), its side unlisted, its tag = this
+    // order's covenant id, the counterparty's margin rate >= minCounterRate, and the part's value. `bound` is the
+    // stayer's bound (bs for a long order, bl for a short), counterKey, counterTag and (ca, cm, ct) the stayer's
+    // key, tag and listing, which the pair copies and this order does not judge.
+    // DESIGN: T2 says "as in T1", but the part continues the pair's existing covenant id, so T1's fresh-lineage
+    // check (no input carries the id) cannot hold; only a non-zero id is required. A part whose id is fresh, or
+    // whose author is not a real pair, is still a fully funded pair holding this order's terms, so it only gives.
+    entry take(int partOut, int n, int x, int bound, byte[32] counterKey, byte[32] counterTag, int ca, int cm, int ct, byte[] cPre, byte[] cSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(tx.daa >= activeFrom);
+
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(myRate > 0);
+        require(minCounterRate >= 0);
+        require(tip >= 0);
+
+        require(n > 0);
+        require(n <= sizeLeft);
+        require(n >= minSize);
+        require(n >= minFill || n == sizeLeft);
+        int left = sizeLeft - n;
+        require(left == 0 || left >= minSize);
+        require(n / scale <= (INT_MAX - carrier) / priceMax - 1);
+
+        int bl = bound;
+        int bs = x + myRate;
+        byte[32] lk = counterKey;
+        byte[32] sk = byte[32](ownerKey);
+        byte[] lists = byte[](0x08) + byte[](ca as byte[8]) + byte[](0x08) + byte[](cm as byte[8]) + byte[](0x08) + byte[](ct as byte[8]) + byte[](NO_LIST);
+        byte[32] tl = counterTag;
+        byte[32] ts = selfId;
+        if (side == SIDE_LONG) {
+            require(x <= limit);
+            bl = x - myRate;
+            bs = bound;
+            require(bs - x >= minCounterRate);
+            lk = byte[32](ownerKey);
+            sk = counterKey;
+            lists = byte[](NO_LIST) + byte[](0x08) + byte[](ca as byte[8]) + byte[](0x08) + byte[](cm as byte[8]) + byte[](0x08) + byte[](ct as byte[8]);
+            tl = selfId;
+            ts = counterTag;
+        } else {
+            require(side == SIDE_SHORT);
+            require(x >= limit);
+            require(x - bl >= minCounterRate);
+        }
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        byte[] rs = ownRs();
+        byte[] st = rs.slice(MARKET_AT, MARKET_AT + MARKET_LEN) + byte[](0x08) + byte[](n as byte[8]) + byte[](0x08)
+            + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](x as byte[8])
+            + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + lists + byte[](0x20) + byte[](tl)
+            + byte[](0x20) + byte[](ts);
+        require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
+        require(OpOutputCovenantId(partOut) != ZERO32);
+        require(tx.outputs[partOut].value >= quoteOf(n, bs - bl, 0) + carrier);
+
+        int spend = quoteOf(n, myRate + tip, 0) + carrier;
+        if (left > 0) {
+            require(OpCovOutputCount(selfId) == 1);
+            int c = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                rs.slice(0, LEFT_AT) + byte[](left as byte[8]) + rs.slice(LEFT_AT + 8, this.bytecodeSize)
+            )));
+            require(tx.outputs[c].value >= tx.inputs[self].value - spend);
+        } else {
             require(OpCovOutputCount(selfId) == 0);
             require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
             require(tx.outputs[self].value >= tx.inputs[self].value - spend);

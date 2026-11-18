@@ -120,6 +120,7 @@ pub fn genesis_id(auth_outpoint: TransactionOutpoint, outputs: &[TransactionOutp
 
 // ---------------------------------------------------------------- transactions
 
+#[derive(Clone)]
 pub enum Spend {
     /// A P2SH contract input calling `entry(args)`.
     Contract { art: SilAbiArtifact, entry: &'static str, args: Vec<ArtifactValue> },
@@ -137,6 +138,7 @@ pub enum Arg {
     Sig(Keypair),
 }
 
+#[derive(Clone)]
 pub struct In {
     pub outpoint: TransactionOutpoint,
     pub utxo: UtxoEntry,
