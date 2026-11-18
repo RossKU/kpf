@@ -60,6 +60,9 @@ struct Stats {
     close_partial: usize,
     mutual: usize,
     idle: usize,
+    ev_close: usize,
+    ev_liq: usize,
+    ev_transfer: usize,
     txs: usize,
     max_slack: i128,
 }
@@ -414,6 +417,115 @@ impl Sim {
         self.st.mutual += 1;
     }
 
+    // ------------------------------------------------------------ evidence paths (P5, P6, P7)
+
+    /// One evidence action on a random pair: P5 by either side, P6 or P7 of a liquidatable side, at a random quote
+    /// with a fill of exactly ceil(k n) (or more), whole or in part. After it:
+    ///   - no sompi is created (`apply`);
+    ///   - the party that did not act (P5: the other side; P6: the winner) has, at the evidence quote, at least
+    ///     its payoff before at that quote; the loser of P6 / P7 at least that less the keeper fee; the stayer of
+    ///     P7 at every grid price (no-downgrade); each up to 1 sompi per split, or DUST when a payout of it fell
+    ///     below dust and stayed in the remainder.
+    fn evidence(&mut self) {
+        use kpf::evidence::*;
+        let l = self.pick();
+        let p = l.p.clone();
+        let m = p.m.clone();
+        let partial = self.rng.coin();
+        let n = self.random_n(p.size, partial);
+        let what = self.rng.range(0, 5);
+        let a_max = (p.bl * 10_000 - 1) / (10_000 - m.mmr_bps);
+        let b_min = p.bs * 10_000 / (10_000 + m.mmr_bps) + 1;
+        let fill = n * m.k_bps / 10_000 + if self.rng.coin() { 0 } else { self.rng.range(0, n) };
+        let (long, short) = (p.long_key, p.short_key);
+        let (act, e, quote) = match what {
+            0 => {
+                let b = self.rng.range((p.bl - 100_000_000).max(1), p.bs + 100_000_000);
+                (Act::Close { side: LONG, signer: self.keys[&long] }, Evidence::bid(b, fill), b)
+            }
+            1 => {
+                let a = self.rng.range((p.bl - 100_000_000).max(1), p.bs + 100_000_000);
+                (Act::Close { side: SHORT, signer: self.keys[&short] }, Evidence::ask(a, fill), a)
+            }
+            2 | 4 if a_max >= 1 => {
+                let a = self.rng.range((a_max - 300_000_000).max(1), a_max);
+                if what == 2 {
+                    (Act::Liq { side: LONG }, Evidence::ask(a, fill), a)
+                } else {
+                    // The entrant accepts any counter rate >= 0, so x stays at most bs.
+                    let x = self.rng.range(a, (a + 100_000_000).min(p.bs).max(a));
+                    let who = self.fresh_key();
+                    let mut o = long_order(&who);
+                    (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
+                    o.my_rate = self.rng.range((x - p.bl).max(1), x.max(1));
+                    let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb3), op: self.fresh_op() };
+                    (Act::LiqTransfer { side: LONG, x, open, k: self.rng.range(0, 1) }, Evidence::ask(a, fill), a)
+                }
+            }
+            3 | 5 if b_min <= PRICE_MAX => {
+                let b = self.rng.range(b_min, (b_min + 300_000_000).min(PRICE_MAX));
+                if what == 3 {
+                    (Act::Liq { side: SHORT }, Evidence::bid(b, fill), b)
+                } else {
+                    let x = self.rng.range((b - 100_000_000).max(p.bl).min(b), b);
+                    let who = self.fresh_key();
+                    let mut o = short_order(&who);
+                    (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
+                    o.my_rate = self.rng.range((p.bs - x).max(1), (p.bs - x).max(1) + 300_000_000);
+                    let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb4), op: self.fresh_op() };
+                    (Act::LiqTransfer { side: SHORT, x, open, k: self.rng.range(0, 1) }, Evidence::bid(b, fill), b)
+                }
+            }
+            _ => return,
+        };
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: act.clone() }], &e, &self.f.clone(), fnn);
+        self.apply(&d);
+        let split = (n < p.size) as i128;
+        let c = quote.clamp(p.bl, p.bs);
+        let fee = fee_of(&m, n, quote) as i128;
+        let dust = |v: i64| if v > 0 && v < DUST { DUST as i128 } else { 0 };
+        match act {
+            Act::Close { side, .. } => {
+                let (lp, sp, _) = close_at(&l, n, c, side, 0);
+                let slack = split + dust(if side == LONG { q(n, p.bs - c, SCALE, 0) } else { q(n, c - p.bl, SCALE, 0) });
+                let other = if side == LONG { short } else { long };
+                self.at_quote(&before, &other, quote, slack);
+                // The closer is paid exactly what it is owed (a payout of 0 only under dust).
+                let got = self.w.cash(if side == LONG { &long } else { &short }) - before.cash(if side == LONG { &long } else { &short });
+                assert_eq!(got, if side == LONG { lp } else { sp } as i128);
+                self.st.ev_close += 1;
+            }
+            Act::Liq { side } => {
+                let (winner, loser) = if side == LONG { (short, long) } else { (long, short) };
+                let wo = if side == LONG { q(n, p.bs - c, SCALE, 0) } else { q(n, c - p.bl, SCALE, 0) };
+                // The winner pays only what the loser's residual lacks of the fee.
+                let lr = (if n == p.size { l.value as i64 } else { p.range_of(n) }) - wo;
+                let wfee = (fee - lr as i128).max(0);
+                self.at_quote(&before, &winner, quote, split + wfee + dust(wo));
+                self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
+                self.st.ev_liq += 1;
+            }
+            Act::LiqTransfer { side, .. } => {
+                let (stayer, loser) = if side == LONG { (short, long) } else { (long, short) };
+                let g = self.grid(&[&p]);
+                self.non_consenting(&before, &stayer, split, &g);
+                self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
+                self.st.ev_transfer += 1;
+            }
+        }
+        if split == 1 {
+            self.st.split += 1;
+        }
+    }
+
+    /// A party's payoff at price `p` is not lower than before by more than `slack`.
+    fn at_quote(&mut self, before: &World, key: &[u8; 32], p: i64, slack: i128) {
+        let (b, a) = (before.payoff(key, p), self.w.payoff(key, p));
+        assert!(b - a <= slack, "party lost {} sompi at the evidence quote {p} (slack {slack})", b - a);
+    }
+
     /// P8 on one pair: both sides are paid their DESIGN 3.1 payout at the clamped entry, the short also the rest.
     fn idle(&mut self) {
         let l = self.pick();
@@ -467,6 +579,43 @@ fn walk(seed: u64, st_total: &mut Stats) {
     st_total.idle += t.idle;
     st_total.txs += t.txs;
     st_total.max_slack = st_total.max_slack.max(t.max_slack);
+}
+
+/// The X6 walk with the evidence paths mixed in: transfers (which bring entrants, tags and new bounds) and
+/// close-versus-close between evidence actions, then idle settles.
+fn walk_ev(seed: u64, st_total: &mut Stats) {
+    let mut s = Sim::new(seed ^ 0x5eed_0000);
+    s.open(None);
+    s.open(None);
+    for _ in 0..12 {
+        match s.rng.range(0, 5) {
+            0 => s.transfer(true, true),
+            1 => s.close(),
+            _ => s.evidence(),
+        }
+        if s.w.pairs.is_empty() {
+            s.open(None);
+        }
+    }
+    while !s.w.pairs.is_empty() {
+        s.idle();
+    }
+    let t = &s.st;
+    st_total.ev_close += t.ev_close;
+    st_total.ev_liq += t.ev_liq;
+    st_total.ev_transfer += t.ev_transfer;
+    st_total.split += t.split;
+    st_total.txs += t.txs;
+}
+
+#[test]
+fn x6_evidence_random_walk() {
+    let mut st = Stats::default();
+    for seed in 1..=12u64 {
+        walk_ev(seed, &mut st);
+    }
+    println!("X6 evidence: {st:?}");
+    assert!(st.ev_close > 0 && st.ev_liq > 0 && st.ev_transfer > 0 && st.split > 0);
 }
 
 #[test]

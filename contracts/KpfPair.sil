@@ -21,9 +21,33 @@ pragma silverscript ^0.1.0;
 //   mutualClose(n, x)                       P4  both listings of this pair cross at x: n closes for both
 //   idleSettle()                            P8  anyone, age >= idleDaa: settle all at entryPrice clamped to [bl, bs]
 //   coopClose(sl, ss)                       P9  both owners sign; any split, the pair ends
-// Unilateral close (P5) and the liquidations (P6, P7) come later.
+// Entry on price evidence (DESIGN 3.3, 3.6, 4.4 evidence block, 4.5 T4, T6, T7), one entry for three paths:
+//   onEvidence(nb, qb, path, s, side, ev, tk, x, nbd, ek, et, k), n = int(nb)
+//     path 5  P5  the owner of `side` (signature s) closes n at the adverse bound: a long at a resting bid, a short
+//                 at a resting ask (its custody at tk)
+//     path 6  P6  anyone: the loser `side` is liquidatable at the evidence quote (a long at an ask, a short at a
+//                 bid); n closes for both at the quote, less the keeper fee
+//     path 7  P7  anyone: as P6, but the loser's n is sold at x to an entrant of its side (key ek, tag et, new
+//                 bound nbd, part ordinal k; as P3 without a listing, x >= ask / x <= bid)
 //
-// Every entry is the only input of its covenant id (OpCovInputCount(selfId) == 1) and reads only its own input.
+// Evidence (DESIGN 3.3). Input ev is a plain resting KobAsk or KobBid of this market, authenticated as KobCondAsk
+// authenticates its trigger evidence: template hash and P2SH of its redeem script, its signature script starting
+// with the fixed 8-byte push of its fill n_ev > 0, its token covenant id and scale equal to this market's, not
+// decaying (slope 0), interval >= 0, and exposed at its quote for minRestDaa DAA before this transaction:
+// tx.daa >= max(UTXO DAA + interval, activeFrom, for an ask its custody's UTXO DAA) + minRestDaa, tx.daa proven by
+// CLTV. An ask's custody tk is a holder UTXO of this market's token program (template hash tokenTplHash) owned by
+// the ask's covenant id (scheme 0x04) with this market's extension commitment; a bid carries the commitment in
+// its own state. The KobAsk and KobBid templates (hash, prefix and suffix length) are build constants.
+//
+// Evidence block (DESIGN 4.4). Every evidence entry starts its signature script with the two 8-byte pushes
+// (n, q): this pair's part n and the first input q of the block of inputs [q, ev) that act on ev. Each pair of the
+// block reads the first two pushes of every input of the block (at most 8, unrolled), requires each to name the
+// same q and an n_j >= 0, and requires n_ev >= ceil(kBps * sum(n_j) / 10^4). A pair outside a block it names would
+// read a member naming another q and fail, so one print never acts on more than n_ev * 10^4 / kBps in total.
+//
+// Every entry is the only input of its covenant id (OpCovInputCount(selfId) == 1) and reads only its own input,
+// except that an evidence entry also reads its evidence (and an ask's custody) and the first two pushes of every
+// input of its evidence block.
 // A continuation is found by OpCovOutputIdx(selfId, k) and must equal this redeem script outside the bytes the
 // entry may change (contSpk, pairSpk, restSpk). Party payouts use the injective slots of DESIGN 4.4: the first
 // leaving party at output i (this input's index), a second at output M - 1 - i, which must be at least the input
@@ -50,6 +74,12 @@ pragma silverscript ^0.1.0;
 // for a position its party already holds.
 // DESIGN: 4.4 guards claims only by OpCovInputCount(selfId) == 1, which does not exclude this stale-tag aliasing.
 contract KpfPair(
+    byte[32] ASK_TPL,
+    int ASK_PRE,
+    int ASK_SUF,
+    byte[32] BID_TPL,
+    int BID_PRE,
+    int BID_SUF,
     byte[32] init_tokenCovId,
     byte[32] init_tokenTplHash,
     byte[32] init_extensionCommitment,
@@ -87,11 +117,11 @@ contract KpfPair(
     int tplPrefixLen = init_tplPrefixLen;
     int tplSuffixLen = init_tplSuffixLen;
     int scale = init_scale;              // base units per whole token, 0 < scale <= 10^9
-    int mmrBps = init_mmrBps;            // maintenance margin (liquidation, later)
-    int kBps = init_kBps;                // evidence multiple k (later)
-    int minRestDaa = init_minRestDaa;    // evidence rest R (later)
-    int liqFeeBps = init_liqFeeBps;      // liquidation fee (later)
-    int keeperFeeMin = init_keeperFeeMin; // fee floor (later)
+    int mmrBps = init_mmrBps;            // maintenance margin, 0 <= mmrBps < 5000 (P6, P7)
+    int kBps = init_kBps;                // evidence multiple k = kBps / 10^4, 0 < kBps <= 10^5
+    int minRestDaa = init_minRestDaa;    // evidence rest R, DAA
+    int liqFeeBps = init_liqFeeBps;      // liquidation fee rate, 0 <= liqFeeBps <= 10^4
+    int keeperFeeMin = init_keeperFeeMin; // liquidation fee floor, sompi
     int minSize = init_minSize;          // smallest part, base units
     int carrier = init_carrier;          // C, sompi on every pair output above its range
     int idleDaa = init_idleDaa;          // idle timeout of P8, DAA (CSV)
@@ -136,6 +166,12 @@ contract KpfPair(
     byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     // An empty listing window (ask, minPart, tip all zero) with its push opcodes.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
+    // Evidence (KobCondAsk.touch): state lengths of KobAsk and KobBid, the largest evidence block, basis points.
+    int constant ASK_STATE_LEN = 276;
+    int constant BID_STATE_LEN = 285;
+    int constant BPS = 10000;
+    int constant K_MAX = 100000;
+    int constant MMR_CAP = 5000;
 
     // Quote value of n base units at rate r (sompi per whole token). c = 0 rounds down, c = scale - 1 rounds up.
     // As KobCondAsk.quoteOf: the product n * r is never formed.
@@ -361,6 +397,28 @@ contract KpfPair(
         checkPart(n);
         require(x >= 0);
         require(x <= priceMax);
+        int pay = 0;
+        if (side == SIDE_LONG) {
+            require(longAsk > 0);
+            require(x >= longAsk);
+            require(n >= longMin || n == size);
+            pay = owed(n, x - bl, longTip);
+        } else {
+            require(side == SIDE_SHORT);
+            require(shortBid > 0);
+            require(x <= shortBid);
+            require(n >= shortMin || n == size);
+            pay = owed(n, bs - x, shortTip);
+        }
+        handOver(side, n, x, nb, ek, et, k, pay);
+    }
+
+    // The hand-over of P3 and P7: the leaver of `side` is paid `pay` at output i (a payout below dust stays in the
+    // pair), and an entrant with key ek, tag et and new bound nb takes its place in a part of size n with entry x
+    // and its side unlisted. No-downgrade: nb <= bl for a staying short, nb >= bs for a staying long.
+    function handOver(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int k, int pay) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
         byte[] rs = ownRs();
         byte[32] lk = byte[32](longKey);
         byte[32] sk = byte[32](shortKey);
@@ -370,39 +428,31 @@ contract KpfPair(
         byte[32] ts = tagS;
         int b0 = bl;
         int b1 = bs;
-        int pay = 0;
         pubkey leaver = longKey;
         if (side == SIDE_LONG) {
-            require(longAsk > 0);
-            require(x >= longAsk);
-            require(n >= longMin || n == size);
             require(nb >= 0);
             require(nb <= bl);
             b0 = nb;
             lk = ek;
             lw = byte[](NO_LIST);
             tl = et;
-            pay = owed(n, x - bl, longTip);
         } else {
             require(side == SIDE_SHORT);
-            require(shortBid > 0);
-            require(x <= shortBid);
-            require(n >= shortMin || n == size);
             require(nb >= bs);
             require(nb <= priceMax);
             b1 = nb;
             sk = ek;
             sw = byte[](NO_LIST);
             ts = et;
-            pay = owed(n, bs - x, shortTip);
             leaver = shortKey;
         }
+        int p = pay;
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
-        if (pay < PLAIN_DUST) {
-            keep = keep + pay;
-            pay = 0;
+        if (p < PLAIN_DUST) {
+            keep = keep + p;
+            p = 0;
         }
-        payTo(self, leaver, pay);
+        payTo(self, leaver, p);
         partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, x, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
     }
 
@@ -598,5 +648,300 @@ contract KpfPair(
         signedBy(sl, longKey);
         signedBy(ss, shortKey);
         require(OpCovOutputCount(selfId) == 0);
+    }
+
+    // ------------------------------------------------------------------ price evidence
+
+    // Input idx is an instance of template (pre, stLen, suf, tpl), checked by P2SH of its redeem script (the last
+    // push of its signature script) and the template hash, as KobCondAsk.tplState. Returns its state span.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // The first two pushes of input j's signature script: 8-byte n_j >= 0, then the 8-byte block start, which must
+    // be exactly qb. Returns n_j.
+    function blockN(int j, byte[8] qb) : int {
+        require(OpTxInputScriptSigSubstr(j, 0, 1) == byte[](0x08));
+        int nj = int(byte[8](OpTxInputScriptSigSubstr(j, 1, 9)));
+        require(nj >= 0);
+        require(OpTxInputScriptSigSubstr(j, 9, 10) == byte[](0x08));
+        require(byte[8](OpTxInputScriptSigSubstr(j, 10, 18)) == qb);
+        return nj;
+    }
+
+    // Evidence block (DESIGN 4.4): this input lies in [q, ev), the block has at most 8 inputs, every input of it
+    // names q, and the evidence fill covers k times their sum: n_ev >= ceil(kBps * sum / 10^4), computed as
+    // floor(sum / 10^4) * kBps + ceil((sum mod 10^4) * kBps / 10^4) (DESIGN 5), exact and without overflow for
+    // sum <= 8 sizes and kBps <= 10^5. An input of the block that is not a pair can only raise the sum.
+    // DESIGN: 4.2 bounds neither kBps nor minRestDaa; k = 0 would let any fill act on any size, so 0 < kBps <= 10^5
+    // (the bound of DESIGN 5) and minRestDaa >= 0 are required here.
+    function evBlock(int ev, int nev, byte[8] qb) {
+        require(kBps > 0);
+        require(kBps <= K_MAX);
+        int self = this.activeInputIndex;
+        int q = int(qb);
+        require(q >= 0);
+        require(q <= self);
+        require(self < ev);
+        int len = ev - q;
+        require(len <= 8);
+        int sum = blockN(q, qb);
+        if (len > 1) { sum = sum + blockN(q + 1, qb); }
+        if (len > 2) { sum = sum + blockN(q + 2, qb); }
+        if (len > 3) { sum = sum + blockN(q + 3, qb); }
+        if (len > 4) { sum = sum + blockN(q + 4, qb); }
+        if (len > 5) { sum = sum + blockN(q + 5, qb); }
+        if (len > 6) { sum = sum + blockN(q + 6, qb); }
+        if (len > 7) { sum = sum + blockN(q + 7, qb); }
+        require(nev >= (sum / BPS) * kBps + ((sum % BPS) * kBps + BPS - 1) / BPS);
+    }
+
+    // The quote of the evidence at input ev: a resting KobAsk (ask = 1, its custody at tk) or KobBid (ask = 0), as
+    // KobCondAsk.touch reads it, and the evidence block of this input. KobAsk state offsets: tokenCovId [34..66)
+    // scale [118..126) price [136..144) activeFrom [163..171) interval [190..198) slope [208..216); KobBid's scale,
+    // price and activeFrom sit 33 bytes later, after its extensionCommitment [118..150), its interval and slope 51.
+    function evQuote(int ask, int ev, int tk, byte[8] qb) : int {
+        require(minRestDaa >= 0);
+        require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
+        int nev = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
+        require(nev > 0);
+        int pre = BID_PRE;
+        int len = BID_STATE_LEN;
+        int suf = BID_SUF;
+        byte[32] tpl = BID_TPL;
+        int d = 33;
+        int w = 51;
+        if (ask == 1) {
+            pre = ASK_PRE;
+            len = ASK_STATE_LEN;
+            suf = ASK_SUF;
+            tpl = ASK_TPL;
+            d = 0;
+            w = 0;
+        }
+        byte[] o = tplState(ev, pre, len, suf, tpl);
+        require(byte[32](o.slice(34, 66)) == tokenCovId);
+        byte[] qs = o.slice(118 + d, 171 + d);
+        byte[] r = o.slice(190 + w, 216 + w);
+        require(int(byte[8](qs.slice(0, 8))) == scale);
+        require(int(byte[8](r.slice(18, 26))) == 0);
+        // The interval is the evidence order's own state; one built by hand can carry a negative one, which must
+        // not shorten the rest.
+        int iv = int(byte[8](r.slice(0, 8)));
+        require(iv >= 0);
+        int exposed = OpTxInputDaaScore(ev) + iv;
+        int act = int(byte[8](qs.slice(45, 53)));
+        if (act > exposed) { exposed = act; }
+        if (ask == 1) {
+            // tk: a token UTXO of this market's program whose state [10..44) is the ask's covenant id as owner,
+            // then the push 0x01 of owner_scheme 0x04, with this market's extension commitment.
+            require(OpInputCovenantId(tk) == tokenCovId);
+            byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+            require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            require(byte[32](ts.slice(80, 112)) == extensionCommitment);
+            int td = OpTxInputDaaScore(tk);
+            if (td > exposed) { exposed = td; }
+        } else {
+            require(byte[32](o.slice(118, 150)) == extensionCommitment);
+        }
+        require(tx.daa >= exposed + minRestDaa);
+        evBlock(ev, nev, qb);
+        return int(byte[8](qs.slice(18, 26)));
+    }
+
+    // Header of every evidence entry: the single-input guard, the pair bounds, the live-tag guard (a remainder or
+    // part continues the tags), n = int(nb) a part of this pair, and this input's own first two pushes are nb and
+    // an 8-byte q (so the n settled here is the n its block counts). Returns n.
+    function evEntry(byte[8] nb) : int {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        tagsNotLive();
+        int n = int(nb);
+        checkPart(n);
+        require(OpTxInputScriptSigSubstr(self, 0, 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(self, 1, 9) == byte[](nb));
+        return n;
+    }
+
+    function clampP(int p) : int {
+        int c = p;
+        if (c < bl) { c = bl; }
+        if (c > bs) { c = bs; }
+        return c;
+    }
+
+    // Closes n of this pair at the clamped price c (P5, P6). The party `side` is owed exactly q(n, its distance to
+    // c) (rounded down); the other party takes the rest of what leaves the pair less `fee`: q(n, bs - bl) - owed
+    // with a remainder, or this UTXO's whole value - owed when n = s (carrier and excess included). When that rest
+    // does not cover the fee, the owed party pays what it lacks. The long is paid at output i, the short at
+    // M - 1 - i (at least the input count). A payout below dust is not created: with a remainder its value stays
+    // there, with n = s it goes to the other party. Whatever no output is required to hold (the fee) is the
+    // executor's.
+    function closeAt(int n, int c, int side, int fee) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        int v = tx.inputs[self].value;
+        int part = quoteOf(n, bs - bl, 0);
+        int keep = v - part;
+        int avail = part;
+        if (n == size) {
+            avail = v;
+            keep = 0;
+        }
+        int owe = quoteOf(n, c - bl, 0);
+        if (side == SIDE_SHORT) { owe = quoteOf(n, bs - c, 0); }
+        int other = avail - owe - fee;
+        if (other < 0) {
+            owe = owe + other;
+            other = 0;
+            if (owe < 0) { owe = 0; }
+        }
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            if (owe < PLAIN_DUST) {
+                other = other + owe;
+                owe = 0;
+            }
+            if (other < PLAIN_DUST) {
+                owe = owe + other;
+                other = 0;
+            }
+            if (owe < PLAIN_DUST) { owe = 0; }
+        } else {
+            if (owe < PLAIN_DUST) {
+                keep = keep + owe;
+                owe = 0;
+            }
+            if (other < PLAIN_DUST) {
+                keep = keep + other;
+                other = 0;
+            }
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(ownRs(), rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+        int lp = owe;
+        int sp = other;
+        if (side == SIDE_SHORT) {
+            lp = other;
+            sp = owe;
+        }
+        payTo(self, longKey, lp);
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, shortKey, sp);
+        }
+    }
+
+    // Keeper fee of a liquidation of n at quote p: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))).
+    function feeAt(int n, int p) : int {
+        int f = quoteOf(n, p * liqFeeBps / BPS, 0);
+        if (f < keeperFeeMin) { f = keeperFeeMin; }
+        return f;
+    }
+
+    // The three evidence paths share one entry, so the evidence reader and the block scan are in the script once.
+    // `path` selects the path, as KobCondAsk.settle selects fill or refund by n; s is read by P5 only, and x, nbd,
+    // ek, et, k by P7 only.
+    //
+    // P5 unilateral close (DESIGN 3.5 i, 4.5 T4), path 5. The owner of `side` (signature s) closes n at the bound
+    // adverse to it: the long at a resting bid b (the price is at least b), the short at a resting ask a (at most
+    // a). The closer is owed exactly q(n, c - bl) (long) or q(n, bs - c) (short) with c the quote clamped to
+    // [bl, bs]; the other party, which did not act, takes the rest and the rounding. A remainder (s - n) keeps
+    // every field.
+    //
+    // P6 liquidation, close both (DESIGN 3.6, 4.5 T6), path 6. Anyone. The loser `side` is liquidatable at the
+    // quote: a long at an ask a with a * (10^4 - mmrBps) < bl * 10^4, a short at a bid b with
+    // bs * 10^4 < b * (10^4 + mmrBps). n closes for both at c = the quote clamped to [bl, bs]. The winner is owed
+    // exactly q(n, its distance to c); the loser takes the rest less the keeper fee, and the winner pays only what
+    // that rest lacks. Partial liquidation in pieces: the remainder keeps every field and the same margin ratio.
+    //
+    // P7 liquidation by transfer (DESIGN 3.6, 4.5 T7), path 7. Anyone. As P6, but the loser's n is sold at x to an
+    // entrant of its side exactly as P3 (key ek, tag et, new bound nbd, no-downgrade for the winner), without a
+    // listing: a long at x >= a, a short at x <= b. The loser receives q(n, x - bl) (long) or q(n, bs - x) (short)
+    // less the keeper fee, never below 0; the winner keeps its key, bound, tag and listing.
+    //
+    // DESIGN: 5 bounds the trigger products for a, b <= priceMax only; a liquidation quote outside [0, priceMax] is
+    // refused (P5 only clamps, it forms no product with the quote).
+    // DESIGN: T6 names a keeper output at an argument index holding >= fee. Anyone builds the transaction and
+    // chooses that output's script, and two pairs could name one output, so it protects no party; the fee is
+    // instead what no output is required to hold, the executor's like every other excess (4.4).
+    // DESIGN: T4 and T6 do not say where the carrier and excess go when n = s; in P5 they go to the party that did
+    // not act (the remainder side of 4.6), in P6 with the loser's residual, so the fee is taken from them first.
+    // DESIGN: T7 says the loser receives q(n, X - BL) - fee; with the winner untouched there is nothing to take a
+    // larger fee from, so the payout is max(0, ...).
+    // DESIGN: 2.5 carries over maintenance < 50 % but 4.2 bounds none of mmrBps, liqFeeBps, keeperFeeMin; P6 and P7
+    // require 0 <= mmrBps < 5000, 0 <= liqFeeBps <= 10^4 (the fee-rate bound of DESIGN 5) and keeperFeeMin >= 0.
+    //
+    // The signature s is a byte[] converted to a 65-byte sig only by P5 (as KCC-20 converts its witness), so P6 and
+    // P7 carry an empty push instead of a 65-byte dummy.
+    entry onEvidence(byte[8] nb, byte[8] qb, int path, byte[] s, int side, int ev, int tk, int x, int nbd, byte[32] ek, byte[32] et, int k) {
+        int n = evEntry(nb);
+        int ask = 0;
+        if (path == 5) {
+            if (side == SIDE_LONG) {
+                signedBy(sig(byte[65](s)), longKey);
+            } else {
+                require(side == SIDE_SHORT);
+                signedBy(sig(byte[65](s)), shortKey);
+                ask = 1;
+            }
+        } else {
+            require(path == 6 || path == 7);
+            require(mmrBps >= 0);
+            require(mmrBps < MMR_CAP);
+            require(liqFeeBps >= 0);
+            require(liqFeeBps <= BPS);
+            require(keeperFeeMin >= 0);
+            if (side == SIDE_LONG) {
+                ask = 1;
+            } else {
+                require(side == SIDE_SHORT);
+            }
+        }
+        int p = evQuote(ask, ev, tk, qb);
+        // P5: the closer is owed its distance; P6: the winner is (the other side of the loser).
+        int owedSide = side;
+        int fee = 0;
+        if (path != 5) {
+            require(p >= 0);
+            require(p <= priceMax);
+            if (ask == 1) {
+                require(p * (BPS - mmrBps) < bl * BPS);
+                owedSide = SIDE_SHORT;
+            } else {
+                require(bs * BPS < p * (BPS + mmrBps));
+                owedSide = SIDE_LONG;
+            }
+            fee = feeAt(n, p);
+        }
+        if (path == 7) {
+            require(x >= 0);
+            require(x <= priceMax);
+            int o = 0;
+            if (side == SIDE_LONG) {
+                require(x >= p);
+                o = owed(n, x - bl, 0);
+            } else {
+                require(x <= p);
+                o = owed(n, bs - x, 0);
+            }
+            int pay = o - fee;
+            if (pay < 0) { pay = 0; }
+            handOver(side, n, x, nbd, ek, et, k, pay);
+        } else {
+            closeAt(n, clampP(p), owedSide, fee);
+        }
     }
 }

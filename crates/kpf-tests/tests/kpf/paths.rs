@@ -111,7 +111,7 @@ pub struct Draft {
 }
 
 impl Draft {
-    fn new(ins: Vec<In>, outs: Vec<TransactionOutput>, change: Option<usize>) -> Draft {
+    pub fn new(ins: Vec<In>, outs: Vec<TransactionOutput>, change: Option<usize>) -> Draft {
         Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change, pairs: vec![], opens: vec![] }
     }
 
@@ -265,20 +265,28 @@ pub struct TransferOut {
 pub fn transfer_out(l: &Live, t: &TransferSpec) -> TransferOut {
     let p = &l.p;
     let sc = p.m.scale;
+    let pay = if t.side == LONG { owed(t.n, t.x - p.bl, p.long_tip, sc) } else { owed(t.n, p.bs - t.x, p.short_tip, sc) };
+    hand_over_out(l, t, pay)
+}
+
+/// The hand-over of P3 and P7 (KpfPair.handOver) for a leaver owed `pay`.
+pub fn hand_over_out(l: &Live, t: &TransferSpec, pay: i64) -> TransferOut {
+    let p = &l.p;
     let mut part = p.with_size(t.n);
     part.entry = t.x;
-    let (mut pay, leaver) = if t.side == LONG {
+    let mut pay = pay;
+    let leaver = if t.side == LONG {
         part.bl = t.nb;
         part.long_key = t.ek;
         part.tag_l = t.et;
         (part.long_ask, part.long_min, part.long_tip) = (0, 0, 0);
-        (owed(t.n, t.x - p.bl, p.long_tip, sc), p.long_key)
+        p.long_key
     } else {
         part.bs = t.nb;
         part.short_key = t.ek;
         part.tag_s = t.et;
         (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
-        (owed(t.n, p.bs - t.x, p.short_tip, sc), p.short_key)
+        p.short_key
     };
     let mut keep = l.value as i64 - p.range_of(t.n);
     if pay < DUST {

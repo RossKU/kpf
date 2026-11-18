@@ -136,6 +136,9 @@ pub enum Spend {
 pub enum Arg {
     V(ArtifactValue),
     Sig(Keypair),
+    /// A KCC-20 leader witness of the normal path for a P2PK owner: `0x00 || signature`
+    /// (`vendor/kob/crates/kob-protocol/src/script.rs`, `leader_witness`).
+    LeaderSig(Keypair),
 }
 
 #[derive(Clone)]
@@ -184,6 +187,7 @@ pub fn build_ext(ins: &[In], outputs: Vec<TransactionOutput>, lock_time: u64, se
                     .map(|a| match a {
                         Arg::V(v) => v.clone(),
                         Arg::Sig(kp) => ArtifactValue::Bytes(sign(&unsigned, &entries, k, kp)),
+                        Arg::LeaderSig(kp) => ArtifactValue::Bytes([vec![0x00], sign(&unsigned, &entries, k, kp)].concat()),
                     })
                     .collect();
                 entry_sig_script(art, entry, &vals)

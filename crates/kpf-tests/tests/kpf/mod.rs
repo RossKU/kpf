@@ -6,6 +6,8 @@
 //! arguments.
 #![allow(dead_code)]
 
+pub mod evidence;
+pub mod kob;
 pub mod paths;
 
 use std::sync::OnceLock;
@@ -52,13 +54,20 @@ pub struct Market {
     pub price_max: i64,
 }
 
+/// The market of the tests: a token of KOB's reference KCC-20 program (`vendor/kob/contracts/kcc20/KCC20Ref.sil`),
+/// so that evidence custodies and deliveries run the real token program.
 pub fn market() -> Market {
+    let (h, pre, suf) = kob::tpl_facts(kob::kcc20_base());
+    market_of(Hash::from_bytes(h), pre, suf)
+}
+
+pub fn market_of(token_tpl_hash: Hash, tpl_prefix_len: i64, tpl_suffix_len: i64) -> Market {
     Market {
         token_cov_id: Hash::from_bytes([0xc1; 32]),
-        token_tpl_hash: Hash::from_bytes([0xc2; 32]),
+        token_tpl_hash,
         ext: Hash::from_bytes([0xc3; 32]),
-        tpl_prefix_len: 34,
-        tpl_suffix_len: 2000,
+        tpl_prefix_len,
+        tpl_suffix_len,
         scale: SCALE,
         mmr_bps: 500,
         k_bps: 10_000,
@@ -174,8 +183,11 @@ impl Pair {
     pub fn state_bytes(&self) -> Vec<u8> {
         encode(&self.fields())
     }
+    /// The constructor arguments: the KOB evidence template constants, then the state.
     pub fn ctor(&self) -> Vec<ArtifactValue> {
-        to_args(&self.fields())
+        let mut a = kob::kob_consts();
+        a.extend(to_args(&self.fields()));
+        a
     }
     /// q(s, bs - bl) + C: what every pair output must hold.
     pub fn floor(&self) -> i64 {
@@ -224,7 +236,7 @@ pub fn template_hash(art: &SilAbiArtifact) -> [u8; 32] {
     art.contracts.values().next().unwrap().compiled.template_hash
 }
 
-fn splice(base: &SilAbiArtifact, state: &[u8]) -> SilAbiArtifact {
+pub fn splice(base: &SilAbiArtifact, state: &[u8]) -> SilAbiArtifact {
     let (pre, suf) = parts(base);
     let mut a = base.clone();
     let c = a.contracts.values_mut().next().unwrap();
