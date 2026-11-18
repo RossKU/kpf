@@ -354,6 +354,39 @@ pub fn not_accepted(what: &str, t: &T) {
     assert!(!accepted(t), "{what}: accepted");
 }
 
+/// Review 6: output `j` becomes the genesis of a fresh covenant id authored by input `auth` (outpoint `op`), the id
+/// computed over output `j` alone once every output is final (what the family's `fresh` check requires of every part a
+/// party enters and of every pending part).
+pub fn seal(outs: &mut [TransactionOutput], j: usize, auth: u16, op: TransactionOutpoint) {
+    outs[j].covenant = None;
+    let g = genesis_id(op, outs, &[j]);
+    outs[j].covenant = bind(auth, g);
+}
+
+/// How a builder places the output a party enters or a claim starts (review 6): under a fresh id (what the family
+/// requires), keeping the authorizing input's id `keep` (what KpfPair does, refused here), or fresh with a twin at
+/// output `k` (refused by the scan).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lineage {
+    Fresh,
+    Keep,
+    Twin(usize),
+}
+
+pub fn place(outs: &mut [TransactionOutput], j: usize, auth: u16, op: TransactionOutpoint, keep: Hash, lin: Lineage) {
+    match lin {
+        Lineage::Fresh => seal(outs, j, auth, op),
+        Lineage::Keep => outs[j].covenant = bind(auth, keep),
+        Lineage::Twin(k) => {
+            outs[j].covenant = None;
+            outs[k].covenant = None;
+            let g = genesis_id(op, outs, &[j.min(k), j.max(k)]);
+            outs[j].covenant = bind(auth, g);
+            outs[k].covenant = bind(auth, g);
+        }
+    }
+}
+
 /// The UTXO output `j` of `t` becomes at DAA `daa`.
 pub fn live<S: Clone>(t: &T, j: usize, daa: u64, s: &S) -> Live<S> {
     let o = &t.0.outputs[j];
@@ -533,9 +566,14 @@ pub struct ClaimSpec {
 }
 
 /// A proposal: in 0 the pair (propose), 1 the vouching input of `voucher` (its P2PK, it funds the bond), 2 the closer's
-/// own funding (kind 1) or the executor; out 0 the pending part (ordinal 0 of the id), 1 the remainder (n < s), then
+/// own funding (kind 1) or the executor; out 0 the pending part (a fresh id, review 6), 1 the remainder (n < s), then
 /// change. `closer`: the key whose signature the close carries.
 pub fn propose_tx(lp: &LPair, c: &ClaimSpec, voucher: &Keypair, closer: Option<&Keypair>) -> (T, OPending) {
+    propose_tx_with(lp, c, voucher, closer, Lineage::Fresh)
+}
+
+/// `propose_tx` with the pending part placed by `lin`.
+pub fn propose_tx_with(lp: &LPair, c: &ClaimSpec, voucher: &Keypair, closer: Option<&Keypair>, lin: Lineage) -> (T, OPending) {
     let k = kit();
     let (w, fb) = lp.s.pending_of(k, c.n, c.kind, c.side, c.p, c.t0).unwrap_or_else(|| {
         // A claim the model refuses still gets a pending state to build (the engine must refuse it too).
@@ -550,12 +588,13 @@ pub fn propose_tx(lp: &LPair, c: &ClaimSpec, voucher: &Keypair, closer: Option<&
     let args = vec![iv(c.n), iv(c.kind), iv(c.side), iv(c.p), iv(c.t0), iv(1), sig, iv(fb), iv(0), bv(&k.pending.prefix), bv(&k.pending.suffix)];
     let ins = vec![pair_in(lp, "propose", args), key_in(outpoint(210), 50_000_000_000, 0, voucher), exec_in(211)];
     let id = lp.id.unwrap();
-    let mut outs = vec![out(lp.s.pending_value(lp.value, &w) as u64, pend_spk(&w), bind(0, id))];
+    let mut outs = vec![out(lp.s.pending_value(lp.value, &w) as u64, pend_spk(&w), None)];
     if c.n < lp.s.size {
         let rest = lp.s.rest_of(lp.s.size - c.n);
         outs.push(out(lp.s.rest_value(lp.value, c.n) as u64, pair_spk(&rest), bind(0, id)));
     }
     outs.push(change(90_000_000_000));
+    place(&mut outs, 0, 0, lp.op, id, lin);
     (build_ext(&ins, outs, c.lock, &[0, 0, 0]), w)
 }
 
@@ -804,8 +843,13 @@ pub fn amend_tx(lp: &LPair, side: i64, kp: &Keypair, ask: i64, seq: u64) -> (T, 
 }
 
 /// A whole transfer of `side` at x to a signing taker `ek` posting bound `nb`: in 0 the pair (sequence `seq`), 1 the
-/// taker's funding; out 0 the leaver's payout, 1 the new pair, 2 change.
+/// taker's funding; out 0 the leaver's payout, 1 the new pair (a fresh id, review 6), 2 change.
 pub fn transfer_tx(lp: &LPair, side: i64, xp: i64, nb: i64, ek: &Keypair, seq: u64) -> (T, OPair) {
+    transfer_tx_with(lp, side, xp, nb, ek, seq, Lineage::Fresh)
+}
+
+/// `transfer_tx` with the part placed by `lin`.
+pub fn transfer_tx_with(lp: &LPair, side: i64, xp: i64, nb: i64, ek: &Keypair, seq: u64, lin: Lineage) -> (T, OPair) {
     let p = &lp.s;
     let mut part = p.rest_of(p.size);
     let pay = if side == LONG { kpf_protocol::payoff::owed(p.size, xp - p.bl, p.long_tip, p.m.p.scale) } else { kpf_protocol::payoff::owed(p.size, p.bs - xp, p.short_tip, p.m.p.scale) };
@@ -819,10 +863,11 @@ pub fn transfer_tx(lp: &LPair, side: i64, xp: i64, nb: i64, ek: &Keypair, seq: u
         (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
     }
     let leaver = if side == LONG { p.long_key } else { p.short_key };
-    let ins = vec![pair_in(lp, "transfer", vec![iv(side), iv(p.size), iv(xp), iv(nb), bv(&x(ek)), bv(&[0; 32]), iv(0)]), key_in(outpoint(223), 500_000_000_000, 0, ek)];
+    let ins = vec![pair_in(lp, "transfer", vec![iv(side), iv(p.size), iv(xp), iv(nb), bv(&x(ek)), bv(&[0; 32]), iv(1)]), key_in(outpoint(223), 500_000_000_000, 0, ek)];
     let keep = lp.value as i64 - p.range_of(p.size);
     let floor = part.range_of(p.size) + keep;
-    let outs = vec![out(pay.max(2_000_000) as u64, key_spk(&leaver), None), out(floor as u64, pair_spk(&part), bind(0, lp.id.unwrap())), out(100_000_000_000, p2pk_spk(ek), None)];
+    let mut outs = vec![out(pay.max(2_000_000) as u64, key_spk(&leaver), None), out(floor as u64, pair_spk(&part), bind(0, lp.id.unwrap())), out(100_000_000_000, p2pk_spk(ek), None)];
+    place(&mut outs, 1, 0, lp.op, lp.id.unwrap(), lin);
     (build_ext(&ins, outs, 0, &[seq, 0]), part)
 }
 
@@ -849,8 +894,13 @@ pub fn unbond_tx(sl: &LSlot, d: i64, lock: u64) -> T {
 /// An order entering a listed side of a pair (T2 with the fresh bind): in 0 the pair (transfer of `side` for its whole
 /// size at x to the order), 1 the order (take), 2 the slot (bind for OUT_REF + 2 at the pair's expiry, unless `bind` is
 /// false: then a plain input of the underwriter stands in), 3 the executor; out 0 the leaver's payout, 1 the order's
-/// refund or continuation, 2 the part, 3 the slot (or the stand-in's change), 4 change.
+/// refund or continuation, 2 the part (a fresh id, review 6), 3 the slot (or the stand-in's change), 4 change.
 pub fn take_tx(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, with_bind: bool) -> (T, OPair) {
+    take_tx_with(lp, lo, sl, xp, lock, with_bind, Lineage::Fresh)
+}
+
+/// `take_tx` with the part placed by `lin`.
+pub fn take_tx_with(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, with_bind: bool, lin: Lineage) -> (T, OPair) {
     let k = kit();
     let p = &lp.s;
     let o = &lo.s;
@@ -896,7 +946,7 @@ pub fn take_tx(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, with_bin
     ];
     let third = if with_bind { slot_in(sl, "bind", bind_args(&a, &uw_kp())) } else { key_in(outpoint(226), 1_000_000_000, 0, &uw_kp()) };
     let ins = vec![
-        pair_in(lp, "transfer", vec![iv(o.side), iv(n), iv(xp), iv(nb), bv(&o.owner), bv(&lo.idb()), iv(0)]),
+        pair_in(lp, "transfer", vec![iv(o.side), iv(n), iv(xp), iv(nb), bv(&o.owner), bv(&lo.idb()), iv(2)]),
         order_in(lo, "take", take_args),
         third,
         exec_in(227),
@@ -907,13 +957,14 @@ pub fn take_tx(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, with_bin
         None => out(ov, key_spk(&o.owner), None),
     };
     let keep = lp.value as i64 - p.range_of(n);
-    let outs = vec![
+    let mut outs = vec![
         out(pay.max(2_000_000) as u64, key_spk(&leaver), None),
         order_out,
-        out((part.range_of(n) + keep) as u64, pair_spk(&part), bind(0, lp.id.unwrap())),
+        out((part.range_of(n) + keep) as u64, pair_spk(&part), None),
         if with_bind { out(sl.value, bond_spk(&b2), bind(2, sl.id.unwrap())) } else { change(900_000_000) },
         change(90_000_000_000),
     ];
+    place(&mut outs, 2, 0, lp.op, lp.id.unwrap(), lin);
     (build_ext(&ins, outs, lock, &[seq_quiet(lp), 0, 10, 0]), part)
 }
 
@@ -942,9 +993,14 @@ pub fn split_tx(sl: &LSlot, a: &[i64; 12], va: u64, lock: u64) -> (T, Bond, Bond
 }
 
 /// Close-versus-close of two whole pairs at x: the host's long listing and the donor's short listing are filled; the
-/// stayers form P3 under the host's id with the host's binding. in 0 the host (closeHost), 1 the donor (closeDonor), 2
+/// stayers form P3 under a fresh id (review 6) with the host's binding. in 0 the host (closeHost), 1 the donor (closeDonor), 2
 /// the executor; out 0 the host's long, 1 the donor's short, 2 P3, 3 change.
 pub fn close_vs_close_tx(host: &LPair, donor: &LPair, xp: i64, e3: i64) -> (T, OPair) {
+    close_vs_close_tx_with(host, donor, xp, e3, Lineage::Fresh)
+}
+
+/// `close_vs_close_tx` with P3 placed by `lin` (`Keep`: the host's id).
+pub fn close_vs_close_tx_with(host: &LPair, donor: &LPair, xp: i64, e3: i64, lin: Lineage) -> (T, OPair) {
     let (h, d) = (&host.s, &donor.s);
     let n = h.size;
     let mut p3 = h.rest_of(n);
@@ -956,16 +1012,17 @@ pub fn close_vs_close_tx(host: &LPair, donor: &LPair, xp: i64, e3: i64) -> (T, O
     let sc = h.m.p.scale;
     let lpay = kpf_protocol::payoff::owed(n, xp - h.bl, h.long_tip, sc);
     let spay = kpf_protocol::payoff::owed(n, d.bs - xp, d.short_tip, sc) + donor.value as i64 - d.range_of(n);
-    let host_args = vec![iv(n), iv(xp), iv(e3), iv(0), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&donor.idb())];
+    let host_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&donor.idb())];
     let donor_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), iv(h.b.cover_rate), iv(h.b.expiry), iv(h.b.premium)];
     let ins = vec![pair_in(host, "closeHost", host_args), pair_in(donor, "closeDonor", donor_args), exec_in(229)];
     let keep_h = host.value as i64 - h.range_of(n);
-    let outs = vec![
+    let mut outs = vec![
         out(lpay as u64, key_spk(&h.long_key), None),
         out(spay as u64, key_spk(&d.short_key), None),
-        out((p3.range_of(n) + keep_h) as u64, pair_spk(&p3), bind(0, host.id.unwrap())),
+        out((p3.range_of(n) + keep_h) as u64, pair_spk(&p3), None),
         change(90_000_000_000),
     ];
+    place(&mut outs, 2, 0, host.op, host.id.unwrap(), lin);
     (build_ext(&ins, outs, 0, &[seq_quiet(host), seq_quiet(donor), 0]), p3)
 }
 

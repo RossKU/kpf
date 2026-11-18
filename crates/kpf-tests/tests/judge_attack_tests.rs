@@ -45,10 +45,13 @@ fn holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim() {
     let s = contract_source("KpfStake.sil");
     let c = contract_source("stubs/KpfClaimStub.sil");
     assert_eq!(between(&s, "// BEGIN judge bounds", "// END judge bounds"), between(&c, "// BEGIN judge bounds", "// END judge bounds"));
-    for k in ["MU_MIN_BPS = 11000", "MU_MAX_BPS = 15000", "BURN_MAX_BPS = 5000", "MIN_STAKE_MAX = 100000000000000", "UNIT = 1000000000", "CSV_LIMIT = 4294967296"] {
+    for k in ["MU_MIN_BPS = 11000", "MU_MAX_BPS = 15000", "BURN_MAX_BPS = 5000", "MIN_STAKE_MAX = 1000000000000", "ROUND_MAX = 2592000", "AGE_MAX = 25920000", "UNBOND_MAX = 77760000", "UNIT = 1000000000"] {
         assert!(s.contains(k) && c.contains(k), "{k} in both");
     }
-    assert_eq!((MU_MIN_BPS, MU_MAX_BPS, BURN_MAX_BPS, MIN_STAKE_MAX, UNIT), (11_000, 15_000, 5_000, 100_000_000_000_000, 1_000_000_000));
+    // Review 6 (R6-F4): upper bounds on the least stake (10,000 KAS), the round (3 days), the stake age (30 days) and the
+    // unbonding delay (90 days) at 10 DAA/s.
+    assert_eq!((MU_MIN_BPS, MU_MAX_BPS, BURN_MAX_BPS, MIN_STAKE_MAX, UNIT), (11_000, 15_000, 5_000, 1_000_000_000_000, 1_000_000_000));
+    assert_eq!((ROUND_MAX, AGE_MAX, UNBOND_MAX), (2_592_000, 25_920_000, 77_760_000));
     // The model's bounds, at each edge.
     let p = jparams();
     for (q, good) in [
@@ -61,6 +64,13 @@ fn holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim() {
         (JudgeParams { burn_bps: 5_001, ..p }, false),
         (JudgeParams { min_stake: UNIT - 1, ..p }, false),
         (JudgeParams { min_stake: MIN_STAKE_MAX + 1, ..p }, false),
+        (JudgeParams { min_stake: MIN_STAKE_MAX, ..p }, true),
+        (JudgeParams { round: ROUND_MAX, age: ROUND_MAX, unbond: ROUND_MAX, ..p }, true),
+        (JudgeParams { round: ROUND_MAX + 1, age: AGE_MAX, unbond: UNBOND_MAX, ..p }, false),
+        (JudgeParams { age: AGE_MAX, ..p }, true),
+        (JudgeParams { age: AGE_MAX + 1, ..p }, false),
+        (JudgeParams { unbond: UNBOND_MAX, ..p }, true),
+        (JudgeParams { unbond: UNBOND_MAX + 1, ..p }, false),
         (JudgeParams::testnet(), true),
     ] {
         assert_eq!(q.check().is_ok(), good, "{q:?}");

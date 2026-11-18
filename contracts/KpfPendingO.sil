@@ -2,8 +2,11 @@ pragma silverscript ^0.1.0;
 
 // KpfPendingO: a part of an oracle-market pair (KpfPairO) against which a price claim vouched by the pair's underwriter
 // is pending (docs/DESIGN-ORACLE-2.md 1.5, 1.7; what is built and every deviation: docs/DESIGN-ORACLE-IMPL.md, third
-// slice). KpfPairO.propose writes it under the pair's covenant id (one id, two templates, as KpfPending); only the
-// status window (status, P, disputer) ever changes.
+// slice). KpfPairO.propose writes it under a fresh covenant id that it checks (no input and no other output carries
+// it), so the id names this claim alone: its dispute, receipts and pool, and the restored, cured or forfeited part,
+// continue that id; only the status window (status, P, disputer) ever changes.
+// DESIGN: review 6 (R6-F1, R6-F2): KpfPending lives under its pair's id (one id, two templates); here a claim's id is
+// unique to it, so a dispute or pool of one claim can never be taken for another's, whatever the DAA scores.
 //
 // Statuses: 1 pending, 2 contested, 3 upheld, 4 refuted.
 //   pending    contest(u, dOut)  anyone with aged judge stake (KpfStake.open on NO in the same transaction): the part
@@ -206,7 +209,10 @@ contract KpfPendingO(
     int constant MU_MIN_BPS = 11000;
     int constant MU_MAX_BPS = 15000;
     int constant BURN_MAX_BPS = 5000;
-    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant MIN_STAKE_MAX = 1000000000000;
+    int constant ROUND_MAX = 2592000;
+    int constant AGE_MAX = 25920000;
+    int constant UNBOND_MAX = 77760000;
     int constant UNIT = 1000000000;
     int constant SCALE_MAX = 1000000000;
     int constant PRICE_CAP = 100000000000000;
@@ -368,11 +374,11 @@ contract KpfPendingO(
         require(muBps >= MU_MIN_BPS);
         require(muBps <= MU_MAX_BPS);
         require(roundDaa > 0);
-        require(roundDaa < CSV_LIMIT);
+        require(roundDaa <= ROUND_MAX);
         require(ageDaa >= roundDaa);
-        require(ageDaa < CSV_LIMIT);
+        require(ageDaa <= AGE_MAX);
         require(unbondDaa >= roundDaa);
-        require(unbondDaa < CSV_LIMIT);
+        require(unbondDaa <= UNBOND_MAX);
         require(burnBps >= 0);
         require(burnBps <= BURN_MAX_BPS);
         require(minStake >= UNIT);

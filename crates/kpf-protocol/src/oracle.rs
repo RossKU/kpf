@@ -66,7 +66,7 @@ pub struct OParams {
     pub keeper_fee_min: i64,
     pub min_size: i64,
     pub carrier: i64,
-    /// The age of a lapsed pair before `lapseSettle` (CSV).
+    /// How long after the cover's liability ended (`expiry + tailDaa`) a lapsed pair may be settled (`lapseSettle`, CLTV).
     pub idle_daa: i64,
     /// W: the contest window from P, the earliest finalize (CSV).
     pub challenge_daa: i64,
@@ -688,10 +688,10 @@ impl OPair {
         let pay = self.range_of(self.size) - r.range_of(self.size);
         Some((r, pay))
     }
-    /// The first DAA at which a lapsed pair can be settled at its entry (`lapseSettle`): the cover's end, if the pair is
-    /// also idleDaa old by then.
-    pub fn lapse_from(&self, utxo_daa: u64) -> u64 {
-        ((self.b.expiry + self.m.bond.tail).max(0) as u64).max(utxo_daa.saturating_add(self.m.p.idle_daa.max(0) as u64))
+    /// The first DAA at which a lapsed pair can be settled at its entry (`lapseSettle`): idleDaa after the cover's
+    /// liability ended, by the calendar (review 6, R6-F3: no longer the UTXO's age, which an amend restarted).
+    pub fn lapse_from(&self) -> u64 {
+        (self.b.expiry + self.m.bond.tail + self.m.p.idle_daa).max(0) as u64
     }
     /// `lapseSettle` (as KpfPair's idle settle): (long, short) of a pair of `value`.
     pub fn lapse_out(&self, value: u64) -> (i64, i64) {
@@ -1135,6 +1135,30 @@ pub fn market_warnings(m: &OMarket, daa_per_second: i64) -> Vec<String> {
     }
     if m.judge.age < 24 * 3_600 * s {
         w.push(format!("judge stake counts after {:.1} h: capital raised for a dispute counts soon", hours(m.judge.age)));
+    }
+    // Review 6 (R6-F4): a judge that cannot be reached in practice. The contracts bound each parameter (a round at most
+    // 3 days, stake age 30 days, unbonding 90 days, the least stake 10,000 KAS at 10 DAA/s); the wallet warns well inside.
+    let days = |d: i64| d as f64 / s as f64 / 86_400.0;
+    let mut unreachable = vec![];
+    if p.challenge_daa < 3_600 * s {
+        unreachable.push(format!("the contest window is only {:.2} h", hours(p.challenge_daa)));
+    }
+    if m.judge.min_stake > 100_000_000_000 {
+        w.push(format!("a judge stake must be at least {} KAS: few defenders can post it", m.judge.min_stake as f64 / 1e8));
+        unreachable.push(format!("each stake must be at least {} KAS", m.judge.min_stake as f64 / 1e8));
+    }
+    if m.judge.age > 14 * 86_400 * s {
+        w.push(format!("judge stake counts only {:.1} days after it is bonded: in a new market no claim can be contested for that long", days(m.judge.age)));
+        unreachable.push(format!("stake must have been bonded {:.1} days before the claim", days(m.judge.age)));
+    }
+    if m.judge.round > 24 * 3_600 * s {
+        w.push(format!("a dispute round lasts {:.1} days: every contest freezes the part at least that long", days(m.judge.round)));
+    }
+    if m.judge.unbond > 30 * 86_400 * s {
+        w.push(format!("judge stake takes {:.1} days to leave: stakers' capital is locked long", days(m.judge.unbond)));
+    }
+    if !unreachable.is_empty() {
+        w.push(format!("a contest within the window is not realistically possible here: {}; a false price will most likely stand", unreachable.join(", ")));
     }
     if p.mmr_bps < p.g_bps {
         w.push("the maintenance margin is smaller than the tolerance g".into());

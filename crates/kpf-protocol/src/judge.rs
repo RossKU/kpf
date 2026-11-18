@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use silverscript_abi::ArtifactValue;
 
-use crate::state::{encode, to_args, F, BPS, CSV_LIMIT, LOCK_TIME_THRESHOLD};
+use crate::state::{encode, to_args, F, BPS, LOCK_TIME_THRESHOLD};
 
 /// Why the model refuses a step (a contract `require` or an overflow); for messages only.
 pub type Refusal = &'static str;
@@ -63,7 +63,13 @@ pub const NO: i64 = 2;
 pub const MU_MIN_BPS: i64 = 11_000;
 pub const MU_MAX_BPS: i64 = 15_000;
 pub const BURN_MAX_BPS: i64 = 5_000;
-pub const MIN_STAKE_MAX: i64 = 100_000_000_000_000;
+pub const MIN_STAKE_MAX: i64 = 1_000_000_000_000;
+/// Upper bounds of the judge's windows (review 6, R6-F4), at 10 DAA per second: a round at most 3 days, stake age at
+/// most 30 days, unbonding at most 90 days. With them no market within the bounds makes a contest impossible by its
+/// judge alone (10,000 KAS of stake at most, aged a month at most, frozen three days a round at most).
+pub const ROUND_MAX: i64 = 2_592_000;
+pub const AGE_MAX: i64 = 25_920_000;
+pub const UNBOND_MAX: i64 = 77_760_000;
 /// Stakes per deposit and receipts per settlement (`KpfStake.deposit`, `settle`: hand-unrolled).
 pub const BATCH: i64 = 7;
 /// A burn below this is not created (it stays with the executor, as `KpfLock`'s, DESIGN 4.5f deviation 6).
@@ -102,13 +108,13 @@ impl JudgeParams {
     // log_mu(stake deployed / opening stake) rounds of D_r each (about 230 000 rounds at mu = 1.0001 for a 10^9 range);
     // here mu >= 1.1, so a dispute ends within log_1.1(range) <= 230 rounds even if both sides escalate to the supply.
     // The note's M_age >= 7 days is a DAA count that depends on the network's rate; the contract requires only
-    // M_age, U >= D_r (the long delay is at least one round) and below 2^32.
+    // M_age, U >= D_r (the long delay is at least one round), and since review 6 the upper bounds above.
     pub fn check(&self) -> Result<(), Refusal> {
         let p = self;
         chk(p.mu_bps >= MU_MIN_BPS && p.mu_bps <= MU_MAX_BPS, "mu out of range")?;
-        chk(p.round > 0 && p.round < CSV_LIMIT, "round window")?;
-        chk(p.age >= p.round && p.age < CSV_LIMIT, "stake age")?;
-        chk(p.unbond >= p.round && p.unbond < CSV_LIMIT, "unbonding delay")?;
+        chk(p.round > 0 && p.round <= ROUND_MAX, "round window")?;
+        chk(p.age >= p.round && p.age <= AGE_MAX, "stake age")?;
+        chk(p.unbond >= p.round && p.unbond <= UNBOND_MAX, "unbonding delay")?;
         chk(p.burn_bps >= 0 && p.burn_bps <= BURN_MAX_BPS, "burn")?;
         chk(p.min_stake >= UNIT && p.min_stake <= MIN_STAKE_MAX, "minimum stake")
     }

@@ -356,9 +356,12 @@ fn finalize_takes_the_branch_validity_dictates() {
     let (tx_void, _) = finalize_tx(&void, 1_001, 200);
     let mut a = finalize_tx(&valid, 500, 200).0;
     a.0.outputs = tx_void.0.outputs.clone();
+    // Review 6: every claim has its own covenant id, so the swapped outputs are rebound to this part's id.
+    rebind(&mut a, valid.id.unwrap());
     refused("a valid claim restored", &rebuild(&a), 0);
     let mut b = finalize_tx(&void, 1_001, 200).0;
     b.0.outputs = tv.0.outputs.clone();
+    rebind(&mut b, void.id.unwrap());
     refused("a void claim settled", &rebuild(&b), 0);
 }
 
@@ -543,9 +546,10 @@ fn renewal_moves_the_expiry_and_pays_the_premium_from_the_margins() {
 #[test]
 fn a_lapsed_pair_settles_at_its_entry_price() {
     let (lp, _, _) = opened();
-    must("lapse settle", &lapse_tx(&lp, 1_400, 1_000));
-    refused("before X + tail", &lapse_tx(&lp, 1_399, 1_000), 0);
-    refused("younger than idleDaa", &lapse_tx(&lp, 1_400, 999), 0);
+    // Review 6 (R6-F3): idleDaa is counted from the cover's end by the calendar (X + tail + idle = 2,400), not from the
+    // UTXO's age, so no sequence is needed and none helps.
+    must("lapse settle", &lapse_tx(&lp, 2_400, 0));
+    refused("before X + tail + idleDaa", &lapse_tx(&lp, 2_399, 1_000_000), 0);
     let (l, s) = lp.s.lapse_out(lp.value);
     assert_eq!((l, s), (100_000_000_000, 200_020_000_000), "at E = 10 KAS: the long its margin, the short its margin and the carrier");
 }
@@ -679,4 +683,14 @@ fn rebuild(t: &T) -> T {
     }
     tx.finalize();
     (tx, t.1.clone())
+}
+
+/// Every output that carries a covenant id is rebound to `id` (authorizing input 0).
+fn rebind(t: &mut T, id: kaspa_consensus_core::Hash) {
+    for o in t.0.outputs.iter_mut() {
+        if let Some(c) = o.covenant.as_mut() {
+            c.covenant_id = id;
+            c.authorizing_input = 0;
+        }
+    }
 }

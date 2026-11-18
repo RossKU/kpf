@@ -20,10 +20,17 @@ pragma silverscript ^0.1.0;
 // Entries without a price (the book market's, in spirit):
 //   amend, addMargin, transfer, closeHost, closeDonor, mutualClose   as KpfPair P1-P4; the range stays within coverRate,
 //                     the underwriter is never a party (an entrant's key, P3's keys); every one requires the pair UTXO
-//                     to be quietDaa old (CSV), the oracle form of the hand-over rate limit
+//                     to be quietDaa old (CSV), the oracle form of the hand-over rate limit; the part an entrant gets
+//                     (transfer) and P3 (closeHost, closeDonor) start a fresh covenant id this script checks (`fresh`),
+//                     the remainder keeps this id
 //   coopClose         both owners, any split (P9)
-//   lapseSettle       anyone, once the cover has lapsed (tx.daa >= expiry + tailDaa, CLTV) and the pair is idleDaa old
-//                     (CSV): settle all at the entry price (P8, restricted to a lapsed pair)
+//   lapseSettle       anyone, idleDaa after the cover has lapsed (tx.daa >= expiry + tailDaa + idleDaa, CLTV): settle
+//                     all at the entry price (P8, restricted to a lapsed pair)
+// The induction of review 6: every UTXO of a pair's (or a claim's) id was written by a template of this family. A
+// lineage starts only where a script of the family checked that no input carries the new id and exactly one output
+// does (KpfOpenO.fill, KpfOpenO.take, transfer, closeHost, closeDonor, propose); every entry that spends a UTXO of
+// the id counts the id's outputs exactly and fixes each one's script, and only a UTXO of an id authorizes outputs of
+// it, so the property carries to every later transaction.
 // Entries of the underwriter:
 //   renew(u, k)       the slot at input u binds this pair's cover at expiry + termDaa (claim k names this input); the
 //                     premium leaves the margins, half from each side, bounds moved inward; nobody else signs
@@ -33,10 +40,10 @@ pragma silverscript ^0.1.0;
 //                     a bond, exactly as KpfPair.propose moves it into KpfPending (kind 1 close, signed by the closer;
 //                     kind 2 liquidation; restore, cure and forfeit states precomputed as P2SH hashes)
 // DESIGN: the note removes idle settle at E in oracle markets (1.4, 5.13: a blocker could run the clock out to it). It is
-// kept only for a pair whose cover has lapsed (tx.daa >= X + tailDaa) and that is idleDaa old: while an underwriter
-// renews, every renewal and every restored claim is a new UTXO, so no blocker can reach it; once the underwriter is
-// silent it is the one exit of a pair whose counterparty is gone that needs nobody (the price-free exits below need a
-// taker or both parties), and it pays each side at a price both consented to.
+// kept only for a pair whose cover has lapsed, idleDaa after the lapse by the calendar (tx.daa >= X + tailDaa +
+// idleDaa): while an underwriter renews, X moves on and the settle is never due; once the underwriter is silent it is
+// the one exit of a pair whose counterparty is gone that needs nobody (the price-free exits below need a taker or both
+// parties), and it pays each side at a price both consented to. No party can postpone it (review 6, R6-F3).
 // DESIGN: the book market's hand-over limit (tx.daa >= S + 4R, an evidence clock) has no evidence to protect here. What
 // needs protecting is the underwriter's signed claim, which commits to this pair's outpoint: a party that respent its
 // side every block (amend, transfer) would void every claim before it landed. So every party entry needs the pair
@@ -164,13 +171,17 @@ contract KpfPairO(
     int constant MU_MIN_BPS = 11000;
     int constant MU_MAX_BPS = 15000;
     int constant BURN_MAX_BPS = 5000;
-    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant MIN_STAKE_MAX = 1000000000000;
+    int constant ROUND_MAX = 2592000;
+    int constant AGE_MAX = 25920000;
+    int constant UNBOND_MAX = 77760000;
     int constant UNIT = 1000000000;
     int constant SCALE_MAX = 1000000000;
     int constant PRICE_CAP = 100000000000000;
     int constant MMR_CAP = 5000;
     int constant BOND_MIN_MAX = 1000000000000;
     int constant OUT_REF = 65536;
+    int constant MAX_OUTPUTS = 8;
     // KpfBond's state length and the offsets of its status and bond block within it.
     int constant BOND_STATE_LEN = 236;
     int constant BOND_STATUS_AT = 33;
@@ -321,21 +332,23 @@ contract KpfPairO(
         }
     }
 
-    // As KpfPair.partAndRest (the remainder keeps the old carrier, the excess and the rounding slack).
-    function partAndRest(byte[32] selfId, byte[] rs, int n, int k, byte[] partSpk, int partRange, int keep) {
+    // The part a party enters at output c, under a fresh covenant id (`fresh`), and the remainder (n < s) as the only
+    // output of this pair's id, as KpfPair.partAndRest (the remainder keeps the old carrier, the excess and the rounding
+    // slack).
+    // DESIGN: review 6 (R6-F1): KpfPair continues the pair's id into the part. Here every part a party enters without
+    // having been in this lineage (a transfer to a signing taker or an order, P3 of close-versus-close) starts a fresh
+    // lineage checked by this script, so nothing of the old id is carried into it; the remainder, which nobody enters,
+    // keeps this id.
+    function partAndRest(byte[32] selfId, byte[] rs, int n, int c, byte[] partSpk, int partRange, int keep) {
+        fresh(c);
+        require(tx.outputs[c].scriptPubKey == partSpk);
+        require(tx.outputs[c].value >= partRange + carrier);
         if (n == size) {
-            require(OpCovOutputCount(selfId) == 1);
-            int c = OpCovOutputIdx(selfId, 0);
-            require(tx.outputs[c].scriptPubKey == partSpk);
-            require(tx.outputs[c].value >= partRange + carrier);
+            require(OpCovOutputCount(selfId) == 0);
             require(tx.outputs[c].value >= partRange + keep);
         } else {
-            require(OpCovOutputCount(selfId) == 2);
-            require(k == 0 || k == 1);
-            int c0 = OpCovOutputIdx(selfId, k);
-            require(tx.outputs[c0].scriptPubKey == partSpk);
-            require(tx.outputs[c0].value >= partRange + carrier);
-            int c1 = OpCovOutputIdx(selfId, 1 - k);
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
             int rest = size - n;
             require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
@@ -356,6 +369,26 @@ contract KpfPairO(
         require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
         return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
     }
+
+    // BEGIN fresh id
+    // The output `out` starts a new lineage (review 6, R6-F1): its covenant id is not zero and no input carries it, so
+    // it is a genesis (an id no UTXO had before), and no other output carries it (the scan, at most MAX_OUTPUTS
+    // outputs; a brand-new id is invisible to the covenant counters of its creating transaction, so OpCovOutputCount
+    // cannot count it). After this transaction the id has exactly one UTXO, the one the caller writes, and every later
+    // output of the id needs an input of it.
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+        return id;
+    }
+    // END fresh id
 
     // BEGIN oracle bind proof
     // The slot input u proves that it counts cover >= c with expiry x for the claimant `ref`: u is a KpfBond, its
@@ -425,11 +458,11 @@ contract KpfPairO(
         require(muBps >= MU_MIN_BPS);
         require(muBps <= MU_MAX_BPS);
         require(roundDaa > 0);
-        require(roundDaa < CSV_LIMIT);
+        require(roundDaa <= ROUND_MAX);
         require(ageDaa >= roundDaa);
-        require(ageDaa < CSV_LIMIT);
+        require(ageDaa <= AGE_MAX);
         require(unbondDaa >= roundDaa);
-        require(unbondDaa < CSV_LIMIT);
+        require(unbondDaa <= UNBOND_MAX);
         require(burnBps >= 0);
         require(burnBps <= BURN_MAX_BPS);
         require(minStake >= UNIT);
@@ -536,7 +569,7 @@ contract KpfPairO(
 
     // P3 transfer (as KpfPair), after quietDaa; the entrant is never the underwriter and the part's range stays within
     // the cover rate. The binding is copied.
-    entry transfer(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int k) {
+    entry transfer(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int c) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -559,10 +592,10 @@ contract KpfPairO(
             require(n >= shortMin || n == size);
             pay = owed(n, bs - x, shortTip);
         }
-        handOver(side, n, nb, ek, et, k, pay, x);
+        handOver(side, n, nb, ek, et, c, pay, x);
     }
 
-    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay, int hp) {
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int c, int pay, int hp) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         byte[] rs = ownRs();
@@ -601,12 +634,13 @@ contract KpfPairO(
             p = 0;
         }
         payTo(self, payKey, p);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
+        partAndRest(selfId, rs, n, c, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
     }
 
-    // P4 close-versus-close, host side (as KpfPair), after quietDaa. P3 keeps this pair's binding; its long (the donor's)
-    // is not the underwriter and its range stays within this pair's cover rate.
-    entry closeHost(int n, int x, int e3, int k, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
+    // P4 close-versus-close, host side (as KpfPair), after quietDaa. P3, at output c under a fresh covenant id (checked
+    // here and by the donor), keeps this pair's binding; its long (the donor's) is not the underwriter and its range
+    // stays within this pair's cover rate.
+    entry closeHost(int n, int x, int e3, int c, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -632,7 +666,7 @@ contract KpfPairO(
         }
         payTo(self, longKey, pay);
         byte[] lists = win(la3, lm3, lt3) + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
+        partAndRest(selfId, rs, n, c, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
     }
 
     // P4 close-versus-close, donor side (as KpfPair), after quietDaa. The long moves into the host's P3 at output c,
@@ -663,9 +697,9 @@ contract KpfPairO(
         require(x3 <= expiry);
         require(pr3 <= premium);
         byte[] rs = ownRs();
-        byte[32] pid = OpOutputCovenantId(c);
-        require(pid != zero32());
-        require(pid != selfId);
+        // DESIGN: review 6 (R6-F1): P3 starts a fresh lineage that this script checks, whatever the host is (a pair, a
+        // look-alike, a plain key carrying an id): the donor's long never enters an id another UTXO holds.
+        fresh(c);
         byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win(sa3, sm3, st3);
         byte[] bnd = rs.slice(BIND_AT, COVER_AT) + i9(cr3) + i9(x3) + i9(pr3);
         require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, bnd, lists, selfId, zero32()));
@@ -746,16 +780,19 @@ contract KpfPairO(
         }
     }
 
-    // Lapse settle (P8 of a lapsed pair). Anyone, once the cover's liability has ended (tx.daa >= expiry + tailDaa, CLTV)
-    // and this UTXO is idleDaa old (CSV): the pair ends at the entry price clamped to [bl, bs], the long at output i, the
-    // short the rest of this UTXO's value at M - 1 - i (as KpfPair.idleSettle).
+    // Lapse settle (P8 of a lapsed pair). Anyone, once the cover's liability has ended and idleDaa more has passed by the
+    // calendar (tx.daa >= expiry + tailDaa + idleDaa, CLTV, the expiry read from this state): the pair ends at the entry
+    // price clamped to [bl, bs], the long at output i, the short the rest of this UTXO's value at M - 1 - i (as
+    // KpfPair.idleSettle).
+    // DESIGN: review 6 (R6-F3): the idle time was the age of this UTXO (CSV), which a party restarted by amending once
+    // per idleDaa, blocking the one exit that needs nobody for ever. It is measured from the recorded expiry instead,
+    // which no party can move (every price-free entry copies the binding; only the underwriter's renewal moves it).
     entry lapseSettle() {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        require(this.ageDaa >= idleDaa);
-        int end = expiry + tailDaa;
+        int end = expiry + tailDaa + idleDaa;
         require(end >= 0);
         require(end < LOCK_TIME_THRESHOLD);
         require(tx.daa >= end);
@@ -859,7 +896,13 @@ contract KpfPairO(
     //          part), and no cure when the cured range would exceed coverRate or the short's bound priceMax; the
     //          forfeit bound fb as KpfPair.
     // Every pair state the part may become (restore, cure, forfeit) is fixed here with this binding, the entry kept,
-    // both sides unlisted and both tags 0.
+    // both sides unlisted and both tags 0. The pending part is written at output k under a fresh covenant id.
+    // DESIGN: review 6 (R6-F1, R6-F2): KpfPair.propose writes the pending part under the pair's id. The claim's id is
+    // what its dispute, receipts and pool are keyed by, so it must be unique to this claim and held by no UTXO outside
+    // the family: two claims on parts of one lineage (equal DAA scores included) then never share a pool, and a
+    // holder of the pair's id (were there one) could not write a dispute or pool of this claim. The cost: the scan
+    // admits at most MAX_OUTPUTS outputs, so one proposal transaction carries at most 7 whole-pair claims (before, only
+    // the mass limited it).
     entry propose(int n, int kind, int side, int p, int t0, int j, byte[] s, int fb, int k, byte[] pPre, byte[] pSuf) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -947,18 +990,15 @@ contract KpfPairO(
         require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDING_TPL);
         byte[] pend = byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf));
         int v = tx.inputs[self].value;
+        fresh(k);
+        require(tx.outputs[k].scriptPubKey == pend);
         if (n == size) {
-            require(OpCovOutputCount(selfId) == 1);
-            int c = OpCovOutputIdx(selfId, 0);
-            require(tx.outputs[c].scriptPubKey == pend);
-            require(tx.outputs[c].value >= v + bond);
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[k].value >= v + bond);
         } else {
-            require(OpCovOutputCount(selfId) == 2);
-            require(k == 0 || k == 1);
-            int c0 = OpCovOutputIdx(selfId, k);
-            require(tx.outputs[c0].scriptPubKey == pend);
-            require(tx.outputs[c0].value >= part + refund);
-            int c1 = OpCovOutputIdx(selfId, 1 - k);
+            require(OpCovOutputCount(selfId) == 1);
+            require(tx.outputs[k].value >= part + refund);
+            int c1 = OpCovOutputIdx(selfId, 0);
             int rest = size - n;
             require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
             require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);

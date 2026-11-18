@@ -131,10 +131,21 @@ fn words(m: &OMarket, pair: Option<(i64, i64, i64, i64, i64, i64)>) -> String {
     let mut s = String::new();
     s += &format!("This market prices an underlying in KAS (sompi per whole unit of {} base units). It is not approved, listed or verified by anyone: anyone can create a market.\n", p.scale);
     s += &format!("Prices come only from each pair's underwriter: whoever vouches a price can move margin from one party to the other. A false price stands unless someone contests it within {} ({} DAA) of the claim landing.\n", h(p.challenge_daa), p.challenge_daa);
-    s += &format!("A contest is judged by aged bonded KAS: the side committing at least {} times the other's wins after rounds of {}; stake counts only if it was bonded {} before the claim. If colluders control that stake, false prices stand.\n", m.judge.mu_bps as f64 / 1e4, h(m.judge.round), h(m.judge.age));
+    let j = &m.judge;
+    s += &format!(
+        "A contest is judged by aged bonded KAS (the judge): each stake is at least {} KAS; the side committing at least {} times the other's takes the lead, and the leader wins once a round of {} passes without a change; stake counts only if it was bonded {} before the claim; a stake takes {} to leave; {} % of the losers' stake is burned and the rest goes to the winners. If colluders control that stake, false prices stand.\n",
+        k(j.min_stake),
+        j.mu_bps as f64 / 1e4,
+        h(j.round),
+        h(j.age),
+        h(j.unbond),
+        j.burn_bps as f64 / 100.0
+    );
+    s += &format!("A new market has no judge for its first {}: no stake can count before it is that old, so a claim made earlier cannot be contested.\n", h(j.age));
+    s += &format!("A contest that lands after the window is ignored for the verdict, but the part still waits for the dispute (at least {}): a late contest delays a claim for the price of its fees.\n", h(j.round));
     s += &format!("An underwriter may underwrite up to {} times its bond. Its bond is never paid to you in this version: a refuted claim costs its proposer the claim's bond ({} % of the cover, at least {} KAS), {} % of it to the disputer and the rest to the wronged party.\n", m.bond.rho_bps as f64 / 1e4, p.sigma_bps as f64 / 100.0, k(p.bond_min), p.beta_bps as f64 / 100.0);
     s += &format!("A side is liquidated (it forfeits its whole margin to the other side) when a vouched price, moved {} % in its favour, is past its trigger at {} % maintenance. A close by a party is paid at the vouched price moved {} % against the closer.\n", p.g_bps as f64 / 100.0, p.mmr_bps as f64 / 100.0, p.g_bps as f64 / 100.0);
-    s += &format!("The cover runs for a term of {} and is renewed by the underwriter at the agreed premium, taken half from each side's margin. If the underwriter stops, the pair can be closed or transferred without any price; once its cover has lapsed ({} after expiry) and it is {} idle, anyone settles it at its entry price.\n", h(m.bond.term), h(m.bond.tail), h(p.idle_daa));
+    s += &format!("The cover runs for a term of {} and is renewed by the underwriter at the agreed premium, taken half from each side's margin. If the underwriter stops, the pair can be closed or transferred without any price; once {} has passed after its cover's expiry (the lapse after {}, then {} more by the calendar; amending the pair does not postpone it), anyone settles it at its entry price.\n", h(m.bond.term), h(m.bond.tail + p.idle_daa), h(m.bond.tail), h(p.idle_daa));
     s += &format!("A claim must land within {} of the time it prices, and at least the contest window before the cover expires, or it is void. Each party entry waits {} after the last change of the pair.\n", h(p.late_daa), h(p.quiet_daa));
     s += "The winner of a pair bears every move beyond the loser's margin (gaps, a silent underwriter). The underwriter is never a party to its own pairs by key; a second key of the same owner cannot be detected.\n";
     if let Some((size, x, rl, rs, cr, prem)) = pair {
@@ -605,6 +616,8 @@ pub fn settle_pool_cmd(a: &Args) -> R<()> {
 
 /// `oracle-watch`: for the key `--me`, every claim against it and the time left to contest, its pairs' underwriter
 /// cover expiry and what follows it, and the disputes it has stake in, from object files (`--object`, `--scan DIR`).
+/// With `--node` every object's DAA score and value are read from the node; without it a DAA read from a file is shown
+/// as unchecked (review 6).
 pub fn watch_cmd(a: &Args) -> R<()> {
     a.only(&["me", "object", "scan", "daa", "node", "json"])?;
     let net = network(a)?;
@@ -622,9 +635,23 @@ pub fn watch_cmd(a: &Args) -> R<()> {
     }
     let mut rows = vec![];
     for f in files {
-        let Ok(of) = ObjFile::load(&f) else { continue };
+        let Ok(mut of) = ObjFile::load(&f) else { continue };
         let Ok(obj) = OObj::decode(&of.redeem) else { continue };
+        // Review 6 (note 3): the DAA score decides whether a claim is valid and when its window ends, so it is read from
+        // the node whenever one is given; a file's own `daa` is marked as unchecked.
+        let unchecked = match node.as_mut() {
+            Some(n) => {
+                if let Err(x) = crate::cmds::refresh(n, &mut of, net) {
+                    rows.push((f.clone(), format!("NOT AT THE NODE: {x}; nothing in this file is current")));
+                    continue;
+                }
+                ""
+            }
+            None if of.daa.is_some() => " [DAA from the object file, not checked against a node: pass --node]",
+            None => "",
+        };
         let daa = of.daa.map(|d| d as i64);
+        let before = rows.len();
         match obj {
             OObj::Pending(w) => {
                 let mine = w.long_key == me || w.short_key == me;
@@ -648,6 +675,10 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                         )
                     }
                     (PENDING, None) => format!("a pending {what}: its DAA is unknown (run kpf status --update)"),
+                    (CONTESTED, Some(c)) if c >= w.clock + w.m.p.challenge_daa => format!(
+                        "a contested {what}, but the contest landed at DAA {c}, after the window (it ended at DAA {}): the verdict will be ignored and the claim settles as if uncontested once its dispute resolves (kpf resolve)",
+                        w.clock + w.m.p.challenge_daa - 1
+                    ),
                     (CONTESTED, _) => format!("a contested {what}: resolves when its dispute's round closes (kpf resolve)"),
                     (UPHELD, _) => format!("an upheld {what}: finalize at once (kpf oracle-finalize --pending {f})"),
                     _ => format!("a refuted {what}: finalize at once to restore the part and pay the bond (kpf oracle-finalize --pending {f})"),
@@ -661,14 +692,17 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 let x = p.b.expiry;
                 let step = p.m.bond.step;
                 let lapse = x + p.m.bond.tail;
+                let settle_from = p.lapse_from();
                 let msg = if t < x - step {
                     format!("your underwriter's cover runs until DAA {x} ({} DAA left); renewal from DAA {}", x - t, x - step)
                 } else if t < x {
                     format!("COVER EXPIRES at DAA {x} ({} DAA left): the underwriter may renew now; claims landing after DAA {} are void", x - t, x - p.m.p.challenge_daa)
                 } else if t < lapse {
-                    format!("THE COVER HAS EXPIRED (DAA {x}): no claim is valid; the underwriter may still renew; lapse settle at the entry price from DAA {lapse} once the pair is idle {} DAA", p.m.p.idle_daa)
+                    format!("THE COVER HAS EXPIRED (DAA {x}): no claim is valid; the underwriter may still renew; the cover lapses at DAA {lapse}; lapse settle at the entry price from DAA {settle_from}")
+                } else if (t as u64) < settle_from {
+                    format!("THE COVER HAS LAPSED (DAA {lapse}): anyone may settle the pair at its entry price from DAA {settle_from} (kpf lapse-settle --pair {f}), whatever its parties do meanwhile; a price-free exit (transfer, mutual or cooperative close) is open meanwhile")
                 } else {
-                    format!("THE COVER HAS LAPSED: anyone may settle the pair at its entry price once it is idle {} DAA (kpf lapse-settle --pair {f}); a price-free exit (transfer, mutual or cooperative close) is open meanwhile", p.m.p.idle_daa)
+                    format!("THE COVER HAS LAPSED: anyone may settle the pair at its entry price now (kpf lapse-settle --pair {f}); a price-free exit (transfer, mutual or cooperative close) is open meanwhile")
                 };
                 rows.push((f.clone(), msg));
             }
@@ -690,6 +724,11 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 rows.push((f.clone(), format!("your slot: {} KAS of cover counted of a capacity of {} KAS", fmt_kas(sum as i128), fmt_kas(capacity(of.amount as i64, b.m.p.rho_bps) as i128))));
             }
             _ => {}
+        }
+        if rows.len() > before {
+            if let Some(r) = rows.last_mut() {
+                r.1 += unchecked;
+            }
         }
     }
     if a.has("json") {

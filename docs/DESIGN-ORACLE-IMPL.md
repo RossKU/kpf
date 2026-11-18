@@ -2,7 +2,9 @@
 
 Sections 1-7 are the first slice (the underwriting slot `KpfBond`); sections 8-14 the second (the stake judge
 `KpfStake`); sections 15-23 the third (the oracle-market order, pair and pending part wired to both: `KpfOpenO`,
-`KpfPairO`, `KpfPendingO`, pinned, with builders and the command line).
+`KpfPairO`, `KpfPendingO`, pinned, with builders and the command line); section 24 the changes after review 6 (fresh
+covenant ids for every entered part and every claim, the calendar lapse clock, the judge's upper bounds), which
+supersede the earlier sections where they differ.
 
 Status: implemented and tested offline; not pinned, not on testnet. Implements part of `DESIGN-ORACLE-2.md` (cited
 `O2§n`; `O§n` is `DESIGN-ORACLE.md`, `D§n` is `DESIGN.md`). This slice is the underwriting slot and its accounting only:
@@ -369,7 +371,7 @@ underlying priced in KAS); `ρ` a market parameter, 1 by default, refused above 
 by both orders; live disputes during the window, decided by the stake judge of the second slice; no retrospective
 dispute, no fast path, no request object (`KpfReq`), no lock path, no rebind; closed markets by the feed definition and
 a lateness bound; markets permissionless (the contracts enforce parameter bounds, never a list of markets). Sections
-15-24.
+15-24; section 24 records the changes after review 6, which supersede the text of 15-23 where they differ.
 
 ## 15. What exists
 
@@ -416,10 +418,10 @@ cover.
 | Entry | Who | Rule |
 |---|---|---|
 | order `fill` (T1′) | anyone | the book order's checks; the slot input is a `KpfBond` of this market spent by `bind` counting `q(n, coverRate)` at `X` for `OUT_REF + pairOut` (the bind proof); the slot accepted (`uwAccept`, zero for any), its owner neither this order's owner nor the counterparty; `premium <= premMax`; `coverRate >= bs - bl`; `X >= this order's DAA score + term`; the pair id fresh and carried by no other output (the scan, at most 8 outputs); the escrow spend `q(n, rate + tip + half the premium) + carrier` |
-| order `take` (T2) | anyone | as `KpfOpen.take`, and the slot binds the entered part afresh in the same transaction (claim `OUT_REF + partOut`, at the part's `X`) |
+| order `take` (T2) | anyone | as `KpfOpen.take`, but the part starts a fresh covenant id the order checks (review 6), and the slot binds the entered part afresh in the same transaction (claim `OUT_REF + partOut`, at the part's `X`) |
 | pair `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose` | as KpfPair | as KpfPair; the pair UTXO `quietDaa` old (CSV); the range within `coverRate`; no entrant and no key of P3 is `uwKey`; `closeDonor` requires P3 under its own underwriter with `x3 <= X`, `premium3 <= premium` and P3's range within both cover rates |
 | pair `coopClose` | both owners | any split |
-| pair `lapseSettle` | anyone | `tx.daa >= X + tail` (CLTV) and the UTXO `idleDaa` old (CSV): settle at the entry price, as KpfPair's idle settle |
+| pair `lapseSettle` | anyone | `tx.daa >= X + tail + idleDaa` (CLTV, review 6; before: `X + tail` and the UTXO `idleDaa` old by CSV): settle at the entry price, as KpfPair's idle settle |
 | pair `renew(u, k)` | the slot's bind (the underwriter signs) | the bind counts `q(s, coverRate)` at `X + term` for this input; the premium leaves the margins (the long's bound up by `premium - floor(premium / 2)`, the short's down by `floor(premium / 2)`); what may leave is `q(s, range) - q(s, new range)`; the range stays wider than both bands; possible only from `X - step` (the slot's window) |
 | pair `propose(n, kind, side, p, t0, j, ...)` | the underwriter's P2PK input `j`, SIGHASH_ALL (and the closer's signature for a close) | `tx.daa >= t0` (CLTV); a liquidation triggers with g inside: long `ceil(p(1 + g)) (1 - m) < bl`, short `bs < floor(p(1 - g)) (1 + m)`; the keys differ; the range rule; the fee, the cure bound (no cure beyond `coverRate`) and the forfeit bound as KpfPair; the part moves into `KpfPendingO` with a bond `B = max(bondMin, 0.02 KAS, q(n, coverRate · σ))` |
 | pending `contest(u, dOut)` | anyone with aged judge stake | the stand-in's contest: the opener is a canonical free `KpfStake` of this judge block spent by `open(self, self, dOut)`; three outputs of the id; records `P` and the opener's key |
@@ -436,7 +438,7 @@ or delayed harmfully (a claim landing more than `lateDaa` after its `t0` is void
 claim).
 
 **Contest and verdict.** The pending part's `contest` and `decide` are the stand-in claim's of the second slice with the
-oracle judge block; the dispute and its receipts take the part's id; the resolution spends the contested part and
+oracle judge block; the dispute and its receipts take the claim's id (since review 6 a fresh id per claim, section 24); the resolution spends the contested part and
 delivers the verdict in the same transaction (the dispute's recorded script hash and id:
 `a_verdict_delivered_to_the_wrong_part_is_refused`). The window is enforced after the fact: the contested part's own DAA
 score is the contest's acceptance, exact when `decide` reads it; a contest accepted at `P + W` or later is ignored, so a
@@ -464,8 +466,8 @@ feed definition without a `sessions:` line. A weekend maintenance rate (`mmr_w`)
 
 It is never stuck: (1) a transfer to a signing taker (no underwriter needed; an entrant through an order needs the slot's
 bind, so the underwriter), (2) a mutual close (both list, anyone executes), (3) a cooperative close (both sign), (4)
-close-versus-close with another pair of the same underwriter, (5) once the cover has lapsed (`X + tail`) and the pair is
-`idleDaa` old, a settlement by anyone at the entry price (`lapseSettle`, what replaces the idle settle). The cost: no
+close-versus-close with another pair of the same underwriter, (5) once the cover has lapsed (`X + tail`) and `idleDaa` more
+has passed by the calendar (review 6), a settlement by anyone at the entry price (`lapseSettle`, what replaces the idle settle). The cost: no
 liquidation and no unilateral close while the underwriter is silent; a winner whose loser is past its trigger gets its
 entry-price payoff at the lapse settle instead of the loser's margin
 (`exploit_a_silent_underwriter_turns_a_due_liquidation_into_a_settlement_at_the_entry`). An underwriter that renews but
@@ -512,7 +514,7 @@ pair: 1,000 units, cover 6,000 KAS, a 10 KAS opening stake, a 0.5 KAS dispute ba
 | unbond the slot | 2 | 167,792 / 100,001 | 8,273 | 12 | 4,943 | 0.0099 |
 
 The storage masses near 80,000 come from the 0.5 KAS dispute base and the 10 KAS receipts (KIP-9); a larger base lowers
-them. **The largest multi-pair shapes:** proposals vouched by one input are limited by no scan: 4 / 8 / 12 pairs use
+them. **The largest multi-pair shapes:** (before review 6; since then the fresh-id scan limits one proposal transaction to 7 whole pairs, section 24) proposals vouched by one input are limited by no scan: 4 / 8 / 12 pairs use
 95,826 / 188,906 / 281,986 compute mass and 68,786 / 137,186 / 205,586 bytes (0.41 KAS for 12); the byte limit stops at
 14 (17,150 bytes a pair). A renewal of 7 pairs (the bind's 7 claims) uses 124,835 compute mass and 99,555 bytes. An open
 carries one pair (the twin scan admits 8 outputs; two order rests, the pair, the slot, the premium and change are six).
@@ -538,15 +540,17 @@ close).
 4. **"A claim accepted after X is void"** (O2§1.5): a claim accepted at `X - 1` would be pending past the cover. A claim
    is valid only if `P + W <= X`.
 5. **Idle settle must go** (O2§1.4, §7 decision 8): kept only after the cover has lapsed (`lapseSettle`). While an
-   underwriter renews, every renewal and every restore is a new UTXO, so no blocker can reach it; without it a pair whose
-   counterparty is gone and whose underwriter is silent had no exit needing nobody.
+   underwriter renews, `X` moves on and the settle is never due; without it a pair whose counterparty is gone and whose
+   underwriter is silent had no exit needing nobody. (Review 6, R6-F3: the idle time was the UTXO's age, which a party
+   restarted by amending; it is now `idleDaa` after `X + tail` by the calendar, section 24.)
 6. **The hand-over rate limit** has no evidence to protect here. What needs protecting is the underwriter's signed claim,
    which commits to the pair's outpoint: any respend voids it. Every party entry needs the pair `quietDaa` old.
 7. **The term an order gets** cannot be proven (no upper bound on the present): `X >= the order's DAA score + term`; the
    first premium is due whatever the remaining term.
 8. **Look-alike pairs** (O2§5.2, left to the entrant's wallet): an entrant through an order requires the slot to bind
    the entered part in the same transaction (a second count of the part's cover until its expiry); only a signing taker
-   relies on its wallet.
+   relies on its wallet. (Review 6, R6-F1: the bind counts the cover but could not stop a forged verdict under an id a
+   foreign UTXO also held; since then every entered part starts a fresh id its entrant checks, section 24.)
 9. **Margin and cure beyond the cover** (O2§1.4, "otherwise the transaction must renew"): the range never exceeds
    `coverRate`; a cure that would is not offered (the orders choose the headroom at open).
 10. **Who posts the bond of a close:** the closer (it signs the claim; the underwriter co-signs the price). The note's "no
@@ -584,7 +588,7 @@ Worked on the fixture pair (1,000 units at 10 KAS, long margin 1,000 KAS, short 
 | a Sybil key of the underwriter as a party | **exploit**: the contracts compare keys only |
 | a stuck pair, slot, stake or dispute | **holds**: every state has an exit needing nobody (or only its owner): finalize, decide with the resolution, lapse settle, advance and unbond, settle and close |
 | a genesis pair naming a real slot | **exploit, bounded** (as slice A): uncounted cover for at most one period; no order enters it without the slot counting the part; a signing taker relies on its wallet |
-| look-alike pending parts and disputes | **holds**: a look-alike's bond is its own and it reaches no slot; no output can carry an existing part's id without that part as an input |
+| look-alike pending parts and disputes | **holds** for its bond (its own, reaching no slot). The claim "no output can carry an existing part's id without that part as an input" was false (review 6, R6-F1: any input of the id authorizes, a plain key's included); since review 6 every entered part and every claim starts a fresh id its party checks, section 24 |
 | a twin of any template at a pair's genesis | **holds** (the scan) |
 | a hostile market within the bounds (W 1 DAA, no quiet time, a 0.02 KAS bond, ρ 5, the whole bond to the disputer, settlement right after a lapse) | **exploit, only a wallet can flag it**: the contracts open a pair on it and a false claim finalizes one DAA after it lands; `market_warnings` names each. A feed definition whose hash matches can still render misleadingly (bidirectional overrides, homoglyphs, invisible characters, carriage returns): `check_feed` flags them, and only a wallet can |
 
@@ -608,7 +612,7 @@ window is reversed: your position comes back as it was, and the claim's bond is 
 "Disputes are won by the side committing more aged bonded KAS, by a factor `μ`; if colluders control that, false prices
 stand." "A false price nobody contests within the window stands: you can lose your whole margin in that pair." "If your
 underwriter stops, you can still leave without any price (transfer, mutual or cooperative close), and once its cover has
-lapsed anyone can settle your pair at its entry price." "The winner bears gaps beyond the loser's margin." "Prices are in
+lapsed anyone can settle your pair at its entry price, after a fixed time nobody can postpone." (Review 6: the contest wording holds again only since the fixes of section 24; before them it was false for a part entered into an id another UTXO held.) "The winner bears gaps beyond the loser's margin." "Prices are in
 KAS."
 
 **False.** "Trustless", "no trusted oracle", "decentralized oracle" as a security claim. "Insured", "covered by the
@@ -629,3 +633,120 @@ always slashed" (only when contested in time and outvoted). "Gold price" or any 
   recommendation (`ρ <= 2` until the judge has a history) stands.
 - Not done here: discovery from a node (object files only, as for pending parts and locks); a live testnet exercise; the
   `KpfLock` fold (section 6).
+
+## 24. Changes after review 6
+
+Review 6 (`docs/audit/REVIEW-6.md`) found one Critical, one High and two Medium findings and three notes. Its root cause:
+under rusty-kaspa v2.1.0 any input that carries a covenant id, a plain key's UTXO included, authorizes outputs of that id
+with any script (`CovenantsContext::from_tx`). The family treated "an object under this part's id" as authentic (the
+dispute, its pool and its receipts live under the claim's id), and three entries placed a party into a lineage whose id
+another UTXO could also hold: an order's `take` (the part's id only had to be non-zero), `closeDonor` (the host could be a
+plain-key UTXO) and a genesis look-alike pair created with a plain-key twin. The decisions below are built; every
+deviation is a `// DESIGN:` comment in the contracts.
+
+### 24.1 The induction
+
+**Every UTXO of a pair's or a claim's covenant id was written by a template of this family that a party of that part
+verified.** Base: a lineage starts only where a script of the family checks, in the creating transaction, that no input
+carries the new id and that no other output does (`fresh`, one text in `KpfOpenO` and `KpfPairO`: the twin scan of slice
+A over at most 8 outputs; a brand-new id is invisible to the covenant counters of its creating transaction, so the scan,
+not `OpCovOutputCount`, proves "exactly one"). Step: only an input of an id authorizes outputs of it (a genesis cannot
+reproduce an existing id: it is a hash of an unspent outpoint), every input of the id is a template instance by
+hypothesis, and every entry of `KpfPairO`, `KpfPendingO` and `KpfStake` that spends a UTXO of an id counts that id's
+outputs exactly and fixes each one's script (enumerated in review 6, "What was checked and found sound"). Tests:
+`audit6_tests` (every route); the seeded run checks it on every accepted step (24.5).
+
+### 24.2 The decisions as built
+
+| # | Decision | Built as | What it replaced |
+|---|---|---|---|
+| 1 | a party never enters a lineage it cannot prove clean | a fresh id, checked by `fresh`, for: the part an order takes (`KpfOpenO.take`, checked by the order itself, whatever the other inputs are), the part of a transfer to a signing taker (`KpfPairO.transfer`), P3 of close-versus-close (checked by both `closeHost` and `closeDonor`), and every pending part (`propose`, decision 3). The old id is not carried; remainders, renewals, amends, restores, cures and forfeits (nobody new enters) keep their id | `take` and `transfer` continued the pair's id; `closeDonor` accepted P3 under any non-zero id other than its own; `propose` wrote the pending part under the pair's id |
+| 2 | nothing is authentic merely because of its id | inside the induction the claim's fresh id is sufficient again: `decide`, `resolve`, `settle` and `redeem` keep their id checks, which no outsider can now satisfy. No further on-chain binding was added (deviation a) | the id of a lineage any input could hold |
+| 3 | a dispute, its pool and its receipts are keyed by something unique to the claim | a fresh covenant id per pending part (chosen over the pending part's outpoint: it survives equal DAA scores, needs no change of `KpfStake`'s state, and also closes R6-F1 for claims on any lineage) | the claim lived under the pair's id; receipts carried only the anchor (the claim's DAA score), shared by two claims of one split accepted in one block |
+| 4 | the lapse clock is the recorded expiry, not the UTXO's age | `lapseSettle` needs `tx.daa >= expiry + tailDaa + idleDaa` (CLTV) and no age; `OPair::lapse_from()` | `tx.daa >= X + tail` and the UTXO `idleDaa` old (CSV), which an amend restarted |
+| 5 | upper bounds on the judge's parameters, one text everywhere | `checkJudge` in `KpfStake`, `KpfOpenO`, `KpfPairO`, `KpfPendingO` and the stand-in claim, and `JudgeParams::check`: `roundDaa <= ROUND_MAX` (3 days at 10 DAA/s), `ageDaa <= AGE_MAX` (30 days), `unbondDaa <= UNBOND_MAX` (90 days), `minStake <= MIN_STAKE_MAX` (10,000 KAS, was 10^6 KAS). `oracle-market` and `oracle-check` state every judge parameter in words and warn above 1,000 KAS of least stake, 14 days of stake age, a 1-day round or 30 days of unbonding, and say "a contest within the window is not realistically possible" when the window is under an hour, the least stake above 1,000 KAS or the age above 14 days | bounds below `2^32` DAA and `10^6` KAS; warnings only for a small stake and a short age |
+| 6 | the notes, in the tooling | `oracle-check` states that a new market has no judge for its first `M_age` and that a late contest delays a claim for a round; `oracle-watch` reads every object's DAA and value from the node when `--node` is given (an object not at the node is reported as such), marks a DAA read from a file as unchecked otherwise, flags a contest that landed after the window, and gives the lapse settle's DAA | the words were silent; `oracle-watch` trusted the file's `daa` even with `--node` |
+
+`// DESIGN:` deviations. (a) Decision 2's "explicit binding wherever the induction does not reach" cannot be built: the
+induction does not reach a claim or dispute written by a genesis instead of by a pair's `propose`, and there the forger
+writes every field and every object of its id, so no field a contract could check helps. No party of a real pair is in
+such a claim; a staker who joins its dispute is protected only by its wallet tracing the claim's id to a `propose` (as in
+section 13; the `KpfStake` header). (b) The fresh-id scan admits at most 8 outputs, so one proposal transaction now
+carries at most 7 whole-pair claims (before review 6 only the mass limited it: 12 measured, 14 by bytes); 8 in one
+transaction are refused (`oracle_metrics_tests`). (c) A renewal by the underwriter still moves the expiry of a lapsed pair
+(the back-dated renewal of section 21, paid from both margins): no party can postpone the lapse settle, only the
+underwriter's counted renewal can.
+
+Interfaces that changed: `KpfPairO.transfer`'s last argument and `closeHost`'s fourth are now the absolute output index
+of the fresh part (they were the part's ordinal among the pair id's outputs); `propose`'s `k` is the pending part's output
+index; `lapseSettle` needs no sequence; the builders (`oracle_build::propose`, `transfer`, `lapse_settle`) write the
+pending part and the entrant's pair as a genesis authored by the pair input. The commands are unchanged.
+
+### 24.3 The sibling book-market family (no contract changed)
+
+The same three routes were run against `KpfOpen`, `KpfPair`, `KpfPending` and `KpfLock` (`audit6_book_tests`). Each route
+is accepted (the victim's side does land under an id the attacker holds through a plain-key UTXO) and each is harmless:
+**holds**. No book-family entry treats a UTXO as authentic because it carries the part's id: every pair and pending entry
+(and `KpfOpen.fill`, `take`, `refund`) requires `OpCovInputCount(selfId) == 1`, so the handle can never be an input beside
+a genuine object of the id; the only foreign inputs ever read (the KOB evidence order, the ask's token custody) are
+authenticated by template hash and P2SH, the custody's id compared with the market's token id; `KpfPending` settles from
+its own state with template-checked counter-evidence (there is no dispute object to forge); `KpfLock` reads no covenant
+id. A `KpfPending` forged with the handle pays out only what its author funded. Tests:
+`holds_take_into_a_held_id_gives_the_handle_no_power`, `holds_close_donor_into_a_held_id_gives_the_handle_no_power`,
+`holds_an_order_taking_a_genesis_pair_with_a_twin_gives_the_twin_no_power`, and the control
+`holds_a_held_id_cannot_join_any_pair_entry`. The two-step paths add no reader of a part's id (the lock is read by
+template; its claim id is informational).
+
+### 24.4 The change attacked
+
+| Attack on the fresh ids | Verdict |
+|---|---|
+| a reference to the old id dangles: cover bound to a pair by its id | **holds**: a slot binds by input or output index and counts by expiry bucket, never by the pair's id; a part under a new id renews, is claimed and lapse-settles (`holds_a_part_under_a_new_id_renews_claims_and_lapses`) |
+| a pending claim or a dispute in progress when its lineage is handed over | **holds**: the claim has its own id; handing over the remainder neither voids nor redirects it; the dispute resolves onto its own contested part and the restored part continues the claim's id (`holds_a_hand_over_of_the_remainder_leaves_a_claim_and_its_dispute_intact`) |
+| a vouch bound to a part | **holds as before**: the vouch signs the pair's outpoint, so any respend voids an unlanded claim; every party entry still needs `quietDaa`, and a new part is a new UTXO with its own quiet time |
+| a listing, the quiet time | **holds**: the stayer's listing is copied into the part (as KpfPair); the entrant's side is unlisted; the new part waits `quietDaa` before any party entry |
+| a forced hand-over to void a claim, orphan cover or escape a dispute | **holds**: only a listed side can be taken (its owner consented); a pending or contested part has no hand-over entry; cover follows the expiry, not the id |
+| cover counted twice or not released when the id changes | **holds**: a transfer to a signing taker re-binds nothing (the cover stays counted at its expiry); an order's take counts the part again (the documented second count of 20.8); the seeded run moves each pair's cover to its new id and checks the slot after every step |
+| a party stuck because its lineage changed | **holds**: the restored part (under its claim's id) amends, transfers and is claimed again, each new claim under its own id |
+| a take with no pair at all (the order's checks are all on the part) | **exploit, as before and bounded**: whoever funds the counterparty side can "take" a resting order into a fresh part at the order's own terms (price, rate, the slot's fresh bind) and collect the order's tip; it was possible before (route 1 needed no pair either), it is what an order offers, and the part's lineage is now clean |
+
+### 24.5 Tests
+
+`audit6_tests` (15): every `exploit_` test of the review is now a `holds_` test of the same transaction
+(`holds_take_into_a_held_id_is_refused_by_the_order`, `holds_close_donor_into_a_held_id_is_refused`,
+`holds_an_order_taking_a_genesis_pair_with_a_twin_lands_under_a_fresh_id`, `holds_a_true_claim_cannot_be_refuted_by_a_forgery`,
+`holds_receipts_of_two_claims_with_one_anchor_never_settle_in_each_others_pool`,
+`holds_a_party_cannot_block_the_lapse_settle_by_amending`), plus a handle inside the take, a second output of each new
+id (take, transfer, propose, close-versus-close: host and donor), a plain-key host, every forgery of a dispute, pool and
+receipt under a part's and a claim's id, markets at and beyond each judge bound (an open and a stake), and the attacks of
+24.4. `audit6_cli` (3): the unreachable judge refused, the bounds stated and warned, the notes stated; `oracle_cli` checks
+the unchecked DAA and the late contest in `oracle-watch`. The seeded run (`oracle_conservation_tests`) now hands pairs
+over, checks on every accepted step that each output with an id continues a known id from an input of the family or
+starts a fresh one carried by no input and no other output (308 fresh lineages over the 10 seeds), refuses a hand-over
+keeping the old id, and checks that every receipt settles only in its own claim's pool (a receipt of another claim is
+refused). Tests whose premise changed: `oracle_tests::a_lapsed_pair_settles_at_its_entry_price` (the calendar clock),
+`oracle_tests::finalize_takes_the_branch_validity_dictates` (two claims no longer share an id: the swapped outputs are
+rebound), `oracle_metrics_tests` (proposals of 1, 4 and 7 pairs; 8 refused),
+`judge_attack_tests::holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim` (the new constants), the 44 changed
+golden vectors of `oracle_builders`, and the pinned artifacts.
+
+### 24.6 Numbers after review 6
+
+Script bytes: `KpfOpenO` 6,027 (was 5,845), `KpfPairO` 14,222 (13,337), `KpfPendingO` 4,298 (4,302), `KpfBond` 4,453
+(unchanged), `KpfStake` 9,652 (9,688). Largest stack 180 of 244 (the take). The pinned artifacts and the golden vectors
+were regenerated (`CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`, `KPF_GOLDEN=print`); the book
+market's artifacts are byte for byte as before.
+
+| Transaction | Script units per input | Compute mass | Bytes | Fee (KAS), was |
+|---|---|---|---|---|
+| open (2 orders, slot bind, funder) | 278,836 / 278,983 / 169,945 / 100,001 | 55,184 | 44,984 | 0.0900, 0.0857 |
+| propose a liquidation / a close | 617,107 / 416,216 (pair) | 27,197 / 25,197 | 18,367 | 0.0367, 0.0350 |
+| take by an order with the slot's bind | 252,530 / 279,408 / 169,945 / 100,001 | 49,072 | 39,442 | 0.0789, 0.0750 |
+| transfer to a signing taker | 252,384 / 100,001 | 19,362 | 14,772 | 0.0295, 0.0278 |
+| amend / cooperative close | 318,020 / 229,537 | 19,541 / 19,066 | 14,711 / 14,786 | 0.0294 / 0.0296, 0.0277 / 0.0278 |
+| lapse settle / mutual close | 29,401 / 30,036 | 16,934 / 17,044 | 14,654 / 14,664 | 0.0293 / 0.0293, 0.0275 / 0.0276 |
+| renew 1 / 4 / 7 pairs | each pair 293,416 to 293,450 | 26,572 / 79,501 / 132,430 | 19,512 / 62,631 / 105,750 | 0.0390 / 0.1253 / 0.2115, 0.0373 / 0.1182 / 0.1991 |
+| contest / deposit 1 / resolve and decide / settle 2 receipts | 175,622 / 298,671 / 128,357 / 349,197 (first input) | 21,882 / 27,188 / 19,432 / 36,884 | 14,712 / 19,988 / 14,532 / 29,584 | 0.0294 / 0.0400 / 0.0291 / 0.0592 |
+| 7 proposals vouched by one input (the most since review 6) | 617,539 to 617,562 each | 173,903 | 126,253 | 0.2525 |
+
+One pair-month (open, one renewal, a close proposed and finalized): **0.1752 KAS** of network fees (was 0.1674).

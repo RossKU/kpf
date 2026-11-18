@@ -56,7 +56,10 @@ contract KpfClaimStub(
     int constant MU_MIN_BPS = 11000;
     int constant MU_MAX_BPS = 15000;
     int constant BURN_MAX_BPS = 5000;
-    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant MIN_STAKE_MAX = 1000000000000;
+    int constant ROUND_MAX = 2592000;
+    int constant AGE_MAX = 25920000;
+    int constant UNBOND_MAX = 77760000;
     // KpfStake: its state length, the statuses read here, and the offsets within its state (redeem offset - 1).
     int constant STAKE_STATE_LEN = 270;
     int constant STAKE_FREE = 4;
@@ -81,11 +84,11 @@ contract KpfClaimStub(
         require(muBps >= MU_MIN_BPS);
         require(muBps <= MU_MAX_BPS);
         require(roundDaa > 0);
-        require(roundDaa < CSV_LIMIT);
+        require(roundDaa <= ROUND_MAX);
         require(ageDaa >= roundDaa);
-        require(ageDaa < CSV_LIMIT);
+        require(ageDaa <= AGE_MAX);
         require(unbondDaa >= roundDaa);
-        require(unbondDaa < CSV_LIMIT);
+        require(unbondDaa <= UNBOND_MAX);
         require(burnBps >= 0);
         require(burnBps <= BURN_MAX_BPS);
         require(minStake >= UNIT);

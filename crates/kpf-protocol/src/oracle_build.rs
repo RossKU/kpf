@@ -629,8 +629,8 @@ pub struct ClaimTerms {
 }
 
 /// A proposal: in 0 the pair (propose), 1 the underwriter's vouching input (`vouch`, its own P2PK UTXO, which also
-/// funds the bond unless the closer's funding does), then the funding; out 0 the pending part, 1 the remainder (n < s),
-/// then change. A close carries the closer's signature (`KeySet` must hold it).
+/// funds the bond unless the closer's funding does), then the funding; out 0 the pending part (under a fresh covenant
+/// id), 1 the remainder (n < s, the pair's id), then change. A close carries the closer's signature (`KeySet` must hold it).
 pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending)> {
     let k = pinned::kit();
     let p = &pair.s;
@@ -644,7 +644,8 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     d.lock(c.t0.max(0) as u64);
     d.contract(pair, OWhich::Pair, p.redeem(k), "propose", vec![iv(c.n), iv(c.kind), iv(c.side), iv(c.price), iv(c.t0), iv(1), sig, iv(fb), iv(0), bv(&k.pending.prefix), bv(&k.pending.suffix)], "pair", 0);
     d.key(vouch, "the underwriter's vouch");
-    d.obj(OObj::Pending(w.clone()), p.pending_value(pair.value, &w) as u64, Some((0, id)), "pending part");
+    // Review 6: the pending part starts a fresh covenant id (a genesis authored by the pair input), which propose checks.
+    d.genesis(OObj::Pending(w.clone()), p.pending_value(pair.value, &w) as u64, 0, "pending part");
     if c.n < p.size {
         d.obj(OObj::Pair(p.rest_of(p.size - c.n)), p.rest_value(pair.value, c.n) as u64, Some((0, id)), "remainder");
     }
@@ -873,8 +874,8 @@ pub fn lapse_settle(pair: &OLive<OPair>, funder: &[KeyUtxo], change_to: &[u8; 32
     let p = &pair.s;
     let (l, s) = p.lapse_out(pair.value);
     let mut d = ODraft::new(rate, FeeMode::Relay);
-    d.lock((p.b.expiry + p.m.bond.tail).max(0) as u64);
-    d.contract(pair, OWhich::Pair, p.redeem(k), "lapseSettle", vec![], "pair", p.m.p.idle_daa as u64);
+    d.lock(p.lapse_from());
+    d.contract(pair, OWhich::Pair, p.redeem(k), "lapseSettle", vec![], "pair", 0);
     if l > 0 {
         d.plain(l, &p.long_key, "long");
     }
@@ -924,11 +925,11 @@ pub fn amend(pair: &OLive<OPair>, side: i64, ask: i64, min_part: i64, tip: i64, 
 }
 
 /// A whole transfer of a listed `side` at `x` to a signing taker `entrant` posting bound `nb` (the taker funds it):
-/// out 0 the leaver, 1 the new pair, then change.
+/// out 0 the leaver, 1 the new pair (under a fresh covenant id), then change.
 pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 32], funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPair)> {
     let k = pinned::kit();
     let p = &pair.s;
-    let id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
+    let _id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
     if entrant == p.b.uw_key {
         return invalid("the underwriter cannot be a party");
     }
@@ -947,11 +948,12 @@ pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 3
     };
     let keep = pair.value as i64 - p.range_of(p.size);
     let mut d = ODraft::new(rate, FeeMode::Relay);
-    d.contract(pair, OWhich::Pair, p.redeem(k), "transfer", vec![iv(side), iv(p.size), iv(x), iv(nb), bv(&entrant), bv(&[0; 32]), iv(0)], "pair", p.m.p.quiet_daa as u64);
+    d.contract(pair, OWhich::Pair, p.redeem(k), "transfer", vec![iv(side), iv(p.size), iv(x), iv(nb), bv(&entrant), bv(&[0; 32]), iv(if pay >= PLAIN_DUST { 1 } else { 0 })], "pair", p.m.p.quiet_daa as u64);
     if pay >= PLAIN_DUST {
         d.plain(pay, &leaver, "leaver");
     }
-    d.obj(OObj::Pair(part.clone()), (part.range_of(p.size) + keep + if pay < PLAIN_DUST { pay } else { 0 }) as u64, Some((0, id)), "pair");
+    // Review 6: the entrant's pair starts a fresh covenant id (a genesis authored by the pair input), which transfer checks.
+    d.genesis(OObj::Pair(part.clone()), (part.range_of(p.size) + keep + if pay < PLAIN_DUST { pay } else { 0 }) as u64, 0, "pair");
     d.fund(funder, change_to);
     Ok((d.finish()?, part))
 }

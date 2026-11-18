@@ -96,6 +96,14 @@ fn holds_the_market_bond_judge_bounds_and_the_bind_proof_are_one_text() {
     assert_eq!(j(&w), j(&stake));
     let bp = |s: &str| between(s, "// BEGIN oracle bind proof", "// END oracle bind proof");
     assert_eq!(bp(&o), bp(&p));
+    // Review 6: the fresh-id check is one text in the order and the pair, with the same output bound, and it runs at
+    // every entry that starts a lineage (the order's fill and take; the pair's transfer and closeHost through
+    // partAndRest, closeDonor and propose).
+    let fr = |s: &str| between(s, "// BEGIN fresh id", "// END fresh id");
+    assert_eq!(fr(&o), fr(&p));
+    assert_eq!(constant(&o, "MAX_OUTPUTS"), constant(&p, "MAX_OUTPUTS"));
+    assert_eq!(o.matches("fresh(").count(), 3, "the definition, fill and take");
+    assert_eq!(p.matches("fresh(").count(), 4, "the definition, partAndRest, closeDonor, propose");
     // Every check of the book market on a parameter both families carry is the same line in both.
     let book = between(&kopen, "// BEGIN market bounds", "// END market bounds");
     let shared = [
@@ -133,7 +141,7 @@ fn holds_the_market_bond_judge_bounds_and_the_bind_proof_are_one_text() {
             assert_eq!(constant(s, n).as_deref(), Some(v.as_str()), "{n}");
         }
     }
-    for n in ["MU_MIN_BPS", "MU_MAX_BPS", "BURN_MAX_BPS", "MIN_STAKE_MAX", "UNIT"] {
+    for n in ["MU_MIN_BPS", "MU_MAX_BPS", "BURN_MAX_BPS", "MIN_STAKE_MAX", "ROUND_MAX", "AGE_MAX", "UNBOND_MAX", "UNIT"] {
         let v = constant(&stake, n).unwrap();
         for s in [&o, &p, &w] {
             assert_eq!(constant(s, n).as_deref(), Some(v.as_str()), "{n}");
@@ -273,7 +281,7 @@ fn exploit_with_g_at_the_feeds_tolerance_a_pair_within_g_squared_of_its_trigger_
 #[test]
 fn exploit_a_silent_underwriter_turns_a_due_liquidation_into_a_settlement_at_the_entry() {
     let (lp, _, _) = opened();
-    let t = lapse_tx(&lp, 1_400, 1_000);
+    let t = lapse_tx(&lp, lp.s.lapse_from(), 0);
     must("lapse settle", &t);
     let (l, s) = lp.s.lapse_out(lp.value);
     let fair_short = lp.value as i64 - lp.s.long_at(850_000_000);
@@ -451,7 +459,7 @@ fn exploit_a_sybil_key_of_the_underwriter_can_be_a_party() {
 #[test]
 fn holds_no_pair_bond_stake_or_dispute_is_left_unspendable() {
     let (lp, sl, _) = opened();
-    must("pair: lapse settle by anyone", &lapse_tx(&lp, 1_400, 1_000));
+    must("pair: lapse settle by anyone", &lapse_tx(&lp, lp.s.lapse_from(), 0));
     must("slot: unbond by its owner once the calendar released the cover", &unbond_tx(&sl, 12, 1_400));
     let lw = proposed(&lp, &liq(L, FALSE_P, 450), 500);
     must("pending: finalize by anyone after W", &finalize_tx(&lw, 500, 200).0);

@@ -16,14 +16,18 @@
 //!     settles;
 //!   - every claim's bond ends in exactly one documented place (its proposer, its defender, the disputer's share), to
 //!     the sompi; every stake committed to a dispute ends as a winner's payout or a loser's forfeit, and a pool's books
-//!     close (winners' gains + burn + rounding = losers' stake).
+//!     close (winners' gains + burn + rounding = losers' stake);
+//!   - review 6: no object of the family ever shares a covenant id with a UTXO its parties did not verify (every output
+//!     with an id continues a known id from an input of the family, or starts a fresh one carried by no input and no
+//!     other output; a hand-over keeping the old id is refused); a receipt settles only in its own claim's pool (each
+//!     receipt is checked against the claim it was committed under, and a receipt of another claim is refused).
 
 mod bondkit;
 mod common;
 mod judgekit;
 mod oraclekit;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use common::*;
 use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -93,6 +97,10 @@ struct World {
     books: Books,
     /// Live cover per pair id (size x coverRate) with the end of its liability (X + tail).
     cover: HashMap<[u8; 32], (i64, u64)>,
+    /// Review 6: every covenant id of the run's objects (the slot's, the orders', and every id born fresh in a step).
+    family: HashSet<Hash>,
+    /// Review 6: the claim (pending part) id each receipt was committed under.
+    receipt_claim: HashMap<TransactionOutpoint, Hash>,
 }
 
 impl World {
@@ -100,6 +108,7 @@ impl World {
         self.next_id += 1;
         let mut b = [0x33u8; 32];
         b[..4].copy_from_slice(&self.next_id.to_le_bytes());
+        self.family.insert(Hash::from_bytes(b));
         (TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes(b), index: self.next_id }, Hash::from_bytes(b))
     }
     fn tick(&mut self, n: u64) {
@@ -111,6 +120,38 @@ impl World {
     fn hostile(&mut self, what: &str, t: &T) {
         assert!(!accepted(t), "hostile variant accepted: {what}");
         self.books.hostile_refused += 1;
+    }
+
+    /// An accepted step: the engine accepts it and it keeps the lineage invariant.
+    fn ok(&mut self, what: &str, t: &T) {
+        must(what, t);
+        self.lineage(what, t);
+    }
+
+    /// Review 6, the lineage invariant of every accepted step (the induction of DESIGN-ORACLE-IMPL 24): an output that
+    /// carries a covenant id either continues an id the run already knows (the slot's, an order's, or one born fresh
+    /// in an earlier step), authorized by an input of the family (a P2SH) carrying it, or starts a fresh id: no input
+    /// carries it, no other output carries it, the run never saw it. No plain-key output ever carries an id. So no
+    /// object of the family ever shares its covenant id with a UTXO its parties did not verify.
+    fn lineage(&mut self, what: &str, t: &T) {
+        let ins: HashSet<Hash> = t.1.iter().filter_map(|e| e.covenant_id).collect();
+        for o in t.0.outputs.iter() {
+            let Some(c) = o.covenant else { continue };
+            let id = c.covenant_id;
+            assert_eq!(o.script_public_key.script().first(), Some(&0xaa), "{what}: a plain output carries a covenant id");
+            if ins.contains(&id) {
+                assert!(self.family.contains(&id), "{what}: an output continues an id the run never saw born");
+                let a = &t.1[c.authorizing_input as usize];
+                assert_eq!(a.covenant_id, Some(id), "{what}: continuation authorized by an input of another id");
+                assert_eq!(a.script_public_key.script().first(), Some(&0xaa), "{what}: authorized by a plain input");
+            } else {
+                assert!(!self.family.contains(&id), "{what}: a genesis reuses a known id");
+                let n = t.0.outputs.iter().filter(|x| x.covenant.map(|c| c.covenant_id) == Some(id)).count();
+                assert_eq!(n, 1, "{what}: a fresh id carried by more than one output");
+                self.family.insert(id);
+                self.count("fresh lineage");
+            }
+        }
     }
 
     /// The cover invariants: the slot within rho x its value; every pair's live cover counted at its expiry.
@@ -161,6 +202,7 @@ impl World {
         h.0.finalize();
         self.hostile("open with the pair one sompi short", &h);
         self.count("open");
+        self.lineage("open", &t);
         let lp = live(&t, 2, self.now, &p);
         self.cover.insert(lp.idb(), (cover, (xe + m.bond.tail) as u64));
         self.slot = live(&t, 3, self.now, &b2);
@@ -174,6 +216,40 @@ impl World {
             let p = &mut self.pairs[i].1;
             *p = (*p + d * 10_000_000).clamp(800_000_000, 1_300_000_000);
         }
+    }
+
+    /// Review 6: a hand-over. A pair's long lists at the entry price and a signing taker takes it whole (the same key,
+    /// so that the run's later closes still sign): the part starts a fresh lineage and its cover moves to the new id;
+    /// the same transfer keeping the old id is refused.
+    fn hand_over(&mut self) {
+        if self.pairs.is_empty() {
+            return;
+        }
+        let i = self.rng.below(self.pairs.len() as u64) as usize;
+        let (lp, truth) = self.pairs[i].clone();
+        let q = lp.s.m.p.quiet_daa as u64;
+        if self.now < lp.daa + q || self.now + 100 >= lp.s.b.expiry as u64 {
+            return;
+        }
+        let ask = lp.s.entry;
+        let (at, listed) = amend_tx(&lp, L, &long_kp(), ask, q);
+        self.ok("list for a hand-over", &at);
+        let ll = live(&at, 0, self.now, &listed);
+        self.pairs[i] = (ll.clone(), truth);
+        self.tick(q);
+        let (tt, part) = transfer_tx(&ll, L, ask, ll.s.bl, &long_kp(), q);
+        if !accepted(&tt) {
+            return;
+        }
+        self.ok("hand-over", &tt);
+        self.hostile("a hand-over keeping the pair's id", &transfer_tx_with(&ll, L, ask, ll.s.bl, &long_kp(), q, Lineage::Keep).0);
+        let np = live(&tt, 1, self.now, &part);
+        assert_ne!(np.id, ll.id, "the entrant's part is under a fresh id");
+        if let Some(c) = self.cover.remove(&ll.idb()) {
+            self.cover.insert(np.idb(), c);
+        }
+        self.pairs[i] = (np, truth);
+        self.count("hand-over");
     }
 
     fn propose(&mut self) {
@@ -210,7 +286,7 @@ impl World {
         let c = ClaimSpec { kind, side, n, p, t0, lock: self.now };
         let closer = if kind == CLOSE { Some(if side == L { long_kp() } else { short_kp() }) } else { None };
         let (t, w) = propose_tx(&lp, &c, &uw_kp(), closer.as_ref());
-        must("propose", &t);
+        self.ok("propose", &t);
         // Hostile: vouched by another key.
         let (h, _) = propose_tx(&lp, &c, &keypair(77), closer.as_ref());
         self.hostile("propose vouched by a stranger", &h);
@@ -241,21 +317,25 @@ impl World {
         let (op, _) = self.id();
         let st = Live { op, value: 10 * UNIT as u64, daa: 0, id: None, s: kpf_protocol::judge::Js::free(x(&keypair(70)), omarket().judge_market()) };
         let (t, w2, r, d) = contest_tx(&c.w, &st, 70, self.now);
-        must("contest", &t);
+        self.ok("contest", &t);
         self.count(if late { "contest late" } else { "contest in time" });
         self.books.stakes_committed += st.value as i64;
         let part = live(&t, 0, self.now, &w2);
         let mut con = Contest { c: c.clone(), part, dispute: live(&t, 2, self.now, &d), receipts: vec![live(&t, 1, self.now, &r)], in_time: !late };
+        // Review 6: the dispute and its receipts take the claim's own id, which no other claim has.
+        assert_eq!(con.dispute.id, c.w.id);
+        self.receipt_claim.insert(con.receipts[0].op, c.w.id.unwrap());
         // The underwriter defends a true claim with aged stake (1.25 x the opener's takes the lead).
         if !c.false_claim {
             self.tick(1);
             let (op, _) = self.id();
             let ys = Live { op, value: 20 * UNIT as u64, daa: 0, id: None, s: kpf_protocol::judge::Js::free(x(&uw_kp()), omarket().judge_market()) };
             let (t, d2, rs) = deposit_tx(&con.dispute, YES, &[(ys.clone(), 31)], self.now);
-            must("defence", &t);
+            self.ok("defence", &t);
             self.books.stakes_committed += ys.value as i64;
             con.dispute = live(&t, 0, self.now, &d2);
             con.receipts.push(live(&t, 1, self.now, &rs[0]));
+            self.receipt_claim.insert(con.receipts[1].op, c.w.id.unwrap());
         }
         self.claims.remove(i);
         self.contests.push(con);
@@ -277,7 +357,7 @@ impl World {
         let (h, _, _) = decide_tx(d, &con.part, (st + d.s.m.p.round - 1) as u64);
         self.hostile("resolve before the window", &h);
         let (t, pool, w2) = decide_tx(d, &con.part, self.now);
-        must("decide", &t);
+        self.ok("decide", &t);
         self.count("decide");
         // The honest judge: NO on a false claim, YES on a true one; a late contest is ignored.
         let expect = if !con.in_time { UPHELD } else if con.c.false_claim { REFUTED } else { UPHELD };
@@ -295,7 +375,7 @@ impl World {
                 let (h, _) = finalize_tx(&c.w, c.w.daa as i64, c.w.s.m.p.challenge_daa as u64 - 1);
                 self.hostile("finalize one DAA early", &h);
                 let (t, s) = finalize_tx(&c.w, c.w.daa as i64, c.w.s.m.p.challenge_daa as u64);
-                must("finalize", &t);
+                self.ok("finalize", &t);
                 self.count("finalize pending");
                 if c.false_claim && !matches!(s, Settlement::Restore { .. }) {
                     self.books.false_settled_uncontested += 1;
@@ -309,7 +389,7 @@ impl World {
         // Decided parts at once.
         while let Some((c, w, in_time)) = self.decided.pop() {
             let (t, s) = finalize_tx(&w, w.s.clock, 0);
-            must("finalize decided", &t);
+            self.ok("finalize decided", &t);
             self.count("finalize decided");
             if c.false_claim && in_time {
                 assert!(matches!(s, Settlement::Restore { .. }), "a false claim contested in time never settles");
@@ -355,14 +435,23 @@ impl World {
 
     fn settle_pools(&mut self) {
         while let Some((pool, receipts)) = self.pools.pop() {
+            // Review 6: a receipt settles only in its own claim's pool. Every receipt here was committed under this
+            // pool's claim; a receipt of another claim (the next pool's) is refused here.
+            for r in &receipts {
+                assert_eq!(self.receipt_claim.get(&r.op).copied(), pool.id, "a receipt of another claim in this pool");
+            }
+            if let Some(other) = self.pools.last().and_then(|(_, rs)| rs.first().cloned()) {
+                assert_ne!(other.id, pool.id, "two claims share a pool's id");
+                self.hostile("a receipt settled in another claim's pool", &settle_tx(&pool, &[other], self.now).0);
+            }
             let (t, p2, pays) = settle_tx(&pool, &receipts, self.now);
-            must("settle", &t);
+            self.ok("settle", &t);
             let losers: i64 = receipts.iter().filter(|r| r.s.side != pool.s.side).map(|r| r.value as i64).sum();
             let winners: i64 = receipts.iter().filter(|r| r.s.side == pool.s.side).map(|r| r.value as i64).sum();
             let paid: i64 = pays.iter().map(|x| *x as i64).sum();
             let gain = paid - winners;
             let (ct, burn) = pool_close_tx(&live(&t, 0, self.now, &p2));
-            must("close", &ct);
+            self.ok("close", &ct);
             assert!(gain + burn as i64 <= losers && losers - gain - burn as i64 <= receipts.len() as i64, "a pool's books close to the sompi");
             self.books.stakes_paid += paid;
             self.books.burned += burn as i64;
@@ -382,6 +471,7 @@ impl World {
                     let (h, _, _) = renew_tx(&lp, &self.slot, x - 101, adv);
                     self.hostile("renewal before the last step", &h);
                     self.count("renew");
+                    self.lineage("renew", &t);
                     self.books.premiums += lp.value as i64 - t.0.outputs[0].value as i64;
                     self.slot = live(&t, 1, self.now, &b2);
                     let np = live(&t, 0, self.now, &r);
@@ -390,10 +480,11 @@ impl World {
                 } else {
                     self.count("renewal refused for capacity");
                 }
-            } else if self.now >= x + 200 && self.now >= lp.daa + 1_000 {
-                let t = lapse_tx(&lp, self.now, 1_000);
-                must("lapse settle", &t);
-                self.hostile("lapse settle one DAA early", &lapse_tx(&lp, x + 199, 1_000));
+            } else if self.now >= lp.s.lapse_from() {
+                // Review 6 (R6-F3): idleDaa after the cover's end by the calendar, whatever the UTXO's age.
+                let t = lapse_tx(&lp, self.now, 0);
+                self.ok("lapse settle", &t);
+                self.hostile("lapse settle one DAA early", &lapse_tx(&lp, lp.s.lapse_from() - 1, 1_000_000));
                 self.count("lapse settle");
                 self.cover.remove(&lp.idb());
                 self.pairs.remove(i);
@@ -411,7 +502,7 @@ impl World {
             let c = self.claims.remove(i);
             let loser = if c.w.s.side == L { long_kp() } else { short_kp() };
             let (t, cured) = cure_tx(&c.w, &loser);
-            must("cure", &t);
+            self.ok("cure", &t);
             self.count("cure");
             self.books.bonds_to_proposer += c.w.s.bond;
             self.pairs.push((live(&t, 1, self.now, &cured), c.truth));
@@ -432,6 +523,8 @@ fn play(seed: u64, steps: usize) -> Books {
         next_id: seed as u32 * 10_000,
         books: Books::default(),
         cover: HashMap::new(),
+        family: [SLOT_ID].into_iter().collect(),
+        receipt_claim: HashMap::new(),
     };
     for _ in 0..steps {
         let dt = 1 + w.rng.below(40);
@@ -441,6 +534,7 @@ fn play(seed: u64, steps: usize) -> Books {
             2 | 3 => w.propose(),
             4 => w.contest(),
             5 => w.cure_some(),
+            6 => w.hand_over(),
             _ => {}
         }
         w.walk();
@@ -503,7 +597,7 @@ fn seeded_conservation_and_replay_across_pairs_bonds_and_stakes() {
         total.false_settled_uncontested,
         total.premiums / 100_000_000
     );
-    for k in ["open", "propose true", "propose false", "contest in time", "decide", "finalize pending", "finalize decided", "renew", "pool settled and closed"] {
+    for k in ["open", "propose true", "propose false", "contest in time", "decide", "finalize pending", "finalize decided", "renew", "pool settled and closed", "hand-over", "fresh lineage"] {
         assert!(total.steps.get(k).copied().unwrap_or(0) > 0, "the run exercised `{k}`");
     }
     assert!(total.false_contested_restored > 0);

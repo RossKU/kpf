@@ -14,6 +14,16 @@ pragma silverscript ^0.1.0;
 //                     forfeited into it, the rest is burned at close
 // The dispute and its receipts carry the claim's covenant id (as DESIGN-ORACLE-2.md 1.7 wants: "the dispute UTXO
 // (same id)"), so no genesis is needed and every output of the id is counted by OpCovOutputCount.
+// The claim's id identifies one claim: KpfPairO.propose writes every pending part under a fresh covenant id that it
+// checks no input carries and no other output carries (review 6, R6-F1, R6-F2), so the dispute, its receipts and its
+// pool are the only objects of that id besides the claim's own continuations, every one written by a template of the
+// family that counts the id's outputs exactly, so the id is again enough to tie a dispute, a pool or a receipt to its
+// claim, and no further binding is added.
+// DESIGN: review 6 asks for an explicit binding wherever that induction does not reach. It does not reach a claim (or a
+// dispute) written by a genesis instead of by a pair's propose: no party of a real pair is in it, and no field a
+// contract could check helps, since the forger writes every field and every object of its id. A staker who joins such
+// a dispute is protected only by its wallet tracing the claim's id to a propose of a pair (as before review 6,
+// docs/DESIGN-ORACLE-IMPL.md 13).
 // DESIGN: DESIGN-ORACLE.md 2 creates the dispute under a new id with a checked genesis; a genesis id cannot work here,
 // since the dispute names the contested claim's script (its hash) and the claim would have to name the dispute's id.
 // DESIGN: receipts hold the stake itself, not a record beside a dispute UTXO holding every stake (the note): a record
@@ -105,7 +115,10 @@ contract KpfStake(
     int constant MU_MIN_BPS = 11000;
     int constant MU_MAX_BPS = 15000;
     int constant BURN_MAX_BPS = 5000;
-    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant MIN_STAKE_MAX = 1000000000000;
+    int constant ROUND_MAX = 2592000;
+    int constant AGE_MAX = 25920000;
+    int constant UNBOND_MAX = 77760000;
     int constant BURN_DUST = 2000000;
     // P2SH hash of the redeem script OP_RETURN (0x6a): an output nobody can spend (DESIGN 4.5f, experiment Z7).
     byte[32] constant BURN = byte[32](0xd379e50f3e2203f9a92584916335bb7cd014b237ceaa8b36f1d3d80d0cc88b32);
@@ -130,16 +143,21 @@ contract KpfStake(
     // DESIGN: the note bounds mu by 1 < mu <= 1.5; here mu >= 1.1, so a dispute ends within log_1.1(stake range)
     // rounds (at most about 230) even if both sides escalate to the supply. The note's M_age >= 7 days is a network-rate
     // dependent DAA count; the bound here is M_age, U >= D_r (the long delay is at least one round).
+    // DESIGN: review 6 (R6-F4): a market could make contest impossible in practice within the old bounds (stakes of
+    // 10^6 KAS, stake age and rounds of 2^32 - 1 DAA, 13.6 years at 10 DAA/s). Upper bounds now hold in every contract
+    // of the family and the library (judge.rs), at 10 DAA/s: a round at most 3 days (ROUND_MAX), stake age at most 30
+    // days (AGE_MAX), unbonding at most 90 days (UNBOND_MAX), the least stake at most 10,000 KAS (MIN_STAKE_MAX). The
+    // wallet warns well inside them (oracle-check).
     // BEGIN judge bounds
     function checkJudge() {
         require(muBps >= MU_MIN_BPS);
         require(muBps <= MU_MAX_BPS);
         require(roundDaa > 0);
-        require(roundDaa < CSV_LIMIT);
+        require(roundDaa <= ROUND_MAX);
         require(ageDaa >= roundDaa);
-        require(ageDaa < CSV_LIMIT);
+        require(ageDaa <= AGE_MAX);
         require(unbondDaa >= roundDaa);
-        require(unbondDaa < CSV_LIMIT);
+        require(unbondDaa <= UNBOND_MAX);
         require(burnBps >= 0);
         require(burnBps <= BURN_MAX_BPS);
         require(minStake >= UNIT);

@@ -211,3 +211,36 @@ there the judge, the documented answer to every false claim, can be bypassed and
 cover has lapsed anyone can settle your pair" holds only while the counterparty does not refresh the UTXO (R6-F3), and
 the receipts' anchor does not separate disputes of one lineage as IMPL 12.5 says (R6-F2). The public wording "A false
 price contested within the window is reversed" must be withdrawn or restricted until R6-F1 is fixed.
+
+## Status after fixes
+
+All four findings and the three notes are fixed in the oracle-market family; the design is
+`docs/DESIGN-ORACLE-IMPL.md` section 24. The pinned oracle artifacts and the 44 changed golden vectors were regenerated;
+the book market's contracts and artifacts are unchanged. Every `exploit_` test of this review is now a `holds_` test of
+the same transaction (`crates/kpf-tests/tests/audit6_tests.rs`, 15 tests; `crates/kpf-cli/tests/audit6_cli.rs`, 3).
+
+| # | Status | Fix | Tests |
+|---|---|---|---|
+| R6-F1 | fixed | every part a party enters (an order's `take`, a transfer to a signing taker, P3 of close-versus-close) and every pending part starts a fresh covenant id that the entering party's script (and the pair's) checks: no input carries it and no other output does (`fresh`, the twin scan over at most 8 outputs); the old id is not carried. Inductively, every UTXO of a part's or a claim's id is written by a template of the family, so no outsider can write a dispute, pool or receipt under it | `holds_take_into_a_held_id_is_refused_by_the_order`, `holds_a_handle_in_the_take_gives_no_hold_on_the_part_or_its_claim`, `holds_a_second_output_of_a_new_id_is_refused_everywhere`, `holds_close_donor_into_a_held_id_is_refused`, `holds_a_plain_key_host_gives_no_hold_on_p3`, `holds_an_order_taking_a_genesis_pair_with_a_twin_lands_under_a_fresh_id`, `holds_a_true_claim_cannot_be_refuted_by_a_forgery`, `holds_a_pair_opened_by_fill_has_no_handle_for_a_forgery` |
+| R6-F2 | fixed | each claim has its own fresh id, so its dispute, pool and receipts never share an id with another claim's, equal DAA scores included | `holds_receipts_of_two_claims_with_one_anchor_never_settle_in_each_others_pool` |
+| R6-F3 | fixed | `lapseSettle` is due at `expiry + tailDaa + idleDaa` by the calendar (CLTV on the recorded expiry), not by the UTXO's age | `holds_a_party_cannot_block_the_lapse_settle_by_amending` |
+| R6-F4 | fixed | upper bounds on the judge in every contract of the family and the library (round 3 days, stake age 30 days, unbonding 90 days, least stake 10,000 KAS, at 10 DAA/s); `oracle-check` states every judge parameter and warns when a contest within the window is not realistically possible | `holds_markets_at_each_judge_bound_open_and_beyond_are_refused`, `audit6_cli::holds_oracle_market_refuses_an_unreachable_judge`, `holds_oracle_check_states_every_judge_parameter_and_warns_on_a_hard_judge` |
+| notes | fixed in the tooling | `oracle-check` states that a new market has no judge for `M_age` and that a late contest delays a claim; `oracle-watch` reads the DAA from the node with `--node`, marks a file's DAA as unchecked otherwise, and flags a late contest | `audit6_cli::holds_oracle_check_states_the_new_market_and_the_late_contest`, `oracle_cli` |
+
+Deviations (each a `// DESIGN:` comment): no explicit on-chain binding beyond the fresh claim id was added, because the
+only place the induction does not reach, a claim or dispute written by a genesis, is one where the forger writes every
+field (stakers who join such a dispute rely on their wallet's trace, as before); one proposal transaction now carries at
+most 7 whole-pair claims (the scan's 8 outputs); the underwriter's renewal still moves a lapsed pair's expiry.
+
+The book-market family was checked for the same root cause without changing it (`audit6_book_tests`, 4 tests): the
+three routes are accepted there but harmless, since no entry of that family treats a UTXO as authentic by its covenant id
+(every pair and pending entry is the only input of its id; evidence and custody are read by template; `KpfLock` reads no
+id). The fix was attacked in turn (DESIGN-ORACLE-IMPL 24.4): nothing refers to a pair by its id (cover is bound by index
+and counted by expiry), claims and disputes survive a hand-over of the remainder, a restored part lives on under its
+claim's id; the only shape that remains is a take without any pair, bounded by the order's own terms, as before.
+
+The seeded conservation run now hands pairs over and checks on every accepted step that no object of the family shares
+a covenant id with a UTXO its parties did not verify, and that a receipt settles only in its own claim's pool.
+
+Still unproven, as above: equal DAA scores on a node (the fix no longer depends on it), overflow inside the bounds beyond
+the replays, and the compiled scripts against source beyond the pinned-artifact test.

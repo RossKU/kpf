@@ -441,7 +441,11 @@ Everything of sections 1 and 2, and: keys `uw` (underwriter), `alice` (long), `b
 (executor, the funder of fees); about 700 KAS for the underwriter (a 600 KAS slot at the small test size below, its
 vouching UTXO, a defence stake), 200 KAS each for alice and bob, 120 KAS for sam, 10 KAS for exec. The judge counts a
 stake only if it was bonded `M_age` (7 days at the defaults) before the claim it judges: **create the stakes first and
-wait**, or create the market with a short age (`--stake-age-daa`, `--round-daa`) for a quick drill.
+wait**, or create the market with a short age (`--stake-age-daa`, `--round-daa`) for a quick drill. Since review 6 the contracts bound
+the judge (a round at most 2,592,000 DAA, stake age at most 25,920,000, unbonding at most 77,760,000, the least stake at
+most 10,000 KAS); `oracle-market` refuses a market beyond them, and `oracle-check` states every judge parameter and warns
+when a contest within the window is not realistically possible. `oracle-watch --node` reads every object's DAA from the
+node; without `--node` a DAA read from a file is marked unchecked.
 
 ### 9.2 The market
 
@@ -527,21 +531,23 @@ restores the part and pays the bond to the defender. The loser of a pending liqu
 ```sh
 kpf oracle-watch --me $A --scan out --node $NODE            # your underwriter's cover runs until DAA X; renewal from X - step
 kpf renew --pair <pair file> --slot <slot file> --key $UW --funder $EX --node $NODE     # from one step before X
-kpf lapse-settle --pair <pair file> --funder $EX --node $NODE   # cover lapsed (X + tail) and the pair idle: at the entry
+kpf lapse-settle --pair <pair file> --funder $EX --node $NODE   # from X + tail + idleDaa by the calendar: at the entry
 kpf unbond --slot <slot file> --key $UW --funder $UW --node $NODE   # once every cover's liability has ended
 kpf withdraw-bond --slot <unbonding slot file> --key $UW --node $NODE
 ```
 
 If the underwriter goes silent, the parties leave without any price: `amend` and `transfer` to a taker who signs, a
-mutual close, a cooperative close, or the lapse settle once the cover has lapsed. Book-market commands that touch a pair
+mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the calendar: no party can postpone it).
+A part handed over to a taker starts a new covenant id (review 6): use the new object file the builder writes. Book-market commands that touch a pair
 (`amend`, `transfer`, `mutual-close`, `coop-close`) do not read oracle pairs; the library builders do
 (`kpf_protocol::oracle_build`), and their commands are the next step of the tooling.
 
 ### 9.7 Measured cost (offline, 100 sompi per gram)
 
-Open 0.0857 KAS, a claim 0.0350 + finalize 0.0095, a renewal 0.0373 (seven pairs in one bind 0.1991), a contest 0.0295,
-a defence 0.0401, the resolution 0.0291, settling and closing the pool 0.0796: a pair-month without a dispute is about
-0.17 KAS of network fees, plus the premium the orders agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` section 19.
+Open 0.0900 KAS, a claim 0.0367 + finalize 0.0095, a renewal 0.0390 (seven pairs in one bind 0.2115), a contest 0.0294,
+a defence 0.0400, the resolution 0.0291, settling and closing the pool 0.0793: a pair-month without a dispute is about
+0.18 KAS of network fees, plus the premium the orders agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` sections 19 and 24.6
+(after review 6).
 
 ### 9.8 Not possible yet
 

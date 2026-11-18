@@ -16,16 +16,22 @@ pragma silverscript ^0.1.0;
 //          entry counts q(n, coverRate) at expiry xe for claim k = OUT_REF + pairOut). This order pays its margin, its
 //          tip, one pair carrier and its half of the first term's premium.
 //   take(partOut, n, x, e, bound, counterKey, ca, cm, ct, u, k, xe, coverRate, premium, cPre, cSuf)
-//          T2 transfer: n units at x take a same-side listing of an existing pair; the part at partOut must be bound
+//          T2 transfer: n units at x take a same-side listing of an existing pair into a part under a fresh covenant
+//          id (this order checks that no input and no other output carries it); the part at partOut must be bound
 //          afresh by the pair's slot in the same transaction (claim OUT_REF + partOut, at the part's expiry).
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
 // What every fill and take checks, besides KpfOpen's: the market block's bounds and id (checkMarket, one text with the
 // pair and the pending part); the slot input is a KpfBond of this market spent by bind for the new output (the bind
 // proof, one text with the pair); the slot is accepted (uwAccept) and its owner is neither this order's owner nor the
-// counterparty; premium <= premMax; the cover rate covers the range; and, at fill, the new pair's id is fresh and no
-// other output carries it (the twin scan of slice A, at most 8 outputs), and its expiry is at least one term after this
-// order's own UTXO was accepted (the only clock an order can prove).
+// counterparty; premium <= premMax; the cover rate covers the range; the new pair's (fill) or part's (take) covenant
+// id is fresh: no input carries it and no other output does (`fresh`, the twin scan of slice A, at most 8 outputs; one
+// text with the pair); and, at fill, the expiry is at least one term after this order's own UTXO was accepted (the
+// only clock an order can prove).
+// DESIGN: review 6 (R6-F1): an entrant never enters a lineage it cannot prove clean. The book market's take (and this
+// order's before review 6) continued the pair's id, which any input carrying that id authorizes, a plain key's UTXO
+// included; its holder could write any object of the family under the part's id (a dispute deciding the part's claim,
+// a pool forfeiting its stakers). The part is created under a fresh id instead, checked here.
 // DESIGN: an order cannot prove the term it gets (no upper bound on the present exists): xe >= this order's DAA score +
 // termDaa is the strongest lower bound available; the premium of the first term is due whatever the remaining term.
 // DESIGN: the note (5.2) leaves a look-alike pair (a genesis naming a real slot, uncounted cover) to the entrant's
@@ -137,7 +143,10 @@ contract KpfOpenO(
     int constant MU_MIN_BPS = 11000;
     int constant MU_MAX_BPS = 15000;
     int constant BURN_MAX_BPS = 5000;
-    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant MIN_STAKE_MAX = 1000000000000;
+    int constant ROUND_MAX = 2592000;
+    int constant AGE_MAX = 25920000;
+    int constant UNBOND_MAX = 77760000;
     int constant UNIT = 1000000000;
     int constant SCALE_MAX = 1000000000;
     int constant PRICE_CAP = 100000000000000;
@@ -265,11 +274,11 @@ contract KpfOpenO(
         require(muBps >= MU_MIN_BPS);
         require(muBps <= MU_MAX_BPS);
         require(roundDaa > 0);
-        require(roundDaa < CSV_LIMIT);
+        require(roundDaa <= ROUND_MAX);
         require(ageDaa >= roundDaa);
-        require(ageDaa < CSV_LIMIT);
+        require(ageDaa <= AGE_MAX);
         require(unbondDaa >= roundDaa);
-        require(unbondDaa < CSV_LIMIT);
+        require(unbondDaa <= UNBOND_MAX);
         require(burnBps >= 0);
         require(burnBps <= BURN_MAX_BPS);
         require(minStake >= UNIT);
@@ -377,14 +386,25 @@ contract KpfOpenO(
         }
     }
 
-    // One output j other than `out` does not carry `id` (only read when it exists).
-    function notId(int j, int out, int n, byte[32] id) {
-        if (j < n) {
+    // BEGIN fresh id
+    // The output `out` starts a new lineage (review 6, R6-F1): its covenant id is not zero and no input carries it, so
+    // it is a genesis (an id no UTXO had before), and no other output carries it (the scan, at most MAX_OUTPUTS
+    // outputs; a brand-new id is invisible to the covenant counters of its creating transaction, so OpCovOutputCount
+    // cannot count it). After this transaction the id has exactly one UTXO, the one the caller writes, and every later
+    // output of the id needs an input of it.
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
             if (j != out) {
                 require(OpOutputCovenantId(j) != id);
             }
         }
+        return id;
     }
+    // END fresh id
 
     // T1' open (as KpfOpen.fill, with the binding and the twin scan).
     entry fill(int pairOut, int n, int x, int bl, int bs, byte[32] counterKey, byte[32] counterTag, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
@@ -432,24 +452,14 @@ contract KpfOpenO(
         require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
             + i9(n) + i9(bl) + i9(bs) + i9(x) + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + bnd + byte[](NO_LISTS)
             + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts) + cSuf)));
-        byte[32] pairId = OpOutputCovenantId(pairOut);
-        require(pairId != zero32());
-        require(OpCovInputCount(pairId) == 0);
-        require(tx.outputs.length <= MAX_OUTPUTS);
-        notId(0, pairOut, tx.outputs.length, pairId);
-        notId(1, pairOut, tx.outputs.length, pairId);
-        notId(2, pairOut, tx.outputs.length, pairId);
-        notId(3, pairOut, tx.outputs.length, pairId);
-        notId(4, pairOut, tx.outputs.length, pairId);
-        notId(5, pairOut, tx.outputs.length, pairId);
-        notId(6, pairOut, tx.outputs.length, pairId);
-        notId(7, pairOut, tx.outputs.length, pairId);
+        // The pair starts a fresh lineage: no input and no other output carries its id.
+        fresh(pairOut);
         require(tx.outputs[pairOut].value >= quoteOf(n, bs - bl, 0) + carrier);
         escrow(n, myRate + tip + half, left);
     }
 
-    // T2 transfer (as KpfOpen.take): the part at partOut continues an existing pair's id, with the pair's entry e
-    // accepted only in this order's favour, this order's side unlisted and tagged with its id, the stayer's key and
+    // T2 transfer (as KpfOpen.take): the part at partOut takes a listed side of an existing pair, under a fresh id,
+    // with the pair's entry e accepted only in this order's favour, this order's side unlisted and tagged with its id, the stayer's key and
     // listing as given, and the binding the slot proves in this very transaction (the part's cover counted afresh).
     entry take(int partOut, int n, int x, int e, int bound, byte[32] counterKey, int ca, int cm, int ct, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
         int bl = bound;
@@ -497,7 +507,10 @@ contract KpfOpenO(
         require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
             + i9(n) + i9(bl) + i9(bs) + i9(e) + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + bnd + lists
             + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts) + cSuf)));
-        require(OpOutputCovenantId(partOut) != zero32());
+        // DESIGN: review 6 (R6-F1): the part starts a fresh lineage, which this order checks itself (no input and no
+        // other output carries its id), so no UTXO but the part holds its id whatever the other inputs are (a pair, a
+        // look-alike, a plain key carrying an id). The pair's old id is not carried into it.
+        fresh(partOut);
         require(tx.outputs[partOut].value >= quoteOf(n, bs - bl, 0) + carrier);
         escrow(n, myRate + tip, left);
     }

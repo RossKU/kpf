@@ -73,7 +73,7 @@ fn liq(p: i64, t0: i64) -> ClaimSpec {
 }
 
 /// k pairs proposed in one transaction, vouched by one input of the underwriter: in 0..k the pairs, k the vouch, k+1
-/// the executor; out 0..k the pending parts, then change.
+/// the executor; out 0..k the pending parts (each under a fresh id), then change.
 fn multi_propose(pairs: &[LPair]) -> T {
     let k = kit();
     let kk = pairs.len();
@@ -82,12 +82,16 @@ fn multi_propose(pairs: &[LPair]) -> T {
     for (i, lp) in pairs.iter().enumerate() {
         let c = liq(920_000_000, 450);
         let (w, fb) = lp.s.pending_of(k, c.n, c.kind, c.side, c.p, c.t0).unwrap();
-        ins.push(pair_in(lp, "propose", vec![iv(c.n), iv(c.kind), iv(c.side), iv(c.p), iv(c.t0), iv(kk as i64), bv(&[0u8; 65]), iv(fb), iv(0), bv(&k.pending.prefix), bv(&k.pending.suffix)]));
-        outs.push(out(lp.s.pending_value(lp.value, &w) as u64, pend_spk(&w), bind(i as u16, lp.id.unwrap())));
+        ins.push(pair_in(lp, "propose", vec![iv(c.n), iv(c.kind), iv(c.side), iv(c.p), iv(c.t0), iv(kk as i64), bv(&[0u8; 65]), iv(fb), iv(i as i64), bv(&k.pending.prefix), bv(&k.pending.suffix)]));
+        outs.push(out(lp.s.pending_value(lp.value, &w) as u64, pend_spk(&w), None));
     }
     ins.push(key_in(outpoint(210), 50_000_000_000_000, 0, &uw_kp()));
     ins.push(exec_in(211));
     outs.push(change(90_000_000_000));
+    // Review 6: each pending part under its own fresh id, authored by its pair's input.
+    for (i, lp) in pairs.iter().enumerate() {
+        seal(&mut outs, i, i as u16, lp.op);
+    }
     let seqs = vec![0u64; ins.len()];
     build_ext(&ins, outs, 450, &seqs)
 }
@@ -189,7 +193,7 @@ fn oracle_sizes_masses_and_fees() {
     // Renewal, lapse, the price-free exits, the take with a bind.
     let (t, _, _) = renew_tx(&lp, &lsl, 1_100, 8);
     rows.push(measure("renew 1 pair (pair, slot bind, funder)", &t));
-    rows.push(measure("lapse settle", &lapse_tx(&lp, 1_400, 1_000)));
+    rows.push(measure("lapse settle", &lapse_tx(&lp, lp.s.lapse_from(), 0)));
     rows.push(measure("cooperative close", &coop_tx(&lp, 100_000_000_000)));
     let (t, a1) = amend_tx(&lp, L, &long_kp(), 1_000_000_000, 20);
     rows.push(measure("amend", &t));
@@ -209,7 +213,10 @@ fn oracle_sizes_masses_and_fees() {
     let (pairs, big) = many_pairs(12);
     let mut multi = vec![];
     let mut largest = 0;
-    for n in [1usize, 4, 8, 12] {
+    // Review 6: every pending part is checked fresh by a scan of at most 8 outputs, so one transaction carries at most
+    // 7 whole-pair proposals (7 pending parts and the change); 8 are refused.
+    not_accepted("8 proposals in one transaction (9 outputs)", &multi_propose(&pairs[..8]));
+    for n in [1usize, 4, 7] {
         let t = multi_propose(&pairs[..n]);
         must("multi propose", &t);
         let r = measure(&format!("{n} proposals, one vouch"), &t);
@@ -224,7 +231,7 @@ fn oracle_sizes_masses_and_fees() {
         multi.push(measure(&format!("renewal of {n} pairs, one bind"), &t));
     }
     print(&multi);
-    println!("largest proposal block measured that fits: {largest} pairs (no scan limits it; the mass does)");
+    println!("largest proposal block measured that fits: {largest} pairs (the fresh-id scan of at most 8 outputs limits it)");
     assert!(multi.iter().filter(|r| r.name.starts_with("renewal")).all(fits), "7 renewals in one bind fit");
 
     // One pair-month (the term Lambda = 28 days on testnet): open, one renewal, one claim (propose and finalize), and a

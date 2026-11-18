@@ -147,6 +147,8 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let pend = h.step(&["vouch", "--pair", &pair, "--kind", "liquidate", "--side", "long", "--price", "9.2", "--t0", "7999000", "--vouch", &vouch, "--key", &uw, "--funder", &ex, "--funding", &f, "--daa", "7999000"], "oracle pending part", 8_000_000);
     let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8100000"]);
     assert!(out.contains("A CLAIM AGAINST YOU") && out.contains("contest until DAA 8215999 (115999 DAA left)"), "{out}");
+    // Review 6 (note 3): without a node the file's DAA is shown as unchecked.
+    assert!(out.contains("[DAA from the object file, not checked against a node: pass --node]"), "{out}");
     // A stranger cannot vouch: the tool refuses a vouch input of another key.
     let f = h.funding(10);
     let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
@@ -159,6 +161,19 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let out = h.p(&format!("out{}", h.n));
     h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out]);
     let cw = h.obj(&out, "oracle pending part", 8_100_000);
+    // Review 6 (note 2): a contested part whose contest landed after the window (its UTXO at P + W or later) is shown
+    // as one whose verdict will be ignored.
+    {
+        let late = format!("{cw}.late.json");
+        let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&cw).unwrap()).unwrap();
+        v["daa"] = json!(8_216_000);
+        std::fs::write(&late, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &late, "--daa", "8216000"]);
+        assert!(o.contains("after the window") && o.contains("the verdict will be ignored"), "{o}");
+        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &cw, "--daa", "8216000"]);
+        assert!(!o.contains("after the window"), "{o}");
+        std::fs::remove_file(&late).unwrap();
+    }
     let dispute = {
         let files: Vec<PathBuf> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().contains("judge-stake")).collect();
         let d = files.iter().find(|p| std::fs::read_to_string(p).unwrap().contains("status: 7")).expect("the dispute").clone();
