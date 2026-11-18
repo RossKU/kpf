@@ -15,7 +15,7 @@ pragma silverscript ^0.1.0;
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
 // Liquidation by transfer (T7) uses take unchanged: the pair's liqTransfer entry replaces the listing by price
-// evidence and pays the loser, and this order checks only its own guarantees, as for T2.
+// evidence and pays the winner (DESIGN 4.5b), and this order checks only its own guarantees, as for T2.
 //
 // The order enforces only its own guarantees (KOB option 2). It never reads the counterparty: it rebuilds the
 // whole pair output script from its own market block, its own key, rate and covenant id, and the arguments, and

@@ -28,16 +28,18 @@ pragma silverscript ^0.1.0;
 //     path 5  P5  the owner of `side` (signature s) closes n at the adverse bound: a long at a resting bid, a short
 //                 at a resting ask (its custody at tk)
 //     path 6  P6  anyone: the loser `side` is liquidatable at the evidence quote (a long at an ask, a short at a
-//                 bid); n closes for both at the quote, less the keeper fee
+//                 bid); n closes, the loser gets 0 and the winner the part less the keeper fee (DESIGN 4.5b)
 //     path 7  P7  anyone: as P6, but the loser's n is sold at x to an entrant of its side (key ek, tag et, new
-//                 bound nbd, part ordinal k; as P3 without a listing, x >= ask / x <= bid)
+//                 bound nbd, part ordinal k; as P3 without a listing, x >= ask / x <= bid); the entrant's payment
+//                 less the fee goes to the winner, the loser gets 0
 //
 // Evidence (DESIGN 3.3). Input ev is a plain resting KobAsk or KobBid of this market, authenticated as KobCondAsk
 // authenticates its trigger evidence: template hash and P2SH of its redeem script, its signature script starting
 // with the fixed 8-byte push of its fill n_ev > 0, its token covenant id and scale equal to this market's, not
 // decaying (slope 0), interval >= 0, and exposed at its quote for minRestDaa DAA before this transaction:
 // tx.daa >= max(UTXO DAA + interval, activeFrom, for an ask its custody's UTXO DAA) + minRestDaa, tx.daa proven by
-// CLTV. An ask's custody tk is a holder UTXO of this market's token program (template hash tokenTplHash) owned by
+// CLTV, and fillable by conforming matchers for that whole window: expiryDaa, the IOC/FOK kill and the 90-day idle
+// limit all at or after its end (DESIGN 4.5b, review 2 F2). An ask's custody tk is a holder UTXO of this market's token program (template hash tokenTplHash) owned by
 // the ask's covenant id (scheme 0x04) with this market's extension commitment; a bid carries the commitment in
 // its own state. The KobAsk and KobBid templates (hash, prefix and suffix length) are build constants.
 //
@@ -179,6 +181,9 @@ contract KpfPair(
     int constant BPS = 10000;
     int constant K_MAX = 100000;
     int constant MMR_CAP = 5000;
+    // KobAsk and KobBid soft expiry (review 2, F2): the IOC/FOK kill and the 90-day idle limit, as in their source.
+    int constant IOC_LIFE = 600;
+    int constant MAX_IDLE = 77760000;
 
     // Quote value of n base units at rate r (sompi per whole token). c = 0 rounds down, c = scale - 1 rounds up.
     // As KobCondAsk.quoteOf: the product n * r is never formed.
@@ -424,14 +429,14 @@ contract KpfPair(
             require(n >= shortMin || n == size);
             pay = owed(n, bs - x, shortTip);
         }
-        handOver(side, n, nb, ek, et, k, pay);
+        handOver(side, n, nb, ek, et, k, pay, side);
     }
 
-    // The hand-over of P3 and P7: the leaver of `side` is paid `pay` at output i (a payout below dust stays in the
-    // pair), and an entrant with key ek, tag et and new bound nb takes its place in a part of size n with the entry
-    // price kept and its side unlisted; the stayer's tag is cleared. No-downgrade: nb <= bl for a staying short,
-    // nb >= bs for a staying long.
-    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay) {
+    // The hand-over of P3 and P7: the party `payee` (the leaver `side` in P3, the stayer in P7) is paid `pay` at
+    // output i (a payout below dust stays in the pair), and an entrant with key ek, tag et and new bound nb takes
+    // the leaver's place in a part of size n with the entry price kept and its side unlisted; the stayer's tag is
+    // cleared. No-downgrade: nb <= bl for a staying short, nb >= bs for a staying long.
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay, int payee) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         byte[] rs = ownRs();
@@ -443,7 +448,7 @@ contract KpfPair(
         byte[32] ts = tl;
         int b0 = bl;
         int b1 = bs;
-        pubkey leaver = longKey;
+        pubkey payKey = longKey;
         if (side == SIDE_LONG) {
             require(nb >= 0);
             require(nb <= bl);
@@ -459,7 +464,11 @@ contract KpfPair(
             sk = ek;
             sw = byte[](NO_LIST);
             ts = et;
-            leaver = shortKey;
+            payKey = shortKey;
+        }
+        if (payee != side) {
+            payKey = longKey;
+            if (side == SIDE_LONG) { payKey = shortKey; }
         }
         int p = pay;
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -467,7 +476,7 @@ contract KpfPair(
             keep = keep + p;
             p = 0;
         }
-        payTo(self, leaver, p);
+        payTo(self, payKey, p);
         partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
     }
 
@@ -721,8 +730,10 @@ contract KpfPair(
 
     // The quote of the evidence at input ev: a resting KobAsk (ask = 1, its custody at tk) or KobBid (ask = 0), as
     // KobCondAsk.touch reads it, and the evidence block of this input. KobAsk state offsets: tokenCovId [34..66)
-    // scale [118..126) price [136..144) activeFrom [163..171) interval [190..198) slope [208..216); KobBid's scale,
-    // price and activeFrom sit 33 bytes later, after its extensionCommitment [118..150), its interval and slope 51.
+    // scale [118..126) price [136..144) tif [154..162) activeFrom [163..171) expiryDaa [172..180) interval
+    // [190..198) slope [208..216); KobBid's scale, price, tif, activeFrom and expiryDaa sit 33 bytes later, after
+    // its extensionCommitment [118..150), its interval and slope 51 (kpf_layout_tests checks them against the
+    // compiled KOB templates).
     function evQuote(int ask, int ev, int tk, byte[8] qb) : int {
         require(minRestDaa >= 0);
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
@@ -744,7 +755,7 @@ contract KpfPair(
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
         require(byte[32](o.slice(34, 66)) == tokenCovId);
-        byte[] qs = o.slice(118 + d, 171 + d);
+        byte[] qs = o.slice(118 + d, 180 + d);
         byte[] r = o.slice(190 + w, 216 + w);
         require(int(byte[8](qs.slice(0, 8))) == scale);
         require(int(byte[8](r.slice(18, 26))) == 0);
@@ -752,7 +763,8 @@ contract KpfPair(
         // not shorten the rest.
         int iv = int(byte[8](r.slice(0, 8)));
         require(iv >= 0);
-        int exposed = OpTxInputDaaScore(ev) + iv;
+        int ud = OpTxInputDaaScore(ev);
+        int exposed = ud + iv;
         int act = int(byte[8](qs.slice(45, 53)));
         if (act > exposed) { exposed = act; }
         if (ask == 1) {
@@ -767,7 +779,18 @@ contract KpfPair(
         } else {
             require(byte[32](o.slice(118, 150)) == extensionCommitment);
         }
-        require(tx.daa >= exposed + minRestDaa);
+        int restEnd = exposed + minRestDaa;
+        require(tx.daa >= restEnd);
+        // Fillable by conforming matchers for the whole rest window (DESIGN 4.5b, review 2 F2; KOB matcher.md 2.3):
+        // not past its soft expiry, not past the IOC/FOK kill (on chain every tif but GTC has it), not past 90 days
+        // idle, each read from the order's own state as KobAsk.settle and KobBid.refund compute them.
+        require(int(byte[8](qs.slice(54, 62))) >= restEnd);
+        if (int(byte[8](qs.slice(36, 44))) != 0) {
+            int kill = ud;
+            if (act > kill) { kill = act; }
+            require(kill + IOC_LIFE >= restEnd);
+        }
+        require(restEnd <= ud + MAX_IDLE);
         evBlock(ev, nev, qb);
         return int(byte[8](qs.slice(18, 26)));
     }
@@ -794,10 +817,11 @@ contract KpfPair(
         return c;
     }
 
-    // Closes n of this pair at the clamped price c (P5, P6). The party `side` is owed exactly q(n, its distance to
+    // Closes n of this pair at the price c in [bl, bs] (P5 at the clamped quote; P6 at the loser's bankruptcy
+    // price, so the loser `side` is owed 0). The party `side` is owed exactly q(n, its distance to
     // c) (rounded down); the other party takes the rest of what leaves the pair less `fee`: q(n, bs - bl) - owed
-    // with a remainder, or this UTXO's whole value - owed when n = s (carrier and excess included). The fee is
-    // capped at that rest, so the owed party never pays it (DESIGN 4.5a). The long is paid at output i, the short at
+    // with a remainder, or this UTXO's whole value - owed when n = s (carrier and excess included), never below 0.
+    // The long is paid at output i, the short at
     // M - 1 - i (at least the input count). A payout below dust is not created: with a remainder its value stays
     // there, with n = s it goes to the other party. Whatever no output is required to hold (the fee) is the
     // executor's.
@@ -858,7 +882,7 @@ contract KpfPair(
     }
 
     // Keeper fee of a liquidation of n at quote p before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps /
-    // 10^4))). P6 caps it at the loser's residual (closeAt), P7 at the loser's payout, so the winner never pays.
+    // 10^4))). onEvidence caps it at the maintenance slice (DESIGN 4.5b).
     function feeAt(int n, int p) : int {
         int f = quoteOf(n, p * liqFeeBps / BPS, 0);
         if (f < keeperFeeMin) { f = keeperFeeMin; }
@@ -875,27 +899,40 @@ contract KpfPair(
     // [bl, bs]; the other party, which did not act, takes the rest and the rounding. A remainder (s - n) keeps
     // every field.
     //
-    // P6 liquidation, close both (DESIGN 3.6, 4.5 T6), path 6. Anyone. The loser `side` is liquidatable at the
+    // P6 liquidation, close both (DESIGN 3.6, 4.5b), path 6. Anyone. The loser `side` is liquidatable at the
     // quote: a long at an ask a with a * (10^4 - mmrBps) < bl * 10^4, a short at a bid b with
-    // bs * 10^4 < b * (10^4 + mmrBps). n closes for both at c = the quote clamped to [bl, bs]. The winner is owed
-    // exactly q(n, its distance to c); the loser takes the rest less the keeper fee, capped at that rest, so a
-    // bankrupt piece pays no fee and the winner never pays one, in any number of pieces (DESIGN 4.5a). Partial
-    // liquidation in pieces: the remainder keeps every field but the tags, and the same margin ratio.
+    // bs * 10^4 < b * (10^4 + mmrBps). The quote decides only that; the loser forfeits its residual (review 2, F1:
+    // the loser could print its own quote on the wrong side of the market for free). The loser gets 0, the winner
+    // the whole liquidated value less the fee: q(n, bs - bl) - fee with a remainder (which keeps the carrier, any
+    // excess and the rounding slack, as on every split), the whole UTXO value - fee when n = s (carrier and excess
+    // included). The fee is min(max(keeperFeeMin, q(n, floor(quote * liqFeeBps / 10^4))), slice), slice the
+    // maintenance slice q(n, T - bl) with T = floor(bl * 10^4 / (10^4 - mmrBps)) for a long loser, q(n, bs - T)
+    // with T = ceil(bs * 10^4 / (10^4 + mmrBps)) for a short, from the pair's state and not the quote. Since q is
+    // superadditive, the winner receives at least q(n, bs - T) (its payoff at T) for a long loser, q(n, T - bl) for
+    // a short. Partial liquidation in pieces: the remainder keeps every field but the tags.
     //
-    // P7 liquidation by transfer (DESIGN 3.6, 4.5 T7), path 7. Anyone. As P6, but the loser's n is sold at x to an
+    // P7 liquidation by transfer (DESIGN 3.6, 4.5b), path 7. Anyone. As P6, but the loser's n is sold at x to an
     // entrant of its side exactly as P3 (key ek, tag et, new bound nbd, no-downgrade for the winner, entry kept),
-    // without a listing: a long at x >= a, a short at x <= b. The loser receives q(n, x - bl) (long) or
-    // q(n, bs - x) (short) less the keeper fee, never below 0; the winner keeps its key, bound and listing.
+    // without a listing: a long at x >= a, a short at x <= b. The entrant pays q(n, x - bl) (long) or q(n, bs - x)
+    // (short); that payment less the fee (the same fee as P6), never below 0, goes to the winner at output i, and
+    // the winner keeps its key, bound and listing in the part. The loser gets 0. A payout below dust stays in the
+    // pair as in P3 (with n = s, in the part).
+    //
+    // DESIGN: 4.5b writes the fee cap as q(n, T - BL) (long) and q(n, BS - T) (short). When the range is so narrow
+    // that T lies outside [bl, bs] (T > bs for a long), that cap would exceed the part and the winner could be
+    // left below 0; T is clamped to [bl, bs] first, so the cap is at most q(n, bs - bl) and the winner receives at
+    // least its payoff at the clamped T (0 when T >= bs).
     //
     // DESIGN: 5 bounds the trigger products for a, b <= priceMax only; a liquidation quote outside [0, priceMax] is
     // refused (P5 only clamps, it forms no product with the quote).
     // DESIGN: T6 names a keeper output at an argument index holding >= fee. Anyone builds the transaction and
     // chooses that output's script, and two pairs could name one output, so it protects no party; the fee is
     // instead what no output is required to hold, the executor's like every other excess (4.4).
-    // DESIGN: T4 and T6 do not say where the carrier and excess go when n = s; in P5 they go to the party that did
-    // not act (the remainder side of 4.6), in P6 with the loser's residual, so the fee is taken from them first.
-    // DESIGN: T7 says the loser receives q(n, X - BL) - fee; with the winner untouched there is nothing to take a
-    // larger fee from, so the payout is max(0, ...).
+    // DESIGN: T4 does not say where the carrier and excess go when n = s; in P5 they go to the party that did
+    // not act (the remainder side of 4.6), in P6 to the winner (4.5b: "the whole value of the part").
+    // DESIGN: 4.5b says the winner receives the entrant's payment less the fee; when the fee exceeds the payment
+    // the winner's position is not touched to make up the difference, so the payout is max(0, ...) and the fee is
+    // what is left of the payment.
     // DESIGN: 2.5 carries over maintenance < 50 % but 4.2 bounds none of mmrBps, liqFeeBps, keeperFeeMin; P6 and P7
     // require 0 <= mmrBps < 5000, 0 <= liqFeeBps <= 10^4 (the fee-rate bound of DESIGN 5) and keeperFeeMin >= 0.
     //
@@ -926,20 +963,32 @@ contract KpfPair(
             }
         }
         int p = evQuote(ask, ev, tk, qb);
-        // P5: the closer is owed its distance; P6: the winner is (the other side of the loser).
-        int owedSide = side;
+        // P5 settles at the quote clamped to [bl, bs]; P6 at the loser's own bankruptcy price, so the loser `side`
+        // is owed 0 and the winner takes the rest less the fee (closeAt).
+        int c = clampP(p);
         int fee = 0;
         if (path != 5) {
             require(p >= 0);
             require(p <= priceMax);
+            // The trigger price t from this pair's own state and the maintenance slice q(n, t - bl) (long) or
+            // q(n, bs - t) (short) that caps the fee; t is clamped to [bl, bs] (see DESIGN below).
+            int t = bl;
             if (ask == 1) {
                 require(p * (BPS - mmrBps) < bl * BPS);
-                owedSide = SIDE_SHORT;
+                t = bl * BPS / (BPS - mmrBps);
+                if (t > bs) { t = bs; }
+                t = t - bl;
+                c = bl;
             } else {
                 require(bs * BPS < p * (BPS + mmrBps));
-                owedSide = SIDE_LONG;
+                t = (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
+                if (t < bl) { t = bl; }
+                t = bs - t;
+                c = bs;
             }
             fee = feeAt(n, p);
+            int slice = quoteOf(n, t, 0);
+            if (fee > slice) { fee = slice; }
         }
         if (path == 7) {
             require(x >= 0);
@@ -954,9 +1003,10 @@ contract KpfPair(
             }
             int pay = o - fee;
             if (pay < 0) { pay = 0; }
-            handOver(side, n, nbd, ek, et, k, pay);
+            // The entrant's payment for the loser's part goes to the winner, the stayer (DESIGN 4.5b).
+            handOver(side, n, nbd, ek, et, k, pay, SIDE_LONG + SIDE_SHORT - side);
         } else {
-            closeAt(n, clampP(p), owedSide, fee);
+            closeAt(n, c, side, fee);
         }
     }
 }

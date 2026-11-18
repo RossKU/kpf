@@ -97,6 +97,15 @@ impl Evidence {
         e
     }
 
+    /// A bid of time in force `tif` (1 IOC, 2 FOK) funded for exactly this fill, so the fill ends it.
+    pub fn ending_bid(price: i64, fill: i64, tif: i64) -> Evidence {
+        let mut e = Evidence::bid(price, fill);
+        e.bid.tif = tif;
+        let b = &e.bid;
+        e.value = (q(fill, b.price + b.tip, b.scale, b.scale - 1) + b.delivery_carrier) as u64;
+        e
+    }
+
     pub fn price(&self) -> i64 {
         match self.kind {
             Kind::Ask => self.ask.price,
@@ -175,6 +184,12 @@ impl Evidence {
                 let left = self.value as i64 - used;
                 let delivery = out((b.delivery_carrier + used - all_in) as u64, p2sh(&delivered.art()), bind(tk as u16, self.tok_cov));
                 let seller = out(all_in as u64, p2pk_spk(&self.counter), None);
+                if b.tif != 0 {
+                    // An IOC/FOK bid ends with its fill (KobBid: no continuation); built with `ending_bid`, so the
+                    // KAS left beyond the delivery is below KOB's refund minimum and rides on the delivery.
+                    let delivery = out((self.value as i64 - all_in) as u64, p2sh(&delivered.art()), bind(tk as u16, self.tok_cov));
+                    return (vec![order, tok_in], vec![delivery, seller], vec![]);
+                }
                 let cont = out((left - b.delivery_carrier) as u64, p2sh(&art), bind(ev as u16, self.id));
                 (vec![order, tok_in], vec![delivery, seller], vec![cont])
             }
@@ -202,10 +217,40 @@ pub struct PairLeg {
     pub act: Act,
 }
 
-/// The keeper fee before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))). P6 caps it at the loser's
-/// residual and P7 at the loser's payout (DESIGN 4.5a), so the winner never pays it.
+/// The keeper fee before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))).
 pub fn fee_of(m: &Market, n: i64, p: i64) -> i64 {
     q(n, p * m.liq_fee_bps / 10_000, m.scale, 0).max(m.keeper_fee_min)
+}
+
+/// The trigger price T of a loser `side` (DESIGN 4.5b), from the pair's own state, clamped to [bl, bs]:
+/// floor(bl * 10^4 / (10^4 - mmrBps)) for a long, ceil(bs * 10^4 / (10^4 + mmrBps)) for a short.
+pub fn trigger_of(p: &Pair, side: i64) -> i64 {
+    let m = p.m.mmr_bps;
+    let t = if side == LONG { p.bl * 10_000 / (10_000 - m) } else { (p.bs * 10_000 + 10_000 + m - 1) / (10_000 + m) };
+    t.clamp(p.bl, p.bs)
+}
+
+/// The maintenance slice of n for a loser `side`: q(n, T - bl) (long), q(n, bs - T) (short).
+pub fn slice_of(p: &Pair, n: i64, side: i64) -> i64 {
+    let t = trigger_of(p, side);
+    if side == LONG { q(n, t - p.bl, p.m.scale, 0) } else { q(n, p.bs - t, p.m.scale, 0) }
+}
+
+/// The liquidation fee of P6 and P7 (DESIGN 4.5b): fee_of capped at the maintenance slice.
+pub fn liq_fee(p: &Pair, n: i64, quote: i64, side: i64) -> i64 {
+    fee_of(&p.m, n, quote).min(slice_of(p, n, side))
+}
+
+/// The winner's payoff at the trigger price for n of a loser `side`: q(n, bs - T) for a long loser, q(n, T - bl)
+/// for a short loser.
+pub fn winner_at_trigger(p: &Pair, n: i64, side: i64) -> i64 {
+    let t = trigger_of(p, side);
+    if side == LONG { q(n, p.bs - t, p.m.scale, 0) } else { q(n, t - p.bl, p.m.scale, 0) }
+}
+
+/// The loser's bankruptcy price: where P6 settles (the loser is owed 0).
+pub fn loser_price(p: &Pair, side: i64) -> i64 {
+    if side == LONG { p.bl } else { p.bs }
 }
 
 /// KpfPair.closeAt: (long payout, short payout, remainder and its least value).
@@ -261,11 +306,17 @@ pub fn p7_spec(n: i64, side: i64, x: i64, open: &LiveOpen, k: i64) -> TransferSp
     TransferSpec { side, n, x, nb, ek: open.o.owner, et: open.id, k }
 }
 
-/// The loser's payout of P7 before the dust rule: max(0, q(n, x - bl) - fee) (long), max(0, q(n, bs - x) - fee).
+/// The winner's payout of P7 before the dust rule (DESIGN 4.5b): the entrant's payment q(n, x - bl) (long loser)
+/// or q(n, bs - x) (short loser) less the fee, never below 0.
 pub fn p7_pay(l: &Live, n: i64, side: i64, x: i64, p: i64) -> i64 {
     let pr = &l.p;
     let o = if side == LONG { owed(n, x - pr.bl, 0, pr.m.scale) } else { owed(n, pr.bs - x, 0, pr.m.scale) };
-    (o - fee_of(&pr.m, n, p)).max(0)
+    (o - liq_fee(pr, n, p, side)).max(0)
+}
+
+/// The winner's key of a loser `side`.
+pub fn winner_key(p: &Pair, side: i64) -> [u8; 32] {
+    if side == LONG { p.short_key } else { p.long_key }
 }
 
 fn nbq(n: i64, qq: i64) -> [Arg; 2] {
@@ -338,8 +389,7 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
                 }
             }
             Act::Liq { side } => {
-                let winner = if *side == LONG { SHORT } else { LONG };
-                let (l_pay, s_pay, rest) = close_at(&g.l, g.n, clamp(lp, p), winner, fee_of(&lp.m, g.n, p));
+                let (l_pay, s_pay, rest) = close_at(&g.l, g.n, loser_price(lp, *side), *side, liq_fee(lp, g.n, p, *side));
                 ins.push(pair_input(&g.l, "onEvidence", ev_args(g.n, g.q, 6, no_sig(), *side, ev as i64, tk_arg, 0, 0, &z, ZERO, 0)));
                 pos.push(out(l_pay as u64, p2pk_x(&lp.long_key), None));
                 tail[i] = out(s_pay as u64, p2pk_x(&lp.short_key), None);
@@ -352,7 +402,7 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
                 let t = p7_spec(g.n, *side, *x, open, *k);
                 let to = hand_over_out(&g.l, &t, p7_pay(&g.l, g.n, *side, *x, p));
                 ins.push(pair_input(&g.l, "onEvidence", ev_args(g.n, g.q, 7, no_sig(), *side, ev as i64, tk_arg, *x, t.nb, &t.ek, t.et, *k)));
-                pos.push(out(to.pay as u64, p2pk_x(&to.leaver), None));
+                pos.push(out(to.pay as u64, p2pk_x(&winner_key(lp, *side)), None));
                 let part_o = out(to.part_value as u64, p2sh(&to.part.art()), bind(i as u16, g.l.id));
                 let part_at;
                 match &to.rest {

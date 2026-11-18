@@ -45,8 +45,10 @@ LPs (M2); committee members (M4); miners and GhostDAG ordering. Any actor may co
 
 **A1 Self-dealt (wash) evidence.**
 V: the attacker rests its own ask at a low `a` for `R`, fills it with its own bid next to a liquidation of the victim's
-long; the short (attacker) receives `q(n, BS − a)` instead of the fair value. P: attacker is the counterparty or pays it.
-I: theft of `q(n, p − a)` plus the liquidation fee from the victim. M: evidence must rest `R` exposed to every matcher
+long; the long forfeits its residual and the short (attacker) receives the part less the fee (D§4.5b). P: attacker is
+the counterparty or pays it. I: theft of the victim's whole residual `q(n, p − BL)` (more than before review 2, when
+the victim kept `q(n, a − BL)`). The mirror attack by the loser (its own free quote on the wrong side of the market,
+review 2 F1) now gains it only the keeper fee it collects as executor. M: evidence must rest `R` exposed to every matcher
 and be filled for `k·Σn` (D§3.3, D§4.4); honest matchers cross a low ask with every resting bid ≥ `a` in the next tick
 (`[K] docs/spec/matcher.md:274-287`), so the attacker first sells into all real bids between `p` and `a`.
 R: the covenant cannot tell self-dealing (`matcher.md:761-765`); cost is the depth swept plus exposure risk, zero on a
@@ -81,7 +83,10 @@ V: shorten the exposure with a negative `interval`, an `activeFrom` in the past,
 continuation. P: evidence read without KOB's checks. I: a print that never rested. M: reuse KOB's `touch` logic
 verbatim: `interval ≥ 0` (audit 2026-10-29 F1, `[K] docs/spec/matcher.md:729-734`), exposure = max of UTXO DAA + interval,
 `activeFrom`, custody DAA, checked by CLTV (`[K] contracts/orders/KobCondAsk.sil:219-246`); only accepted UTXOs
-(`matcher.md:1047-1054`). R: none known. T: port KOB's evidence mutation suite to every KPF evidence path.
+(`matcher.md:1047-1054`). The order must also have been fillable by conforming matchers for the whole window
+(review 2, F2; D§4.5b): `expiryDaa`, the IOC/FOK kill `max(UTXO DAA, activeFrom) + 600` and UTXO DAA + 90 days all
+`≥ exposed + R`, read from the order's own state. R: KOB's `KobCondAsk.touch` still lacks the soft-expiry rule. T:
+port KOB's evidence mutation suite to every KPF evidence path; `audit2_tests` expiry, kill and idle boundaries.
 
 **A6 Evidence identity.**
 V: evidence of another token, another extension commitment, another `scale`, a decaying order, or a conditional /
@@ -101,9 +106,10 @@ T: X7.
 **B2 Keeper incentive failure.**
 V: nobody liquidates. P: fee below the transaction cost (an evidence transaction costs about 0.025 KAS,
 `[K] docs/spec/matcher.md:1146`, `:1148`) or below the capital cost of producing `k·n` evidence; the loser's residual is
-zero after a gap. I: bad debt grows; the winner absorbs it. M: `fee = min(loser's residual, max(keeperFeeMin,
-q(n, a·liqFeeBps/10⁴)))` (D§4.5a): the winner never pays, and a bankrupt piece pays no fee; the winner is the natural
-keeper; KOB executors can add
+zero after a gap. I: bad debt grows; the winner absorbs it. M: `fee = min(max(keeperFeeMin, q(n, a·liqFeeBps/10⁴)),
+q(n, T − BL))` (D§4.5b, `T` the trigger price from the pair's state): the fee is paid out of the forfeited
+maintenance slice, so the winner receives at least its payoff at `T`, and a bankrupt piece pays the fee too; the
+winner is the natural keeper; KOB executors can add
 liquidations to batches that already fill qualifying evidence (arming precedent, `matcher.md:770-812`). R: no operator
 runs keepers (Q6). T: X4 fee table vs `keeperFeeMin`; liveness drill with only the winner as keeper.
 
@@ -113,14 +119,18 @@ capped at the loser's margin (`[L] docs/plan.md:909`); the gap is lost to the wi
 `maxSize`; M2 pool pays the gap first. R: inherent to an evidence-only design. T: A2 simulation.
 
 **B4 Liquidation by transfer at a bad price.**
-V: keeper and a colluding `KpfOpen` buy the loser's part at a price below the market. P: T7. I: the loser is under-paid.
-M: T7 requires `X ≥ a` for a long (`X ≤ b` for a short), so the loser is paid at least its value at an upper bound of
-the price; the winner is protected by no-downgrade. R: the loser pays the spread between the market and `a`. T:
-mutation `X < a`.
+V: keeper and a colluding `KpfOpen` buy the loser's part at a price below the market. P: T7. I: the winner, which
+receives the entrant's payment (D§4.5b), is under-paid; the loser receives nothing in any case. M: T7 requires
+`X ≥ a` for a long (`X ≤ b` for a short); the winner keeps its position (no-downgrade) and its cash plus the part's
+payoff at `X` is at least its payoff at `T`. R: the winner's cash depends on `X`, chosen by the entrant within its own
+limit. T: mutation `X < a`; `holds_p7_winner_at_least_its_trigger_payoff`.
 
 **B5 Liquidation of a healthy pair.**
-V: liquidate with evidence that does not satisfy the trigger, or with a trigger computed on the wrong side. M: trigger
-in price units only (`a·(10⁴ − mmrBps) < BL·10⁴`, D§3.6), checked by the pair itself. R: none. T: boundary vectors X11.
+V: liquidate with evidence that does not satisfy the trigger, or with a trigger computed on the wrong side; since
+review 2 the winner gains the loser's whole residual, so the winner has the motive. M: trigger in price units only
+(`a·(10⁴ − mmrBps) < BL·10⁴`, D§3.6), checked by the pair itself; one evidence kind per side; market identity; the
+evidence block; `T` affects only the fee cap. R: none found (review 2 follow-up). T: boundary vectors X11;
+`audit2_tests` `holds_winner_cannot_*` and `holds_trigger_boundary_and_rounding_of_t`.
 
 ### C. Re-mark, re-pair and transfer
 

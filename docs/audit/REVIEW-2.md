@@ -145,3 +145,42 @@ Suggest documenting the minimum as a per-UTXO rule, or clearing a listing whose 
 
 GhostDAG races (X7), script budgets of the new shapes (X4), the KCC-20 program itself, and the economic size of F1
 and F2 on a real book (X9).
+
+## Status after fixes
+
+The fixes implement DESIGN 4.5b. Proofs: `crates/kpf-tests/tests/audit2_tests.rs` (every former `exploit_*` test is
+now a `holds_*` test), `kpf_layout_tests.rs`, and the extended X6 run. Full suite: 189 tests pass.
+
+| # | Status | Shown by |
+|---|---|---|
+| F1 | Fixed. P6: the loser gets 0, the winner the liquidated value less the fee (with `n = s` the whole UTXO value, carrier and excess included; with `n < s` the remainder keeps the carrier, excess and slack as on every split). P7: the entrant's payment less the fee goes to the winner at output `i`, the loser gets 0. The fee is capped at the maintenance slice `q(n, T − BL)` / `q(n, BS − T)` computed from the pair's state. | `holds_self_liquidation_at_an_inflated_ask`, `holds_self_liquidation_at_a_deflated_bid`, `holds_self_liquidating_loser_receives_zero_at_any_quote`, `holds_winner_receipt_depends_on_the_quote_only_through_the_fee`, `holds_p7_winner_at_least_its_trigger_payoff` |
+| F2 | Fixed. `evQuote` requires `expiryDaa ≥ exposed + R`, for any `tif ≠ 0` (as KOB applies the kill) `max(UTXO DAA, activeFrom) + 600 ≥ exposed + R`, and `exposed + R ≤ UTXO DAA + 77,760,000`. Offsets of `tif` and `expiryDaa` (KobAsk 154, 172; KobBid 187, 205) are checked against the compiled KOB templates. | `holds_expired_ask_is_not_rested_evidence`, `holds_expired_bid_cannot_close_the_long_at_the_whole_range`, `holds_expiry_boundary`, `holds_ioc_and_fok_kill_boundary`, `holds_ninety_day_idle_boundary`, `kob_evidence_offsets_match_the_compiled_templates` |
+| F3 | Accepted as documented (DESIGN 4.5b). | — |
+| F4 | Accepted as documented (DESIGN 4.5b). | — |
+
+Residual of F1. The loser that liquidates itself still collects the keeper fee as executor, as any keeper would.
+At a free quote (the top of its window) that fee is about `liqFeeBps / mmrBps` of the maintenance slice (10 % in
+the DESIGN 5 market: 47.37 KAS against 42.50 KAS for an honest keeper at 8.5 KAS, against 473.68 KAS before the fix).
+A market with `liqFeeBps ≥ mmrBps` would let the loser keep the whole slice this way; no bound between the two is
+enforced (not in 4.5b).
+
+Fee and quote. The fee rule is proportional to the quote, so for a short loser a higher bid (against the loser)
+gives a larger fee and a slightly smaller winner receipt; the receipt never falls below the winner's payoff at `T`.
+
+Deviation (`// DESIGN:` in `KpfPair.sil`). `T` is clamped to `[BL, BS]` before the cap is formed. Without it a pair
+whose range is narrower than its maintenance (for example `mmrBps = 4999`) has a cap above the part, and the
+winner's receipt could be negative; with it the winner receives at least its payoff at the clamped `T` (0 when the
+pair is liquidatable from birth). Also documented: in P7 the winner's cash is `max(0, payment − fee)`.
+
+Winner-triggered liquidations (now the winner takes the loser's whole residual). Checked and refused: the wrong side
+of the evidence (a bid for a long, an ask for a short, side values other than 1 and 2), a look-alike or foreign-custody
+ask, a quote of another token, scale or extension commitment, a fill reused by a second pair or a pair outside its
+block, an evidence index pointing at another pair, and the trigger boundary (exact and inexact `T`). Rounding of `T`
+moves only the fee cap and always in the winner's favour. No exploit found (`holds_winner_cannot_*`,
+`holds_trigger_boundary_and_rounding_of_t`).
+
+Script size of `KpfPair`: 11,246 → 11,567 bytes. Script units per path (before → after): P1 272,437 → 277,252;
+P2 261,012 → 265,506; P3 256,189 → 263,254; P4 host 244,727 → 251,468, donor 233,626 → 240,046, mutual 138,251 →
+142,103; P5 long 245,682 → 249,422, short 275,932 → 279,672; P6 long 175,747 → 179,339, short 145,506 → 149,340;
+P7 long 305,039 → 312,627, short 274,970 → 282,552; P8 23,329 → 23,971; P9 223,585 → 224,227. Eight liquidations on
+one evidence: 1,598,895 script units, compute mass 125,460 / 500,000, 100,550 / 250,000 bytes. `KpfOpen` unchanged.

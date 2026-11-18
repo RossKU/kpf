@@ -181,13 +181,20 @@ fn p7_liquidates_by_transfer_end_to_end() {
 }
 
 #[test]
-fn p7_winner_is_untouched_and_loser_paid_at_x_less_fee() {
+fn p7_winner_keeps_its_position_and_is_paid_at_x_less_fee() {
+    // Premise changed by review 2 (DESIGN 4.5b): the entrant's payment less the fee goes to the winner, not the
+    // loser.
     let l = live(&base(), 0x36);
     let x = 950_000_000;
     let d = d1(liq_t(&l, N, LONG, x, 0), &ask(LIQ_ASK, N));
     ok(&d);
-    let fee = fee_of(&l.p.m, N, LIQ_ASK);
+    let fee = liq_fee(&l.p, N, LIQ_ASK, LONG);
     assert_eq!(d.outs[0].value as i64, q(N, x - l.p.bl, SCALE, 0) - fee);
+    assert_eq!(d.outs[0].script_public_key, p2pk_x(&l.p.short_key));
+    // Paying the loser instead is refused.
+    let mut to_loser = d.clone();
+    to_loser.outs[0].script_public_key = p2pk_x(&l.p.long_key);
+    bad(&to_loser, 0);
     let part = &d.pairs[0].1;
     // The winner keeps its key and bound; its tag is cleared (DESIGN 4.4) and the entry is kept (DESIGN 4.5a).
     assert_eq!((part.bs, part.short_key, part.tag_s, part.entry), (l.p.bs, l.p.short_key, ZERO, l.p.entry));
@@ -641,36 +648,41 @@ fn p6_out_of_range_parameters_are_refused() {
     bad(&d1(liq(&live(&p, 0x4c), N, LONG), &ask(LIQ_ASK, N)), 0);
 }
 
+/// Premise changed by review 2 (F1, DESIGN 4.5b): the loser of P6 receives 0 and the winner the whole liquidated
+/// value less the fee, the fee capped at the maintenance slice. Before, the winner was owed its distance to the
+/// quote and the loser took the rest less the fee.
 #[test]
 fn p6_fee_above_the_formula_is_refused() {
     let l = live(&base(), 0x4d);
     for n in [N, HALF] {
-        // Long liquidated: its residual is at output 0.
+        let avail = if n == N { l.value as i64 } else { l.p.range_of(n) };
+        // Long liquidated: the winner (short) is at M - 1, the loser at output 0 gets nothing.
         let d = d1(liq(&l, n, LONG), &ask(LIQ_ASK, n));
         ok(&d);
-        let fee = fee_of(&l.p.m, n, LIQ_ASK);
-        let winner = q(n, l.p.bs - LIQ_ASK, SCALE, 0);
-        let avail = if n == N { l.value as i64 } else { l.p.range_of(n) };
-        assert_eq!(d.outs[0].value as i64, avail - winner - fee);
+        let m = outs_len(&d);
+        assert_eq!(d.outs[0].value, 0);
+        assert_eq!(d.outs[m - 1].value as i64, avail - liq_fee(&l.p, n, LIQ_ASK, LONG));
         let mut x = d.clone();
-        x.outs[0].value -= 1;
+        x.outs[m - 1].value -= 1;
         bad(&x, 0);
-        // Short liquidated: its residual is at M - 1.
+        // Short liquidated: the winner (long) is at output 0.
         let d = d1(liq(&l, n, SHORT), &bid(LIQ_BID, n));
         ok(&d);
         let m = outs_len(&d);
+        assert_eq!(d.outs[m - 1].value, 0);
+        assert_eq!(d.outs[0].value as i64, avail - liq_fee(&l.p, n, LIQ_BID, SHORT));
         let mut x = d.clone();
-        x.outs[m - 1].value -= 1;
+        x.outs[0].value -= 1;
         bad(&x, 0);
     }
 }
 
+/// Premise changed by review 2: one sompi moved from the winner to the loser is refused (the loser is owed 0).
 #[test]
-fn p6_fee_charged_to_the_winner_while_the_loser_could_pay_is_refused() {
+fn p6_value_moved_from_the_winner_to_the_loser_is_refused() {
     let l = live(&base(), 0x4e);
     let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
     let m = outs_len(&d);
-    // The winner (short, at M - 1) pays one sompi of the fee and the loser gets it.
     let mut x = d.clone();
     x.outs[m - 1].value -= 1;
     x.outs[0].value += 1;
@@ -682,36 +694,46 @@ fn p6_fee_charged_to_the_winner_while_the_loser_could_pay_is_refused() {
     bad(&x, 0);
 }
 
-/// Premise changed by review 1 (F5, DESIGN 4.5a): the winner used to pay what a bankrupt loser's residual
-/// lacked of the fee. Now the fee is capped at the loser's residual: a bankrupt piece pays no fee and the winner
-/// receives its whole distance q(n, bs - bl).
+/// Premise changed by review 2 (DESIGN 4.5b; review 1 F5 had capped the fee at the loser's residual, so a bankrupt
+/// piece paid none). A bankrupt piece now pays the fee out of the part like any other, and the winner still
+/// receives at least its payoff at the trigger price.
 #[test]
-fn p6_bankrupt_loser_pays_no_fee_and_the_winner_none() {
+fn p6_bankrupt_piece_pays_the_capped_fee() {
     let l = live(&base(), 0x4f);
     let a = 500_000_000;
     let d = d1(liq(&l, HALF, LONG), &ask(a, HALF));
     ok(&d);
     let m = outs_len(&d);
+    let fee = liq_fee(&l.p, HALF, a, LONG);
+    assert_eq!(fee, fee_of(&l.p.m, HALF, a));
     assert_eq!(d.outs[0].value, 0);
-    assert_eq!(d.outs[m - 1].value as i64, l.p.range_of(HALF));
-    // The old shape (the winner short of the fee) is refused.
-    let mut x = d.clone();
-    x.outs[m - 1].value -= fee_of(&l.p.m, HALF, a) as u64;
-    bad(&x, 0);
+    assert_eq!(d.outs[m - 1].value as i64, l.p.range_of(HALF) - fee);
+    assert!(d.outs[m - 1].value as i64 >= winner_at_trigger(&l.p, HALF, LONG));
     let mut x = d.clone();
     x.outs[m - 1].value -= 1;
     bad(&x, 0);
 }
 
 #[test]
-fn p6_keeper_fee_floor_applies() {
+fn p6_keeper_fee_floor_applies_up_to_the_maintenance_slice() {
     let mut p = base();
-    p.m.keeper_fee_min = 10_000_000_000; // 100 KAS, above the rate fee of 4.7 KAS
+    p.m.keeper_fee_min = 10_000_000_000; // 100 KAS, above the rate fee of 47 KAS, below the slice of 473.68 KAS
     let l = live(&p, 0x2a);
     let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
     ok(&d);
-    let winner = q(N, l.p.bs - LIQ_ASK, SCALE, 0);
-    assert_eq!(d.outs[0].value as i64, l.value as i64 - winner - p.m.keeper_fee_min);
+    let m = outs_len(&d);
+    assert_eq!(d.outs[m - 1].value as i64, l.value as i64 - p.m.keeper_fee_min);
+    // A floor above the slice is capped at the slice q(n, T - bl), T = floor(bl * 10^4 / 9500) = 947,368,421.
+    p.m.keeper_fee_min = 100_000_000_000; // 1,000 KAS
+    let l = live(&p, 0x2a);
+    let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
+    ok(&d);
+    let slice = q(N, 947_368_421 - p.bl, SCALE, 0);
+    assert_eq!(slice_of(&p, N, LONG), slice);
+    assert_eq!(d.outs[m - 1].value as i64, l.value as i64 - slice);
+    let mut x = d.clone();
+    x.outs[m - 1].value -= 1;
+    bad(&x, 0);
 }
 
 // ---------------------------------------------------------------- P7
@@ -767,7 +789,7 @@ fn p7_entrant_whose_bound_does_not_match_its_rate_is_refused_by_the_entrant() {
 }
 
 #[test]
-fn p7_loser_payout_one_sompi_short_and_stayer_changes_are_refused() {
+fn p7_winner_payout_one_sompi_short_and_stayer_changes_are_refused() {
     let l = live(&base(), 0x2e);
     for (side, x, e) in [(LONG, 950_000_000, ask(LIQ_ASK, N)), (SHORT, 1_140_000_000, bid(LIQ_BID, N))] {
         let d = d1(liq_t(&l, HALF, side, x, 0), &e);

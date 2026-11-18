@@ -493,13 +493,15 @@ impl Sim {
     /// One evidence action on a random pair: P5 by either side, P6 or P7 of a liquidatable side, at a random quote
     /// with a fill of exactly ceil(k n) (or more), whole or in part. After it:
     ///   - no sompi is created (`apply`);
-    ///   - the party that did not act (P5: the other side; P6: the winner) has, at the evidence quote, at least
-    ///     its payoff before at that quote; the loser of P6 / P7 at least that less the keeper fee; the stayer of
-    ///     P7 at every grid price (no-downgrade); each up to 1 sompi per split, or DUST when a payout of it fell
+    ///   - the other side of a P5 has, at the evidence quote, at least its payoff before at that quote; the stayer
+    ///     of P7 at every grid price (no-downgrade); each up to 1 sompi per split, or DUST when a payout of it fell
     ///     below dust and stayed in the remainder;
-    ///   - the winner of P6 and the stayer of P7 keep their idle-settle payout (payoff at E). The other side of a
-    ///     P5 is settled at the adverse quote, which DESIGN compares at the quote, not at E, so it is not checked
-    ///     at E; nor is the loser of a liquidation.
+    ///   - review 2 (DESIGN 4.5b): the loser of P6 and P7 receives exactly 0; the winner of P6 receives the
+    ///     liquidated value less the capped fee, at least its payoff at the trigger price T; the winner of P7
+    ///     receives the entrant's payment less the fee, and that plus its part's payoff at x is at least its
+    ///     payoff at T; the winner of P6 loses at most the fee at the quote and at E;
+    ///   - the stayer of P7 keeps its idle-settle payout (payoff at E). The other side of a P5 is settled at the
+    ///     adverse quote, which DESIGN compares at the quote, not at E, so it is not checked at E.
     fn evidence(&mut self) {
         use kpf::evidence::*;
         let l = self.pick();
@@ -570,7 +572,6 @@ impl Sim {
         self.apply(&d, &handed);
         let split = (n < p.size) as i128;
         let c = quote.clamp(p.bl, p.bs);
-        let fee = fee_of(&m, n, quote) as i128;
         let dust = |v: i64| if v > 0 && v < DUST { DUST as i128 } else { 0 };
         match act {
             Act::Close { side, .. } => {
@@ -584,20 +585,38 @@ impl Sim {
                 self.st.ev_close += 1;
             }
             Act::Liq { side } => {
+                // Review 2 (DESIGN 4.5b): the loser receives 0; the winner the liquidated value less the fee, at
+                // least its payoff at the trigger price T (unless that payout fell below dust).
                 let (winner, loser) = if side == LONG { (short, long) } else { (long, short) };
-                let wo = if side == LONG { q(n, p.bs - c, SCALE, 0) } else { q(n, c - p.bl, SCALE, 0) };
-                // The winner never pays the fee (DESIGN 4.5a): no fee term in its slack, at the quote or at E.
-                self.at_quote(&before, &winner, quote, split + dust(wo));
-                self.idle_kept(&before, &winner, split + dust(wo));
-                self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
+                let fee = liq_fee(&p, n, quote, side);
+                let avail = if n == p.size { l.value as i64 } else { p.range_of(n) };
+                let wo = avail - fee;
+                if winner != loser {
+                    assert_eq!(self.w.cash(&loser) - before.cash(&loser), 0, "P6: the loser received something");
+                    let got = self.w.cash(&winner) - before.cash(&winner);
+                    assert_eq!(got, if wo < DUST { 0 } else { wo as i128 }, "P6: winner's receipt");
+                    assert!(wo < DUST || got >= winner_at_trigger(&p, n, side) as i128, "P6: winner below its trigger payoff");
+                }
+                self.at_quote(&before, &winner, quote, split + fee as i128 + dust(wo));
+                self.idle_kept(&before, &winner, split + fee as i128 + dust(wo));
                 self.st.ev_liq += 1;
             }
-            Act::LiqTransfer { side, .. } => {
+            Act::LiqTransfer { side, x, .. } => {
+                // Review 2: the entrant's payment less the fee goes to the winner (the stayer), the loser gets 0;
+                // the winner's part payoff at x plus that cash is at least its payoff at T.
                 let (stayer, loser) = if side == LONG { (short, long) } else { (long, short) };
                 let g = self.grid(&[&p]);
                 self.non_consenting(&before, &stayer, split, &g);
                 self.idle_kept(&before, &stayer, split);
-                self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
+                if stayer != loser {
+                    assert_eq!(self.w.cash(&loser) - before.cash(&loser), 0, "P7: the loser received something");
+                    let pay = p7_pay(&l, n, side, x, quote);
+                    let got = self.w.cash(&stayer) - before.cash(&stayer);
+                    assert_eq!(got, if pay < DUST { 0 } else { pay as i128 }, "P7: winner's receipt");
+                    let cx = x.clamp(p.bl, p.bs);
+                    let at_x = if side == LONG { q(n, p.bs - cx, SCALE, 0) } else { q(n, cx - p.bl, SCALE, 0) };
+                    assert!(pay < DUST || at_x as i128 + got >= winner_at_trigger(&p, n, side) as i128, "P7: winner below its trigger payoff");
+                }
                 self.st.ev_transfer += 1;
             }
         }

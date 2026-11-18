@@ -47,6 +47,44 @@ fn pair_base_market() -> Vec<u8> {
     bytecode(pair_base())[1..208].to_vec()
 }
 
+/// The KobAsk and KobBid state offsets KpfPair.evQuote hard-codes (relative to the state span), checked against
+/// the real KOB templates compiled from `vendor/kob` with a distinct value in every field (review 2, F2 added tif
+/// and expiryDaa). If KOB's layout changes, this fails. Also the soft-expiry constants KpfPair repeats.
+#[test]
+fn kob_evidence_offsets_match_the_compiled_templates() {
+    use kpf::kob::*;
+    let rd = |st: &[u8], at: usize| i64::from_le_bytes(st[at..at + 8].try_into().unwrap());
+    let state = |art: &silverscript_abi::SilAbiArtifact| {
+        let c = &art.contracts.values().next().unwrap().compiled;
+        c.bytecode[c.state_span.offset..c.state_span.offset + c.state_span.len].to_vec()
+    };
+    let mut a = ask_of(&market(), [9; 32], 1_111, 2_222);
+    (a.scale, a.tif, a.active_from, a.expiry_daa, a.interval, a.slope) = (3_333, 4_444, 5_555, 6_666, 7_777, 8_888);
+    let st = state(&compile_src("KobAsk", &kob_source("orders/KobAsk.sil"), &a.ctor()));
+    assert_eq!(st.len(), 276);
+    assert_eq!(&st[34..66], &a.token_cov_id.as_bytes());
+    for (at, v) in [(118, a.scale), (136, a.price), (154, a.tif), (163, a.active_from), (172, a.expiry_daa), (190, a.interval), (208, a.slope)] {
+        assert_eq!(rd(&st, at), v, "KobAsk offset {at}");
+    }
+    let mut b = bid_of(&market(), [9; 32], 1_111);
+    (b.scale, b.tif, b.active_from, b.expiry_daa, b.interval, b.slope) = (3_333, 4_444, 5_555, 6_666, 7_777, 8_888);
+    let st = state(&compile_src("KobBid", &kob_source("orders/KobBid.sil"), &b.ctor()));
+    assert_eq!(st.len(), 285);
+    assert_eq!(&st[34..66], &b.token_cov_id.as_bytes());
+    assert_eq!(&st[118..150], &b.ext.as_bytes());
+    for (at, v) in [(151, b.scale), (169, b.price), (187, b.tif), (196, b.active_from), (205, b.expiry_daa), (241, b.interval), (259, b.slope)] {
+        assert_eq!(rd(&st, at), v, "KobBid offset {at}");
+    }
+    for rel in ["orders/KobAsk.sil", "orders/KobBid.sil"] {
+        let src = kob_source(rel);
+        assert!(src.contains("int constant IOC_LIFE = 600;"), "{rel}: IOC_LIFE");
+        assert!(src.contains("int constant MAX_IDLE = 77760000;"), "{rel}: MAX_IDLE");
+        assert!(src.contains("int constant TIF_GTC = 0;"), "{rel}: TIF_GTC");
+    }
+    let pair_src = contract_source("KpfPair.sil");
+    assert!(pair_src.contains("int constant IOC_LIFE = 600;") && pair_src.contains("int constant MAX_IDLE = 77760000;"));
+}
+
 #[test]
 fn splice_equals_compile() {
     let mut p = pair(&keypair(3), &keypair(4));

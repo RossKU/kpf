@@ -518,34 +518,40 @@ fn holds_e3_refused_when_donor_entry_above_host_entry() {
 
 // ---------------------------------------------------------------- the fee (F5)
 
-/// holds_fee_capped_at_the_loser_residual (F5, DESIGN 4.5a): a long liquidated at an ask just above its
-/// bankruptcy price owes a fee (4.5 KAS per token at 9 KAS, 0.5 %) far above its residual (0.001 KAS per token).
-/// The fee is capped at the residual: the winner (the short) gets exactly q(n, bs - a), whole or in part, and a
-/// winner short of anything is refused.
+/// holds_fee_capped_at_the_maintenance_slice. Premise changed by review 2 (F1, DESIGN 4.5b): the fee used to be
+/// capped at the loser's residual (F5); the loser now receives nothing and the fee is capped at the maintenance
+/// slice q(n, T - bl), T the trigger price from the pair's state. In a market with a 10 % fee rate a long
+/// liquidated just above its bankruptcy price owes a rate fee (0.9 KAS per token at 9 KAS) above the slice
+/// (0.4737 KAS per token): the winner (the short) gets exactly the part less the slice, which is its payoff at T,
+/// whole or in part, and a winner short of anything is refused.
 #[test]
-fn holds_fee_capped_at_the_loser_residual() {
-    let p = pair(&lk(), &sk());
+fn holds_fee_capped_at_the_maintenance_slice() {
+    let mut p = pair(&lk(), &sk());
+    p.m.liq_fee_bps = 1_000;
     let a = p.bl + 1_000;
     for n in [N, HALF] {
         let l = live_at(&p, 0x61);
-        let fee = fee_of(&p.m, n, a);
-        assert!(fee > q(n, a - p.bl, SCALE, 0) + C);
+        let slice = slice_of(&p, n, LONG);
+        assert!(fee_of(&p.m, n, a) > slice);
         let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side: LONG } }], &Evidence::ask(a, n), &fk(), 12);
         let tx = accept_d(&d);
         let m = tx.outputs.len();
-        assert_eq!(tx.outputs[m - 1].value as i64, q(n, p.bs - a, SCALE, 0), "the winner gets its whole distance");
-        assert_eq!(tx.outputs[0].value, 0, "the loser's residual all went to the fee (or stayed under dust)");
+        let avail = if n == N { l.value as i64 } else { p.range_of(n) };
+        assert_eq!(tx.outputs[m - 1].value as i64, avail - slice, "the winner gets the part less the slice");
+        assert!(tx.outputs[m - 1].value as i64 >= winner_at_trigger(&p, n, LONG));
+        assert_eq!(tx.outputs[0].value, 0, "the loser gets nothing");
         let mut x = d.clone();
         x.outs[m - 1].value -= 1;
         refused0(&x);
     }
 }
 
-/// holds_fee_floor_never_reaches_the_winner_in_pieces (F5): a market whose fee floor (10 KAS) exceeds the
-/// loser's residual of a minimum-size piece; the long is liquidated one token at a time. Every piece pays the
-/// winner exactly q(1 token, bs - a); over the whole pair the winner receives q(s, bs - a), no fee.
+/// holds_fee_floor_never_takes_the_winner_below_its_trigger_payoff_in_pieces. Premise changed by review 2: a
+/// market whose fee floor (10 KAS) exceeds a minimum-size piece's maintenance slice; the long is liquidated one
+/// token at a time. Every piece pays the winner the piece less its slice; over the whole pair the winner receives
+/// at least q(s, bs - T), its payoff at the trigger price.
 #[test]
-fn holds_fee_floor_never_reaches_the_winner_in_pieces() {
+fn holds_fee_floor_never_takes_the_winner_below_its_trigger_payoff_in_pieces() {
     let mut p = pair(&lk(), &sk()).with_size(5 * MIN_SIZE);
     p.m.keeper_fee_min = 1_000_000_000;
     let a = p.bl + 1_000_000;
@@ -557,7 +563,9 @@ fn holds_fee_floor_never_reaches_the_winner_in_pieces() {
         let tx = accept_d(&d);
         let m = tx.outputs.len();
         let got = tx.outputs[m - 1].value as i64;
-        assert_eq!(got, q(n, p.bs - a, SCALE, 0), "piece {i}");
+        let avail = if i == 4 { l.value as i64 } else { p.range_of(n) };
+        assert_eq!(got, avail - slice_of(&p, n, LONG), "piece {i}");
+        assert_eq!(tx.outputs[0].value, 0, "piece {i}: the loser gets nothing");
         winner += got;
         let rest = live_pairs(&tx, &d);
         if rest.is_empty() {
@@ -566,7 +574,7 @@ fn holds_fee_floor_never_reaches_the_winner_in_pieces() {
         }
         l = rest[0].clone();
     }
-    assert_eq!(winner, q(p.size, p.bs - a, SCALE, 0));
+    assert!(winner >= winner_at_trigger(&p, p.size, LONG));
 }
 
 // ---------------------------------------------------------------- KpfOpen evidence parameters (F4)

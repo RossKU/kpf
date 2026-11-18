@@ -130,8 +130,9 @@ not decaying, `interval ≥ 0`, exposed ≥ `R` DAA (`[K] docs/spec/matcher.md:6
 | both in one transaction | `b ≤ price ≤ a` | funding / mark-to-market (D4 ii), margin withdrawal of either side |
 
 Rule: a price-dependent split is computed at the bound least favourable to the party that acts (or benefits), i.e.
-most favourable to the party that did not consent. A long liquidated at an ask `a` is valued at a price ≥ the market;
-a long closing on a bid `b` gets at most its fair value.
+most favourable to the party that did not consent. A long closing on a bid `b` gets at most its fair value. A
+liquidation does not split at the quote at all (§4.5b): the quote only proves the trigger, and the loser forfeits its
+residual, because the loser can itself print a free quote on the wrong side of the market (review 2, F1).
 
 Corrections. (1) **Proportional to capital exposed, not to cost.** Both sides of the evidence may be one party
 (`matcher.md:761-765`). A fake print costs the real opposite-side depth swept between the true and the fake quote
@@ -140,7 +141,8 @@ takes it; with no arbitrageurs the second is free. Testnet-10 has no external ma
 only be simulated (X9). (2) **Per transaction, not per position.** Evidence is "read, never consumed"
 (`matcher.md:742-743`): `fill ≥ k × size` per position lets one print act on unboundedly many pairs. KPF requires
 `n_ev ≥ ⌈k·Σ n_i⌉` over all pairs acting on that evidence (evidence block, §4.4). Evidence must be an accepted UTXO
-(`matcher.md:1047-1054`).
+(`matcher.md:1047-1054`) and must have been fillable by conforming matchers for the whole rest window: not past its
+`expiryDaa`, its IOC/FOK kill or 90 days idle before `exposed + R` (§4.5b, review 2 F2).
 
 ### 3.4 D3 position representation: one UTXO per pair, not two
 
@@ -198,10 +200,12 @@ M1: permissionless, evidence per §3.3, partial allowed. Long liquidatable at as
 short at bid `b` iff `BS·10⁴ < b·(10⁴ + mmrBps)`. Pro-rata splits keep the margin ratio, so a partial liquidation does
 not cure the pair; it lets thin evidence liquidate in pieces of `n ≤ n_ev/k`.
 
-Two M1 variants (both specified, §4.5 T6/T7):
-- **close both** at the evidence quote (the lead's M1);
+Two M1 variants (both specified, §4.5 T6/T7 as changed by §4.5b). In both the loser receives nothing: the quote
+decides only whether the trigger holds, and the maintenance buffer goes to the winner less the keeper fee.
+- **close both** (the lead's M1): the winner receives the liquidated part's whole value less the fee;
 - **liquidate by transfer** (refinement, no pool): the loser's part is sold to any resting `KpfOpen` of the same side at
-  `X ≥ a` (long) / `X ≤ b` (short), with no-downgrade for the winner. The winner continues; the open book is the backstop.
+  `X ≥ a` (long) / `X ≤ b` (short), with no-downgrade for the winner; the entrant's payment less the fee goes to the
+  winner, which continues. The open book is the backstop.
 
 Pool-empty (D5 later): in a bilateral pair the shortfall is already assigned: the winner of that pair absorbs it,
 because its payout is capped at `BL` (`[L] docs/plan.md:909`). A pool can only pay the winner the gap first; when the
@@ -301,8 +305,8 @@ equals this state outside the windows the path may change; `value ≥ q(s, BS �
 | P3 | fill listing: transfer | anyone | none | leaver paid; entrant's key, tag and new bound written; no-downgrade |
 | P4 | fill listings: close-versus-close or mutual | anyone | none | §3.4 (c); same-pair crossing listings close both at `X` |
 | P5 | unilateral close | owner (sig) | adverse bound | settle `n` at `b` (long) / `a` (short) |
-| P6 | liquidate (close both) | anyone | victim-favourable bound | settle `n` at the quote, fee to keeper |
-| P7 | liquidate by transfer | anyone | as P6 | loser's `n` sold to a `KpfOpen` at `X ≥ a` / `X ≤ b` |
+| P6 | liquidate (close both) | anyone | trigger only (ask for a long, bid for a short) | loser 0; winner the part less the fee (§4.5b) |
+| P7 | liquidate by transfer | anyone | as P6 | loser's `n` sold to a `KpfOpen` at `X ≥ a` / `X ≤ b`; payment less fee to the winner |
 | P8 | idle settle | anyone, `age ≥ idleDaa` (CSV, `KobCondAsk.sil:553`) | none | settle all at `E` |
 | P9 | cooperative close | both owners (2 sigs) | none | any split (`[L] docs/PERP_DESIGN.md:94-97`) |
 
@@ -386,13 +390,15 @@ T5: continuation with `BL − δ` or `BS + δ`, value ≥ old + `⌈q(s, δ)⌉`
 
 **T6 Liquidate a long (close both), `n` at ask `a`.**
 in: block `[q, ev)` of liquidated pairs, `ev` evidence `KobAsk`, `tk` its custody, buyer side, `F`. out per pair `i`:
-`i` long residual ≥ `q(n, c(a) − BL) − fee`, `M−1−i` short ≥ `q(n, BS − c(a))`, keeper output (argument index) ≥ `fee`,
-remainder continuation (tags 0, `E` kept). `fee = min(long's residual, max(keeperFeeMin, q(n, ⌊a·liqFeeBps/10⁴⌋)))`
-(§4.5a): the short's payout is never reduced.
+`i` long 0, `M−1−i` short ≥ `q(n, BS − BL) − fee` (with `n = s`: the whole input value − fee, carrier and excess
+included), remainder continuation (tags 0, `E` kept; it keeps the carrier, excess and rounding slack); the fee is
+the executor's. `fee = min(max(keeperFeeMin, q(n, ⌊a·liqFeeBps/10⁴⌋)), q(n, T − BL))`, `T` the trigger price of
+§4.5b clamped to `[BL, BS]`: the short receives at least `q(n, BS − T)`.
 Check: `a·(10⁴ − mmrBps) < BL·10⁴`. Short mirrored with a bid.
 
 **T7 Liquidate by transfer.** As T6, but the long's `n` goes to a `KpfOpen` long at `X ≥ a` exactly as T2 (`BL′ ≤ BL`),
-the long receives `max(0, q(n, X − BL) − fee)`, the short is untouched (its tag cleared, `E` kept).
+the long receives nothing, the short receives `max(0, q(n, X − BL) − fee)` at output `i` and keeps its position (its
+tag cleared, `E` kept).
 
 **T8 Idle timeout.** in: `0` P (age ≥ `idleDaa`), `F`. out: `0` long ≥ `q(s, c(E) − BL)`, `M−1` short ≥ the rest, Ch.
 
@@ -463,6 +469,8 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
   intermediate `1000·3·10⁸ = 3·10¹¹`.
 - `mmrBps = 500`. Long liquidatable at ask `a` iff `a·9500 < 9·10¹²`, i.e. `a ≤ 947,368,420` (9.4737 KAS): equity at
   9.47 = 470 KAS < 5 % of 9,470. Short liquidatable at bid `b` iff `1.2·10¹³ < b·10500`, i.e. `b ≥ 1,142,857,143`.
+  Liquidating the whole long (§4.5b): the long gets 0, the short 3,000.2 KAS less the fee, at least
+  `q(s, BS − T) + C` with `T = 947,368,421` (2,526.32 KAS + C); at `a = 9.4 KAS` the fee is 47 KAS.
 - `kBps = 10⁴` (k = 1): either liquidation needs a resting order of ≥ 1,000 tokens at the trigger, rested `R`.
 - Close-versus-close with `P2 = (BL2 = 8.5, BS2 = 11.5)` KAS at `X = 10.2`: L1 gets `1000·1.2` = 1,200 KAS, S2 gets
   `1000·1.3` = 1,300 KAS, `P3 = (8.5, 12.0)` holds 3,500 KAS. 3,000 + 3,000 = 1,200 + 1,300 + 3,500. No-downgrade:
