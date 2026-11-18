@@ -324,10 +324,12 @@ Not in M1: margin withdrawal (needs the adverse bound: bid for a long, ask for a
   equal its own covenant id. Covenant ids are **not** unique per input: the parts of a same-id split, and the outputs
   of one multi-output genesis group, share an id (experiments X2, X5). Every claimer therefore also requires
   `OpCovInputCount(selfId) == 1`; with that guard two inputs of one transaction cannot both claim one output.
-- **Live-tag guard.** A tag outlives its creating transaction, so the continuation of an older pair whose tag still
-  names a live claimer (a partly filled `KpfOpen`, the remainder of a donor) would satisfy that claimer's hand-over
-  check, and the claimer would pay for a position its party already holds. Every entry that copies a tag into a
-  continuation requires that no input of the transaction carries that tag as its covenant id (found in slice 1b).
+- **Tags live for one transaction.** A tag that outlived its creating transaction let the continuation of an older
+  pair pose as a fresh hand-over to a claimer that is still alive (slice 1b). The first fix, a guard that refused
+  any input carrying a copied tag's id, was itself exploitable: a taker could write the pair's own id or the token's
+  id as a tag and freeze the pair (review 1, F1/F2). Rule now: **no entry copies a tag.** Every pair output an entry
+  creates carries tag 0 on each side, except the side handed over in this very transaction, which carries the tag
+  the hand-over writes. There is no live-tag guard.
 - **Carriers on a split.** The departing part takes exactly `q(n, BS − BL)` out of the pair; the remainder keeps the
   old carrier, any excess and the rounding slack. The carrier of a new part is funded by the taker (the `KpfOpen`'s
   per-fill carrier, or the executor's own input), never out of a non-consenting party's margin.
@@ -391,6 +393,21 @@ Check: `a·(10⁴ − mmrBps) < BL·10⁴`. Short mirrored with a bid.
 the long receives `q(n, X − BL) − fee`, the short is untouched.
 
 **T8 Idle timeout.** in: `0` P (age ≥ `idleDaa`), `F`. out: `0` long ≥ `q(s, c(E) − BL)`, `M−1` short ≥ the rest, Ch.
+
+### 4.5a Rules changed by review 1 (these override the shapes above)
+
+- **The entry price `E` changes only with the consent of both parties of the pair** (review 1, F3: a party taking
+  its own listing could set `E` alone, and idle settle at that `E` took an absent counterparty's whole margin).
+  T1 sets `E = X` (both orders, or the order and a signing taker, agree). **Transfer (T2) and liquidation by
+  transfer (T7) keep `E`** in the part and in the remainder; the entrant sees `E` and accepts it by entering.
+  **Close-versus-close (T3)** writes `E3` into the re-paired output with `E(P2) ≤ E3 ≤ E(P1)`: not below the
+  staying long's old entry, not above the staying short's; if `E(P2) > E(P1)` the two pairs cannot be re-paired.
+  Mutual close, unilateral close and liquidation leave `E` of any remainder unchanged. Consequence: at idle settle
+  an absent party gets its payoff at a price it consented to, or better.
+- **The winner never pays the liquidation fee** (F5). `fee = min(loser's residual, max(keeperFeeMin,
+  q(n, ⌊quote·liqFeeBps/10⁴⌋)))`. A bankrupt piece pays no fee; the winner has its own reason to liquidate it.
+- **`KpfOpen` checks the evidence parameters** the pair it creates will need (`kBps`, `minRestDaa`, `mmrBps`,
+  `liqFeeBps`, `keeperFeeMin`) with the same bounds as `KpfPair` (F4).
 
 ### 4.6 Rounding
 
