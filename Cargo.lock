@@ -2230,6 +2230,7 @@ dependencies = [
 name = "kpf-tests"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "kaspa-consensus-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",

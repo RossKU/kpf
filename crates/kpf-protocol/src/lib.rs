@@ -17,6 +17,8 @@
 //! - [`verify`]: every input through the rusty-kaspa v2.1.0 script engine, with consensus metering.
 //! - [`bond`]: the underwriting slot of oracle-only markets (`docs/DESIGN-ORACLE-IMPL.md`) as a pure model of
 //!   `KpfBond` and of its stand-in pair and order: the ring, the bounds, the acceptance rule of every entry.
+//! - [`judge`]: the stake judge (`docs/DESIGN-ORACLE-IMPL.md`, second slice) as a pure model of `KpfStake` and of its
+//!   stand-in claim: whole transactions, the acceptance rule of every input, the transaction shapes, a UTXO world.
 //!
 //! # The evidence paths
 //!
@@ -39,6 +41,7 @@ pub mod build;
 pub mod error;
 pub mod evidence;
 pub mod fixtures;
+pub mod judge;
 pub mod kob;
 pub mod lock;
 pub mod network;

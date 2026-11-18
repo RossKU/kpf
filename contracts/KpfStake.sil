@@ -1,0 +1,553 @@
+pragma silverscript ^0.1.0;
+
+// KpfStake: the stake judge of oracle-only markets (docs/DESIGN-ORACLE.md 2, docs/DESIGN-ORACLE-2.md 1.7; what this
+// slice implements and every deviation: docs/DESIGN-ORACLE-IMPL.md, second slice). One template, five statuses, so it
+// continues itself and needs no template hash of its own (no pin cycle):
+//   4 free stake      bonded KAS of ownerKey; it counts in a dispute only if its UTXO was accepted ageDaa before the
+//                     disputed claim (its own DAA score, never a stored time: a re-created UTXO restarts its age)
+//   5 unbonding       on its way out: withdraw once unbondDaa old (CSV)
+//   6 receipt         a stake committed to one dispute on one side: the stake's whole value, under the dispute's
+//                     covenant id (the claim's), with the amount counted, the side, the round it joined and the anchor
+//   7 dispute         the tally of one dispute: totals and weights per side, the leader, the anchor (the claim's own
+//                     DAA score), the round's start, blake3 of the contested claim's script public key
+//   8 resolved        the pool after the verdict: winners redeem their receipts plus a share, losers' receipts are
+//                     forfeited into it, the rest is burned at close
+// The dispute and its receipts carry the claim's covenant id (as DESIGN-ORACLE-2.md 1.7 wants: "the dispute UTXO
+// (same id)"), so no genesis is needed and every output of the id is counted by OpCovOutputCount.
+// DESIGN: DESIGN-ORACLE.md 2 creates the dispute under a new id with a checked genesis; a genesis id cannot work here,
+// since the dispute names the contested claim's script (its hash) and the claim would have to name the dispute's id.
+// DESIGN: receipts hold the stake itself, not a record beside a dispute UTXO holding every stake (the note): a record
+// is a small output, about 10^12 / value of storage mass each; losers' receipts are forfeited into the pool and
+// winners paid from it.
+//
+// State (redeem bytes from 1; one layout, unused fields 0): ownerKey, status, the judge block (market id, muBps,
+// ageDaa, unbondDaa, roundDaa, burnBps, minStake: the same 87 bytes as the claims that accept this judge), spkHash,
+// side, amt, round, yes, no, yesU, noU, anchor, start, wLeft, lLeft, base.
+//
+// Entries (every one runs checkJudge and checks its status):
+//   free:      open(claimIdx, cOut, dOut, s)  owner, SIGHASH_ALL: opens a dispute on the claim input with this stake
+//                                             on NO; the claim's continuation, the dispute and this receipt are the
+//                                             three outputs of the claim's id
+//              commit(side, round, anchor, s) owner, SIGHASH_ALL or SINGLE|ANYONECANPAY: this stake becomes the
+//                                             receipt at its own output index; the dispute input counts it
+//              unbond(s)                      owner: status unbonding at its own output index
+//   unbonding: withdraw(s)                    owner, unbondDaa old: anywhere the owner's SIGHASH_ALL signature says
+//   dispute:   deposit(side, first, k)        anyone: the stakes at inputs [first, first + k) join the trailing side
+//              resolve(claimIdx)              anyone, once the round's window has closed: the verdict, delivered to
+//                                             the contested claim in the same transaction
+//   resolved:  settle(first, k)               anyone: receipts at [first, first + k): winners paid, losers forfeited
+//              close(j)                       anyone, every receipt settled: the remainder burned at output j
+//   receipt:   redeem(d)                      anyone, with its resolved pool at input d (which checks everything)
+// Exits without anybody's cooperation: a dispute resolves by anyone once its window closes; a pool settles every
+// receipt and closes by anyone; a free or unbonding stake needs only its owner.
+contract KpfStake(
+    pubkey init_ownerKey,
+    int init_status,
+    byte[32] init_market,
+    int init_muBps,
+    int init_ageDaa,
+    int init_unbondDaa,
+    int init_roundDaa,
+    int init_burnBps,
+    int init_minStake,
+    byte[32] init_spkHash,
+    int init_side,
+    int init_amt,
+    int init_round,
+    int init_yes,
+    int init_no,
+    int init_yesU,
+    int init_noU,
+    int init_anchor,
+    int init_start,
+    int init_wLeft,
+    int init_lLeft,
+    int init_base
+) {
+    pubkey ownerKey = init_ownerKey;
+    int status = init_status;
+    // The judge block (state [42..129)), byte for byte the claims'.
+    byte[32] market = init_market;
+    int muBps = init_muBps;            // mu: the lead changes when the trailing side reaches ceil(mu x the leader's)
+    int ageDaa = init_ageDaa;          // M_age: a stake counts only if accepted this long before the claim
+    int unbondDaa = init_unbondDaa;    // U: the least age of an unbonding stake before withdraw (CSV)
+    int roundDaa = init_roundDaa;      // D_r: a round's window
+    int burnBps = init_burnBps;        // phi: the share of the losers' stake that is burned
+    int minStake = init_minStake;      // the least value of one stake UTXO
+    byte[32] spkHash = init_spkHash;
+    int side = init_side;
+    int amt = init_amt;
+    int round = init_round;
+    int yes = init_yes;
+    int no = init_no;
+    int yesU = init_yesU;
+    int noU = init_noU;
+    int anchor = init_anchor;
+    int start = init_start;
+    int wLeft = init_wLeft;
+    int lLeft = init_lLeft;
+    int base = init_base;
+
+    byte constant SIGHASH_ALL = 0x01;
+    byte constant SIGHASH_SINGLE_ACP = 0x84;
+    int constant STATUS_FREE = 4;
+    int constant STATUS_UNBONDING = 5;
+    int constant STATUS_RECEIPT = 6;
+    int constant STATUS_DISPUTE = 7;
+    int constant STATUS_RESOLVED = 8;
+    int constant YES = 1;
+    int constant NO = 2;
+    int constant BPS = 10000;
+    int constant UNIT = 1000000000;
+    int constant BATCH = 7;
+    int constant CSV_LIMIT = 4294967296;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant MU_MIN_BPS = 11000;
+    int constant MU_MAX_BPS = 15000;
+    int constant BURN_MAX_BPS = 5000;
+    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant BURN_DUST = 2000000;
+    // P2SH hash of the redeem script OP_RETURN (0x6a): an output nobody can spend (DESIGN 4.5f, experiment Z7).
+    byte[32] constant BURN = byte[32](0xd379e50f3e2203f9a92584916335bb7cd014b237ceaa8b36f1d3d80d0cc88b32);
+    // Redeem-script offsets of the state pushes (the state starts at byte 1; checked by the tests).
+    int constant STATUS_AT = 34;
+    int constant MARKET_AT = 43;
+    int constant MARKET_END = 130;
+    int constant SPK_AT = 130;
+    int constant SIDE_AT = 163;
+    int constant AMT_AT = 172;
+    int constant ROUND_AT = 181;
+    int constant ANCHOR_AT = 226;
+    int constant START_AT = 235;
+    int constant WLEFT_AT = 244;
+    int constant BASE_AT = 262;
+    int constant STATE_END = 271;
+
+    // The judge bounds: every parameter in its range, so that every dispute a stake can open terminates within a
+    // bounded number of rounds, every window is a provable lower bound, and the payout arithmetic stays inside 63 bits.
+    // The function between the markers is the same text in KpfStake and in the stand-in claim (contracts/stubs), which
+    // `judge_attack_tests` enforces, so the two cannot drift.
+    // DESIGN: the note bounds mu by 1 < mu <= 1.5; here mu >= 1.1, so a dispute ends within log_1.1(stake range)
+    // rounds (at most about 230) even if both sides escalate to the supply. The note's M_age >= 7 days is a network-rate
+    // dependent DAA count; the bound here is M_age, U >= D_r (the long delay is at least one round).
+    // BEGIN judge bounds
+    function checkJudge() {
+        require(muBps >= MU_MIN_BPS);
+        require(muBps <= MU_MAX_BPS);
+        require(roundDaa > 0);
+        require(roundDaa < CSV_LIMIT);
+        require(ageDaa >= roundDaa);
+        require(ageDaa < CSV_LIMIT);
+        require(unbondDaa >= roundDaa);
+        require(unbondDaa < CSV_LIMIT);
+        require(burnBps >= 0);
+        require(burnBps <= BURN_MAX_BPS);
+        require(minStake >= UNIT);
+        require(minStake <= MIN_STAKE_MAX);
+    }
+    // END judge bounds
+
+    // A 65-byte Schnorr signature with SIGHASH_ALL by k, so the signer commits to every input and output.
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    // This input's redeem script.
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    // An 8-byte integer state field with its push opcode.
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    // The 33 bytes of a zero 32-byte field with its push opcode.
+    function z33() : byte[] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[](0x20) + z8 + z8 + z8 + z8;
+    }
+
+    // Four zero 8-byte fields.
+    function z36() : byte[] {
+        byte[] z = i9(0);
+        return z + z + z + z;
+    }
+
+    // The P2SH script public key of this template (redeem script rs) with state st (STATE_END - 1 bytes).
+    function spkWith(byte[] rs, byte[] st) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, 1) + st + rs.slice(STATE_END, this.bytecodeSize)));
+    }
+
+    // The state of input i (bytes [1..STATE_END) of its redeem script), which must be an instance of this template:
+    // input i's P2SH commits to this template's prefix and suffix around it. In the returned bytes the field whose
+    // push is at redeem offset X has its value at [X, X + 8) (8-byte fields) or [X, X + 32).
+    function stateOf(int i, byte[] rs) : byte[] {
+        int sz = this.bytecodeSize;
+        int b = OpTxInputScriptSigLen(i) - sz;
+        require(b >= 0);
+        byte[] st = OpTxInputScriptSigSubstr(i, b + 1, b + STATE_END);
+        require(tx.inputs[i].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, 1) + st + rs.slice(STATE_END, sz))));
+        return st;
+    }
+
+    // ceil(l x mu): what the trailing side needs to take the lead from a leader holding l (split product).
+    function need(int l) : int {
+        int n = (l / BPS) * muBps + ((l % BPS) * muBps + BPS - 1) / BPS;
+        return n;
+    }
+
+    // floor(l x phi), split product.
+    function burnOf(int l) : int {
+        int n = (l / BPS) * burnBps + ((l % BPS) * burnBps) / BPS;
+        return n;
+    }
+
+    // floor(u x lnet / wu) for a weight u <= wu (units) and an amount lnet (sompi), no product above 2^63:
+    // lnet = a x UNIT + b, x = u x a <= 2.9e9^2, y = u x b; (x / wu) x UNIT + ((x % wu) x UNIT + y) / wu.
+    function share(int u, int lnet, int wu) : int {
+        require(wu > 0);
+        int a = lnet / UNIT;
+        int b = lnet % UNIT;
+        int x = u * a;
+        int y = u * b;
+        int r = (x / wu) * UNIT + ((x % wu) * UNIT + y) / wu;
+        return r;
+    }
+
+    // Open (docs/DESIGN-ORACLE.md 2 "Opening"). The opener's stake goes on NO: a dispute says the claim is false.
+    // DESIGN: the note's opening deposit is "any KAS"; a fresh deposit would let capital raised for the occasion set
+    // the first bar, so the opening is aged judge stake like every other.
+    // DESIGN: a stake counts only if its UTXO was accepted ageDaa before the claim's own UTXO (the anchor, exact), not
+    // ageDaa before the deposit (the note's CSV): under the note's rule a dispute that runs longer than ageDaa admits
+    // capital bonded after the claim was made.
+    entry open(byte[8] cb, byte[8] cob, byte[8] db, sig s) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_FREE);
+        signedBy(s, ownerKey);
+        int v = tx.inputs[self].value;
+        require(v >= minStake);
+        int c = int(cb);
+        int co = int(cob);
+        int d = int(db);
+        require(c >= 0);
+        require(c < tx.inputs.length);
+        require(c != self);
+        byte[32] cid = OpInputCovenantId(c);
+        require(cid != zero32());
+        require(OpCovInputCount(cid) == 1);
+        require(OpCovOutputCount(cid) == 3);
+        int an = OpTxInputDaaScore(c);
+        require(an >= 0);
+        int own = OpTxInputDaaScore(self);
+        require(own >= 0);
+        require(own + ageDaa <= an);
+        require(co != d);
+        require(co != self);
+        require(d != self);
+        require(OpOutputCovenantId(co) == cid);
+        require(OpOutputCovenantId(self) == cid);
+        require(OpOutputCovenantId(d) == cid);
+        byte[32] h = blake3(tx.outputs[co].scriptPubKey);
+        byte[] rs = ownRs();
+        byte[] mkt = rs.slice(MARKET_AT, MARKET_END);
+        byte[] z9 = i9(0);
+        byte[] rst = rs.slice(1, STATUS_AT) + i9(STATUS_RECEIPT) + mkt + z33() + i9(NO) + i9(v) + z9 + z36() + i9(an) + z36();
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, rst));
+        require(tx.outputs[self].value >= v);
+        byte[] dst = z33() + i9(STATUS_DISPUTE) + mkt + byte[](0x20) + byte[](h) + i9(NO) + z9 + z9 + z9 + i9(v) + z9 + i9(v / UNIT)
+            + i9(an) + i9(-1) + z9 + z9 + z9;
+        require(tx.outputs[d].scriptPubKey == spkWith(rs, dst));
+    }
+
+    // Commit: this stake joins `side` of the dispute whose id its own output carries, in round r of the dispute
+    // anchored at a. The owner signs this input and this output only (SINGLE|ANYONECANPAY, experiment Z13: the
+    // signature also fixes the output's covenant binding, so the dispute), so any aggregator can add the commitment to
+    // a deposit against whatever the dispute UTXO is when it lands; the round and the anchor in the receipt make the
+    // commitment void once the lead has changed or for another dispute of the same claim. Everything else (the
+    // stake's age, the tally, the side being the trailing one) is the dispute input's check: no output of the id can
+    // exist without it.
+    // DESIGN: every other owner entry requires SIGHASH_ALL; here SINGLE|ANYONECANPAY is accepted so that stakers'
+    // consent is not bound to the dispute's outpoint (the contention of a dispute, docs/DESIGN-ORACLE-IMPL.md).
+    entry commit(byte[8] sb, byte[8] rb, byte[8] ab, sig s) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_FREE);
+        byte[] sg = byte[](s);
+        require(sg.length == 65);
+        byte t = sg[64];
+        require(t == SIGHASH_ALL || t == SIGHASH_SINGLE_ACP);
+        require(checkSig(s, ownerKey));
+        int sd = int(sb);
+        require(sd == YES || sd == NO);
+        int v = tx.inputs[self].value;
+        require(OpOutputCovenantId(self) != zero32());
+        byte[] rs = ownRs();
+        byte[] rst = rs.slice(1, STATUS_AT) + i9(STATUS_RECEIPT) + rs.slice(MARKET_AT, MARKET_END) + z33() + i9(sd) + i9(v) + i9(int(rb))
+            + z36() + i9(int(ab)) + z36();
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, rst));
+        require(tx.outputs[self].value >= v);
+    }
+
+    // Unbond: the stake starts leaving; it counts nowhere any more.
+    entry unbond(sig s) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_FREE);
+        signedBy(s, ownerKey);
+        byte[] rs = ownRs();
+        byte[] st = rs.slice(1, STATUS_AT) + i9(STATUS_UNBONDING) + rs.slice(MARKET_AT, STATE_END);
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, st));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    // Withdraw: an unbonding stake unbondDaa old, wherever its owner's SIGHASH_ALL signature sends it.
+    entry withdraw(sig s) {
+        checkJudge();
+        require(status == STATUS_UNBONDING);
+        signedBy(s, ownerKey);
+        require(this.ageDaa >= unbondDaa);
+    }
+
+    // Deposit (docs/DESIGN-ORACLE.md 2 "Deposits"): the stakes at inputs [first, first + k) join side sd, which must be
+    // the trailing side. Each must be a free stake of this judge, at least minStake, accepted ageDaa before the anchor;
+    // its receipt is the output at its own index. The lead changes when the side's total reaches ceil(mu x the
+    // leader's); a new round then starts at the continuation's own DAA score (start -1). A deposit that does not change
+    // the lead keeps the round's start, read exactly from the UTXO that started it.
+    // DESIGN: only the trailing side may deposit, and a deposit moves the window only by changing the lead. The note
+    // lets anyone add to either side and restarts the window on every deposit (bounded by a minimum step eps): a
+    // leader could then raise the bar in the last DAA of the window, and either side could prolong a dispute at the
+    // cost of eps. Here the bar the trailing side must reach is fixed for the whole round, and the round count is
+    // bounded by mu alone (eps is not needed; minStake bounds the number of deposits per round).
+    entry deposit(byte[8] sb, byte[8] fb, byte[8] kb) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_DISPUTE);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 1);
+        int sd = int(sb);
+        require(sd == YES || sd == NO);
+        require(sd != side);
+        int first = int(fb);
+        int k = int(kb);
+        require(k >= 1);
+        require(k <= BATCH);
+        require(first >= 0);
+        int end = first + k;
+        require(end <= tx.inputs.length);
+        require(self < first || self >= end);
+        require(OpCovOutputCount(id) == 1 + k);
+        byte[] rs = ownRs();
+        byte[] mkt = rs.slice(MARKET_AT, MARKET_END);
+        byte[] fr = i9(STATUS_FREE);
+        byte[] mid = i9(STATUS_RECEIPT) + mkt + z33() + i9(sd);
+        byte[] tl = i9(round) + z36() + i9(anchor) + z36();
+        int sum = 0;
+        int units = 0;
+        for (i, first, end, BATCH) {
+            byte[] st = stateOf(i, rs);
+            require(st.slice(STATUS_AT - 1, STATUS_AT + 8) == fr);
+            require(st.slice(MARKET_AT - 1, MARKET_END - 1) == mkt);
+            int v = tx.inputs[i].value;
+            require(v >= minStake);
+            int dd = OpTxInputDaaScore(i);
+            require(dd >= 0);
+            require(dd + ageDaa <= anchor);
+            require(OpOutputCovenantId(i) == id);
+            require(tx.outputs[i].scriptPubKey == spkWith(rs, st.slice(0, STATUS_AT - 1) + mid + i9(v) + tl));
+            require(tx.outputs[i].value >= v);
+            sum = sum + v;
+            units = units + v / UNIT;
+        }
+        int ny = yes;
+        int nn = no;
+        int nyu = yesU;
+        int nnu = noU;
+        int mine = no + sum;
+        int lead = yes;
+        if (sd == YES) {
+            ny = yes + sum;
+            nyu = yesU + units;
+            mine = ny;
+            lead = no;
+        } else {
+            nn = mine;
+            nnu = noU + units;
+        }
+        int ns = side;
+        int nr = round;
+        int nst = start;
+        if (mine >= need(lead)) {
+            ns = sd;
+            nr = round + 1;
+            nst = -1;
+        } else {
+            if (start == -1) {
+                nst = OpTxInputDaaScore(self);
+                require(nst >= 0);
+            }
+        }
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, rs.slice(1, SIDE_AT) + i9(ns) + rs.slice(AMT_AT, ROUND_AT) + i9(nr) + i9(ny)
+            + i9(nn) + i9(nyu) + i9(nnu) + rs.slice(ANCHOR_AT, START_AT) + i9(nst) + rs.slice(WLEFT_AT, STATE_END)));
+        require(OpOutputCovenantId(self) == id);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    // Resolve (docs/DESIGN-ORACLE.md 2 "Resolution"): once the round's window has closed (tx.daa >= start + roundDaa,
+    // CLTV; a lower bound only, so an answer that lands before the resolution still counts), the leader wins. The
+    // contested claim (input c: the dispute's id, the script whose hash the opening recorded) is spent in the same
+    // transaction and continues with the verdict, so the outcome is delivered once, to that claim only.
+    // DESIGN: resolution and delivery are one transaction: the pool could otherwise close before an outcome reached
+    // the claim, or deliver it to another UTXO of the claim's id (a pair's parts share an id).
+    entry resolve(byte[8] cb) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_DISPUTE);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int st = start;
+        if (start == -1) {
+            st = OpTxInputDaaScore(self);
+        }
+        require(st >= 0);
+        int e = st + roundDaa;
+        require(e < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= e);
+        int c = int(cb);
+        require(c >= 0);
+        require(c < tx.inputs.length);
+        require(c != self);
+        require(OpInputCovenantId(c) == id);
+        require(blake3(tx.inputs[c].scriptPubKey) == spkHash);
+        int wl = noU;
+        int ll = yes;
+        if (side == YES) {
+            wl = yesU;
+            ll = no;
+        }
+        byte[] rs = ownRs();
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, rs.slice(1, STATUS_AT) + i9(STATUS_RESOLVED) + rs.slice(MARKET_AT, START_AT) + i9(st)
+            + i9(wl) + i9(ll) + i9(tx.inputs[self].value)));
+        require(OpOutputCovenantId(self) == id);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    // Settle (docs/DESIGN-ORACLE.md 1.7, the judge's rows): the receipts at inputs [first, first + k), each of this
+    // pool's id and anchor. A winning receipt becomes a free stake of its owner at its own output index, worth its
+    // value plus floor(units x lnet / winners' units), lnet = the losers' total less floor(phi x it); a losing
+    // receipt's value stays in the pool. Any order: a winner whose share the pool cannot pay yet waits for the losers
+    // (anyone can forfeit them).
+    // DESIGN: winnings return as free stake, so U applies to them and their age restarts (the note's "receipts redeem
+    // into free slots of their owners"); payout weights are whole 10-KAS units of the amount counted (the note's units),
+    // the amounts paid are sompi.
+    entry settle(byte[8] fb, byte[8] kb) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_RESOLVED);
+        byte[32] id = OpInputCovenantId(self);
+        int first = int(fb);
+        int k = int(kb);
+        require(k >= 1);
+        require(k <= BATCH);
+        require(OpCovInputCount(id) == 1 + k);
+        require(OpCovOutputCount(id) == 1);
+        require(first >= 0);
+        int end = first + k;
+        require(end <= tx.inputs.length);
+        require(self < first || self >= end);
+        int wu = noU;
+        int l = yes;
+        if (side == YES) {
+            wu = yesU;
+            l = no;
+        }
+        int lnet = l - burnOf(l);
+        byte[] rs = ownRs();
+        byte[] mkt = rs.slice(MARKET_AT, MARKET_END);
+        byte[] rc = i9(STATUS_RECEIPT);
+        byte[] an = i9(anchor);
+        byte[] ft = i9(STATUS_FREE) + mkt + z33() + z36() + z36() + z36();
+        int wl = wLeft;
+        int ll = lLeft;
+        int gained = 0;
+        int paid = 0;
+        for (i, first, end, BATCH) {
+            require(OpInputCovenantId(i) == id);
+            byte[] st = stateOf(i, rs);
+            require(st.slice(STATUS_AT - 1, STATUS_AT + 8) == rc);
+            require(st.slice(MARKET_AT - 1, MARKET_END - 1) == mkt);
+            require(st.slice(ANCHOR_AT - 1, ANCHOR_AT + 8) == an);
+            int r = tx.inputs[i].value;
+            int a = int(byte[8](st.slice(AMT_AT, AMT_AT + 8)));
+            if (int(byte[8](st.slice(SIDE_AT, SIDE_AT + 8))) == side) {
+                int u = a / UNIT;
+                int sh = share(u, lnet, wu);
+                require(tx.outputs[i].scriptPubKey == spkWith(rs, st.slice(0, STATUS_AT - 1) + ft));
+                require(tx.outputs[i].value >= r + sh);
+                wl = wl - u;
+                paid = paid + sh;
+            } else {
+                ll = ll - a;
+                gained = gained + r;
+            }
+        }
+        require(wl >= 0);
+        require(ll >= 0);
+        int pool = tx.inputs[self].value + gained - paid;
+        require(pool >= 0);
+        require(tx.outputs[self].scriptPubKey == spkWith(rs, rs.slice(1, WLEFT_AT) + i9(wl) + i9(ll) + rs.slice(BASE_AT, STATE_END)));
+        require(OpOutputCovenantId(self) == id);
+        require(tx.outputs[self].value >= pool);
+    }
+
+    // Close: every receipt settled; what the pool holds beyond its base (the burn of the losers' stake and the
+    // rounding) goes to the burn output j; the base, the carrier funded at the opening, is the executor's.
+    // DESIGN: a burn below 0.02 KAS is not created and stays with the executor (as KpfLock's, DESIGN 4.5f, 6).
+    entry close(byte[8] jb) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_RESOLVED);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 0);
+        require(wLeft == 0);
+        require(lLeft == 0);
+        int b = tx.inputs[self].value - base;
+        if (b >= BURN_DUST) {
+            int j = int(jb);
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SH(BURN)));
+            require(tx.outputs[j].value >= b);
+        }
+    }
+
+    // Redeem: a receipt is spent only beside its resolved pool (input d: this receipt's id and anchor, status resolved),
+    // whose settle entry pays or forfeits it. A receipt has no other entry: committed stake cannot leave before the
+    // verdict.
+    entry redeem(byte[8] db) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == STATUS_RECEIPT);
+        byte[32] id = OpInputCovenantId(self);
+        require(id != zero32());
+        int d = int(db);
+        require(d >= 0);
+        require(d < tx.inputs.length);
+        require(d != self);
+        require(OpInputCovenantId(d) == id);
+        byte[] st = stateOf(d, ownRs());
+        require(st.slice(STATUS_AT - 1, STATUS_AT + 8) == i9(STATUS_RESOLVED));
+        require(st.slice(ANCHOR_AT - 1, ANCHOR_AT + 8) == i9(anchor));
+    }
+}

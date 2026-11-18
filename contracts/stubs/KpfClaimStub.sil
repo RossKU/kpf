@@ -1,0 +1,228 @@
+pragma silverscript ^0.1.0;
+
+// KpfClaimStub: a stand-in for a disputable claim (the pending part, KpfPendingO, or the record, KpfRecord, of the next
+// slices: docs/DESIGN-ORACLE-2.md 1.7), sufficient to test how a claim hands itself to the stake judge and receives its
+// verdict. It is NOT a claim.
+//
+// What it checks (and the real claims must keep):
+//   - contest: the claim is pending; the opener input u is a KpfStake (template JUDGE_TPL, P2SH, canonical state) of
+//     this claim's judge block, in status free, spent by its open entry (dispatch tag OPEN_TAG, every argument push at
+//     its fixed offset) naming this input as the claim and this input's index as the claim's continuation and the
+//     dispute at output dOut; the continuation, the dispute and the opener's receipt are exactly the three outputs of
+//     this claim's id (the dispute takes the claim's id: no genesis, no twin scan). KpfStake.open checks the rest.
+//   - decide: the claim is contested; input d is a KpfStake dispute of this claim's id and judge block, spent by its
+//     resolve entry naming this input; the continuation carries the leader's verdict (YES: upheld, NO: refuted). The
+//     dispute's resolve checks that this input is the contested claim (the script hash it recorded at the opening).
+//   - the single-input guard on every entry, and checkJudge (the same text as KpfStake's).
+// What it does NOT check, and so does not show: what the claim says (no price, no counter quote, no kind or side), any
+// reservation of an underwriter's stake, any restitution, anything the verdict should do beyond recording it, any
+// window within which a claim may be contested (anyone may contest a pending stand-in at any time). Its value is not
+// tied to anything. Its exit is close (owner, any status but contested).
+contract KpfClaimStub(
+    byte[32] JUDGE_TPL,
+    int JUDGE_PRE,
+    int JUDGE_SUF,
+    byte[4] OPEN_TAG,
+    byte[4] RESOLVE_TAG,
+    byte[32] init_market,
+    int init_muBps,
+    int init_ageDaa,
+    int init_unbondDaa,
+    int init_roundDaa,
+    int init_burnBps,
+    int init_minStake,
+    pubkey init_ownerKey,
+    int init_status
+) {
+    // The judge block (state [0..87)), byte for byte the stakes'.
+    byte[32] market = init_market;
+    int muBps = init_muBps;
+    int ageDaa = init_ageDaa;
+    int unbondDaa = init_unbondDaa;
+    int roundDaa = init_roundDaa;
+    int burnBps = init_burnBps;
+    int minStake = init_minStake;
+    pubkey ownerKey = init_ownerKey;
+    int status = init_status;           // 1 pending, 2 contested, 3 upheld, 4 refuted
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant PENDING = 1;
+    int constant CONTESTED = 2;
+    int constant UPHELD = 3;
+    int constant REFUTED = 4;
+    int constant YES = 1;
+    int constant UNIT = 1000000000;
+    int constant CSV_LIMIT = 4294967296;
+    int constant MU_MIN_BPS = 11000;
+    int constant MU_MAX_BPS = 15000;
+    int constant BURN_MAX_BPS = 5000;
+    int constant MIN_STAKE_MAX = 100000000000000;
+    // KpfStake: its state length, the statuses read here, and the offsets within its state (redeem offset - 1).
+    int constant STAKE_STATE_LEN = 270;
+    int constant STAKE_FREE = 4;
+    int constant STAKE_DISPUTE = 7;
+    int constant STAKE_STATUS_AT = 33;
+    int constant STAKE_MARKET_AT = 42;
+    int constant STAKE_MARKET_END = 129;
+    int constant STAKE_SIDE_AT = 162;
+    // KpfStake.open's signature script: three 8-byte pushes, the 65-byte signature, the 4-byte dispatch tag, then the
+    // redeem script (OP_PUSHDATA2, 3 bytes of header). KpfStake.resolve's: one 8-byte push, the tag, the redeem script.
+    int constant OPEN_SIG_AT = 27;
+    int constant OPEN_TAG_AT = 93;
+    int constant OPEN_HEAD = 101;
+    int constant RESOLVE_TAG_AT = 9;
+    int constant RESOLVE_HEAD = 17;
+    // This contract's offsets (state from byte 1): the judge block [1..88), status push [121..130).
+    int constant MARKET_END = 88;
+    int constant STATUS_AT = 121;
+
+    // BEGIN judge bounds
+    function checkJudge() {
+        require(muBps >= MU_MIN_BPS);
+        require(muBps <= MU_MAX_BPS);
+        require(roundDaa > 0);
+        require(roundDaa < CSV_LIMIT);
+        require(ageDaa >= roundDaa);
+        require(ageDaa < CSV_LIMIT);
+        require(unbondDaa >= roundDaa);
+        require(unbondDaa < CSV_LIMIT);
+        require(burnBps >= 0);
+        require(burnBps <= BURN_MAX_BPS);
+        require(minStake >= UNIT);
+        require(minStake <= MIN_STAKE_MAX);
+    }
+    // END judge bounds
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // As KpfPair.tplState: input idx's redeem script is an instance of template tpl (prefix pre, state stLen, suffix
+    // suf bytes) and input idx is its P2SH; returns the state.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // The 8-byte push at offset `at` of input u's signature script.
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // A KpfStake state whose every field is a canonical push (32-byte fields 0x20, 8-byte fields 0x08), so the
+    // template's code reads the fields this contract reads: a state of any other shape would put other values on its
+    // stack, and its open entry would not be the one this contract relies on.
+    function canon(byte[] st) {
+        require(st.length == STAKE_STATE_LEN);
+        require(st.slice(0, 1) == byte[](0x20));
+        require(st.slice(33, 34) == byte[](0x08));
+        require(st.slice(42, 43) == byte[](0x20));
+        require(st.slice(75, 76) == byte[](0x08));
+        require(st.slice(84, 85) == byte[](0x08));
+        require(st.slice(93, 94) == byte[](0x08));
+        require(st.slice(102, 103) == byte[](0x08));
+        require(st.slice(111, 112) == byte[](0x08));
+        require(st.slice(120, 121) == byte[](0x08));
+        require(st.slice(129, 130) == byte[](0x20));
+        require(st.slice(162, 163) == byte[](0x08));
+        require(st.slice(171, 172) == byte[](0x08));
+        require(st.slice(180, 181) == byte[](0x08));
+        require(st.slice(189, 190) == byte[](0x08));
+        require(st.slice(198, 199) == byte[](0x08));
+        require(st.slice(207, 208) == byte[](0x08));
+        require(st.slice(216, 217) == byte[](0x08));
+        require(st.slice(225, 226) == byte[](0x08));
+        require(st.slice(234, 235) == byte[](0x08));
+        require(st.slice(243, 244) == byte[](0x08));
+        require(st.slice(252, 253) == byte[](0x08));
+        require(st.slice(261, 262) == byte[](0x08));
+    }
+
+    // This claim's continuation at output `self` with status st, and the guards of an entry that continues it.
+    function cont(int st) {
+        int self = this.activeInputIndex;
+        byte[] rs = ownRs();
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATUS_AT) + i9(st)
+            + rs.slice(STATUS_AT + 9, this.bytecodeSize))));
+        require(OpOutputCovenantId(self) == OpInputCovenantId(self));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    // Contest: hand the claim to the judge (the opener's stake on NO, docs/DESIGN-ORACLE.md 2 "Opening").
+    entry contest(byte[8] ub, byte[8] db) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == PENDING);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 3);
+        int u = int(ub);
+        int d = int(db);
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != self);
+        byte[] st = tplState(u, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        canon(st);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_FREE));
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == ownRs().slice(1, MARKET_END));
+        require(OpTxInputScriptSigLen(u) == OPEN_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(u, OPEN_TAG_AT, OPEN_HEAD - 3) == byte[](0x04) + byte[](OPEN_TAG));
+        require(OpTxInputScriptSigSubstr(u, OPEN_SIG_AT, OPEN_SIG_AT + 1) == byte[](0x41));
+        require(push8(u, 0) == self);
+        require(push8(u, 9) == self);
+        require(push8(u, 18) == d);
+        require(d >= 0);
+        require(OpOutputCovenantId(d) == id);
+        cont(CONTESTED);
+    }
+
+    // Decide: the verdict of this claim's dispute (input d, resolving onto this input) becomes this claim's status.
+    entry decide(byte[8] db) {
+        int self = this.activeInputIndex;
+        checkJudge();
+        require(status == CONTESTED);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int d = int(db);
+        require(d >= 0);
+        require(d < tx.inputs.length);
+        require(d != self);
+        require(OpInputCovenantId(d) == id);
+        byte[] st = tplState(d, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_DISPUTE));
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == ownRs().slice(1, MARKET_END));
+        require(OpTxInputScriptSigLen(d) == RESOLVE_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(d, RESOLVE_TAG_AT, RESOLVE_HEAD - 3) == byte[](0x04) + byte[](RESOLVE_TAG));
+        require(push8(d, 0) == self);
+        int v = REFUTED;
+        if (int(byte[8](st.slice(STAKE_SIDE_AT + 1, STAKE_SIDE_AT + 9))) == YES) {
+            v = UPHELD;
+        }
+        cont(v);
+    }
+
+    // Close: the stand-in's exit, its owner's signature, no output of the id; not while contested.
+    entry close(sig s) {
+        byte[32] id = OpInputCovenantId(this.activeInputIndex);
+        checkJudge();
+        require(status != CONTESTED);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 0);
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, ownerKey));
+    }
+}

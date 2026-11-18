@@ -127,6 +127,8 @@ pub enum Spend {
     P2pk(Keypair),
     /// A P2SH contract input whose arguments may include SIGHASH_ALL Schnorr signatures over this transaction.
     Signed { art: SilAbiArtifact, entry: &'static str, args: Vec<Arg> },
+    /// An ordinary P2PK input signed with the given sighash type (for example 0x84, SINGLE | ANYONECANPAY).
+    P2pkType(Keypair, u8),
 }
 
 /// A contract argument: a value, or a SIGHASH_ALL signature of `kp` over the transaction being built (signature
@@ -138,6 +140,8 @@ pub enum Arg {
     /// A KCC-20 leader witness of the normal path for a P2PK owner: `0x00 || signature`
     /// (`vendor/kob/crates/kob-protocol/src/script.rs`, `leader_witness`).
     LeaderSig(Keypair),
+    /// A Schnorr signature of `kp` with the given sighash type (its last byte).
+    SigType(Keypair, u8),
 }
 
 #[derive(Clone)]
@@ -180,6 +184,7 @@ pub fn build_ext(ins: &[In], outputs: Vec<TransactionOutput>, lock_time: u64, se
         tx.inputs[k].signature_script = match &i.spend {
             Spend::Contract { art, entry, args } => entry_sig_script(art, entry, args),
             Spend::P2pk(kp) => push(&sign(&unsigned, &entries, k, kp)),
+            Spend::P2pkType(kp, t) => push(&sign_type(&unsigned, &entries, k, kp, *t)),
             Spend::Signed { art, entry, args } => {
                 let vals: Vec<ArtifactValue> = args
                     .iter()
@@ -187,6 +192,7 @@ pub fn build_ext(ins: &[In], outputs: Vec<TransactionOutput>, lock_time: u64, se
                         Arg::V(v) => v.clone(),
                         Arg::Sig(kp) => ArtifactValue::Bytes(sign(&unsigned, &entries, k, kp)),
                         Arg::LeaderSig(kp) => ArtifactValue::Bytes([vec![0x00], sign(&unsigned, &entries, k, kp)].concat()),
+                        Arg::SigType(kp, t) => ArtifactValue::Bytes(sign_type(&unsigned, &entries, k, kp, *t)),
                     })
                     .collect();
                 entry_sig_script(art, entry, &vals)
@@ -201,6 +207,21 @@ fn sign(tx: &Transaction, entries: &[UtxoEntry], idx: usize, kp: &Keypair) -> Ve
     let mut keys = kpf_protocol::tx::KeySet::new();
     let k = keys.add_keypair(*kp);
     keys.sign(&k, &kpf_protocol::tx::sighash(tx, entries, idx)).expect("sign")
+}
+
+/// A Schnorr signature of input `idx` with sighash type `t` (the type byte appended), as the engine verifies it.
+pub fn sign_type(tx: &Transaction, entries: &[UtxoEntry], idx: usize, kp: &Keypair, t: u8) -> Vec<u8> {
+    use kaspa_consensus_core::hashing::sighash::calc_schnorr_signature_hash;
+    use kaspa_consensus_core::hashing::sighash_type::SigHashType;
+    use kaspa_consensus_core::tx::MutableTransaction;
+    let ty = SigHashType::from_u8(t).expect("sighash type");
+    let mt = MutableTransaction::with_entries(tx.clone(), entries.to_vec());
+    let reused = SigHashReusedValuesUnsync::new();
+    let h = calc_schnorr_signature_hash(&mt.as_verifiable(), idx, ty, &reused);
+    let msg = secp256k1::Message::from_digest_slice(&h.as_bytes()).expect("digest");
+    let mut s = Secp256k1::new().sign_schnorr_no_aux_rand(&msg, kp).as_ref().to_vec();
+    s.push(t);
+    s
 }
 
 /// The UTXO that output `idx` of an accepted `tx` becomes: its covenant id is the output's binding id

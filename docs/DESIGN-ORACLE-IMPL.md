@@ -1,5 +1,8 @@
 # KPF oracle-only markets: first slice, the underwriting capital (implementation note)
 
+Sections 1-7 are the first slice (the underwriting slot `KpfBond`); sections 8-14 the second (the stake judge
+`KpfStake`).
+
 Status: implemented and tested offline; not pinned, not on testnet. Implements part of `DESIGN-ORACLE-2.md` (cited
 `O2§n`; `O§n` is `DESIGN-ORACLE.md`, `D§n` is `DESIGN.md`). This slice is the underwriting slot and its accounting only:
 no price claim, no judge, no oracle-market pair. Resolutions of the note's open points given for this slice: `ρ` starts
@@ -161,3 +164,199 @@ changes `KpfPending` and the pinned artifacts, so it is a slice of its own.
 - **Stake judge, reserve, release, pay, records**: the model's `reserve` and Z3's slashed invariant; the `KpfLock` fold.
 - **Closed-market rules, dollar-token margin**: not started.
 - Pin `KpfBond` and the real pair in `contracts/artifacts/`, builders and command line.
+
+# Second slice: the stake judge
+
+Status: implemented and tested offline; not pinned, not on testnet. Implements the judge of O§2 with the changes of
+O2§1.7, standalone: a disputed claim is a stand-in covenant; no price claim, no counter quote `p′`, no reservation of
+an underwriter's stake, no wiring into `KpfPending`. Resolutions given for this slice: participation is permissionless
+(any aged judge stake, no member list, key or token); the long delay applies to judge stake, both the age a stake needs
+before it counts (`M_age`) and the delay before it leaves (`U`), both market parameters; windows are lower bounds on UTXO
+DAA scores and ages; `μ` is a market parameter, default 1.25; no UTXO is shared between disputes; a dispute nobody
+answers resolves for the side that staked.
+
+## 8. What exists
+
+| Path | What |
+|---|---|
+| `contracts/KpfStake.sil` | the judge, one template, statuses free stake (4), unbonding (5), receipt (6), dispute (7), resolved (8): `open`, `commit`, `unbond`, `withdraw`, `deposit`, `resolve`, `settle`, `close`, `redeem` |
+| `contracts/stubs/KpfClaimStub.sil` | a stand-in claim: `contest` (hands itself to the judge), `decide` (receives the verdict), `close` |
+| `crates/kpf-protocol/src/judge.rs` | the pure model: parameters and bounds, the state codec, whole transactions (`JTx`) and the acceptance rule of every input of both contracts (every `require`, a failure on any 64-bit overflow), the transaction shapes (`Arena`), a UTXO world |
+| `crates/kpf-protocol/tests/judge_model.rs` | property games, adversarial strategies, Z10 (9 tests) |
+| `crates/kpf-tests/tests/judgekit/` | the compiled templates, the real hash environment, `JTx` to engine transaction |
+| `crates/kpf-tests/tests/kpf_judge_tests.rs` | every path positive and negative, boundaries, payouts to the sompi (10) |
+| `crates/kpf-tests/tests/judge_attack_tests.rs` | attacks (12), the shared bounds text and offsets (2), the model-against-contract replay (1) |
+| `crates/kpf-tests/tests/kpf_judge_metrics_tests.rs`, `z_judge_experiments_tests.rs` | the numbers; Z13 |
+
+Run: `CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2` (493 tests: the 457 before this slice and 36 new), or
+`-p kpf-protocol --test judge_model`, `-p kpf-tests --test kpf_judge_tests` etc.; `--nocapture` prints the tables. Every
+engine test builds its transactions from the model's `JTx` and requires the model's and the engine's verdicts to agree
+input by input (`judgekit::agree`), so every engine test is also a replay. `KpfBond`, `KpfPair`, `KpfOpen`,
+`KpfPending`, `KpfLock` are unchanged; the test harness gained a signature of any sighash type.
+
+## 9. The judge
+
+**Why a companion template, not a status of `KpfBond`.** `KpfStake` is 9,688 bytes; `KpfBond`'s bind is close to the
+stack limit and every bind and renewal input would carry the judge's code (about 9 kB more per input, three times its
+size), while the judge needs none of the ring. The two share the bond header (`ownerKey` 32, `status` 8 at the same
+offsets; status values disjoint: `KpfLock` 1, `KpfBond` 2-3, `KpfStake` 4-8), so the fold of O2§7 stays possible. One
+template for stake, receipts and dispute continues itself, so it needs no template hash of its own: inputs of the same
+template are recognised by their P2SH over this template's own prefix and suffix around their state.
+
+**State** (270 bytes from redeem byte 1, one layout, unused fields 0): `ownerKey`, `status`, the judge block (market id
+32, `μBps, M_age, U, D_r, φBps, minStake`: 87 bytes that a claim carries identically), `spkHash` (blake3 of the
+contested claim's script public key), `side`, `amt`, `round`, `yes`, `no`, `yesU`, `noU`, `anchor`, `start`, `wLeft`,
+`lLeft`, `base`. Amounts are sompi; weights are whole 10-KAS units (`⌊amt/10⁹⌋`).
+
+**Bounds** (`checkJudge`, one text in both contracts, enforced by `holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim`):
+`1.1 ≤ μ ≤ 1.5`; `0 < D_r < 2³²`; `D_r ≤ M_age < 2³²`; `D_r ≤ U < 2³²`; `0 ≤ φ ≤ 50 %`; `10 KAS ≤ minStake ≤ 10⁶ KAS`.
+Testnet defaults (10 DAA/s): `μ` 1.25, `M_age` = `U` = 7 days, `D_r` 12 h, `φ` 10 %, 100 KAS.
+
+| Entry | Status | Who | Rule |
+|---|---|---|---|
+| `open(c, cOut, dOut, s)` | free | owner, SIGHASH_ALL | input `c` is the claim (id `C ≠ 0`, the only input of `C`, accepted: its DAA score is the **anchor**); this stake `≥ minStake`, accepted at least `M_age` before the anchor; exactly three outputs of `C`: the claim's continuation `cOut`, this stake's receipt at its own index (side NO, round 0, the anchor, value `≥` the stake), the dispute `dOut` (leader NO, `no` = the stake, `start = -1`, `spkHash` = blake3 of output `cOut`'s script) |
+| `commit(side, r, a, s)` | free | owner, SIGHASH_ALL or SINGLE\|ANYONECANPAY | the receipt at its own index: this owner, `side`, round `r`, anchor `a`, the stake's value, a covenant id |
+| `unbond(s)` / `withdraw(s)` | free / unbonding | owner | unbonding continuation at its own index / CSV `≥ U`, SIGHASH_ALL decides the outputs |
+| `deposit(side, first, k)` | dispute | anyone | the only input of its id; `side` is the trailing side; `1 ≤ k ≤ 7` stakes at `[first, first + k)`, each a free stake of this judge `≥ minStake` accepted `M_age` before the anchor, its receipt at its own index; exactly `1 + k` outputs of the id. If the side's total reaches `⌈μ × the leader's⌉` the lead changes, `round + 1`, `start = -1` (the continuation's own DAA score starts the round); otherwise the round's start is kept, read exactly from the UTXO that started it |
+| `resolve(c)` | dispute | anyone | `tx.daa ≥ start + D_r` (CLTV); input `c` has the dispute's id and the recorded script hash; exactly two inputs and two outputs of the id; the resolved pool: winner = leader, `wLeft` = its weight, `lLeft` = the loser's total, `base` = the pool's own value |
+| `settle(first, k)` | resolved | anyone | `1 ≤ k ≤ 7` receipts of this id and anchor; a winner becomes a free stake of its owner at its own index worth its value `+ ⌊u·Lnet/W_u⌋` (`Lnet = L − ⌊φL⌋`); a loser's value stays in the pool; `wLeft`, `lLeft` count down; the pool pays only what it holds |
+| `close(j)` | resolved | anyone | every receipt settled; the pool's value above `base` to the burn output `j` (not created below 0.02 KAS); `base` is the executor's |
+| `redeem(d)` | receipt | anyone | input `d` is its resolved pool (same id, same anchor) |
+| claim `contest(u, dOut)` | pending | anyone | input `u` is a `KpfStake` (template hash, P2SH, **canonical state**) free stake of the claim's judge block spent by `open(self, self, dOut)` (dispatch tag and argument pushes read at fixed offsets); three outputs of its id; continuation contested |
+| claim `decide(d)` | contested | anyone | input `d` is its id's dispute of its judge block spent by `resolve(self)`; continuation upheld (leader YES) or refuted (NO) |
+
+**Who is paid what.** Winners: their receipts back plus the losers' stake less `φ`, pro rata by weight; the rounding
+(less than one sompi per winning receipt) is burned with `φ`. Losers: nothing. Executors: the pool's base at close.
+Every sompi of every branch is in a continuation, a receipt, a payout, the burn or, explicitly, the executor's.
+
+**Exits.** A dispute resolves by anyone once its window closes (its contested claim decides by anyone in the same
+transaction, and has no other exit); a pool settles every receipt and closes by anyone; a free or unbonding stake needs
+its owner only. A state only a genesis can write (an id-less dispute or receipt, a forged tally) is its author's KAS
+(`holds_no_dispute_or_stake_is_left_unspendable`, `exploit_a_dispute_written_by_a_genesis_traps_the_stakers_who_join_it`).
+
+## 10. Experiments
+
+| # | Question | Measured | Verdict |
+|---|---|---|---|
+| Z13 (new) | does a SIGHASH_SINGLE\|ANYONECANPAY signature (0x84) fix its own output's covenant binding | other outputs and the lock time are free; its own output's value, script and covenant binding (removed, or moved to another existing id) are committed | **holds**: a staker's commitment names its dispute through the binding, so stakers sign once and aggregators chain deposits without re-signing |
+| Z10 | `f*` against O§2's `p_h/(p_h + μ)` | table below (model, `judge_model`) | **the formula holds for one dispute to 10⁻⁴**; a patient attacker across parallel disputes does better (below) |
+
+**Z10, one dispute** (`z10_the_measured_threshold_matches_the_notes_formula`: 2·10⁶ units of aged stake, the attacker's
+in one UTXO, honest stake in pieces of 1,000 units of which honest deploys only an answer that reaches the lead;
+bisection on `f` to 10⁻⁴; "patient": the attacker opens with the minimum and goes all in on its answer):
+
+| `μ` | `p_h` = 1: formula / measured | 0.5 | 0.25 |
+|---|---|---|---|
+| 1.1 | 0.4762 / 0.4762 | 0.3125 / 0.3126 | 0.1852 / 0.1852 |
+| 1.25 | 0.4444 / 0.4445 | 0.2857 / 0.2858 | 0.1667 / 0.1667 |
+| 1.5 | 0.4000 / 0.4000 | 0.2500 / 0.2501 | 0.1429 / 0.1429 |
+
+Patient and all-in thresholds are equal: holding back never helps the attacker, since the responder always needs `μ`
+times the other side's total and the opener can open with everything.
+
+**Z10, the drill of O2§7** (`z10_drill_100_parallel_disputes_half_participation_patient_attacker`: 100 parallel
+disputes, `p_h` = 0.5, `μ` = 1.25; the attacker opens every dispute, then escalates pass after pass, cheapest first;
+honest answers every escalation while its free aged reserve lasts, since committed stake is a receipt and won stake comes
+back fresh). The attacker wins one dispute from `f` = 0.29 (formula 0.2857, on a 1 % grid), 19 at 0.30, 72 at 0.35,
+**all 100 from 0.39**, against `μ p_h/(1 + μ p_h)` = 0.385: in each dispute it ends `μ` times honest's last answer,
+so it takes every dispute once its stake reaches `μ` times honest's whole reserve. A coordinated honest side that
+abandons disputes it cannot hold to the end keeps most of them (the attacker spread evenly takes all only at 0.976); no
+contract can coordinate that.
+
+## 11. Numbers
+
+Script bytes: `KpfStake` 9,688 (1 + 270 + 9,417; O§1.3 estimated about 1.5 kB per stake input, O2§7 about 6 kB for a
+shared template), `KpfClaimStub` 1,687 (1 + 129 + 1,557). Stakes of 100 KAS, pool and claim carriers 1 KAS, each input
+committing the smallest covering compute budget, relay fee at 100 sompi per gram; largest stack 97 of 244.
+
+| Transaction | Inputs | Script units (first input / each stake or receipt / funder) | Compute mass | Storage mass | Bytes | Fee (KAS) |
+|---|---|---|---|---|---|---|
+| open (claim, opener's stake, funder) | 3 | 125,499 / 302,773 / 100,001 | 18,807 | 80,400 | 12,137 | 0.0243 |
+| deposit, 1 stake | 3 | 299,769 / 229,904 / 100,001 | 27,260 | 40,400 | 20,060 | 0.0401 |
+| deposit, 7 stakes | 9 | 1,136,277 / 229,904 / 100,001 | 110,660 | 42,800 | 79,640 | 0.1593 |
+| resolve and deliver (dispute, claim, funder) | 3 | 128,808 / 119,128 / 100,001 | 16,357 | 80,000 | 11,957 | 0.0239 |
+| settle, 1 losing / 7 losing receipts | 3 / 9 | 210,488 / 635,151; 99,335 each | 24,610 / 92,764 | ≤ 57 | 19,880 / 78,434 | 0.0398 / 0.1569 |
+| settle, 1 winning / 7 winning receipts | 3 / 9 | 279,724 / 1,119,596; 99,335 each | 25,633 / 100,525 | ≤ 724 | 19,933 / 78,805 | 0.0399 / 0.1576 |
+| close (with burn) | 2 | 19,878 / 100,001 | 11,908 | 125 | 10,078 | 0.0202 |
+| unbond / withdraw | 2 | 227,933 / 120,040 | 14,065 / 13,054 | 0 | 10,135 / 10,134 | 0.0203 |
+
+The storage masses of 40,000-80,000 come from the 1-KAS carriers (KIP-9 charges a small output about 10¹²/value); a
+larger pool base lowers them. **Stakers paid per transaction**: 7 (the unrolled loop); a winning receipt adds 12,482
+compute mass and 9,812 bytes, so by mass alone 24 would fit. **Contention**: one dispute's deposits pass through its one
+UTXO, at most 7 stakes each: an answer by `n` stakers is `⌈n/7⌉` chained deposits (1,000 stakers: 143 deposits, about
+22.8 KAS of relay fees, 0.023 KAS per staker). Commitments signed SINGLE\|ANYONECANPAY are not bound to the dispute's
+outpoint, so a lost race costs an aggregator a rebuild, not a new round of signatures; only the first partial deposit
+after a lead change waits for that change to be accepted (it reads the round's start from it), later ones chain in the
+mempool. Nothing is shared between disputes. A griefer can occupy the slot only with aged stake on the trailing side
+(the leader cannot deposit), at least `minStake` per deposit, at risk like any other.
+
+## 12. Where the notes are wrong or ambiguous (each a `// DESIGN:` comment)
+
+1. **Age measured at the deposit** (O§2 "aged ≥ `M_age` (CSV)"; `KpfStake.open`, `Spend::Open`). A dispute that runs
+   longer than `M_age` then admits capital bonded after the claim. Here a stake counts only if its UTXO was accepted
+   `M_age` before the claim's own UTXO (the anchor, exact): capital raised for the occasion never counts.
+2. **The opening deposit is "any KAS"** (O§2). It would let fresh capital set the first bar. Here it is aged judge stake.
+3. **Deposits to either side, every deposit restarts the window, minimum step `ε`** (O§2). The leader could raise the bar
+   in the last DAA of a window, and either side could prolong a dispute at a cost of `ε` per restart. Here only the
+   trailing side deposits; the window moves only when the lead changes; `ε` is dropped (`minStake` bounds the deposits).
+4. **`μ` just above 1** (O2§1.2 `10⁴ < μBps`). The number of rounds is `log_μ` of the stake range, about 230,000 at
+   1.0001; here `μ ≥ 1.1` (at most 222 lead changes from 10 KAS to the supply). O2's "`M_age ≥ 7 days`" is a DAA count
+   that depends on the network; the bound is `M_age, U ≥ D_r`, the 7 days are the default.
+5. **The dispute under a new id with a checked genesis** (O§2) cannot deliver its verdict safely: the dispute must name
+   the contested claim's script and the claim the dispute's id, a cycle. O2§1.7's "same id" is used: dispute and receipts
+   take the claim's id (no genesis, no twin scan); receipts carry the anchor so that an earlier dispute's receipts of the
+   same lineage never settle against a later one.
+6. **Resolution and delivery as separate steps** (O§2 is silent). Delivered later, the pool could close before the claim
+   heard the verdict, or the verdict could go to another UTXO of the claim's id (a pair's parts share an id). Here the
+   resolving transaction spends the contested claim, identified by the script hash recorded at the opening.
+7. **Receipts as records beside a dispute UTXO holding every stake** (O§2). Small outputs cost about 10¹²/value of
+   storage mass each. Here a receipt is the stake itself; losers are forfeited into the pool, winners paid from it.
+8. **Units.** Weights in whole 10-KAS units as the note, but the lead rule and every payment in exact sompi (the note
+   counts everything in units); a stake's remainder below 10 KAS carries no weight.
+9. **SINGLE\|ANYONECANPAY commitments** (Z13), where every other owner entry requires SIGHASH_ALL.
+10. **Burn dust**: a burn below 0.02 KAS stays with the executor (as `KpfLock`).
+11. **The note's `f*`** is exact for one dispute; across parallel disputes against a patient attacker it is the threshold
+    to win one, while greedy honest answers lose all at `μ p_h/(1 + μ p_h)` (§10).
+
+## 13. Attacks (`judge_attack_tests`, `judge_model`, and the path tests named)
+
+| Attack | Verdict |
+|---|---|
+| a dispute that never resolves, or is prolonged | **holds**: partial answers do not move the window, the leader cannot deposit, rounds are bounded by `μ ≥ 1.1` (`holds_a_dispute_always_resolves_and_cannot_be_prolonged`); every game of the model ends |
+| a dispute resolving for the side with less stake | **exploit, by design** (`exploit_the_leader_wins_with_less_stake_when_the_answer_falls_short_of_mu`): a leader holding `x` wins against any answer below `⌈μx⌉`, even one above `x`; that is the note's rule, the price of bounded rounds |
+| stake counted twice, in two disputes or two rounds | **holds**: a receipt carries one id, a receipt cannot commit, a UTXO is spent once (`holds_one_stake_counts_once`) |
+| aged stake manufactured: a parent not yet accepted (-1), a lock time, winnings, a look-alike stake | **holds**: the anchor and the UTXO's own score only; winnings come back fresh; the claim refuses an opener whose state is not canonical (`holds_aged_stake_cannot_be_manufactured`) |
+| a staker paid twice or not at all | **holds** for every dispute an opening made: exact to the sompi (`settlement_pays_uneven_stakes_to_the_sompi`, the property games), a look-alike receipt refused, a winner waits only for forfeits anyone can make (`holds_a_staker_is_paid_once_and_exactly`) |
+| the outcome delivered to another claim, or twice | **holds**: script hash, id, the dispatch read by the claim (`holds_the_outcome_reaches_the_disputed_claim_once`, `a_claim_decides_only_from_its_disputes_resolution`) |
+| a decided claim re-opened | **holds**: not pending (`holds_the_outcome_reaches_the_disputed_claim_once`, `a_decided_claim_cannot_be_reopened`) |
+| a rich minority winning by timing | **holds**: a last-DAA answer gives the other side a full window, the bar is fixed for the round, capital younger than the claim never counts (`holds_a_rich_minority_cannot_win_by_timing`, `a_late_flood_...`); a minority richer than `1/μ` of the participating honest stake wins, as O§2 says (Z10) |
+| griefing honest stakers | **holds, with cost**: an opening on a true claim with 100 KAS (testnet) forces 125 KAS of honest stake idle for 7.5 days (938 KAS-days: the round plus the age its fresh winnings need), and the attacker loses its 100 KAS, 90 of them to honest: 0.107 KAS per honest KAS-day (`holds_griefing_honest_stake_costs_the_attacker_its_stake`) |
+| a relayed commitment landed late | **exploit, bounded** (`exploit_a_relayed_commitment_can_land_after_the_window_and_be_forfeited`): no upper bound on time exists, so whoever holds a commitment can land it as a partial answer after the window, before the resolution; its stake is then forfeited. Void after a lead change (round) and in any other dispute (binding, anchor); revocable only by spending the stake. Stakers sign only into an answer an aggregator completes |
+| a commitment moved to another dispute | **holds** (Z13; `holds_a_commitment_cannot_be_moved_to_another_dispute`) |
+| a dispute written by a genesis | **exploit, bounded** (`exploit_a_dispute_written_by_a_genesis_traps_the_stakers_who_join_it`): a forged tally with no losing receipts lets honest stakers win a pool that can never pay them; only stakers who join a dispute they did not trace to an opening (a claim of a verified lineage spent by `open`) lose. Wallets must check the opening transaction, as slice A's look-alike pairs |
+| a dispute or stake left unspendable | **holds** for every state the template writes (`holds_no_dispute_or_stake_is_left_unspendable`) |
+| model and contracts disagree | **holds**: 1,398 replayed steps of 120 random games with 3,255 hostile variants (782 accepted by both, 2,473 refused by both): 100 openings, 184 deposits, 100 resolutions, 194 settlements, 100 closes, 68 withdrawals |
+
+**The model's games** (`judge_games_conserve_terminate_and_never_take_more_than_was_staked`): 300 seeded games, 5,073
+receipts, 656 lead changes, uneven stakes with sub-unit remainders, both sides by one key, unaged and leader stake and
+early resolutions (all refused), answers in the last DAA of a window, settlement in random order and batches. On every
+game: winners' gain plus burn plus the executor's dust equals the losers' forfeit exactly; the rounding is below one
+sompi per winning receipt; no receipt is paid less than it staked if it won, or anything if it lost; the claim gets the
+leader's verdict; the game ends.
+
+## 14. What the next slice needs from this one
+
+- **Wiring into the pending part** (`KpfPendingO`): its contest is the stand-in's (`contest`: the opener read by
+  template hash, canonical state and dispatch, three outputs of its id; the anchor is its `P`), plus O2§1.7's
+  reservation of `σ·c` from the underwriter's slot (a `KpfBond` reserved status, the model's `Bond::reserve`) and the
+  counter quote `p′`; its decide restores (refuted) or finalizes (upheld); the restitution and slash are paid from the
+  reservation at the same resolution, not by the pool. `JUDGE_TPL`, `OPEN_TAG`, `RESOLVE_TAG` become its build constants.
+- **The oracle-market pair and orders**: the judge block (87 bytes) joins the oracle market block, and `checkMarket`
+  calls the `checkJudge` text; `KpfOpen` and the pair are unchanged until then.
+- **The underwriter's price claims and records** (`KpfRecord` for `T_retro`): contested the same way, with their own `P`.
+- **Closed-market rules**: a claim about a closed session is false by the feed definition; that is the judge's (the
+  stakers') judgement, not a covenant rule; no judge change is needed.
+- **Tooling**: wallets must trace a dispute to its opening before committing; aggregators chain deposits from
+  SINGLE\|ANYONECANPAY commitments and complete an answer in one chain.
+- **Not done here**: pinning `KpfStake` and the claim in `contracts/artifacts/`, builders and command line; the fold
+  with `KpfBond` and `KpfLock`; the coordinated (triage) honest strategy of the drill; Z12.
