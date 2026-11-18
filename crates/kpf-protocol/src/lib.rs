@@ -9,21 +9,28 @@
 //! - [`network`]: testnet-10 addresses (mainnet is refused).
 //! - [`tx`]: the transaction model, signing (Schnorr, SIGHASH_ALL), fee and mass, JSON forms.
 //! - [`build`]: the builders of every evidence-free path.
+//! - [`kob`]: KOB order and token codecs, the evidence check.
+//! - [`evidence`]: the builders of the three evidence paths (P5, P6, P7).
 //! - [`verify`]: every input through the rusty-kaspa v2.1.0 script engine, with consensus metering.
 //!
-//! # What is not here
+//! # The evidence paths
 //!
-//! The evidence paths of `KpfPair.onEvidence` (P5 unilateral close, P6 liquidation, P7 liquidation by transfer) are not
-//! built. Their transaction embeds the fill of a live KOB `KobAsk`/`KobBid` and its token custody: the signature
-//! script and outputs of those inputs are KOB's and the token program's (a KCC-20 leader witness, per-program slot
-//! limits, deliveries). `kob-protocol` builds them only inside its own crate-private draft, which cannot take foreign
-//! inputs, and a KPF evidence transaction needs such an order to exist on the network, which requires KOB's indexer.
-//! The engine tests (`crates/kpf-tests/tests/kpf/evidence.rs`) exercise these paths against KOB's real contracts.
+//! The three paths of the `onEvidence` entry (P5 unilateral close, P6 liquidation, P7 liquidation by transfer) are built
+//! by [`evidence`]: the transaction embeds the fill of a live KOB `KobAsk` / `KobBid`, its counterparty (the executor
+//! buys the ask's tokens, or sells its own tokens into the bid) and the token program's inputs and outputs, so that every
+//! input passes its own script. KOB's builder (`kob_protocol::build::build_batch`) cannot be used for this: it assembles
+//! the transaction in a crate-private draft that holds only KOB's own order and key inputs, not a foreign pair input.
+//! [`kob`] reads live orders and token holders from their redeem scripts, checks them against a market (DESIGN 3.3, 4.5b)
+//! and says why an order cannot serve. Supported: KOB's reference KCC-20 program (3 / 3 slots) with P2PK owners, plain
+//! GTC, IOC/FOK and TWAP/DCA-interval orders at a fixed quote; see `docs/TESTNET.md` for what is not.
+//!
 
 pub mod artifacts;
 pub mod build;
 pub mod error;
+pub mod evidence;
 pub mod fixtures;
+pub mod kob;
 pub mod network;
 pub mod payoff;
 pub mod sim;

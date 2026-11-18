@@ -46,7 +46,7 @@ exercise on testnet-10 is described in `docs/TESTNET.md`.
 |---|---|
 | `contracts/KpfPair.sil`, `KpfOpen.sil` | the two covenants (finished and reviewed); `probes/` are experiments |
 | `contracts/artifacts/` | pinned compiled artifacts, manifest, `SHA256SUMS` |
-| `crates/kpf-protocol/` | library: pinned artifacts, state codecs, payoff math, transaction builders, signing, fee/mass, engine verification, in-memory chain (`sim`), test fixtures |
+| `crates/kpf-protocol/` | library: pinned artifacts, state codecs, payoff math, transaction builders (including the price-evidence paths with KOB orders and the token program), KOB order codecs and the evidence check, signing, fee/mass, engine verification, in-memory chain (`sim`), test fixtures |
 | `crates/kpf-artifacts/` | regenerates and checks the pinned artifacts (the only crate that links the compiler) |
 | `crates/kpf-cli/` | the `kpf` binary and its integration tests (scripted lifecycle against an in-memory UTXO set) |
 | `crates/kpf-tests/` | engine tests: both contracts and the KOB evidence paths in the rusty-kaspa script engine |

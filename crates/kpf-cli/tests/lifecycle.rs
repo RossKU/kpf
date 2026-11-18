@@ -115,19 +115,21 @@ impl H {
             let o: Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
             let redeem = from_hex(o["redeem"].as_str().unwrap());
             let idx = o["outpoint"]["index"].as_u64().unwrap() as usize;
-            created.push((
-                idx,
-                match decode_redeem(&redeem).unwrap() {
-                    Decoded::Pair(p) => Obj::Pair(p),
-                    Decoded::Open(o) => Obj::Open(o),
-                },
-            ));
+            created.push((idx, match decode_redeem(&redeem) {
+                Ok(Decoded::Pair(p)) => Obj::Pair(p),
+                Ok(Decoded::Open(o)) => Obj::Open(o),
+                // A KOB order or a token holder an evidence transaction created: the chain knows it as a UTXO.
+                Err(_) => continue,
+            }));
         }
         // The chain re-runs every input in the engine on its own.
         self.chain.apply(&tx, &created).unwrap_or_else(|e| panic!("the chain refused {args:?}: {e}"));
         for f in &files {
             let mut o: Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
             o["daa"] = json!(self.chain.daa);
+            if o.get("custody").is_some_and(|c| !c.is_null()) {
+                o["custody"]["daa"] = json!(self.chain.daa);
+            }
             std::fs::write(f, serde_json::to_string_pretty(&o).unwrap()).unwrap();
         }
         files
@@ -444,4 +446,175 @@ fn runbook_scenario() {
     let _ = leftover;
     let spent = start - h.chain.balance(&a);
     println!("funder balance change over the whole scenario: -{} sompi", spent);
+}
+
+// ---------------------------------------------------------------- the evidence paths with a real KOB book
+
+fn hexs(b: &[u8]) -> String {
+    kpf_protocol::error::to_hex(b)
+}
+
+/// A KOB order or token UTXO placed in the chain by hand (as KOB's indexer would show it), and its file by `kpf kob-file`.
+fn kob_file(h: &H, name: &str, live: &kpf_protocol::sim::KobLive, custody: Option<&str>) -> String {
+    let path = h.p(name);
+    let op = format!("{}:{}", live.op.transaction_id, live.op.index);
+    let (amount, daa, id) = (live.value.to_string(), live.daa.to_string(), hexs(&live.id.as_bytes()));
+    let redeem = hexs(&live.obj.redeem());
+    let mut args = vec!["kob-file", "--redeem", &redeem, "--outpoint", &op, "--amount", &amount, "--daa", &daa, "--covenant-id", &id, "--out", &path];
+    if let Some(c) = custody {
+        args.extend(["--custody", c]);
+    }
+    h.ok(&args);
+    path
+}
+
+fn amounts(files: &[String]) -> Vec<(String, i64)> {
+    files
+        .iter()
+        .map(|f| {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
+            (v["kind"].as_str().unwrap().to_string(), v["state"]["size"].as_i64().or(v["state"]["amount"].as_i64()).or(v["state"]["amountLeft"].as_i64()).unwrap_or(-1))
+        })
+        .collect()
+}
+
+/// A pair of 1,000 tokens at 10 KAS (long 9, short 12), a bid book, a unilateral close of part, a book that moves down,
+/// a liquidation of part by transfer and a liquidation of the rest: every transaction is built by the binary, verified
+/// by it and applied to the chain (every input in the script engine, the KOB orders and the token program included).
+#[test]
+fn evidence_lifecycle_with_a_kob_book() {
+    use kpf_protocol::fixtures::{ask_of, bid_escrow, bid_of, kob_market};
+    use kpf_protocol::kob::*;
+
+    let mut h = H::new("evidence");
+    let m = kob_market();
+    let market = h.p("market.json");
+    std::fs::write(&market, serde_json::to_string(&m.to_json()).unwrap()).unwrap();
+    h.ok(&["market", "--check", &market]);
+    let (lk, l) = h.key("long");
+    let (sk, s) = h.key("short");
+    let (fk, f) = h.key("executor");
+    let (_mk, maker) = h.key("maker");
+    for _ in 0..3 {
+        h.chain.mint(&f, 100_000 * KAS);
+    }
+
+    // Two orders and a pair of 1,000 tokens at 10 KAS.
+    let fund = h.funding("f", &f);
+    let lo = h.step(&[
+        "create-order", "--market", &market, "--side", "long", "--size", "2000", "--limit", "10.5", "--rate", "1", "--min-counter-rate", "1.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &lk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let so = h.step(&[
+        "create-order", "--market", &market, "--side", "short", "--size", "1000", "--limit", "9.5", "--rate", "2", "--min-counter-rate", "0.5", "--min-fill", "100",
+        "--tip", "0.01", "--expiry", "1000000000", "--owner", &sk, "--funder", &fk, "--funding", &fund,
+    ]);
+    let fund = h.funding("f", &f);
+    let opened = h.step(&["open", "--long", &lo[0], "--short", &so[0], "--n", "1000", "--x", "10", "--funder", &fk, "--funding", &fund]);
+    let pair = opened.iter().find(|p| object_kind(p) == "pair").cloned().expect("pair");
+    let entrant = opened.iter().find(|p| object_kind(p) == "order").cloned().expect("the long order's continuation");
+
+    // The book: a resting bid at 10 KAS (1,500 tokens), and the executor's own tokens to sell into it.
+    let now = h.chain.daa;
+    let bid_id = kaspa_consensus_core::Hash::from_bytes([0xe2; 32]);
+    let b = bid_of(&m, maker, 1_000_000_000);
+    let bid = h.chain.mint_kob(KobObj::Bid(b.clone()), bid_escrow(&b, 1_500_000_000), bid_id, now);
+    let seller = h.chain.mint_kob(KobObj::Token(TokenState::p2pk(500_000_000, f, m.ext)), 20_000_000, m.token_cov_id, now);
+    let bid_file = kob_file(&h, "bid.json", &bid, None);
+    let seller_file = kob_file(&h, "seller.json", &seller, None);
+
+    // Too early: the order has not rested for minRestDaa.
+    let early = (now + 100).to_string();
+    let err = h.fail(&["evidence", "--order", &bid_file, "--pair", &pair, "--daa", &early]);
+    assert!(err.contains("cannot serve"), "{err}");
+    let out = h.run(&["evidence", "--order", &bid_file, "--pair", &pair, "--daa", &early]).1;
+    assert!(out.contains("NOT YET") && out.contains("has not rested long enough"), "{out}");
+    h.chain.advance(650);
+    let daa = h.chain.daa.to_string();
+    let out = h.ok(&["evidence", "--order", &bid_file, "--pair", &pair, "--daa", &daa]);
+    assert!(out.contains("usable as evidence now") && out.contains("the long closes (P5)") && out.contains("yes"), "{out}");
+
+    // A bid cannot liquidate a long, and the command says so before building anything.
+    let fund = h.funding("f", &f);
+    let err = h.fail(&["liquidate", "--pair", &pair, "--evidence", &bid_file, "--seller", &seller_file, "--funder", &fk, "--funding", &fund, "--daa", &daa, "--out-dir", &h.p("nope")]);
+    assert!(err.contains("not liquidatable"), "{err}");
+
+    // P5: the long closes 400 tokens at the bid (10 KAS): it is owed 400 x (10 - 9) = 400 KAS.
+    let before = h.chain.balance(&l);
+    let fund = h.funding("f", &f);
+    let closed = h.step(&[
+        "close", "--pair", &pair, "--side", "long", "--n", "400", "--evidence", &bid_file, "--seller", &seller_file, "--key", &lk, "--funder", &fk, "--funding", &fund, "--daa", &daa,
+    ]);
+    assert!(h.chain.balance(&l) - before >= 400 * KAS, "the long received its payout");
+    let rest = closed.iter().find(|p| object_kind(p) == "pair").cloned().expect("remainder");
+    assert_eq!(object_size(&rest), 600_000_000);
+    assert!(closed.iter().any(|p| object_kind(p) == "bid"), "the bid continues");
+    assert!(closed.iter().any(|p| object_kind(p) == "token"), "the executor keeps its change tokens");
+
+    // The book moves down: a new ask at 9.4 KAS (1,500 tokens) with its custody. The long (bl 9, 5 % maintenance: trigger
+    // 9.47) is liquidatable at 9.4 and not at 9.5.
+    let now = h.chain.daa;
+    let ask_id = kaspa_consensus_core::Hash::from_bytes([0xe1; 32]);
+    let ask = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 940_000_000, 1_500_000_000)), 10 * KAS, ask_id, now);
+    let custody = h.chain.mint_kob(KobObj::Token(TokenState::covid(1_500_000_000, ask_id, m.ext)), 20_000_000, m.token_cov_id, now);
+    let custody_file = kob_file(&h, "custody.json", &custody, None);
+    let ask_file = kob_file(&h, "ask.json", &ask, Some(&custody_file));
+    let high_id = kaspa_consensus_core::Hash::from_bytes([0xe3; 32]);
+    let high = h.chain.mint_kob(KobObj::Ask(ask_of(&m, maker, 950_000_000, 1_500_000_000)), 10 * KAS, high_id, now);
+    let high_custody = h.chain.mint_kob(KobObj::Token(TokenState::covid(1_500_000_000, high_id, m.ext)), 20_000_000, m.token_cov_id, now);
+    let high_c = kob_file(&h, "high-custody.json", &high_custody, None);
+    let high_file = kob_file(&h, "high-ask.json", &high, Some(&high_c));
+    h.chain.advance(650);
+    let daa = h.chain.daa.to_string();
+    let out = h.ok(&["evidence", "--order", &high_file, "--pair", &rest, "--daa", &daa]);
+    assert!(out.contains("not below the long's trigger"), "{out}");
+    let q = h.ok(&["quote", "--pair", &rest, "--prices", "9.4,9.5"]);
+    assert!(q.contains("liquidation (the loser forfeits everything") && q.contains("<= 9.47368421 KAS") && q.contains("trigger price 9.47368421"), "{q}");
+    let fund = h.funding("f", &f);
+    let err = h.fail(&["liquidate", "--pair", &rest, "--evidence", &high_file, "--funder", &fk, "--funding", &fund, "--daa", &daa, "--out-dir", &h.p("nope")]);
+    assert!(err.contains("not liquidatable"), "{err}");
+
+    // P7: 300 tokens of the long are sold to the resting long order at the best price the entrant allows (10 KAS).
+    let before = h.chain.balance(&s);
+    let fund = h.funding("f", &f);
+    let moved = h.step(&[
+        "liquidate-transfer", "--pair", &rest, "--entrant-order", &entrant, "--evidence", &ask_file, "--n", "300", "--funder", &fk, "--funding", &fund, "--daa", &daa,
+    ]);
+    let pairs: Vec<&String> = moved.iter().filter(|p| object_kind(p) == "pair").collect();
+    assert_eq!(pairs.len(), 2, "the part (entrant long) and the remainder");
+    assert_eq!(amounts(&moved).iter().filter(|(k, v)| k == "pair" && *v == 300_000_000).count(), 2);
+    assert!(h.chain.balance(&s) - before > 250 * KAS, "the winner (the short) is paid the entrant's payment less the fee");
+    let ask_cont = moved.iter().find(|p| object_kind(p) == "ask").cloned().expect("the ask continues, with its custody");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&ask_cont).unwrap()).unwrap();
+    assert_eq!(v["custody"]["state"]["amount"], 1_200_000_000);
+
+    // The two pieces of one split share a covenant id, and a pair must be the only input of its id: a block holds one piece
+    // per id, so they are liquidated one after the other (each time on the ask's latest continuation, once it has rested).
+    let err = h.fail(&["liquidate", "--pair", pairs[0], "--pair", pairs[1], "--evidence", &ask_cont, "--funder", &fk, "--funding", &h.funding("f", &f), "--out-dir", &h.p("nope3")]);
+    assert!(err.contains("covenant id of an earlier pair"), "{err}");
+
+    // P6: the remainder (300 tokens, the rest) is liquidated whole.
+    h.chain.advance(650);
+    let daa = h.chain.daa.to_string();
+    let fund = h.funding("f", &f);
+    let (before_l, before_s) = (h.chain.balance(&l), h.chain.balance(&s));
+    let done = h.step(&["liquidate", "--pair", pairs[1], "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--daa", &daa]);
+    assert!(done.iter().all(|p| object_kind(p) != "pair"), "the piece is gone");
+    assert_eq!(h.chain.balance(&l), before_l, "a liquidated long receives nothing");
+    assert!(h.chain.balance(&s) > before_s);
+    let ask_cont = done.iter().find(|p| object_kind(p) == "ask").cloned().expect("the ask continues again");
+
+    // And the entrant's part, on the next continuation: a part of a pair that was itself liquidated by transfer.
+    h.chain.advance(650);
+    let daa = h.chain.daa.to_string();
+    let fund = h.funding("f", &f);
+    let done = h.step(&["liquidate", "--pair", pairs[0], "--evidence", &ask_cont, "--funder", &fk, "--funding", &fund, "--daa", &daa]);
+    assert!(done.iter().all(|p| object_kind(p) != "pair"));
+
+    // Refusals: a mainnet network, a submission with no node, an unknown flag.
+    let err = h.fail(&["evidence", "--order", &bid_file, "--pair", &pair, "--network", "mainnet"]);
+    assert!(err.contains("testnet-only"), "{err}");
+    let err = h.fail(&["close", "--pair", &pair, "--sid", "long"]);
+    assert!(err.contains("unknown option"), "{err}");
 }

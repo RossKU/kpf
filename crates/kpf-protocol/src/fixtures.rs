@@ -105,3 +105,76 @@ pub fn pair(long: [u8; 32], short: [u8; 32]) -> Pair {
         tag_s: Hash::default(),
     }
 }
+
+// ---------------------------------------------------------------- KOB evidence fixtures
+
+/// The worked-example market on KOB's reference KCC-20 program: the real template hash and cut of the token, so that
+/// evidence custodies and deliveries run the real token script (tokenCovId and the extension commitment are fixed
+/// placeholders, as everywhere in the fixtures).
+pub fn kob_market() -> Market {
+    let t = crate::artifacts::token_template();
+    let mut m = market();
+    m.token_tpl_hash = Hash::from_bytes(t.hash);
+    m.tpl_prefix_len = t.prefix.len() as i64;
+    m.tpl_suffix_len = t.suffix.len() as i64;
+    m
+}
+
+/// A GTC ask of `amount` base units at `price` on the token of `m`, resting since DAA 0 (no decay, no TWAP).
+pub fn ask_of(m: &Market, maker: [u8; 32], price: i64, amount: i64) -> crate::kob::AskState {
+    crate::kob::AskState {
+        maker,
+        token_cov_id: m.token_cov_id,
+        token_tpl_hash: m.token_tpl_hash,
+        pre: m.tpl_prefix_len,
+        suf: m.tpl_suffix_len,
+        scale: m.scale,
+        min_fill: 1,
+        price,
+        tip: 0,
+        tif: 0,
+        active_from: 0,
+        expiry_daa: 1_000_000_000_000,
+        refund_tip: 0,
+        interval: 0,
+        max_fill: 0,
+        slope: 0,
+        price_end: 0,
+        decay_step: 1,
+        amount_left: amount,
+        ext: m.ext,
+    }
+}
+
+/// A GTC bid at `price` on the token of `m` (minimum fill one whole token, 0.2 KAS delivery carrier).
+pub fn bid_of(m: &Market, maker: [u8; 32], price: i64) -> crate::kob::BidState {
+    crate::kob::BidState {
+        maker,
+        token_cov_id: m.token_cov_id,
+        token_tpl_hash: m.token_tpl_hash,
+        pre: m.tpl_prefix_len,
+        suf: m.tpl_suffix_len,
+        ext: m.ext,
+        scale: m.scale,
+        min_fill: 1_000_000,
+        price,
+        tip: 0,
+        tif: 0,
+        active_from: 0,
+        expiry_daa: 1_000_000_000_000,
+        refund_tip: 0,
+        reserve: 0,
+        delivery_carrier: C,
+        interval: 0,
+        max_fill: 0,
+        slope: 0,
+        price_end: 0,
+        decay_step: 1,
+    }
+}
+
+/// KAS a bid of `amount` base units at `price` is funded with: its budget, its delivery carriers for a fill and a
+/// continuation, one minimum fill of room and 1 KAS.
+pub fn bid_escrow(b: &crate::kob::BidState, amount: i64) -> u64 {
+    (b.used(amount) + 2 * b.delivery_carrier + b.used(b.min_fill) + 100_000_000) as u64
+}

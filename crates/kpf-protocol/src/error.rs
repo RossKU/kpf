@@ -62,3 +62,17 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>> {
 pub fn hex32(s: &str) -> Result<[u8; 32]> {
     from_hex(s)?.try_into().map_err(|_| Error::Invalid("expected 32 bytes of hex".into()))
 }
+
+/// Sompi as a decimal KAS string (up to 8 decimals, trailing zeros trimmed).
+pub fn kas_str(v: i128) -> String {
+    let neg = v < 0;
+    let a = v.unsigned_abs();
+    let (w, f) = (a / 100_000_000, a % 100_000_000);
+    let mut s = format!("{w}.{f:08}");
+    s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    if neg {
+        format!("-{s}")
+    } else {
+        s
+    }
+}

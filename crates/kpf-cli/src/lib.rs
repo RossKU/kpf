@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod cmds;
+pub mod evcmds;
 pub mod files;
 pub mod keys;
 pub mod node;
@@ -38,6 +39,20 @@ Builders (common: --funder KEY --funding UTXOS.json | --node URL, [--key KEY]...
   coop-close    --pair P.json --long-pay KAS [--fee-from long|short] --key LONG --key SHORT [--funder KEY]
   idle-settle   --pair P.json
 
+Price-evidence paths (a real KOB order is filled in the same transaction; the funder is the executor: it BUYS the evidence
+ask's tokens with its own KAS, or SELLS its own tokens into the evidence bid. common flags as the builders)
+  evidence  --order ORDER.json --pair P.json [--daa N | --node URL] [--json]   can this KOB order serve as evidence, and why not
+  close     --pair P.json --side long|short --n T --evidence ORDER.json [--seller TOKEN.json] [--evidence-fill T] --key OWNER
+            P5 unilateral close: a long at a resting bid, a short at a resting ask (the owner's key signs)
+  liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json]   P6, up to 8 pairs on one evidence:
+            an ask liquidates longs, a bid shorts; the loser receives nothing, the winner the part less the fee
+  liquidate-transfer --pair P.json --entrant-order O.json --evidence ORDER.json [--n T] [--x P] [--k 0|1] [--seller TOKEN.json]
+            P7: the loser's part is sold to a resting KpfOpen of its side; the winner keeps its position
+  kob-file  --redeem HEX --outpoint TXID:INDEX (--node URL | --amount SOMPI --daa N --covenant-id HEX) [--custody FILE] [--out FILE]
+            an ORDER.json / TOKEN.json from a KOB order's or a token holder's redeem script
+  (--daa N: the DAA the time checks use when there is no --node; a transaction whose lock time is ahead of the node's DAA
+   is not submitted)
+
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)
   status  --object FILE... [--update]                is the object live; fill in its DAA
@@ -47,7 +62,6 @@ Node (needs --node)
 
 Units: prices, rates and KAS amounts are decimal KAS (or <n>s for exact sompi); sizes are decimal whole tokens of the
 market's scale (or <n>s for base units). Object files are written by every builder (--out-dir, default ./kpf-out).
-Evidence paths (unilateral close, liquidation) are not built: see docs/TESTNET.md.
 ";
 
 /// Runs one invocation (without the program name); prints to stdout.
@@ -75,6 +89,11 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "mutual-close" => cmds::mutual_close_cmd(&a),
         "coop-close" => cmds::coop_close_cmd(&a),
         "idle-settle" => cmds::idle_settle_cmd(&a),
+        "close" => evcmds::close_cmd(&a),
+        "liquidate" => evcmds::liquidate_cmd(&a),
+        "liquidate-transfer" => evcmds::liquidate_transfer_cmd(&a),
+        "evidence" => evcmds::evidence_cmd(&a),
+        "kob-file" => evcmds::kob_file_cmd(&a),
         "verify" => cmds::verify_cmd(&a),
         "submit" => cmds::submit_cmd(&a),
         "utxos" => cmds::utxos_cmd(&a),

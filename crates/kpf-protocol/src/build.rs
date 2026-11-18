@@ -18,8 +18,7 @@
 //! | [`coop_close`] | P9 cooperative close |
 //! | [`idle_settle`] | P8 |
 //!
-//! The evidence paths (P5 unilateral close, P6 liquidation, P7 liquidation by transfer) are not built here: see the
-//! crate documentation.
+//! The evidence paths (P5 unilateral close, P6 liquidation, P7 liquidation by transfer) are built in `crate::evidence`.
 
 use kaspa_consensus_core::Hash;
 
@@ -52,7 +51,7 @@ pub struct Funding {
 }
 
 impl Draft {
-    fn fund_inputs(&mut self, f: &Funding) -> Result<usize> {
+    pub(crate) fn fund_inputs(&mut self, f: &Funding) -> Result<usize> {
         if f.utxos.is_empty() {
             return invalid("this transaction needs at least one funding UTXO (plain P2PK) to pay the fee");
         }
@@ -62,7 +61,7 @@ impl Draft {
         }
         Ok(first)
     }
-    fn add_change(&mut self, key: &[u8; 32]) -> usize {
+    pub(crate) fn add_change(&mut self, key: &[u8; 32]) -> usize {
         let c = self.add_plain(0, key, "change");
         self.change = Some(c);
         c
@@ -145,7 +144,7 @@ fn check_amount(o: &Open, n: i64) -> Result<()> {
 }
 
 /// The order's continuation or refund output after a fill of n, at the next output index. Returns the index.
-fn order_output(d: &mut Draft, lo: &LiveOpen, input: usize, n: i64) -> usize {
+pub(crate) fn order_output(d: &mut Draft, lo: &LiveOpen, input: usize, n: i64) -> usize {
     let (rest, cont) = order_rest(&lo.o, lo.value, n);
     match cont {
         Some(c) => d.add_open_out(&c, rest, Some((input as u16, lo.id)), "order continuation"),
@@ -273,7 +272,7 @@ pub enum Entrant {
 }
 
 /// The arguments of `KpfOpen.take` for the part `part`, taken by an order of `side` for n at x.
-fn take_args(part: &Pair, side: i64, part_out: i64, n: i64, x: i64) -> Vec<Arg> {
+pub(crate) fn take_args(part: &Pair, side: i64, part_out: i64, n: i64, x: i64) -> Vec<Arg> {
     let (bound, ck, w) = if side == LONG { (part.bs, part.short_key, part.short_window()) } else { (part.bl, part.long_key, part.long_window()) };
     let t = pair_template();
     vec![iv(part_out), iv(n), iv(x), iv(part.entry), iv(bound), bv(&ck), iv(w.0), iv(w.1), iv(w.2), bv(&t.prefix), bv(&t.suffix)]

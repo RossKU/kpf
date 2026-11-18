@@ -87,6 +87,7 @@ fn world() -> (World, LiveOpen, LiveOpen, LivePair) {
             match o {
                 Live::Pair(p) => pair = Some(p),
                 Live::Open(o) => lcont = Some(o),
+                Live::Kob(_) => unreachable!("an evidence-free transaction creates no KOB object"),
             }
         }
         (pair.expect("pair"), lcont.expect("long continuation"))
@@ -390,7 +391,7 @@ fn assert_args_matter(b: &Built) {
                 let (r, e) = (redeem.clone(), *entry);
                 (args, Box::new(move |a| Plan::Open { redeem: r.clone(), entry: e, args: a }))
             }
-            Plan::P2pk { .. } => continue,
+            Plan::P2pk { .. } | Plan::Kob { .. } => continue,
         };
         for (k, a) in args.iter().enumerate() {
             if let Arg::V(silverscript_abi::ArtifactValue::Int(v)) = a {

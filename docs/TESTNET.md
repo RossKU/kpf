@@ -6,7 +6,7 @@ network yet: the tooling was only exercised offline (engine tests, and the CLI a
 
 What this exercise covers: every evidence-free path of `KpfOpen` and `KpfPair` (create order, open, list, transfer,
 add margin, mutual close, cooperative close, idle settle, plus cancel, refund, open against a signing taker and
-close-versus-close). It does not cover price evidence (see the last section).
+close-versus-close). Price evidence (unilateral close, liquidation) is a separate exercise: section 7.
 
 ## 1. What must exist before
 
@@ -122,14 +122,136 @@ node may not relay at the floor: raise `--fee-rate` or add `--priority` (which a
   send you its object file. There is no order book and no matching.
 - **An executor.** Nobody watches the chain to fill orders, open pairs between orders, or collect tips. Every transaction
   of this exercise is built and funded by hand by the owner.
-- **The evidence paths**: P5 unilateral close, P6 liquidation and P7 liquidation by transfer (`KpfPair.onEvidence`) are
-  not built by the tooling. Their transaction embeds the fill of a live KOB `KobAsk` / `KobBid` of the market's token
-  and that token's custody, with KOB's and the token program's own signature scripts, outputs and per-program limits.
-  `kob-protocol` builds these only inside its crate-private draft, which cannot take foreign inputs, and a KPF evidence
-  transaction needs such an order to exist, which requires KOB's indexer. The engine tests
-  (`crates/kpf-tests/tests/kpf/evidence.rs`) exercise all three paths against KOB's real contracts. The market of this exercise
-  carries a placeholder token, so evidence could not be used on it anyway. Without evidence a pair can end by transfer,
-  close-versus-close, mutual or cooperative close, or idle settle.
 - **Multi-party signing across machines.** `coop-close` needs both owners' key files on the machine that builds it.
   There is no partial-signature exchange yet.
 - **Mainnet**: refused on purpose.
+
+## 7. Price evidence: unilateral close, liquidation, liquidation by transfer
+
+The three paths of `KpfPair.onEvidence` (P5, P6, P7) need a **real KOB order**: a resting `KobAsk` or `KobBid` of the
+market's token is filled in the same transaction, and the pair reads its quote (DESIGN 3.3). `kpf close`, `kpf liquidate`
+and `kpf liquidate-transfer` build that whole transaction: the pairs, KOB's order, its counterparty and the token
+program's inputs and outputs, all verified input by input in the script engine before anything is written. They have been
+exercised only offline (engine tests and the CLI against an in-memory chain with a KOB book); nothing has been run on a
+network. This section is the exercise that would change that.
+
+### 7.1 What it needs
+
+1. **A KCC-20 token on testnet-10 of KOB's reference program** `kcc20-ref-3x3` (template hash
+   `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, prefix 1 byte, suffix 2,802 bytes, 112-byte
+   state; the program `kob token create --program 3x3` issues). The tool spends only this program: for any other
+   (`KCC20Ref_4x5`, `_8x8`, `KCC20PublicMint` / kUSDT, KRON) `kpf evidence` says so and nothing is built. You need its
+   covenant id and its extension commitment.
+2. **A market file for that token.** Start from `kpf market --idle-daa 3000 --carrier 0.2 > market.json` and replace the
+   token identity: `tokenCovId`, `extensionCommitment` (hex, 32 bytes), `tokenTplHash` =
+   `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, `tplPrefixLen` = 1, `tplSuffixLen` = 2802, and
+   `scale` = 10^decimals of the token (and `minSize` in base units). `kpf market --check market.json` validates it.
+   `minRestDaa` (default 600, about one minute) is how long an evidence order must have rested.
+3. **Resting KOB orders of that token whose templates are byte-identical to the ones pinned in `KpfPair`.** The pair
+   authenticates its evidence by the template hash, the prefix length and the suffix length of the order's redeem script:
+
+   | order | template hash | prefix | suffix | state |
+   |---|---|---|---|---|
+   | `KobAsk` | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1 | 1,407 | 276 B |
+   | `KobBid` | `dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef` | 1 | 1,343 | 285 B |
+
+   These are the hashes of KOB at commit `ed16148` (`vendor/kob/contracts/orders/KobCondAsk.ctor.json` pins the same
+   values). The orders must be plain: GTC (or IOC/FOK whose kill falls after the rest window), a fixed quote (no decay or
+   rise), tip and `interval` as KOB allows, `expiryDaa` at least the rest window after the order was created, and an ask
+   must be backed by its custody UTXO. A bid must be funded for at least `k` times the parts it serves.
+4. **What the executor (the funder) pays or holds.** The evidence is an actual fill:
+   - *ask evidence* (liquidate a long; a short closes): the executor **buys** `max(k x sum(n), the ask's minimum fill)`
+     base units at the ask's price with its own KAS and keeps the tokens. At the default `k` = 1 it pays about
+     `n x ask price` for a part `n`; with 10 tokens at 9.4 KAS that is 94 KAS (more than the pair is worth). It receives the
+     tokens as a holder UTXO (a file `*-token.json` is written).
+   - *bid evidence* (liquidate a short; a long closes): the executor **sells** that many tokens into the bid and receives the
+     KAS, so it needs a token UTXO of its own (P2PK owner, the market's extension commitment) with at least that amount:
+     pass it with `--seller TOKEN.json`. Tokens the ask evidence bought can serve here. Filling a resting ask against the
+     bid instead (no tokens needed) would add three inputs and is not built.
+   - Both pay the network fee (section 7.4) and lock about 0.2 KAS per token output the transaction creates.
+
+### 7.2 Checking an order before anything is built
+
+An order file (`ORDER.json`) is the order's outpoint, amount, DAA, covenant id and **redeem script** (the KOB order's
+script is not on chain until it is spent: take it from KOB's indexer or from the order's creation record, prefix + state +
+suffix of the template above) and, for an ask, its custody UTXO. `kpf kob-file` writes it and, with `--node`, reads the
+UTXO facts from the node:
+
+```sh
+kpf kob-file --redeem <custody redeem hex> --outpoint <txid>:<i> --node $NODE --out custody.json
+kpf kob-file --redeem <ask redeem hex>     --outpoint <txid>:<i> --node $NODE --custody custody.json --out ask.json
+kpf kob-file --redeem <bid redeem hex>     --outpoint <txid>:<i> --node $NODE --out bid.json
+kpf kob-file --redeem <your token redeem hex> --outpoint <txid>:<i> --node $NODE --out seller.json     # tokens to sell
+kpf evidence --order ask.json --pair out/4/*-pair.json --node $NODE        # or --daa N instead of --node
+```
+
+`kpf evidence` decodes the order, checks it against the pair's market the way `KpfPair` does (token covenant id, scale,
+extension commitment, token program, not decaying, interval, custody, the rest window of DESIGN 4.5b: soft expiry, IOC/FOK
+kill and the 90-day idle limit) and prints, in words, why an order cannot serve: `CANNOT SERVE` (never, as it is) or
+`NOT YET` (it must rest until DAA N). It also lists what the quote lets this pair do (the long closes at a bid, the short
+at an ask, who is liquidatable at that quote and why not). It exits non-zero unless the order is usable (without a DAA only the time-free conditions are judged).
+
+**If the live KOB deployment uses different templates** the check says so: *the script (N bytes) is not an instance of the
+KobAsk / KobBid template pinned in KpfPair ... its template hash is H against the pinned P*. Then no KPF pair of this
+build can use that order as evidence: the hashes are constants of `KpfPair` (a constructor argument of the compiled
+contract), and `KpfOpen` pins the `KpfPair` template, so using other KOB templates means recompiling both contracts and a
+new market, which is a contract change this repository does not make here. Do not patch the tooling around it: record `H`,
+the order's size and the KOB commit it came from and report them. Pairs that already exist keep only the evidence-free
+exits of section 3.
+
+### 7.3 The exercise
+
+Use the pair of section 3, step 4 (size 10 tokens at 10 KAS, range 9 .. 12 KAS) on the market of 7.1, with `F` and `S` as
+there and `--out-dir out/<step>`; dry run first, then `$S`. Time matters: `minRestDaa` DAA after the evidence order was
+created (and, for an ask, after its custody) its quote counts; before that `kpf evidence` says `NOT YET`, and a built
+transaction carries a lock time ahead of the chain, which `kpf` will not submit (`--daa` or `--node` tells it the DAA).
+
+| # | Command | After it, check |
+|---|---|---|
+| 20 | short closes at a resting ask (10.5 KAS): `kpf close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S` | the short is paid `q(4, 12 - 10.5)` = 6 KAS at the pair's last output; the long receives the rest of the part (`q(4, 3)` - 6 = 6 KAS); the pair continues with 6 tokens; the ask continues (or ends if it was exactly filled); the executor holds 4 tokens bought at 10.5 KAS |
+| 21 | long closes at a resting bid (10 KAS): `kpf close --pair P.json --side long --n 4 --evidence bid.json --seller seller.json --key $A $F $S` | the long is paid `q(4, 10 - 9)` = 4 KAS; the executor's tokens went to the bid's maker and the executor received `4 x 10` KAS |
+| 22 | the book falls to an ask of 9.4 KAS (the long's trigger is 9.47 KAS: `kpf quote --pair P.json` prints it): `kpf liquidate --pair P.json --evidence ask.json $F $S` | the long receives nothing; the short receives the part's value less the fee (`kpf quote` shows it); up to 8 pairs of distinct covenant ids go in one transaction: repeat `--pair` |
+| 23 | the same, sold to a resting long order: `kpf liquidate-transfer --pair P.json --entrant-order out/.../order.json --evidence ask.json --n 4 $F $S` (`--x` defaults to the best price the entrant allows) | the loser's 4 tokens belong to the entrant's owner at its price; the short keeps its position and is paid the entrant's payment less the fee |
+
+After a transaction the evidence order that continued (`*-ask.json` with its custody, `*-bid.json`) and the executor's
+tokens (`*-token.json`) are written beside the new pairs. The continuation is a new UTXO: it must rest again before it is
+evidence. The pieces of one split (a part and its remainder) share a covenant id and a pair must be the only input of
+its id, so liquidate them in separate transactions.
+
+### 7.4 Measured cost (offline, relay floor 100 sompi per gram)
+
+Every transaction contains the 11.6 KB redeem script of each pair, KOB's order script and the token program script
+(2.9 KB) with the custody or the seller's tokens. The storage mass (KIP-9) comes from the small token outputs; the block
+limit is 500,000 and a token output of 0.2 KAS uses 200,000, which is why the builders keep their own outputs generous.
+
+| shape | size (bytes) | compute mass | storage mass | fee (KAS) |
+|---|---|---|---|---|
+| P5, long on a bid (whole pair) | 17,433 | 23,883 | 400,022 | 0.0349 |
+| P5, long on a bid (400 of 1,000) | 17,520 | 25,340 | 400,064 | 0.0350 |
+| P5, short on an ask (ask larger than the fill) | 17,424 | 23,674 | 404,012 | 0.0348 |
+| P5, short on an ask filled out | 17,144 | 22,154 | 200,012 | 0.0343 |
+| P6, long on an ask | 17,359 | 22,609 | 414,004 | 0.0347 |
+| P6, short on a bid | 17,316 | 22,406 | 400,009 | 0.0346 |
+| P6, block of 2 pairs | 29,184 | 35,854 | 424,006 | 0.0584 |
+| P6, block of 4 pairs | 52,834 | 62,344 | 444,012 | 0.1057 |
+| P6, block of 8 pairs | 100,134 | 115,324 | 484,024 | 0.2003 |
+| P7, whole pair | 31,384 | 39,714 | 404,073 | 0.0628 |
+| P7, part (remainder kept) | 31,471 | 41,171 | 404,131 | 0.0629 |
+
+The largest input in these transactions is the pair (43,000 to 313,000 script units in the shapes above; every input commits the exact
+budget). The block of 8 uses 97 % of the storage mass a block holds: it needs every token output at 0.2 KAS or more.
+
+### 7.5 What is not built, and why
+
+- **Other token programs.** A holder's witness and the slot limits differ per program (KRON, `KCC20PublicMint` with its
+  compiler context); only KOB's reference 3 / 3 program is spent.
+- **Seller tokens that are not P2PK-owned** (P2PKH, P2SH or covenant-owned holders): the leader witness built is the P2PK
+  one (`0x00` + signature).
+- **A resting opposite order as the counterparty** of a bid evidence (the executor's own tokens are used instead).
+- **An IOC ask filled in part**: its unsold tokens must return to the maker at the custody's own index; the builder takes
+  such an ask entirely (an ask that ends with its fill).
+- **Evidence from conditional, if-done, pair, decaying or rising orders**: `KpfPair` itself refuses them (plain, fixed
+  quote only).
+- **Several pieces of one split in one block**: they share a covenant id and a pair must be the only input of its id.
+- **Mixed blocks from the command line**: the library accepts any mix that one evidence serves (a short closing and a long
+  being liquidated at one ask); `kpf` exposes one path per command.

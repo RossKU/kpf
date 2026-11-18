@@ -87,3 +87,31 @@ fn the_pinned_sample_instance_decodes_and_re_encodes() {
         assert_eq!(again, c.bytecode);
     }
 }
+
+/// KOB's artifacts, embedded from the read-only checkout `vendor/kob`: digests pinned here, so that a different checkout
+/// is noticed, and their templates are the ones `KpfPair` was built with.
+#[test]
+fn the_embedded_kob_artifacts_are_the_pinned_ones() {
+    let digests = [
+        ("KobAsk", kob_ask_artifact_text(), "08f35a7babcd0f5790b130be80342ee7b5b065a49f92f3d23b5c00f433a4b0cf"),
+        ("KobBid", kob_bid_artifact_text(), "9e0d2613700b80a9d657107e6921dd68cec541ab32dfaa5abc47287658e4be43"),
+        ("KCC20Ref", kcc20_artifact_text(), "0149cff3d8b10236eab2c0d2a92e88beb89b726dd9044e4ee1a0a3d4cf6b956e"),
+    ];
+    for (name, text, want) in digests {
+        assert_eq!(sha(norm(text).as_bytes()), want, "{name}: vendor/kob/contracts/artifacts/{name}.json is not the checkout KPF was built against");
+    }
+    let m = manifest();
+    let k = kob_consts();
+    for (t, c) in [(ask_template(), &m.kob_ask), (bid_template(), &m.kob_bid)] {
+        assert_eq!(t.hash.iter().map(|b| format!("{b:02x}")).collect::<String>(), c.template_hash, "{}", t.name);
+        assert_eq!((t.prefix.len() as i64, t.suffix.len() as i64), (c.prefix_len, c.suffix_len), "{}", t.name);
+    }
+    assert_eq!(ask_template().hash, k.ask_tpl);
+    assert_eq!(bid_template().hash, k.bid_tpl);
+    assert_eq!((ask_template().state_len, bid_template().state_len, token_template().state_len), (276, 285, 112));
+    // The reference token program is the one KOB's registry lists as `kcc20-ref-3x3`.
+    assert_eq!(token_template().hash.iter().map(|b| format!("{b:02x}")).collect::<String>(), "173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b");
+    assert_eq!((token_template().prefix.len(), token_template().suffix.len()), (1, 2802));
+    // The market of the fixtures names exactly this program.
+    kpf_protocol::kob::supports_token_program(&kob_market()).unwrap();
+}

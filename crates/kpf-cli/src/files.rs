@@ -86,13 +86,73 @@ impl ObjFile {
         let (kind, state) = match self.decoded() {
             Ok(Decoded::Pair(p)) => ("pair", p.to_json()),
             Ok(Decoded::Open(o)) => ("order", o.to_json()),
-            Err(_) => ("unknown", Value::Null),
+            Err(_) => match kpf_protocol::kob::KobObj::decode(&self.redeem) {
+                Ok(kpf_protocol::kob::KobObj::Ask(a)) => ("ask", a.to_json()),
+                Ok(kpf_protocol::kob::KobObj::Bid(b)) => ("bid", b.to_json()),
+                Ok(kpf_protocol::kob::KobObj::Token(t)) => ("token", t.to_json()),
+                Err(_) => ("unknown", Value::Null),
+            },
         };
         json!({
             "format": "kpf-object/1", "kind": kind, "network": net.name(), "outpoint": outpoint_json(&self.op),
             "amount": self.amount, "daa": self.daa, "covenantId": self.covenant_id.to_string(),
             "address": p2sh_address(&self.redeem, net), "redeem": to_hex(&self.redeem), "state": state,
         })
+    }
+}
+
+/// A KOB order file (an evidence order, an executor's token UTXO): the UTXO as for a pair or an order, and for an ask
+/// the custody UTXO that holds its tokens. The redeem script of a KOB order is not on chain until it is spent: take it
+/// from KOB's indexer (or build it with `kpf kob-file`), and let `--node` refresh the UTXO facts.
+#[derive(Clone, Debug)]
+pub struct KobFile {
+    pub obj: ObjFile,
+    pub custody: Option<ObjFile>,
+}
+
+impl KobFile {
+    pub fn load(path: &str) -> Result<KobFile, String> {
+        let v = read_json(path)?;
+        KobFile::from_json(&v).map_err(|e| format!("{path}: {e}"))
+    }
+
+    pub fn from_json(v: &Value) -> Result<KobFile, String> {
+        let obj = ObjFile::from_json(v)?;
+        let custody = match v.get("custody") {
+            None | Some(Value::Null) => None,
+            Some(c) => Some(ObjFile::from_json(c).map_err(|e| format!("custody: {e}"))?),
+        };
+        Ok(KobFile { obj, custody })
+    }
+
+    pub fn to_json(&self, net: Network) -> Value {
+        let mut v = self.obj.to_json(net);
+        if let Some(c) = &self.custody {
+            v["custody"] = c.to_json(net);
+        }
+        v
+    }
+
+    /// The evidence this file describes: an ask with its custody, or a bid.
+    pub fn evidence(&self) -> Result<kpf_protocol::kob::Evidence, String> {
+        use kpf_protocol::kob::*;
+        match decode_order(&self.obj.redeem).map_err(|e| e.to_string())? {
+            KobOrder::Ask(a) => {
+                let c = self.custody.as_ref().ok_or("an ask needs its custody UTXO: add a `custody` entry (the token UTXO owned by the ask's covenant id)")?;
+                let t = TokenState::decode_redeem(&c.redeem).map_err(|e| format!("custody: {e}"))?;
+                Ok(Evidence::Ask {
+                    order: LiveAsk { a, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa },
+                    custody: LiveToken { t, value: c.amount, id: c.covenant_id, op: c.op, daa: c.daa },
+                })
+            }
+            KobOrder::Bid(b) => Ok(Evidence::Bid { order: LiveBid { b, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa } }),
+        }
+    }
+
+    /// The token holder UTXO this file describes.
+    pub fn live_token(&self) -> Result<kpf_protocol::kob::LiveToken, String> {
+        let t = kpf_protocol::kob::TokenState::decode_redeem(&self.obj.redeem).map_err(|e| e.to_string())?;
+        Ok(kpf_protocol::kob::LiveToken { t, value: self.obj.amount, id: self.obj.covenant_id, op: self.obj.op, daa: self.obj.daa })
     }
 }
 

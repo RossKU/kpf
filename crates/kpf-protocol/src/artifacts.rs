@@ -19,6 +19,26 @@ use crate::error::{Error, Result};
 const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
 const PAIR_JSON: &str = include_str!("../../../contracts/artifacts/KpfPair.json");
 const OPEN_JSON: &str = include_str!("../../../contracts/artifacts/KpfOpen.json");
+// KOB's published artifacts (the read-only checkout `vendor/kob`, never copied): the evidence orders and the reference
+// KCC-20 token program. Their ABIs build the signature scripts of the KOB and token inputs of an evidence transaction;
+// their templates decode live orders. `tests/pinned.rs` pins their digests and checks the template hashes against the
+// constants `KpfPair` was built with.
+const KOB_ASK_JSON: &str = include_str!("../../../vendor/kob/contracts/artifacts/KobAsk.json");
+const KOB_BID_JSON: &str = include_str!("../../../vendor/kob/contracts/artifacts/KobBid.json");
+const KCC20_JSON: &str = include_str!("../../../vendor/kob/contracts/artifacts/KCC20Ref.json");
+
+/// KOB's `KobAsk` artifact as embedded, as text (for digest checks).
+pub fn kob_ask_artifact_text() -> &'static str {
+    KOB_ASK_JSON
+}
+/// KOB's `KobBid` artifact as embedded, as text.
+pub fn kob_bid_artifact_text() -> &'static str {
+    KOB_BID_JSON
+}
+/// KOB's reference KCC-20 (3 / 3 slots) artifact as embedded, as text.
+pub fn kcc20_artifact_text() -> &'static str {
+    KCC20_JSON
+}
 
 /// The embedded manifest, as text (for digest checks).
 pub fn manifest_text() -> &'static str {
@@ -131,7 +151,8 @@ pub struct Template {
 }
 
 impl Template {
-    fn of(name: &'static str, art: &SilAbiArtifact) -> Template {
+    /// The template of the single contract of an artifact (its compiled sample instance gives the cut).
+    pub fn of(name: &'static str, art: &SilAbiArtifact) -> Template {
         let c = &art.contracts.values().next().expect("one contract").compiled;
         let (pre, _, suf) = c.script_parts(&c.bytecode).expect("state span");
         Template { name, prefix: pre.to_vec(), suffix: suf.to_vec(), state_len: c.state_span.len, hash: c.template_hash }
@@ -185,4 +206,40 @@ pub fn splice(base: &SilAbiArtifact, state: &[u8]) -> SilAbiArtifact {
 /// The name of the single contract of an artifact.
 pub fn contract_name(art: &SilAbiArtifact) -> &str {
     art.contracts.keys().next().expect("one contract")
+}
+
+/// KOB's `KobAsk` artifact.
+pub fn ask_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(KOB_ASK_JSON).expect("KobAsk.json"))
+}
+
+/// KOB's `KobBid` artifact.
+pub fn bid_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(KOB_BID_JSON).expect("KobBid.json"))
+}
+
+/// KOB's reference KCC-20 token program (3 / 3 slots, 112-byte state).
+pub fn token_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(KCC20_JSON).expect("KCC20Ref.json"))
+}
+
+/// The `KobAsk` template.
+pub fn ask_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KobAsk", ask_base()))
+}
+
+/// The `KobBid` template.
+pub fn bid_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KobBid", bid_base()))
+}
+
+/// The reference KCC-20 template.
+pub fn token_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KCC20Ref", token_base()))
 }

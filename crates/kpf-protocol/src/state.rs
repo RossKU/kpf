@@ -38,7 +38,7 @@ pub const PLAIN_DUST: i64 = 2_000_000;
 pub const ZERO: Hash = Hash::from_bytes([0; 32]);
 
 /// A state field: an 8-byte int or a 32-byte value.
-enum F {
+pub(crate) enum F {
     I(i64),
     B([u8; 32]),
 }
@@ -52,7 +52,7 @@ pub fn sm8(x: i64) -> [u8; 8] {
     b
 }
 
-fn encode(fields: &[F]) -> Vec<u8> {
+pub(crate) fn encode(fields: &[F]) -> Vec<u8> {
     let mut v = Vec::new();
     for f in fields {
         match f {
@@ -69,7 +69,7 @@ fn encode(fields: &[F]) -> Vec<u8> {
     v
 }
 
-fn to_args(fields: &[F]) -> Vec<ArtifactValue> {
+pub(crate) fn to_args(fields: &[F]) -> Vec<ArtifactValue> {
     fields
         .iter()
         .map(|f| match f {
@@ -79,13 +79,13 @@ fn to_args(fields: &[F]) -> Vec<ArtifactValue> {
         .collect()
 }
 
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+pub(crate) struct Cursor<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) at: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn int(&mut self) -> Result<i64> {
+    pub(crate) fn int(&mut self) -> Result<i64> {
         let s = self.b.get(self.at..self.at + 9).ok_or_else(|| Error::Decode("state ends inside an integer".into()))?;
         if s[0] != 0x08 {
             return Err(Error::Decode(format!("byte {}: expected an 8-byte integer push (0x08), found {:#04x}", self.at, s[0])));
@@ -101,7 +101,7 @@ impl<'a> Cursor<'a> {
         self.at += 9;
         Ok(if neg { -(mag as i64) } else { mag as i64 })
     }
-    fn b32(&mut self) -> Result<[u8; 32]> {
+    pub(crate) fn b32(&mut self) -> Result<[u8; 32]> {
         let s = self.b.get(self.at..self.at + 33).ok_or_else(|| Error::Decode("state ends inside a 32-byte value".into()))?;
         if s[0] != 0x20 {
             return Err(Error::Decode(format!("byte {}: expected a 32-byte push (0x20), found {:#04x}", self.at, s[0])));
@@ -109,10 +109,10 @@ impl<'a> Cursor<'a> {
         self.at += 33;
         Ok(s[1..33].try_into().expect("32 bytes"))
     }
-    fn hash(&mut self) -> Result<Hash> {
+    pub(crate) fn hash(&mut self) -> Result<Hash> {
         Ok(Hash::from_bytes(self.b32()?))
     }
-    fn done(&self) -> Result<()> {
+    pub(crate) fn done(&self) -> Result<()> {
         if self.at != self.b.len() {
             return Err(Error::Decode(format!("{} trailing state bytes", self.b.len() - self.at)));
         }

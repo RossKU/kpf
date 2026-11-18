@@ -46,6 +46,40 @@ impl Chain {
         u
     }
 
+    /// Puts a UTXO into the set as if an earlier transaction had created it (a KOB order or a token holder that the
+    /// tests and the offline runbook place by hand).
+    pub fn insert(&mut self, op: TransactionOutpoint, entry: UtxoEntry) {
+        self.utxos.insert(op, entry);
+    }
+
+    /// Creates a KOB object UTXO (an order or a holder) of `value` sompi, covenant id `id`, created at DAA `daa`.
+    pub fn mint_kob(&mut self, obj: crate::kob::KobObj, value: u64, id: Hash, daa: u64) -> KobLive {
+        self.mints += 1;
+        let mut b = [0xf1u8; 32];
+        b[..4].copy_from_slice(&self.mints.to_le_bytes());
+        let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(b), index: self.mints };
+        let spk = crate::tx::p2sh_spk(&obj.redeem());
+        self.utxos.insert(op, UtxoEntry::new(value, spk, daa, false, Some(id)));
+        self.objs.insert(op, Obj::Kob(obj.clone()));
+        KobLive { obj, value, id, op, daa }
+    }
+
+    /// Creates a KPF object UTXO (a pair, an order, a KOB order or holder) of `value` sompi with covenant id `id`,
+    /// created at DAA `daa`, and returns it live.
+    pub fn mint_obj(&mut self, obj: Obj, value: u64, id: Hash, daa: u64) -> Live {
+        self.mints += 1;
+        let mut b = [0xf2u8; 32];
+        b[..4].copy_from_slice(&self.mints.to_le_bytes());
+        let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(b), index: self.mints };
+        self.utxos.insert(op, UtxoEntry::new(value, crate::tx::p2sh_spk(&obj.redeem()), daa, false, Some(id)));
+        self.objs.insert(op, obj.clone());
+        match obj {
+            Obj::Pair(p) => Live::Pair(LivePair { p, value, id, op, daa }),
+            Obj::Open(o) => Live::Open(LiveOpen { o, value, id, op, daa }),
+            Obj::Kob(k) => Live::Kob(KobLive { obj: k, value, id, op, daa }),
+        }
+    }
+
     pub fn entry(&self, op: &TransactionOutpoint) -> Option<&UtxoEntry> {
         self.utxos.get(op)
     }
@@ -152,6 +186,7 @@ impl Chain {
                 match &c.obj {
                     Obj::Pair(p) => Live::Pair(LivePair { p: p.clone(), value, id: cid, op, daa }),
                     Obj::Open(o) => Live::Open(LiveOpen { o: o.clone(), value, id: cid, op, daa }),
+                    Obj::Kob(k) => Live::Kob(KobLive { obj: k.clone(), value, id: cid, op, daa }),
                 }
             })
             .collect())
@@ -163,19 +198,57 @@ impl Chain {
 pub enum Live {
     Pair(LivePair),
     Open(LiveOpen),
+    Kob(KobLive),
+}
+
+/// A live KOB order or token holder created by an evidence transaction.
+#[derive(Clone, Debug)]
+pub struct KobLive {
+    pub obj: crate::kob::KobObj,
+    pub value: u64,
+    pub id: Hash,
+    pub op: TransactionOutpoint,
+    pub daa: u64,
+}
+
+impl KobLive {
+    pub fn ask(&self) -> crate::kob::LiveAsk {
+        match &self.obj {
+            crate::kob::KobObj::Ask(a) => crate::kob::LiveAsk { a: a.clone(), value: self.value, id: self.id, op: self.op, daa: self.daa },
+            _ => panic!("expected an ask"),
+        }
+    }
+    pub fn bid(&self) -> crate::kob::LiveBid {
+        match &self.obj {
+            crate::kob::KobObj::Bid(b) => crate::kob::LiveBid { b: b.clone(), value: self.value, id: self.id, op: self.op, daa: self.daa },
+            _ => panic!("expected a bid"),
+        }
+    }
+    pub fn token(&self) -> crate::kob::LiveToken {
+        match &self.obj {
+            crate::kob::KobObj::Token(t) => crate::kob::LiveToken { t: t.clone(), value: self.value, id: self.id, op: self.op, daa: self.daa },
+            _ => panic!("expected a token holder"),
+        }
+    }
 }
 
 impl Live {
     pub fn pair(self) -> LivePair {
         match self {
             Live::Pair(p) => p,
-            Live::Open(_) => panic!("expected a pair"),
+            _ => panic!("expected a pair"),
         }
     }
     pub fn open(self) -> LiveOpen {
         match self {
             Live::Open(o) => o,
-            Live::Pair(_) => panic!("expected an order"),
+            _ => panic!("expected an order"),
+        }
+    }
+    pub fn kob(self) -> KobLive {
+        match self {
+            Live::Kob(k) => k,
+            _ => panic!("expected a KOB object"),
         }
     }
 }

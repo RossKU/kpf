@@ -18,17 +18,17 @@ use crate::keys;
 use crate::node::{Node, WsTransport};
 use crate::report;
 
-type R<T> = Result<T, String>;
+pub(crate) type R<T> = Result<T, String>;
 
-fn e<T: ToString>(x: T) -> String {
+pub(crate) fn e<T: ToString>(x: T) -> String {
     x.to_string()
 }
 
-fn network(a: &Args) -> R<Network> {
+pub(crate) fn network(a: &Args) -> R<Network> {
     Network::parse(a.get("network").unwrap_or("testnet-10")).map_err(e)
 }
 
-fn fee_opts(a: &Args) -> R<Opts> {
+pub(crate) fn fee_opts(a: &Args) -> R<Opts> {
     let rate = match a.get("fee-rate") {
         None => MIN_FEE_RATE,
         Some(s) => s.parse::<u64>().map_err(|_| format!("--fee-rate `{s}` is not an integer (sompi per gram)"))?,
@@ -39,7 +39,7 @@ fn fee_opts(a: &Args) -> R<Opts> {
     Ok(Opts { fee_rate: rate, fee_mode: if a.has("priority") { FeeMode::Priority } else { FeeMode::Relay } })
 }
 
-fn side(s: &str) -> R<i64> {
+pub(crate) fn side(s: &str) -> R<i64> {
     match s.to_ascii_lowercase().as_str() {
         "long" | "1" => Ok(LONG),
         "short" | "2" => Ok(SHORT),
@@ -47,12 +47,12 @@ fn side(s: &str) -> R<i64> {
     }
 }
 
-fn int(a: &Args, name: &str) -> R<i64> {
+pub(crate) fn int(a: &Args, name: &str) -> R<i64> {
     let s = a.need(name)?;
     s.replace('_', "").parse::<i64>().map_err(|_| format!("--{name} `{s}` is not an integer"))
 }
 
-fn int_or(a: &Args, name: &str, d: i64) -> R<i64> {
+pub(crate) fn int_or(a: &Args, name: &str, d: i64) -> R<i64> {
     if a.has(name) {
         int(a, name)
     } else {
@@ -61,11 +61,11 @@ fn int_or(a: &Args, name: &str, d: i64) -> R<i64> {
 }
 
 /// A price or rate (KAS per whole token, or `<n>s` sompi per whole token).
-fn price(a: &Args, name: &str) -> R<i64> {
+pub(crate) fn price(a: &Args, name: &str) -> R<i64> {
     kas(a.need(name)?).map_err(|m| format!("--{name}: {m}"))
 }
 
-fn price_or(a: &Args, name: &str, d: i64) -> R<i64> {
+pub(crate) fn price_or(a: &Args, name: &str, d: i64) -> R<i64> {
     if a.has(name) {
         price(a, name)
     } else {
@@ -74,17 +74,17 @@ fn price_or(a: &Args, name: &str, d: i64) -> R<i64> {
 }
 
 /// An amount of tokens (decimal whole tokens, or `<n>s` base units) of a market with `scale` base units per token.
-fn tokens(a: &Args, name: &str, scale: i64) -> R<i64> {
+pub(crate) fn tokens(a: &Args, name: &str, scale: i64) -> R<i64> {
     parse_amount(a.need(name)?, scale).map_err(|m| format!("--{name}: {m}"))
 }
 
-fn units_of(scale: i64) -> String {
+pub(crate) fn units_of(scale: i64) -> String {
     format!("tokens of {scale} base units")
 }
 
 // ---------------------------------------------------------------- node and funding
 
-fn connect(a: &Args) -> R<Option<Node<WsTransport>>> {
+pub(crate) fn connect(a: &Args) -> R<Option<Node<WsTransport>>> {
     match a.get("node") {
         None => Ok(None),
         Some(url) => {
@@ -95,7 +95,7 @@ fn connect(a: &Args) -> R<Option<Node<WsTransport>>> {
     }
 }
 
-fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Network) -> R<()> {
+pub(crate) fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Network) -> R<()> {
     let list = node.utxos(&[p2sh_address(&o.redeem, net)])?;
     let u = list
         .iter()
@@ -109,7 +109,7 @@ fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Network) -> R<()>
     Ok(())
 }
 
-fn load_obj(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<ObjFile> {
+pub(crate) fn load_obj(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<ObjFile> {
     let mut o = ObjFile::load(a.need(flag)?)?;
     if let Some(n) = node {
         refresh(n, &mut o, net)?;
@@ -117,13 +117,13 @@ fn load_obj(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Net
     Ok(o)
 }
 
-struct Funder {
-    key: [u8; 32],
-    keys: kpf_protocol::tx::KeySet,
+pub(crate) struct Funder {
+    pub(crate) key: [u8; 32],
+    pub(crate) keys: kpf_protocol::tx::KeySet,
 }
 
 /// The funder key file plus every `--key` file, as one key set.
-fn funder_and_keys(a: &Args, need_funder: bool) -> R<Option<Funder>> {
+pub(crate) fn funder_and_keys(a: &Args, need_funder: bool) -> R<Option<Funder>> {
     let mut paths: Vec<&str> = vec![];
     let funder_pub = match a.get("funder") {
         Some(f) => {
@@ -140,7 +140,7 @@ fn funder_and_keys(a: &Args, need_funder: bool) -> R<Option<Funder>> {
 
 /// Builds with funding: the UTXOs of a `--funding` file exactly as listed, else (with `--node`) the largest UTXOs of
 /// the funder's address, adding more until the builder is satisfied.
-fn build_funded(
+pub(crate) fn build_funded(
     a: &Args,
     net: Network,
     node: &mut Option<Node<WsTransport>>,
@@ -175,7 +175,7 @@ fn build_funded(
 
 // ---------------------------------------------------------------- finishing a transaction
 
-fn finish(a: &Args, title: &str, built: Built, keys: &kpf_protocol::tx::KeySet, net: Network, node: &mut Option<Node<WsTransport>>) -> R<()> {
+pub(crate) fn finish(a: &Args, title: &str, built: Built, keys: &kpf_protocol::tx::KeySet, net: Network, node: &mut Option<Node<WsTransport>>) -> R<()> {
     let s = built.sign(keys).map_err(e)?;
     let v = verify(&s.tx, &s.entries);
     print!("{}", report::text(title, &s, &v, net, built.fee_rate));
@@ -186,10 +186,21 @@ fn finish(a: &Args, title: &str, built: Built, keys: &kpf_protocol::tx::KeySet, 
     let tag: String = s.txid().to_string().chars().take(8).collect();
     let mut created_files = vec![];
     if !a.has("no-save") {
-        for (op, entry, obj) in s.created_utxos() {
-            let of = ObjFile { op, amount: entry.amount, daa: 0, covenant_id: entry.covenant_id.unwrap_or_default(), redeem: obj.redeem() };
+        let made = s.created_utxos();
+        for (op, entry, obj) in &made {
+            let of = ObjFile { op: *op, amount: entry.amount, daa: 0, covenant_id: entry.covenant_id.unwrap_or_default(), redeem: obj.redeem() };
+            // An ask continued by an evidence fill comes with the custody that holds its remaining tokens.
+            let custody = match obj {
+                Obj::Kob(kpf_protocol::kob::KobObj::Ask(_)) => made.iter().find_map(|(cop, ce, co)| match co {
+                    Obj::Kob(kpf_protocol::kob::KobObj::Token(t)) if t.scheme == kpf_protocol::kob::SCHEME_COVID && Some(Hash::from_bytes(t.owner)) == entry.covenant_id => {
+                        Some(ObjFile { op: *cop, amount: ce.amount, daa: 0, covenant_id: ce.covenant_id.unwrap_or_default(), redeem: co.redeem() })
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            };
             let path = out_dir.join(format!("{tag}-out{}-{}.json", op.index, obj.kind()));
-            write_json(&path, &of.to_json(net))?;
+            write_json(&path, &KobFile { obj: of, custody }.to_json(net))?;
             created_files.push(path.display().to_string());
         }
         let doc = report::json_doc(title, &s, &v, net, &created_files);
@@ -357,7 +368,7 @@ pub fn inspect(a: &Args) -> R<()> {
     Ok(())
 }
 
-fn short_hash(h: &Hash) -> String {
+pub(crate) fn short_hash(h: &Hash) -> String {
     to_hex(&h.as_bytes()[..6])
 }
 
@@ -381,6 +392,32 @@ fn price_list(a: &Args, p: &Pair) -> R<Vec<i64>> {
     Ok(v)
 }
 
+
+/// What a liquidation of `n` of a pair gives each side (DESIGN 4.5b): the loser `side` forfeits, the winner takes the
+/// part's whole value less the keeper fee.
+struct LiqInfo {
+    side: i64,
+    /// The extreme evidence quote that still liquidates: the highest ask (long), the lowest bid (short).
+    limit: i64,
+    trigger: i64,
+    /// The keeper fee at the extreme quote, and its cap (the maintenance slice).
+    fee: i64,
+    slice: i64,
+    /// What the winner receives at the extreme quote, and at least (its payoff at the trigger price).
+    winner: i64,
+    winner_min: i64,
+}
+
+fn liq_info(p: &Pair, part: &Pair, n: i64, side: i64) -> LiqInfo {
+    let limit = if side == LONG {
+        ((p.bl as i128 * 10_000 - 1) / (10_000 - p.m.mmr_bps as i128)) as i64
+    } else {
+        ((p.bs as i128 * 10_000) / (10_000 + p.m.mmr_bps as i128) + 1) as i64
+    };
+    let value = if n == p.size { part.floor() } else { part.floor() - p.m.carrier };
+    let fee = liq_fee(part, n, limit, side);
+    LiqInfo { side, limit, trigger: trigger_of(p, side), fee, slice: slice_of(part, n, side), winner: (value - fee).max(0), winner_min: winner_at_trigger(part, n, side) }
+}
 pub fn quote(a: &Args) -> R<()> {
     a.only(&["object", "pair", "redeem", "prices", "from", "to", "steps", "n", "json"])?;
     let (d, _rs, _) = load_decoded(a)?;
@@ -396,6 +433,7 @@ pub fn quote(a: &Args) -> R<()> {
     let a_max = (p.bl as i128 * 10_000 - 1) / (10_000 - p.m.mmr_bps as i128);
     let b_min = (p.bs as i128 * 10_000) / (10_000 + p.m.mmr_bps as i128) + 1;
     let rows = quote_table(&part, &prices);
+    let (liq_long, liq_short) = (liq_info(&p, &part, n, LONG), liq_info(&p, &part, n, SHORT));
     if a.has("json") {
         let r: Vec<Value> = rows
             .iter()
@@ -404,7 +442,11 @@ pub fn quote(a: &Args) -> R<()> {
                        "longLiqFee": r.long_liquidatable.then(|| liq_fee(&part, n, r.price, LONG)), "shortLiqFee": r.short_liquidatable.then(|| liq_fee(&part, n, r.price, SHORT))})
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor()})).expect("json"));
+        let liq: Vec<Value> = [liq_long, liq_short]
+            .iter()
+            .map(|i| json!({"loser": if i.side == LONG { "long" } else { "short" }, "extremeQuote": i.limit, "trigger": i.trigger, "feeAtExtremeQuote": i.fee, "feeCap": i.slice, "winnerReceives": i.winner, "winnerReceivesAtLeast": i.winner_min, "loserReceives": 0}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor(), "liquidation": liq})).expect("json"));
         return Ok(());
     }
     println!(
@@ -419,6 +461,23 @@ pub fn quote(a: &Args) -> R<()> {
     );
     println!("payouts exclude the carrier. A long is liquidatable by an evidence ask <= {} KAS, a short by an evidence bid >= {} KAS.", fmt_kas(a_max), fmt_kas(b_min));
     println!("trigger price T: long {} KAS, short {} KAS (the winner receives at least its payoff at T)", fmt_kas(t_long as i128), fmt_kas(t_short as i128));
+    println!("liquidation (the loser forfeits everything, DESIGN 4.5b), for {} tokens:", fmt_units(n as i128, sc as i128));
+    for i in [&liq_long, &liq_short] {
+        println!(
+            "  {:<5} liquidated by an evidence {} {} {} KAS (trigger price {} KAS): the {} receives 0; the {} receives {} KAS at that quote (the part's value less the fee {} KAS, which is at most {} KAS) and at least {} KAS",
+            if i.side == LONG { "long" } else { "short" },
+            if i.side == LONG { "ask" } else { "bid" },
+            if i.side == LONG { "<=" } else { ">=" },
+            fmt_kas(i.limit as i128),
+            fmt_kas(i.trigger as i128),
+            if i.side == LONG { "long" } else { "short" },
+            if i.side == LONG { "short" } else { "long" },
+            fmt_kas(i.winner as i128),
+            fmt_kas(i.fee as i128),
+            fmt_kas(i.slice as i128),
+            fmt_kas(i.winner_min as i128)
+        );
+    }
     println!("{:>16}  {:>20}  {:>20}  {:>12}  {:>14}", "price (KAS/token)", "long payout (KAS)", "short payout (KAS)", "liquidatable", "keeper fee (KAS)");
     for r in &rows {
         let (liq, fee) = if r.long_liquidatable {
@@ -466,7 +525,7 @@ pub fn market(a: &Args) -> R<()> {
 
 const FEE_FLAGS: &[&str] = &["fee-rate", "priority", "out-dir", "submit", "node", "brief", "no-save", "funding", "funder", "key"];
 
-fn only_with(a: &Args, own: &[&str]) -> R<()> {
+pub(crate) fn only_with(a: &Args, own: &[&str]) -> R<()> {
     let mut all: Vec<&str> = own.to_vec();
     all.extend(FEE_FLAGS);
     a.only(&all)

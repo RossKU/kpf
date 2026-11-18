@@ -129,6 +129,8 @@ impl LiveOpen {
 pub enum Obj {
     Pair(Pair),
     Open(Open),
+    /// A KOB order or token holder the transaction creates (an evidence transaction's continuations and deliveries).
+    Kob(crate::kob::KobObj),
 }
 
 impl Obj {
@@ -136,12 +138,14 @@ impl Obj {
         match self {
             Obj::Pair(p) => p.redeem(),
             Obj::Open(o) => o.redeem(),
+            Obj::Kob(k) => k.redeem(),
         }
     }
     pub fn kind(&self) -> &'static str {
         match self {
             Obj::Pair(_) => "pair",
             Obj::Open(_) => "order",
+            Obj::Kob(k) => k.kind(),
         }
     }
 }
@@ -194,6 +198,33 @@ pub fn pubkey_of(secret: &[u8; 32]) -> Result<[u8; 32]> {
 pub enum Arg {
     V(ArtifactValue),
     Sig([u8; 32]),
+    /// A KCC-20 leader witness of the normal path for a P2PK owner: `0x00 || signature` (the signature as `Sig`).
+    LeaderSig([u8; 32]),
+}
+
+/// Which KOB contract a foreign input of an evidence transaction is an instance of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KobWhich {
+    Ask,
+    Bid,
+    Token,
+}
+
+impl KobWhich {
+    pub fn name(self) -> &'static str {
+        match self {
+            KobWhich::Ask => "KobAsk",
+            KobWhich::Bid => "KobBid",
+            KobWhich::Token => "KCC20Ref",
+        }
+    }
+    fn base(self) -> &'static silverscript_abi::SilAbiArtifact {
+        match self {
+            KobWhich::Ask => crate::artifacts::ask_base(),
+            KobWhich::Bid => crate::artifacts::bid_base(),
+            KobWhich::Token => crate::artifacts::token_base(),
+        }
+    }
 }
 
 /// Integer argument.
@@ -214,6 +245,8 @@ pub enum Plan {
     Pair { redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
     /// A `KpfOpen` input calling `entry(args)`.
     Open { redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
+    /// A KOB order or KCC-20 token input of an evidence transaction calling `entry(args)`.
+    Kob { which: KobWhich, redeem: Vec<u8>, entry: &'static str, args: Vec<Arg> },
 }
 
 impl Plan {
@@ -221,8 +254,8 @@ impl Plan {
     pub fn signers(&self) -> Vec<[u8; 32]> {
         match self {
             Plan::P2pk { key } => vec![*key],
-            Plan::Pair { args, .. } | Plan::Open { args, .. } => {
-                args.iter().filter_map(|a| if let Arg::Sig(k) = a { Some(*k) } else { None }).collect()
+            Plan::Pair { args, .. } | Plan::Open { args, .. } | Plan::Kob { args, .. } => {
+                args.iter().filter_map(|a| if let Arg::Sig(k) | Arg::LeaderSig(k) = a { Some(*k) } else { None }).collect()
             }
         }
     }
@@ -232,6 +265,7 @@ impl Plan {
             Plan::P2pk { .. } => "p2pk".into(),
             Plan::Pair { entry, .. } => format!("KpfPair.{entry}"),
             Plan::Open { entry, .. } => format!("KpfOpen.{entry}"),
+            Plan::Kob { which, entry, .. } => format!("{}.{entry}", which.name()),
         }
     }
 
@@ -243,6 +277,7 @@ impl Plan {
                 .map(|a| match a {
                     Arg::V(v) => Ok(v.clone()),
                     Arg::Sig(k) => Ok(ArtifactValue::Bytes(sig_of(k)?)),
+                    Arg::LeaderSig(k) => Ok(ArtifactValue::Bytes([vec![0x00], sig_of(k)?].concat())),
                 })
                 .collect::<Result<Vec<_>>>()?;
             let mut s = encode_contract_entry_sig_script(base, name, entry, &vals).map_err(|e| Error::Invalid(format!("{name}.{entry}: {e}")))?;
@@ -253,6 +288,7 @@ impl Plan {
             Plan::P2pk { key } => Ok(push_data(&sig_of(key)?)),
             Plan::Pair { redeem, entry, args } => enc(pair_base(), contract_name(pair_base()), redeem, entry, args),
             Plan::Open { redeem, entry, args } => enc(open_base(), contract_name(open_base()), redeem, entry, args),
+            Plan::Kob { which, redeem, entry, args } => enc(which.base(), contract_name(which.base()), redeem, entry, args),
         }
     }
 
@@ -415,6 +451,17 @@ impl Draft {
 
     pub(crate) fn add_open_in(&mut self, l: &LiveOpen, entry: &'static str, args: Vec<Arg>, label: impl Into<String>) -> usize {
         self.add_in(l.op, l.entry(), Plan::Open { redeem: l.o.redeem(), entry, args }, label)
+    }
+
+    pub(crate) fn add_kob_in(&mut self, op: TransactionOutpoint, entry: UtxoEntry, which: KobWhich, redeem: Vec<u8>, name: &'static str, args: Vec<Arg>, label: impl Into<String>) -> usize {
+        self.add_in(op, entry, Plan::Kob { which, redeem, entry: name, args }, label)
+    }
+
+    pub(crate) fn add_kob_out(&mut self, o: crate::kob::KobObj, value: u64, binding: Option<(u16, Hash)>, label: impl Into<String>) -> usize {
+        let spk = p2sh_spk(&o.redeem());
+        let i = self.add_out(value, spk, binding, label);
+        self.outs[i].obj = Some(Obj::Kob(o));
+        i
     }
 
     pub(crate) fn add_out(&mut self, value: u64, spk: ScriptPublicKey, binding: Option<(u16, Hash)>, label: impl Into<String>) -> usize {
