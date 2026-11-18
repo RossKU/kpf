@@ -73,7 +73,8 @@ base!(pending_base, PENDING_JSON, "KpfPendingO.json");
 base!(pair_base, PAIR_JSON, "KpfPairO.json");
 base!(open_base, OPEN_JSON, "KpfOpenO.json");
 
-fn tag(a: &SilAbiArtifact, entry: &str) -> [u8; 4] {
+/// The dispatch tag of `entry` in a pinned artifact (the 4 bytes a signature script pushes before the redeem script).
+pub fn entry_tag(a: &SilAbiArtifact, entry: &str) -> [u8; 4] {
     *a.contracts.values().next().expect("one contract").entries[entry].dispatch_tag.as_bytes()
 }
 
@@ -92,12 +93,12 @@ pub fn kit() -> &'static OKit {
             bond_tpl: bond.hash,
             bond_pre: bond.prefix.len() as i64,
             bond_suf: bond.suffix.len() as i64,
-            bind_tag: tag(bond_base(), "bind"),
+            bind_tag: entry_tag(bond_base(), "bind"),
             judge_tpl: stake.hash,
             judge_pre: stake.prefix.len() as i64,
             judge_suf: stake.suffix.len() as i64,
-            open_tag: tag(stake_base(), "open"),
-            resolve_tag: tag(stake_base(), "resolve"),
+            open_tag: entry_tag(stake_base(), "open"),
+            resolve_tag: entry_tag(stake_base(), "resolve"),
             pending_tpl: pending.hash,
             pair_tpl: pair.hash,
         };

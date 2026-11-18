@@ -29,8 +29,8 @@ use crate::state::{encode, to_args, Cursor, F, BOND_MIN_MAX, BPS, CSV_LIMIT, KIN
 pub const MARKET_LEN: usize = 309;
 /// State lengths (from redeem byte 1) of the three templates.
 pub const OPEN_STATE_LEN: usize = 465;
-pub const PAIR_STATE_LEN: usize = 624;
-pub const PENDING_STATE_LEN: usize = 780;
+pub const PAIR_STATE_LEN: usize = 723;
+pub const PENDING_STATE_LEN: usize = 813;
 /// Statuses of a pending part.
 pub const PENDING: i64 = 1;
 pub const CONTESTED: i64 = 2;
@@ -518,8 +518,48 @@ pub struct OPair {
     pub short_bid: i64,
     pub short_min: i64,
     pub short_tip: i64,
-    pub tag_l: [u8; 32],
-    pub tag_s: [u8; 32],
+    /// Who created this UTXO (review 7), zero in every state but a fresh part's in its creating transaction.
+    pub mk: Makers,
+}
+
+/// The maker commitment of an input (review 7, `KpfOpenO.me` / `KpfPairO.me`): blake2b-256 of its outpoint, the
+/// transaction id's 32 bytes and then the index as 8 bytes little-endian. Unique per outpoint, so per input, even for
+/// twins and split parts that share a covenant id.
+pub fn maker_of(op: &kaspa_consensus_core::tx::TransactionOutpoint) -> [u8; 32] {
+    let mut b = op.transaction_id.as_bytes().to_vec();
+    b.extend_from_slice(&(op.index as u64).to_le_bytes());
+    // P2SH's hash is blake2b-256 of the redeem script: the same function the contracts' `blake2b` computes.
+    p2sh_hash(&b)
+}
+
+/// The makers of a pair state (review 7, R7-F1; `KpfPairO` state `[558..723)`): one field per role an input can create
+/// a fresh part in, each the maker commitment (`maker_of`) of that input or zero. A fresh output is relied on by its
+/// creating inputs only through the role field holding their own commitment, so two inputs in one role never accept one
+/// output; every other state carries every field zero (no entry copies them).
+///
+/// | output | roles (the rest zero) |
+/// |---|---|
+/// | a pair opened by orders (`KpfOpenO.fill`) | `long` (the long order), `short` (the short order) |
+/// | a part handed over to a signing taker (`KpfPairO.transfer`) | `parent` (the pair) |
+/// | a part an order takes (`transfer` and `KpfOpenO.take`) | `parent` (the pair), `long` or `short` (the order) |
+/// | P3 of close-versus-close (`closeHost`, `closeDonor`) | `host`, `donor` |
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Makers {
+    pub long: [u8; 32],
+    pub short: [u8; 32],
+    pub parent: [u8; 32],
+    pub host: [u8; 32],
+    pub donor: [u8; 32],
+}
+
+impl Makers {
+    pub fn is_zero(&self) -> bool {
+        *self == Makers::default()
+    }
+    /// The fields in state order with their role names.
+    pub fn roles(&self) -> [(&'static str, [u8; 32]); 5] {
+        [("long", self.long), ("short", self.short), ("parent", self.parent), ("host", self.host), ("donor", self.donor)]
+    }
 }
 
 impl OPair {
@@ -528,7 +568,7 @@ impl OPair {
         f.extend([F::I(self.size), F::I(self.bl), F::I(self.bs), F::I(self.entry), F::B(self.long_key), F::B(self.short_key)]);
         f.extend(self.b.fields());
         f.extend([self.long_ask, self.long_min, self.long_tip, self.short_bid, self.short_min, self.short_tip].map(F::I));
-        f.extend([F::B(self.tag_l), F::B(self.tag_s)]);
+        f.extend([F::B(self.mk.long), F::B(self.mk.short), F::B(self.mk.parent), F::B(self.mk.host), F::B(self.mk.donor)]);
         f
     }
     pub fn state_bytes(&self) -> Vec<u8> {
@@ -564,8 +604,7 @@ impl OPair {
             short_bid: c.int()?,
             short_min: c.int()?,
             short_tip: c.int()?,
-            tag_l: c.b32()?,
-            tag_s: c.b32()?,
+            mk: Makers { long: c.b32()?, short: c.b32()?, parent: c.b32()?, host: c.b32()?, donor: c.b32()? },
         };
         c.done()?;
         Ok(p)
@@ -588,7 +627,7 @@ impl OPair {
     }
     /// The part n of this pair (keys, binding, listings kept), tags cleared.
     pub fn rest_of(&self, n: i64) -> OPair {
-        OPair { size: n, tag_l: [0; 32], tag_s: [0; 32], ..self.clone() }
+        OPair { size: n, mk: Makers::default(), ..self.clone() }
     }
     fn unlisted_part(&self, n: i64) -> OPair {
         OPair { long_ask: 0, long_min: 0, long_tip: 0, short_bid: 0, short_min: 0, short_tip: 0, ..self.rest_of(n) }
@@ -678,7 +717,7 @@ impl OPair {
     /// both maintenance bands.
     pub fn renewed(&self) -> Option<(OPair, i64)> {
         let pr = self.b.premium;
-        let mut r = OPair { tag_l: [0; 32], tag_s: [0; 32], ..self.clone() };
+        let mut r = OPair { mk: Makers::default(), ..self.clone() };
         r.bl = self.bl + pr - pr / 2;
         r.bs = self.bs - pr / 2;
         r.b.expiry = self.b.expiry + self.m.bond.term;
@@ -792,6 +831,7 @@ impl OPair {
                 restore_hash: restore.script_hash(k),
                 cure_hash,
                 forfeit_hash,
+                mk_parent: [0; 32],
             },
             fb,
         ))
@@ -844,6 +884,9 @@ pub struct OPending {
     pub restore_hash: [u8; 32],
     pub cure_hash: [u8; 32],
     pub forfeit_hash: [u8; 32],
+    /// The maker (review 7): the outpoint commitment (`maker_of`) of the pair input whose propose wrote this part; zero
+    /// in every later state (contest and decide clear it).
+    pub mk_parent: [u8; 32],
 }
 
 /// What a valid or void claim's finalize pays, and to whom (outputs relative to the part's input index i and the
@@ -869,7 +912,7 @@ impl OPending {
         f.extend([F::I(self.entry), F::B(self.long_key), F::B(self.short_key)]);
         f.extend(self.b.fields());
         f.extend([self.long_ask, self.long_min, self.long_tip, self.short_bid, self.short_min, self.short_tip].map(F::I));
-        f.extend([F::B(self.restore_hash), F::B(self.cure_hash), F::B(self.forfeit_hash)]);
+        f.extend([F::B(self.restore_hash), F::B(self.cure_hash), F::B(self.forfeit_hash), F::B(self.mk_parent)]);
         f
     }
     pub fn state_bytes(&self) -> Vec<u8> {
@@ -915,6 +958,7 @@ impl OPending {
             restore_hash: [0; 32],
             cure_hash: [0; 32],
             forfeit_hash: [0; 32],
+            mk_parent: [0; 32],
         };
         w.entry = c.int()?;
         w.long_key = c.b32()?;
@@ -924,6 +968,7 @@ impl OPending {
         w.restore_hash = c.b32()?;
         w.cure_hash = c.b32()?;
         w.forfeit_hash = c.b32()?;
+        w.mk_parent = c.b32()?;
         c.done()?;
         Ok(w)
     }
@@ -946,8 +991,7 @@ impl OPending {
             short_bid: self.short_bid,
             short_min: self.short_min,
             short_tip: self.short_tip,
-            tag_l: [0; 32],
-            tag_s: [0; 32],
+            mk: Makers::default(),
         }
     }
 
@@ -973,6 +1017,12 @@ impl OPending {
         }
     }
 
+    /// This pending part as `propose` writes it from the pair input at outpoint `op`: its maker field names that input
+    /// (review 7). `OPair::pending_of` leaves it zero, since a state alone does not know its outpoint.
+    pub fn made_by(&self, op: &kaspa_consensus_core::tx::TransactionOutpoint) -> OPending {
+        OPending { mk_parent: maker_of(op), ..self.clone() }
+    }
+
     /// The claim's validity at P (`KpfPendingO.finalize`): `P + W <= X <= P + term + step` and `P - t0 <= lateDaa`.
     pub fn valid_at(&self, p: i64) -> bool {
         let (w, x) = (self.m.p.challenge_daa as i128, self.b.expiry as i128);
@@ -985,13 +1035,13 @@ impl OPending {
     }
     /// The contested state (`KpfPendingO.contest`).
     pub fn contested(&self, p: i64, disputer: [u8; 32]) -> OPending {
-        OPending { status: CONTESTED, clock: p, disputer, ..self.clone() }
+        OPending { status: CONTESTED, clock: p, disputer, mk_parent: [0; 32], ..self.clone() }
     }
     /// The decided state (`KpfPendingO.decide`): the verdict (`yes`: the claim stands), ignored when the contest at `c`
     /// was late.
     pub fn decided(&self, yes: bool, c: i64) -> OPending {
         let st = if yes || !self.contest_in_time(self.clock, c) { UPHELD } else { REFUTED };
-        OPending { status: st, ..self.clone() }
+        OPending { status: st, mk_parent: [0; 32], ..self.clone() }
     }
     /// The close price of a close claim: the vouched price moved by g against the closer, clamped.
     pub fn close_price(&self) -> i64 {
@@ -1203,8 +1253,7 @@ pub mod samples {
             short_bid: 0,
             short_min: 0,
             short_tip: 0,
-            tag_l: [0x1a; 32],
-            tag_s: [0x1b; 32],
+            mk: Makers { long: [0x1a; 32], short: [0x1b; 32], parent: [0x1c; 32], host: [0x1d; 32], donor: [0x1e; 32] },
         }
     }
     pub fn pending(p: &OPair) -> OPending {
@@ -1237,6 +1286,7 @@ pub mod samples {
             restore_hash: [0x2a; 32],
             cure_hash: [0x2b; 32],
             forfeit_hash: [0x2c; 32],
+            mk_parent: [0x2d; 32],
         }
     }
     pub fn order(m: &OMarket, side: i64, owner: [u8; 32]) -> OOpen {

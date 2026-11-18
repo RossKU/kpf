@@ -482,7 +482,7 @@ fn holds_no_pair_bond_stake_or_dispute_is_left_unspendable() {
 fn exploit_a_genesis_pair_naming_a_real_slot_is_bounded_and_no_order_enters_it_uncounted() {
     let (lp, sl, _) = opened();
     let mut gp = lp.s.clone();
-    (gp.long_ask, gp.tag_l, gp.tag_s) = (1_000_000_000, [0; 32], [0; 32]);
+    (gp.long_ask, gp.mk) = (1_000_000_000, Makers::default());
     let fake = genesis_pair(gp.clone(), lp.value, 0x5a, 400);
     // The underwriter can vouch it (it is the attacker).
     let lw = proposed(&fake, &liq(L, FALSE_P, 450), 500);
@@ -531,7 +531,7 @@ fn holds_an_order_enters_a_pair_only_with_its_cover_counted() {
     let lo = order(L, &keypair(46), 0x7a, 0);
     let (t, part) = take_tx(&lp1, &lo, &big, 1_000_000_000, 400, true);
     must("take with the bind", &t);
-    assert_eq!((part.long_key, part.tag_l), (x(&keypair(46)), lo.idb()));
+    assert_eq!((part.long_key, part.mk.long, part.mk.parent), (x(&keypair(46)), maker_of(&lo.op), maker_of(&lp1.op)));
 }
 
 /// A pending part written by a genesis that names a real slot reaches nothing of the slot: its bond is its own, its

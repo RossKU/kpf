@@ -177,8 +177,7 @@ fn take_with_handle(h: &Handle, lo: &LOrder, sl: &LSlot, lock: u64, lin: Lineage
         short_bid: 0,
         short_min: 0,
         short_tip: 0,
-        tag_l: lo.idb(),
-        tag_s: [0; 32],
+        mk: Makers { long: maker_of(&lo.op), ..Makers::default() },
     };
     let cover = part.cover_of(n);
     let a = BindArgs::new(lock as i64, b.expiry, 0, &[Claim::output(2, cover)]);
@@ -191,6 +190,7 @@ fn take_with_handle(h: &Handle, lo: &LOrder, sl: &LSlot, lock: u64, lin: Lineage
         iv(xp),
         iv(bound),
         bv(&x(&attacker())),
+        bv(&[0; 32]),
         iv(0),
         iv(0),
         iv(0),
@@ -236,8 +236,8 @@ fn close_donor_with_handle(lin: Lineage) -> (T, OPair, Handle) {
     let mut p3 = d.rest_of(n);
     p3.short_key = x(&attacker());
     (p3.short_bid, p3.short_min, p3.short_tip) = (0, 0, 0);
-    p3.tag_l = donor.idb();
-    let donor_args = vec![iv(n), iv(xp), iv(d.entry), iv(2), iv(d.bs), bv(&x(&attacker())), iv(0), iv(0), iv(0), iv(d.b.cover_rate), iv(d.b.expiry), iv(d.b.premium)];
+    p3.mk.donor = maker_of(&donor.op);
+    let donor_args = vec![iv(n), iv(xp), iv(d.entry), iv(2), iv(d.bs), bv(&x(&attacker())), iv(0), iv(0), iv(0), iv(d.b.cover_rate), iv(d.b.expiry), iv(d.b.premium), bv(&[0; 32])];
     let spay = kpf_protocol::payoff::owed(n, d.bs - xp, d.short_tip, d.m.p.scale) + donor.value as i64 - d.range_of(n);
     let id = h.id();
     let fund = key_in(outpoint(0x33), 900_000_000_000, 0, &attacker());
@@ -367,7 +367,7 @@ fn holds_a_plain_key_host_gives_no_hold_on_p3() {
 fn holds_an_order_taking_a_genesis_pair_with_a_twin_lands_under_a_fresh_id() {
     let (lp, sl, _) = opened();
     let mut gp = lp.s.clone();
-    (gp.long_ask, gp.tag_l, gp.tag_s) = (1_000_000_000, [0; 32], [0; 32]);
+    (gp.long_ask, gp.mk) = (1_000_000_000, Makers::default());
     let ins = vec![key_in(outpoint(0x35), 900_000_000_000, 0, &attacker())];
     let mut outs = vec![out(lp.value, pair_spk(&gp), None), out(1_000_000_000, p2pk_spk(&attacker()), None), out(500_000_000_000, p2pk_spk(&attacker()), None)];
     let g = genesis_id(outpoint(0x35), &outs, &[0, 1]);

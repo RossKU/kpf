@@ -73,14 +73,22 @@ fn layout_state_at_byte_one_and_lengths() {
     assert_eq!(rs[478], 0x08);
     assert_eq!(&rs[488..496], &sm(p.b.expiry));
     assert_eq!(rs[505], 0x08);
-    assert_eq!(rs[559], 0x20);
-    assert_eq!(rs.len() - k.pair.suffix.len(), 625);
+    // Review 7: the five makers (long, short, parent, host, donor) at [559..724).
+    for (i, f) in [p.mk.long, p.mk.short, p.mk.parent, p.mk.host, p.mk.donor].iter().enumerate() {
+        assert_eq!(rs[559 + 33 * i], 0x20);
+        assert_eq!(&rs[560 + 33 * i..592 + 33 * i], f);
+    }
+    assert_eq!(rs.len() - k.pair.suffix.len(), 724);
     let w = sample_pending(&p);
     let rw = k.pending.redeem(&w.state_bytes());
     assert_eq!(&rw[409..418], &[&[0x08u8][..], &sm(PENDING)[..]].concat()[..]);
     assert_eq!(rw[418], 0x08);
     assert_eq!(rw[427], 0x20);
     assert_eq!(rw[460], 0x08, "the entry push follows the status window");
+    // Review 7: the pending part's maker at [781..814).
+    assert_eq!(rw[781], 0x20);
+    assert_eq!(&rw[782..814], &w.mk_parent);
+    assert_eq!(rw.len() - k.pending.suffix.len(), 814);
     let o = sample_order(&m, 1, [3; 32]);
     let ro = k.open.redeem(&o.state_bytes());
     assert_eq!(&ro[353..361], &sm(o.size_left));
@@ -643,7 +651,7 @@ fn a_restored_part_comes_back_unlisted_and_bound() {
     let (t, s) = finalize_tx(&dw, 500, 0);
     must("restore", &t);
     let Settlement::Restore { part, .. } = s else { panic!() };
-    assert_eq!((part.long_ask, part.short_bid, part.tag_l, part.tag_s), (0, 0, [0; 32], [0; 32]));
+    assert_eq!((part.long_ask, part.short_bid, part.mk), (0, 0, Makers::default()), "unlisted, every maker zero");
     assert_eq!((part.b, part.entry), (lp.s.b, lp.s.entry));
     let back = live(&t, 1, 640, &part);
     proposed(&back, &liq_long(FALSE_P, 600), 650);

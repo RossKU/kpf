@@ -13,33 +13,33 @@
     },
     "KpfOpenO": {
       "artifact": "KpfOpenO.json",
-      "artifact_sha256": "0b68a18ca9c09b63fe2941798bcc71a3116e7cb074e4c79c7fa7ebf4ca8eed3f",
+      "artifact_sha256": "4fc4c39498e85b517d12e49fbfca686ca768faab79b6ae58066280169a304236",
       "prefix_len": 1,
       "source": "contracts/KpfOpenO.sil",
-      "source_sha256": "20e78f29c98c4196f1a7177707a479cb3f0d0695bdb378414c856211a1152e69",
+      "source_sha256": "e7c3ba3f4d614130eee230745b7dde4a5074e6b1176394e45f816039962fd6e3",
       "state_len": 465,
-      "suffix_len": 5561,
-      "template_hash": "7597da20e992e6dbd4600a77d9e59d230d9baa8e008f48dce38a454c9494ebc4"
+      "suffix_len": 5738,
+      "template_hash": "30961bccfc0c34942738286cdcf38a0c5d1f873cd30e68af7af684d4f249be9f"
     },
     "KpfPairO": {
       "artifact": "KpfPairO.json",
-      "artifact_sha256": "682b012fef5eb906584a41e184aadaf1f898cee15673a7671e90d38c46f86250",
+      "artifact_sha256": "35d20a834552755dba3159c7ca139896adcea6ead36947e354634cedcf0545c2",
       "prefix_len": 1,
       "source": "contracts/KpfPairO.sil",
-      "source_sha256": "861ace1248e810ed50ccdb35d75c0ee783de49624fdacdd2bb15b091857813de",
-      "state_len": 624,
-      "suffix_len": 13597,
-      "template_hash": "9b95dc0298ec30f5ce462d1d83b78de17451aa6f9d00da6e6bbe0a86c1332295"
+      "source_sha256": "3e4f15b301fb3a717b6eedf3c5c935804d3da7a9b1af0ae7bb3c31408a1a7aac",
+      "state_len": 723,
+      "suffix_len": 13889,
+      "template_hash": "5d7f6899fe833d12ac90523e3e5ef7602f2a8722d8aae0e4ecd0abb2c6632ac7"
     },
     "KpfPendingO": {
       "artifact": "KpfPendingO.json",
-      "artifact_sha256": "554cda8e0cd2cdf6a969e59a9777a1f3f7f0f189c20c8124c023185b1201abb0",
+      "artifact_sha256": "8985332f7ecef6f05835d28867ab5cd6b65014d449ba3fa0c7264a86225622ac",
       "prefix_len": 1,
       "source": "contracts/KpfPendingO.sil",
-      "source_sha256": "60fa410c97d1635318abe0c982b3553d8359ba91a422a72c9fbb15b55adc091b",
-      "state_len": 780,
-      "suffix_len": 3517,
-      "template_hash": "0b9ede6cf2ebb3f26f05fe85efb63692379e39dc1678d555325d616b38fceb4e"
+      "source_sha256": "08232f4a452bdd23ba98dde164afc48a2f9365bcedeb6597cdcfe611204e10ff",
+      "state_len": 813,
+      "suffix_len": 3581,
+      "template_hash": "8917b65f58b7de75eb6e696b06cfca29d9cb5653af92b7dd9e041987f922b921"
     },
     "KpfStake": {
       "artifact": "KpfStake.json",

@@ -11,11 +11,11 @@ pragma silverscript ^0.1.0;
 // nothing is registered.
 //
 // Entries:
-//   fill(pairOut, n, x, bl, bs, counterKey, counterTag, u, k, xe, coverRate, premium, cPre, cSuf)
+//   fill(pairOut, n, x, bl, bs, counterKey, counterMk, u, k, xe, coverRate, premium, cPre, cSuf)
 //          T1' open: n units at x into the fresh KpfPairO at output pairOut, bound by the slot at input u (its bind
 //          entry counts q(n, coverRate) at expiry xe for claim k = OUT_REF + pairOut). This order pays its margin, its
 //          tip, one pair carrier and its half of the first term's premium.
-//   take(partOut, n, x, e, bound, counterKey, ca, cm, ct, u, k, xe, coverRate, premium, cPre, cSuf)
+//   take(partOut, n, x, e, bound, counterKey, pm, ca, cm, ct, u, k, xe, coverRate, premium, cPre, cSuf)
 //          T2 transfer: n units at x take a same-side listing of an existing pair into a part under a fresh covenant
 //          id (this order checks that no input and no other output carries it); the part at partOut must be bound
 //          afresh by the pair's slot in the same transaction (claim OUT_REF + partOut, at the part's expiry).
@@ -27,7 +27,9 @@ pragma silverscript ^0.1.0;
 // counterparty; premium <= premMax; the cover rate covers the range; the new pair's (fill) or part's (take) covenant
 // id is fresh: no input carries it and no other output does (`fresh`, the twin scan of slice A, at most 8 outputs; one
 // text with the pair); and, at fill, the expiry is at least one term after this order's own UTXO was accepted (the
-// only clock an order can prove).
+// only clock an order can prove); and the new pair or part names this order's outpoint commitment as its maker on
+// this order's side (review 7: two orders of one side, an order and a pair's hand-over of another shape, or twins of
+// one id never accept one output, docs/DESIGN-ORACLE-IMPL.md 25).
 // DESIGN: review 6 (R6-F1): an entrant never enters a lineage it cannot prove clean. The book market's take (and this
 // order's before review 6) continued the pair's id, which any input carrying that id authorizes, a plain key's UTXO
 // included; its holder could write any object of the family under the part's id (a dispute deciding the part's claim,
@@ -191,6 +193,22 @@ contract KpfOpenO(
         byte[] z8 = byte[](0 as byte[8]);
         return byte[32](z8 + z8 + z8 + z8);
     }
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    // BEGIN maker
+    // This input's maker commitment (review 7, R7-F1): blake2b of its outpoint, the transaction id and then the index
+    // as 8 bytes. An outpoint is spent once and two inputs of one transaction never share one, so the commitment is
+    // unique to this input even beside a twin or a split part of its covenant id, and no other input, in this
+    // transaction or a later one, can present it as its own. A creating input requires its own role's field of the
+    // fresh output to hold it; one field holds one commitment, so two inputs in one role never accept one output.
+    function me() : byte[32] {
+        int self = this.activeInputIndex;
+        return blake2b(byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[8]));
+    }
+    // END maker
 
     function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int sz = pre + stLen + suf;
@@ -407,7 +425,10 @@ contract KpfOpenO(
     // END fresh id
 
     // T1' open (as KpfOpen.fill, with the binding and the twin scan).
-    entry fill(int pairOut, int n, int x, int bl, int bs, byte[32] counterKey, byte[32] counterTag, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
+    // The new pair names this order as its long or short maker (`me`, review 7) and counterMk, the counter order's
+    // commitment (zero when the counterparty is not an order), as the other; parent, host and donor are zero, so no
+    // pair's hand-over and no close-versus-close can accept the same output.
+    entry fill(int pairOut, int n, int x, int bl, int bs, byte[32] counterKey, byte[32] counterMk, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
         // The binding first: the bind proof is the deepest stack of this entry.
         terms(coverRate, premium, bl, bs);
         byte[] bnd = binding(pairOut, u, k, xe, quoteOf(n, coverRate, 0), coverRate, premium, counterKey);
@@ -422,8 +443,8 @@ contract KpfOpenO(
         require(bs <= priceMax);
         byte[32] lk = byte[32](ownerKey);
         byte[32] sk = counterKey;
-        byte[32] tl = selfId;
-        byte[32] ts = counterTag;
+        byte[32] tl = me();
+        byte[32] ts = counterMk;
         // This order's half of the premium: the long pays premium - floor(premium / 2), the short floor(premium / 2).
         int half = premium / 2;
         if (side == SIDE_LONG) {
@@ -438,8 +459,8 @@ contract KpfOpenO(
             require(x - bl >= minCounterRate);
             lk = counterKey;
             sk = byte[32](ownerKey);
-            tl = counterTag;
-            ts = selfId;
+            ts = tl;
+            tl = counterMk;
         }
         // Healthy at entry (DESIGN 4.5c), both sides, and the range wider than both maintenance bands.
         require(x * (BPS - mmrBps) >= bl * BPS);
@@ -449,9 +470,10 @@ contract KpfOpenO(
         require(OpTxInputDaaScore(self) >= 0);
         require(xe >= OpTxInputDaaScore(self) + termDaa);
         require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        byte[] z = p33(zero32());
         require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
             + i9(n) + i9(bl) + i9(bs) + i9(x) + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + bnd + byte[](NO_LISTS)
-            + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts) + cSuf)));
+            + p33(tl) + p33(ts) + z + z + z + cSuf)));
         // The pair starts a fresh lineage: no input and no other output carries its id.
         fresh(pairOut);
         require(tx.outputs[pairOut].value >= quoteOf(n, bs - bl, 0) + carrier);
@@ -459,9 +481,11 @@ contract KpfOpenO(
     }
 
     // T2 transfer (as KpfOpen.take): the part at partOut takes a listed side of an existing pair, under a fresh id,
-    // with the pair's entry e accepted only in this order's favour, this order's side unlisted and tagged with its id, the stayer's key and
+    // with the pair's entry e accepted only in this order's favour, this order's side unlisted and named by its maker, the stayer's key and
     // listing as given, and the binding the slot proves in this very transaction (the part's cover counted afresh).
-    entry take(int partOut, int n, int x, int e, int bound, byte[32] counterKey, int ca, int cm, int ct, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
+    // The part names this order as its maker on this order's side (`me`, review 7), pm (the commitment of the pair
+    // handing over, which checks it there) as its parent, the other side, host and donor zero.
+    entry take(int partOut, int n, int x, int e, int bound, byte[32] counterKey, byte[32] pm, int ca, int cm, int ct, int u, int k, int xe, int coverRate, int premium, byte[] cPre, byte[] cSuf) {
         int bl = bound;
         int bs = x + myRate;
         if (side == SIDE_LONG) {
@@ -481,7 +505,7 @@ contract KpfOpenO(
         byte[32] sk = byte[32](ownerKey);
         byte[] lists = i9(ca) + i9(cm) + i9(ct) + byte[](NO_LIST);
         byte[32] tl = zero32();
-        byte[32] ts = selfId;
+        byte[32] ts = me();
         if (side == SIDE_LONG) {
             require(x <= limit);
             require(e >= x);
@@ -489,8 +513,9 @@ contract KpfOpenO(
             lk = byte[32](ownerKey);
             sk = counterKey;
             lists = byte[](NO_LIST) + i9(ca) + i9(cm) + i9(ct);
-            ts = tl;
-            tl = selfId;
+            byte[32] t = tl;
+            tl = ts;
+            ts = t;
             require(x * (BPS - mmrBps) >= bl * BPS);
         } else {
             require(side == SIDE_SHORT);
@@ -506,7 +531,7 @@ contract KpfOpenO(
         require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
         require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
             + i9(n) + i9(bl) + i9(bs) + i9(e) + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + bnd + lists
-            + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts) + cSuf)));
+            + p33(tl) + p33(ts) + p33(pm) + p33(zero32()) + p33(zero32()) + cSuf)));
         // DESIGN: review 6 (R6-F1): the part starts a fresh lineage, which this order checks itself (no input and no
         // other output carries its id), so no UTXO but the part holds its id whatever the other inputs are (a pair, a
         // look-alike, a plain key carrying an id). The pair's old id is not carried into it.

@@ -567,8 +567,7 @@ pub fn open(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &O
         short_bid: 0,
         short_min: 0,
         short_tip: 0,
-        tag_l: long.idb(),
-        tag_s: short.idb(),
+        mk: Makers { long: maker_of(&long.op), short: maker_of(&short.op), ..Makers::default() },
     };
     check_pair(&p).map_err(refusal)?;
     if t.premium > lo.prem_max || t.premium > so.prem_max {
@@ -591,8 +590,8 @@ pub fn open(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &O
     };
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.lock(t.lock.max(lo.active_from.max(0) as u64).max(so.active_from.max(0) as u64));
-    d.contract(long, OWhich::Open, lo.redeem(k), "fill", fill(so.owner, short.idb()), "long order", 0);
-    d.contract(short, OWhich::Open, so.redeem(k), "fill", fill(lo.owner, long.idb()), "short order", 0);
+    d.contract(long, OWhich::Open, lo.redeem(k), "fill", fill(so.owner, maker_of(&short.op)), "long order", 0);
+    d.contract(short, OWhich::Open, so.redeem(k), "fill", fill(lo.owner, maker_of(&long.op)), "short order", 0);
     d.contract(slot, OWhich::Bond, k.bond.redeem(&slot.s.state_bytes()), "bind", bind_args(&a, &slot.s.owner), "slot", m.bond.rate as u64);
     for (i, o) in [(0usize, long), (1, short)] {
         let spend = o.s.fill_spend(t.n, t.premium) as u64;
@@ -639,6 +638,8 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     }
     let id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
     let (w, fb) = p.pending_of(k, c.n, c.kind, c.side, c.price, c.t0).ok_or_else(|| Error::Invalid("the claim cannot be proposed (no trigger within g, one owner, or another kind)".into()))?;
+    // Review 7: the pending part names the pair input (its outpoint) as its maker.
+    let w = w.made_by(&pair.op);
     let sig = if c.kind == KIND_CLOSE { Arg::Sig(if c.side == LONG { p.long_key } else { p.short_key }) } else { bv(&[0u8; 65]) };
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.lock(c.t0.max(0) as u64);
@@ -653,15 +654,160 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     Ok((d.finish()?, w))
 }
 
+// ---------------------------------------------------------------- the trace (review 7, R7-F2)
+
+/// What a wallet proved about a claim's origin before committing stake to it or to its dispute (review 7, R7-F2;
+/// DESIGN-ORACLE-IMPL 13, 24.2 (a)): the claim's covenant id was born in transaction `birth` as a genesis of the one
+/// output `out` (so, by the induction of 24.1, every later UTXO of the id was written by a template of the family), that
+/// output is a pinned `KpfPendingO` in status pending, and it names as its maker (review 7) the pair input `pair_in`,
+/// which ran the pinned `KpfPairO`'s `propose` and would write exactly this pending state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimTrace {
+    pub claim_id: Hash,
+    pub birth: kaspa_consensus_core::tx::TransactionId,
+    pub out: u32,
+    pub pair_in: TransactionOutpoint,
+    pub proposed: OPending,
+}
+
+/// What the builders of a commitment (`contest`, `deposit`) are told about the claim: traced, or explicitly not.
+#[derive(Clone, Debug)]
+pub enum Trust<'a> {
+    /// The claim (and, for a deposit, its dispute) was traced: `trace_claim` or `trace_dispute`.
+    Traced(&'a ClaimTrace),
+    /// Not traced; the user acknowledged that a claim or dispute written by a genesis keeps every stake it receives.
+    Untraced,
+}
+
+/// What a trace does not prove, for the commands to print.
+pub const TRACE_LIMITS: &str = "a transaction's id binds its outpoints, outputs and covenant bindings but not its signature scripts: that the pair input ran `propose` is read from the body as given (the pending template and the claim's id are bound by the output's script and the genesis hash)";
+
+fn hash_eq(a: &Hash, b: &Hash) -> bool {
+    a.as_bytes() == b.as_bytes()
+}
+
+/// The redeem script an input's signature script ends with, if the push before it is `entry`'s dispatch tag of the
+/// pinned artifact `art` and the redeem is `len` bytes (a SilverScript entry: the arguments, the tag, the redeem).
+fn ran<'a>(sig: &'a [u8], len: usize, art: &SilAbiArtifact, entry: &str) -> Option<&'a [u8]> {
+    let tag = pinned::entry_tag(art, entry);
+    let n = sig.len();
+    if n < len + 8 || sig[n - len - 3] != 0x4d || u16::from_le_bytes([sig[n - len - 2], sig[n - len - 1]]) as usize != len {
+        return None;
+    }
+    let at = n - len - 8;
+    if sig[at] != 0x04 || sig[at + 1..at + 5] != tag {
+        return None;
+    }
+    Some(&sig[n - len..])
+}
+
+/// Traces the claim of covenant id `claim_id` to its birth (review 7, R7-F2): `birth` is the transaction that created
+/// it, `pending_redeem` its redeem script as born (the pending file, or the contest input's script of its opening).
+pub fn trace_claim(claim_id: Hash, birth: &Transaction, pending_redeem: &[u8]) -> Result<ClaimTrace> {
+    let k = pinned::kit();
+    let outs: Vec<usize> = (0..birth.outputs.len()).filter(|&j| birth.outputs[j].covenant.is_some_and(|c| hash_eq(&c.covenant_id, &claim_id))).collect();
+    let [o] = outs[..] else {
+        return invalid(format!("the claim's id is carried by {} outputs of its birth transaction, not by exactly one", outs.len()));
+    };
+    let out = &birth.outputs[o];
+    let auth = out.covenant.expect("bound").authorizing_input as usize;
+    let a = birth.inputs.get(auth).ok_or_else(|| Error::Invalid("the claim's binding names no input".into()))?;
+    if !hash_eq(&covenant_id(a.previous_outpoint, std::iter::once((o as u32, out))), &claim_id) {
+        return invalid("the claim's id is not the genesis of that one output (a genesis group of several outputs, or a continuation)");
+    }
+    if pay_to_script_hash_script(pending_redeem) != out.script_public_key {
+        return invalid("the pending part's script is not the claim's output script");
+    }
+    let w = match OObj::decode(pending_redeem)? {
+        OObj::Pending(w) => w,
+        o => return invalid(format!("the claim is a {}, not a pinned oracle pending part", o.kind())),
+    };
+    if w.status != PENDING {
+        return invalid("the claim was not born pending");
+    }
+    let pair_len = k.pair.prefix.len() + PAIR_STATE_LEN + k.pair.suffix.len();
+    for i in &birth.inputs {
+        if maker_of(&i.previous_outpoint) != w.mk_parent {
+            continue;
+        }
+        let Some(rs) = ran(&i.signature_script, pair_len, pinned::pair_base(), "propose") else {
+            return invalid("the input the claim names as its maker did not run KpfPairO.propose");
+        };
+        let OObj::Pair(p) = OObj::decode(rs)? else { return invalid("the claim's maker is not a pinned oracle pair") };
+        let (want, _) = p.pending_of(k, w.n, w.kind, w.side, w.quote, w.t0).ok_or_else(|| Error::Invalid("the maker pair cannot propose this claim".into()))?;
+        if want.made_by(&i.previous_outpoint) != w {
+            return invalid("the claim is not the pending state its maker pair writes");
+        }
+        return Ok(ClaimTrace { claim_id, birth: birth.id(), out: o as u32, pair_in: i.previous_outpoint, proposed: w });
+    }
+    invalid("no input of the birth transaction is the claim's maker (it was not proposed by a pair)")
+}
+
+/// Traces a dispute to its opening and its claim to a propose (review 7, R7-F2): `opening` is the transaction whose
+/// `KpfStake.open` opened the dispute on the claim (its contest input spends the claim's birth output and carries the
+/// pending part's redeem script), `birth` the claim's birth (a `KpfPairO.propose`). Since the claim's id is born clean,
+/// every UTXO of it, the dispute's every continuation included, was written by a template of the family.
+pub fn trace_dispute(dispute: &OLive<Js>, opening: &Transaction, birth: &Transaction) -> Result<ClaimTrace> {
+    let k = pinned::kit();
+    let cid = dispute.id.ok_or_else(|| Error::Invalid("the dispute has no covenant id".into()))?;
+    if dispute.s.status != crate::judge::STATUS_DISPUTE {
+        return invalid("not a dispute");
+    }
+    let n_cid = opening.outputs.iter().filter(|x| x.covenant.is_some_and(|c| hash_eq(&c.covenant_id, &cid))).count();
+    if n_cid != 3 {
+        return invalid("the opening does not write the contested part, the opener's receipt and the dispute under the claim's id");
+    }
+    let pend_len = k.pending.prefix.len() + PENDING_STATE_LEN + k.pending.suffix.len();
+    let c = opening
+        .inputs
+        .iter()
+        .find(|i| i.previous_outpoint.transaction_id == birth.id())
+        .ok_or_else(|| Error::Invalid("the opening spends nothing of the claim's birth transaction".into()))?;
+    let rs = ran(&c.signature_script, pend_len, pinned::pending_base(), "contest").ok_or_else(|| Error::Invalid("the opening's claim input did not run KpfPendingO.contest".into()))?;
+    let t = trace_claim(cid, birth, rs)?;
+    if c.previous_outpoint.index != t.out {
+        return invalid("the opening contests another output of the birth transaction");
+    }
+    let hashes: Vec<[u8; 32]> = opening
+        .outputs
+        .iter()
+        .filter(|x| x.covenant.is_some_and(|cv| hash_eq(&cv.covenant_id, &cid)))
+        .map(|x| {
+            let mut h = x.script_public_key.version().to_be_bytes().to_vec();
+            h.extend_from_slice(x.script_public_key.script());
+            *blake3::hash(&h).as_bytes()
+        })
+        .collect();
+    if !hashes.contains(&dispute.s.spk_hash) {
+        return invalid("the dispute names a contested part its opening did not write");
+    }
+    Ok(t)
+}
+
+fn trusted(t: &Trust, id: Option<Hash>) -> Result<()> {
+    match t {
+        Trust::Untraced => Ok(()),
+        Trust::Traced(c) if id.is_some_and(|i| hash_eq(&i, &c.claim_id)) => Ok(()),
+        Trust::Traced(_) => invalid("the trace is of another claim"),
+    }
+}
+
 /// A contest: in 0 the pending part, 1 the opener's free stake (its owner signs), then the funding (which also funds
-/// the dispute's base `base`); out 0 the contested part, 1 the opener's receipt, 2 the dispute, then change.
-pub fn contest(pending: &OLive<OPending>, opener: &OLive<Js>, base: u64, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending, Js)> {
+/// the dispute's base `base`); out 0 the contested part, 1 the opener's receipt, 2 the dispute, then change. `trust`:
+/// the claim traced to its birth (`trace_claim`, whose birth output must be this very UTXO), or explicitly untraced.
+pub fn contest(pending: &OLive<OPending>, opener: &OLive<Js>, base: u64, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64, trust: &Trust) -> Result<(OBuilt, OPending, Js)> {
     let k = pinned::kit();
     let w = &pending.s;
     if w.status != PENDING {
         return invalid("only a pending claim can be contested");
     }
     let id = pending.id.ok_or_else(|| Error::Invalid("the part has no covenant id".into()))?;
+    trusted(trust, pending.id)?;
+    if let Trust::Traced(t) = trust {
+        if t.birth != pending.op.transaction_id || t.out != pending.op.index || t.proposed != *w {
+            return invalid("the trace is of another UTXO of the claim");
+        }
+    }
     let jm = w.m.judge_market();
     if opener.s.m != jm || opener.s.status != crate::judge::STATUS_FREE {
         return invalid("the opener is not a free stake of this market's judge");
@@ -687,11 +833,13 @@ pub fn contest(pending: &OLive<OPending>, opener: &OLive<Js>, base: u64, funder:
 }
 
 /// A deposit on `side`: in 0 the dispute, 1..=k the stakes (each its owner's signature), then the funding; out 0 the
-/// dispute, 1..=k the receipts, then change.
-pub fn deposit(dispute: &OLive<Js>, side: i64, stakes: &[OLive<Js>], funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, Js)> {
+/// dispute, 1..=k the receipts, then change. `trust`: the dispute traced to its opening and its claim to a propose
+/// (`trace_dispute`, of this dispute's id), or explicitly untraced (review 7, R7-F2).
+pub fn deposit(dispute: &OLive<Js>, side: i64, stakes: &[OLive<Js>], funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64, trust: &Trust) -> Result<(OBuilt, Js)> {
     let k = pinned::kit();
     let d0 = &dispute.s;
     let id = dispute.id.ok_or_else(|| Error::Invalid("the dispute has no covenant id".into()))?;
+    trusted(trust, dispute.id)?;
     if stakes.is_empty() || stakes.len() > 7 {
         return invalid("a deposit carries 1 to 7 stakes");
     }
@@ -909,7 +1057,7 @@ pub fn amend(pair: &OLive<OPair>, side: i64, ask: i64, min_part: i64, tip: i64, 
     let k = pinned::kit();
     let p = &pair.s;
     let id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
-    let mut c = OPair { tag_l: [0; 32], tag_s: [0; 32], ..p.clone() };
+    let mut c = OPair { mk: Makers::default(), ..p.clone() };
     let key = if side == LONG {
         (c.long_ask, c.long_min, c.long_tip) = (ask, min_part, tip);
         p.long_key
@@ -946,6 +1094,8 @@ pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 3
         (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
         (crate::payoff::owed(p.size, p.bs - x, p.short_tip, sc), p.short_key)
     };
+    // Review 7: the part names the pair input as its parent (a signing taker is no family input: no entrant maker).
+    part.mk.parent = maker_of(&pair.op);
     let keep = pair.value as i64 - p.range_of(p.size);
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.contract(pair, OWhich::Pair, p.redeem(k), "transfer", vec![iv(side), iv(p.size), iv(x), iv(nb), bv(&entrant), bv(&[0; 32]), iv(if pay >= PLAIN_DUST { 1 } else { 0 })], "pair", p.m.p.quiet_daa as u64);

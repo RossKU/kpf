@@ -7,6 +7,8 @@ pragma silverscript ^0.1.0;
 // continue that id; only the status window (status, P, disputer) ever changes.
 // DESIGN: review 6 (R6-F1, R6-F2): KpfPending lives under its pair's id (one id, two templates); here a claim's id is
 // unique to it, so a dispute or pool of one claim can never be taken for another's, whatever the DAA scores.
+// DESIGN: review 7 (R7-F1): the fresh id proves the part new, not whose it is; the part also names the outpoint of the
+// pair input that proposed it (mkParent), so no second pair can propose into it.
 //
 // Statuses: 1 pending, 2 contested, 3 upheld, 4 refuted.
 //   pending    contest(u, dOut)  anyone with aged judge stake (KpfStake.open on NO in the same transaction): the part
@@ -124,7 +126,8 @@ contract KpfPendingO(
     int init_shortTip,
     byte[32] init_restoreHash,
     byte[32] init_cureHash,
-    byte[32] init_forfeitHash
+    byte[32] init_forfeitHash,
+    byte[32] init_mkParent
 ) {
     // The oracle market block (state [0..309)), byte for byte the pair's (KpfPairO describes every field).
     byte[32] market = init_market;
@@ -191,6 +194,10 @@ contract KpfPendingO(
     byte[32] restoreHash = init_restoreHash;
     byte[32] cureHash = init_cureHash;
     byte[32] forfeitHash = init_forfeitHash;
+    // The maker (review 7, R7-F1; state [780..813)): the outpoint commitment of the pair input whose propose wrote this
+    // part (KpfPairO.me), so two pairs that would write one pending state never both accept one output. It lives for one
+    // transaction: contest and decide write it zero, and no state this part becomes carries it.
+    byte[32] mkParent = init_mkParent;
 
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_LONG = 1;
@@ -219,11 +226,13 @@ contract KpfPendingO(
     int constant MMR_CAP = 5000;
     int constant BOND_MIN_MAX = 1000000000000;
     // Redeem offsets (the state starts at byte 1): the market body hashed into the id [34..310); the status window
-    // [409..460); the end of the state 781.
+    // [409..460); the maker push [781..814); the end of the state 814.
     int constant BODY_AT = 34;
     int constant BLOCK_END = 310;
     int constant STATUS_AT = 409;
     int constant DISPUTER_END = 460;
+    int constant MAKER_AT = 781;
+    int constant STATE_END = 814;
     // The judge block of the market: the id push [1..34) and the six judge parameters [88..142).
     int constant JUDGE_AT = 88;
     int constant JUDGE_END = 142;
@@ -290,13 +299,14 @@ contract KpfPendingO(
         require(tx.outputs[o].value >= v);
     }
 
-    // This part's continuation at output `self` with the status window w (51 bytes), and the guards of an entry that
-    // continues it (contest, decide).
+    // This part's continuation at output `self` with the status window w (51 bytes) and the maker zero, and the guards
+    // of an entry that continues it (contest, decide).
     function cont(byte[] w) {
         int self = this.activeInputIndex;
         byte[] rs = ownRs();
+        byte[] z8 = byte[](0 as byte[8]);
         require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATUS_AT) + w
-            + rs.slice(DISPUTER_END, this.bytecodeSize))));
+            + rs.slice(DISPUTER_END, MAKER_AT) + byte[](0x20) + z8 + z8 + z8 + z8 + rs.slice(STATE_END, this.bytecodeSize))));
         require(OpOutputCovenantId(self) == OpInputCovenantId(self));
         require(tx.outputs[self].value >= tx.inputs[self].value);
     }

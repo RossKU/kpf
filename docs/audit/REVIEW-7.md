@@ -155,3 +155,27 @@ limit by `ρ`. The documented exploits of the earlier slices (genesis pairs and 
 back-dated renewal, the Sybil underwriter, the take without a pair) are stated accurately as far as this review checked,
 except that the protection the genesis-dispute limit relies on, the wallet's trace, is absent from the shipped
 command (R7-F2).
+
+## Status after fixes
+
+Fixed in the working tree (not committed); the decisions, the role table, the conservation statement, the book-family
+table and the attacks on the change are in DESIGN-ORACLE-IMPL 25.
+
+| # | Status | How | Tests |
+|---|---|---|---|
+| R7-F1 | **fixed** | every fresh output of the family names its makers: one field per creating role (pair: long, short, parent, host, donor; pending part: parent), each the creating input's outpoint commitment (blake2b of txid and index); each creating input requires its own field to hold its own commitment and every role its shape cannot share to be zero; no entry copies a maker | `audit7_tests::holds_two_pairs_never_merge_into_one_part_by_transfer`, `holds_partial_hand_overs_of_two_pairs_never_share_one_part`, `holds_underwriter_cannot_merge_two_halves_into_one_claim` (the three exploits, now refused by the input the output does not name) |
+| R7-F2 | **fixed** | `oracle_build::trace_claim` / `trace_dispute`; `contest` and `deposit` take an explicit `Trust`; `kpf deposit` (`--opening`, `--claim-tx`) and `kpf contest` (`--claim-tx`) require the trace with `--node` and refuse without it unless `--accept-untraced`, printing what was not checked; dispute and stakes read through the node | `audit7_tooling::holds_deposit_refuses_a_dispute_its_trace_does_not_reach`, `oracle_builders` (a real trace), `oracle_cli`, `ocmds::tests::the_trace_gate_of_contest_and_deposit` |
+
+The unproven routes, built:
+
+| Route | Verdict | Test |
+|---|---|---|
+| `closeHost` merge (two identical hosts, one donor, one P3) | **holds** | `holds_two_hosts_never_share_one_p3` (and two donors: `holds_two_donors_never_share_one_p3`) |
+| a merge inside an order's `take` | **holds** | `holds_two_pairs_never_merge_into_the_part_an_order_takes` |
+| an order's `fill` sharing its pair with a hand-over part | **holds** (before the fix: not built; the makers make the two entries demand different fields) | `holds_an_order_fill_never_shares_its_pair_with_a_hand_over_part` |
+| one vouch over proposals of two underwriters | **holds**: each propose requires its own underwriter's input; two vouches in one transaction are harmless | `holds_one_vouch_never_covers_a_proposal_of_another_underwriter` |
+
+The documented limits the review found untrue (DESIGN-ORACLE-IMPL 21, 22) are true of the fixed code and say when they
+were not. The book-market family was checked once more for this class (12 new `holds_` tests in `audit7_book_tests`):
+no exploit, no contract changed. The pinned oracle artifacts and 41 of the 46 golden vectors were regenerated; the book
+market's artifacts are byte for byte as before.

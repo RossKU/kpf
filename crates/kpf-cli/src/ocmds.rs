@@ -246,6 +246,17 @@ fn stake_of_path(path: &str) -> R<OLive<Js>> {
         o => Err(format!("{path} is a {}, not a judge stake", o.kind())),
     }
 }
+/// A stake file refreshed through the node (its UTXO, value and DAA confirmed; review 7).
+fn stake_live(_a: &Args, path: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<OLive<Js>> {
+    let mut f = ObjFile::load(path)?;
+    if let Some(n) = node {
+        crate::cmds::refresh(n, &mut f, net)?;
+    }
+    match OObj::decode(&f.redeem).map_err(e)? {
+        OObj::Stake(s) => live_of(&f, s),
+        o => Err(format!("{path} is a {}, not a judge stake", o.kind())),
+    }
+}
 fn order_of(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<OLive<OOpen>> {
     match load(a, flag, node, net)? {
         (f, OObj::Order(o)) => live_of(&f, o),
@@ -499,13 +510,58 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
     finish(a, "vouch: a price claim", &b, &keys, net, &mut node)
 }
 
+/// A transaction body file: a `kpf-tx/1` file this tool wrote (`transaction`), a node's `rpc` object, or the bare
+/// `RpcTransaction` JSON. Its id binds what the trace reads of it but the signature scripts.
+fn tx_body(path: &str) -> R<kaspa_consensus_core::tx::Transaction> {
+    let v = read_json(path)?;
+    let t = v.get("transaction").or_else(|| v.get("rpc")).unwrap_or(&v);
+    kpf_protocol::tx::tx_from_rpc_json(t).map_err(|x| format!("{path}: {x}"))
+}
+
+/// Review 7 (R7-F2): the wallet's trace before a stake is committed to a claim (`contest`) or a dispute (`deposit`).
+/// With `--node` the trace is required (`--claim-tx`, and `--opening` for a dispute) and a failing trace refuses; without
+/// it the command refuses unless `--accept-untraced` acknowledges what was not checked, which it prints.
+/// DESIGN: the trace reads the transaction bodies from files (the node API this tool uses looks UTXOs up by address,
+/// not transactions by id); a body is bound to the UTXO by its id (outpoints, outputs, covenant bindings), so any
+/// source will do, and the node confirms that the UTXO itself is live.
+fn untraced_or_refuse(a: &Args, node: bool, what: &str, traced: bool) -> R<()> {
+    if traced && node {
+        return Ok(());
+    }
+    if node {
+        return Err(format!("{what}: with --node the claim must be traced: give --claim-tx (the claim's birth transaction){}", if what == "deposit" { " and --opening (the dispute's opening transaction)" } else { "" }));
+    }
+    if !a.has("accept-untraced") {
+        return Err(format!(
+            "{what}: refused without --node: the {} cannot be checked. A dispute or claim written by a genesis keeps every stake committed to it. Use --node with the trace files, or --accept-untraced to commit anyway",
+            if what == "deposit" { "dispute's UTXO" } else { "claim's UTXO" }
+        ));
+    }
+    println!("WARNING: {what} without a node: NOT CHECKED that the {} is live at a node with this script, covenant id and value", if what == "deposit" { "dispute" } else { "claim" });
+    if !traced {
+        println!("WARNING: {what} untraced: NOT CHECKED that the claim's id was born alone in a KpfPairO.propose{}; a forged one keeps every stake committed to it", if what == "deposit" { " and that the dispute was opened on it by KpfStake.open" } else { "" });
+    }
+    Ok(())
+}
+
 /// `contest`: open a dispute on a pending claim with an aged judge stake on NO.
 pub fn contest_cmd(a: &Args) -> R<()> {
-    only(a, &["pending", "stake", "base"])?;
+    only(a, &["pending", "stake", "base", "claim-tx", "accept-untraced"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let w = pending_of(a, "pending", &mut node, net)?;
     let st = stake_of_path(a.need("stake")?)?;
+    let trace = match a.get("claim-tx") {
+        Some(p) => {
+            let id = w.id.ok_or("the pending part has no covenant id")?;
+            let raw = ObjFile::load(a.need("pending")?)?.redeem;
+            let t = trace_claim(id, &tx_body(p)?, &raw).map_err(|x| format!("the claim's trace failed: {x}"))?;
+            println!("traced: the claim was born alone in {} as the pending part of the pair {}:{} (KpfPairO.propose); {}", t.birth, t.pair_in.transaction_id, t.pair_in.index, TRACE_LIMITS);
+            Some(t)
+        }
+        None => None,
+    };
+    untraced_or_refuse(a, node.is_some(), "contest", trace.is_some())?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let t = now(a, &mut node)?;
     let until = w.s.contest_until(w.daa);
@@ -513,24 +569,46 @@ pub fn contest_cmd(a: &Args) -> R<()> {
         println!("WARNING: the contest window ended at DAA {until}: a contest landing now is ignored and the claim settles as if uncontested");
     }
     let base = if a.has("base") { kas(a.need("base")?)? as u64 } else { 50_000_000 };
-    let (b, _, _) = contest(&w, &st, base, &fu, &fk, rate(a)?).map_err(e)?;
+    let trust = match &trace {
+        Some(t) => Trust::Traced(t),
+        None => Trust::Untraced,
+    };
+    let (b, _, _) = contest(&w, &st, base, &fu, &fk, rate(a)?, &trust).map_err(e)?;
     finish(a, "contest", &b, &keys, net, &mut node)
 }
 
 /// `deposit`: stakes join the trailing side of a dispute (`--side yes|no`, up to 7 `--stake` files).
 pub fn deposit_cmd(a: &Args) -> R<()> {
-    only(a, &["dispute", "side", "stake"])?;
+    only(a, &["dispute", "side", "stake", "opening", "claim-tx", "accept-untraced"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
-    let d = stake_of_path(a.need("dispute")?)?;
+    // Review 7 (R7-F2): the dispute is read through the node when one is given (its UTXO, value and id confirmed).
+    let d = match load(a, "dispute", &mut node, net)? {
+        (f, OObj::Stake(s)) => live_of(&f, s)?,
+        (_, o) => return Err(format!("--dispute is a {}, not a judge stake", o.kind())),
+    };
     let sd = match a.need("side")? {
         "yes" => YES,
         "no" => NO,
         s => return Err(format!("--side yes|no, not `{s}`")),
     };
-    let stakes = a.all("stake").into_iter().map(stake_of_path).collect::<R<Vec<_>>>()?;
+    let trace = match (a.get("opening"), a.get("claim-tx")) {
+        (Some(o), Some(c)) => {
+            let t = trace_dispute(&d, &tx_body(o)?, &tx_body(c)?).map_err(|x| format!("the dispute's trace failed: {x}"))?;
+            println!("traced: the dispute was opened on the claim born alone in {} as the pending part of the pair {}:{} (KpfPairO.propose); {}", t.birth, t.pair_in.transaction_id, t.pair_in.index, TRACE_LIMITS);
+            Some(t)
+        }
+        (None, None) => None,
+        _ => return Err("the trace needs both --opening and --claim-tx".into()),
+    };
+    untraced_or_refuse(a, node.is_some(), "deposit", trace.is_some())?;
+    let stakes = a.all("stake").into_iter().map(|p| if node.is_some() { stake_live(a, p, &mut node, net) } else { stake_of_path(p) }).collect::<R<Vec<_>>>()?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, n) = deposit(&d, sd, &stakes, &fu, &fk, rate(a)?).map_err(e)?;
+    let trust = match &trace {
+        Some(t) => Trust::Traced(t),
+        None => Trust::Untraced,
+    };
+    let (b, n) = deposit(&d, sd, &stakes, &fu, &fk, rate(a)?, &trust).map_err(e)?;
     println!("after the deposit: {} leads, YES {} KAS, NO {} KAS", if n.side == YES { "YES" } else { "NO" }, fmt_kas(n.yes as i128), fmt_kas(n.no as i128));
     finish(a, "deposit", &b, &keys, net, &mut node)
 }
@@ -742,4 +820,27 @@ pub fn watch_cmd(a: &Args) -> R<()> {
     }
     let _ = (Path::new("."), SHORT);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Args {
+        Args::parse(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
+    }
+
+    /// Review 7 (R7-F2): with a node the trace is required (no flag excuses it); without one an explicit flag is.
+    #[test]
+    fn the_trace_gate_of_contest_and_deposit() {
+        let none = args(&["deposit"]);
+        let ack = args(&["deposit", "--accept-untraced"]);
+        let e1 = untraced_or_refuse(&none, true, "deposit", false).unwrap_err();
+        assert!(e1.contains("--claim-tx") && e1.contains("--opening"), "{e1}");
+        assert!(untraced_or_refuse(&ack, true, "deposit", false).is_err(), "with a node the flag does not excuse a missing trace");
+        assert!(untraced_or_refuse(&none, true, "deposit", true).is_ok());
+        assert!(untraced_or_refuse(&none, false, "deposit", true).is_err(), "without a node the UTXO is unchecked: the flag is needed");
+        assert!(untraced_or_refuse(&none, false, "contest", false).unwrap_err().contains("--accept-untraced"));
+        assert!(untraced_or_refuse(&ack, false, "contest", false).is_ok());
+    }
 }

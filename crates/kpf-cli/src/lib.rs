@@ -101,7 +101,10 @@ gives the present the lock time proves)
   vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
                 [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too)
   contest       --pending W.json --stake ST.json --key STAKER [--base KAS]   within the window, with aged stake on NO
+                with --node: --claim-tx TX.json (the claim's birth, traced to a KpfPairO.propose); without: --accept-untraced
   deposit       --dispute D.json --side yes|no --stake ST.json... --key OWNER...   join the trailing side
+                with --node: --opening TX.json --claim-tx TX.json (the dispute traced to its opening and its claim
+                to a propose; refused if the trace fails); without --node: --accept-untraced (prints what is unchecked)
   resolve       --dispute D.json --pending W.json                    after the round: the verdict reaches the part
   oracle-cure   --pending W.json --key LOSER                         the loser clears a pending liquidation
   oracle-finalize --pending W.json                                   settle, or restore a refuted or void claim

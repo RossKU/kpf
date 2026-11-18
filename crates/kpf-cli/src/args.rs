@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
     "submit", "json", "brief", "priority", "show-secret", "unlist", "help", "example", "no-save", "allow-in-repo", "update",
-    "allow-dead-evidence",
+    "allow-dead-evidence", "accept-untraced",
 ];
 
 /// Parsed arguments of one command.

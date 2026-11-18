@@ -128,8 +128,7 @@ pub fn sample_pair(m: &OMarket) -> OPair {
         short_bid: 0,
         short_min: 0,
         short_tip: 0,
-        tag_l: [0x1a; 32],
-        tag_s: [0x1b; 32],
+        mk: Makers { long: [0x1a; 32], short: [0x1b; 32], parent: [0x1c; 32], host: [0x1d; 32], donor: [0x1e; 32] },
     }
 }
 
@@ -163,6 +162,7 @@ pub fn sample_pending(p: &OPair) -> OPending {
         restore_hash: [0x2a; 32],
         cure_hash: [0x2b; 32],
         forfeit_hash: [0x2c; 32],
+        mk_parent: [0x2d; 32],
     }
 }
 
@@ -450,8 +450,7 @@ pub fn opened_pair(lo: &LOrder, so: &LOrder, sl: &LSlot, sp: &OpenSpec) -> OPair
         short_bid: 0,
         short_min: 0,
         short_tip: 0,
-        tag_l: lo.idb(),
-        tag_s: so.idb(),
+        mk: Makers { long: maker_of(&lo.op), short: maker_of(&so.op), ..Makers::default() },
     }
 }
 
@@ -495,8 +494,8 @@ pub fn open_tx(lo: &LOrder, so: &LOrder, sl: &LSlot, sp: &OpenSpec, tweak: &dyn 
         ]
     };
     let ins = vec![
-        order_in(lo, "fill", fill_args(so.s.owner, so.idb())),
-        order_in(so, "fill", fill_args(lo.s.owner, lo.idb())),
+        order_in(lo, "fill", fill_args(so.s.owner, maker_of(&so.op))),
+        order_in(so, "fill", fill_args(lo.s.owner, maker_of(&lo.op))),
         slot_in(sl, "bind", bind_args(&a, &uw_kp())),
         exec_in(200),
     ];
@@ -581,6 +580,7 @@ pub fn propose_tx_with(lp: &LPair, c: &ClaimSpec, voucher: &Keypair, closer: Opt
         (w.kind, w.side, w.n, w.quote, w.t0) = (c.kind, c.side, c.n, c.p, c.t0);
         (w, if c.side == LONG { lp.s.bl } else { lp.s.bs })
     });
+    let w = w.made_by(&lp.op);
     let sig = match closer {
         Some(kp) => Arg::Sig(*kp),
         None => bv(&[0u8; 65]),
@@ -831,7 +831,7 @@ pub fn coop_tx(lp: &LPair, long_pay: u64) -> T {
 
 /// An amend of `side` by `kp`: in 0 the pair (sequence `seq`), 1 the executor; out 0 the continuation, 1 change.
 pub fn amend_tx(lp: &LPair, side: i64, kp: &Keypair, ask: i64, seq: u64) -> (T, OPair) {
-    let mut c = OPair { tag_l: [0; 32], tag_s: [0; 32], ..lp.s.clone() };
+    let mut c = OPair { mk: Makers::default(), ..lp.s.clone() };
     if side == LONG {
         (c.long_ask, c.long_min, c.long_tip) = (ask, 0, 0);
     } else {
@@ -862,6 +862,7 @@ pub fn transfer_tx_with(lp: &LPair, side: i64, xp: i64, nb: i64, ek: &Keypair, s
         part.short_key = x(ek);
         (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
     }
+    part.mk.parent = maker_of(&lp.op);
     let leaver = if side == LONG { p.long_key } else { p.short_key };
     let ins = vec![pair_in(lp, "transfer", vec![iv(side), iv(p.size), iv(xp), iv(nb), bv(&x(ek)), bv(&[0; 32]), iv(1)]), key_in(outpoint(223), 500_000_000_000, 0, ek)];
     let keep = lp.value as i64 - p.range_of(p.size);
@@ -910,15 +911,16 @@ pub fn take_tx_with(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, wit
         part.bl = xp - o.my_rate;
         part.long_key = o.owner;
         (part.long_ask, part.long_min, part.long_tip) = (0, 0, 0);
-        part.tag_l = lo.idb();
+        part.mk.long = maker_of(&lo.op);
         (p.short_key, p.bs, (p.short_bid, p.short_min, p.short_tip))
     } else {
         part.bs = xp + o.my_rate;
         part.short_key = o.owner;
         (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
-        part.tag_s = lo.idb();
+        part.mk.short = maker_of(&lo.op);
         (p.long_key, p.bl, (p.long_ask, p.long_min, p.long_tip))
     };
+    part.mk.parent = maker_of(&lp.op);
     let pay = if o.side == LONG { kpf_protocol::payoff::owed(n, xp - p.bl, p.long_tip, p.m.p.scale) } else { kpf_protocol::payoff::owed(n, p.bs - xp, p.short_tip, p.m.p.scale) };
     let leaver = if o.side == LONG { p.long_key } else { p.short_key };
     let nb = if o.side == LONG { part.bl } else { part.bs };
@@ -933,6 +935,7 @@ pub fn take_tx_with(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, wit
         iv(p.entry),
         iv(bound),
         bv(&stayer),
+        bv(&maker_of(&lp.op)),
         iv(cl.0),
         iv(cl.1),
         iv(cl.2),
@@ -946,7 +949,7 @@ pub fn take_tx_with(lp: &LPair, lo: &LOrder, sl: &LSlot, xp: i64, lock: u64, wit
     ];
     let third = if with_bind { slot_in(sl, "bind", bind_args(&a, &uw_kp())) } else { key_in(outpoint(226), 1_000_000_000, 0, &uw_kp()) };
     let ins = vec![
-        pair_in(lp, "transfer", vec![iv(o.side), iv(n), iv(xp), iv(nb), bv(&o.owner), bv(&lo.idb()), iv(2)]),
+        pair_in(lp, "transfer", vec![iv(o.side), iv(n), iv(xp), iv(nb), bv(&o.owner), bv(&maker_of(&lo.op)), iv(2)]),
         order_in(lo, "take", take_args),
         third,
         exec_in(227),
@@ -1008,12 +1011,12 @@ pub fn close_vs_close_tx_with(host: &LPair, donor: &LPair, xp: i64, e3: i64, lin
     p3.entry = e3;
     p3.long_key = d.long_key;
     (p3.long_ask, p3.long_min, p3.long_tip) = (d.long_ask, d.long_min, d.long_tip);
-    p3.tag_l = donor.idb();
+    p3.mk = Makers { host: maker_of(&host.op), donor: maker_of(&donor.op), ..Makers::default() };
     let sc = h.m.p.scale;
     let lpay = kpf_protocol::payoff::owed(n, xp - h.bl, h.long_tip, sc);
     let spay = kpf_protocol::payoff::owed(n, d.bs - xp, d.short_tip, sc) + donor.value as i64 - d.range_of(n);
-    let host_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&donor.idb())];
-    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), iv(h.b.cover_rate), iv(h.b.expiry), iv(h.b.premium)];
+    let host_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&maker_of(&donor.op))];
+    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), iv(h.b.cover_rate), iv(h.b.expiry), iv(h.b.premium), bv(&maker_of(&host.op))];
     let ins = vec![pair_in(host, "closeHost", host_args), pair_in(donor, "closeDonor", donor_args), exec_in(229)];
     let keep_h = host.value as i64 - h.range_of(n);
     let mut outs = vec![

@@ -82,6 +82,7 @@ fn multi_propose(pairs: &[LPair]) -> T {
     for (i, lp) in pairs.iter().enumerate() {
         let c = liq(920_000_000, 450);
         let (w, fb) = lp.s.pending_of(k, c.n, c.kind, c.side, c.p, c.t0).unwrap();
+        let w = w.made_by(&lp.op);
         ins.push(pair_in(lp, "propose", vec![iv(c.n), iv(c.kind), iv(c.side), iv(c.p), iv(c.t0), iv(kk as i64), bv(&[0u8; 65]), iv(fb), iv(i as i64), bv(&k.pending.prefix), bv(&k.pending.suffix)]));
         outs.push(out(lp.s.pending_value(lp.value, &w) as u64, pend_spk(&w), None));
     }
@@ -163,7 +164,7 @@ fn oracle_sizes_masses_and_fees() {
     // Finalize.
     rows.push(measure("finalize liquidation (forfeit)", &finalize_tx(&lw, 500, 200).0));
     rows.push(measure("finalize close", &finalize_tx(&lwc, 500, 200).0));
-    let void = live(&propose_tx(&lp, &liq(920_000_000, 899), &uw_kp(), None).0, 0, 1_001, &lp.s.pending_of(k, lp.s.size, LIQ, L, 920_000_000, 899).unwrap().0);
+    let void = live(&propose_tx(&lp, &liq(920_000_000, 899), &uw_kp(), None).0, 0, 1_001, &lp.s.pending_of(k, lp.s.size, LIQ, L, 920_000_000, 899).unwrap().0.made_by(&lp.op));
     rows.push(measure("finalize void (restore, bond to the defender)", &finalize_tx(&void, 1_001, 200).0));
     // Cure.
     rows.push(measure("cure", &cure_tx(&lw, &long_kp()).0));

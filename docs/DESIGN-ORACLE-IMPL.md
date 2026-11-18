@@ -371,7 +371,8 @@ underlying priced in KAS); `ρ` a market parameter, 1 by default, refused above 
 by both orders; live disputes during the window, decided by the stake judge of the second slice; no retrospective
 dispute, no fast path, no request object (`KpfReq`), no lock path, no rebind; closed markets by the feed definition and
 a lateness bound; markets permissionless (the contracts enforce parameter bounds, never a list of markets). Sections
-15-24; section 24 records the changes after review 6, which supersede the text of 15-23 where they differ.
+15-25; section 24 records the changes after review 6 and section 25 those after review 7, which supersede the text of
+15-24 where they differ.
 
 ## 15. What exists
 
@@ -572,7 +573,7 @@ Worked on the fixture pair (1,000 units at 10 KAS, long margin 1,000 KAS, short 
 
 | Attack | Verdict |
 |---|---|
-| a false claim nobody contests within W | **exploit, bounded by ρ**: forfeit and keep takes the loser's side (1,000 KAS from the long; the underwriter's fee 46 KAS); a slot of K counts at most ρK of cover: **at ρ = 1 one such pair (1,000 KAS), at ρ = 5 five (5,000 KAS)**, a sixth open is refused. The underwriter's own 6,000 KAS bond is never at risk in this slice |
+| a false claim nobody contests within W | **exploit, bounded by ρ**: forfeit and keep takes the loser's side (1,000 KAS from the long; the underwriter's fee 46 KAS); a slot of K counts at most ρK of cover: **at ρ = 1 one such pair (1,000 KAS), at ρ = 5 five (5,000 KAS)**, a sixth open is refused. The underwriter's own 6,000 KAS bond is never at risk in this slice. (Between the fixes of reviews 6 and 7 the bound did not hold: an underwriter merged a restored half and its remainder into one claim and kept the other half, 1,500.2 KAS for a 300 KAS void bond, R7-F1. Since section 25 it holds again: `audit7_tests::holds_underwriter_cannot_merge_two_halves_into_one_claim`) |
 | the same claim contested in time, judge honest | **holds**: the part restored exactly; the underwriter pays its 600 KAS bond (480 to the long, 120 to the disputer); at ρ = 5 the five cost it 3,000 KAS. The parties lose nothing, at any ρ |
 | claims slightly wrong, below the judge's tolerance | **holds when g exceeds the feed's tolerance** (g 2 %, tolerance 1 %: a long healthy 0.06 % above its trigger survives a claim 1 % low; a close 1 % high is paid 9.898 for 10). **Exploit when g is at or below it**: a pair within `g^2` of its trigger can be liquidated, losing its residual (at most 473.68 KAS here). Only a wallet can compare g with the feed text |
 | letting the cover lapse at a chosen moment; refusing a due liquidation | **exploit, bounded**: the pair settles at its entry after the lapse; at a true 8.50 the winner gets 2,000.2 KAS instead of 3,000.2, losing the loser's entry margin (1,000 KAS) per pair, at ρ = 1 and 5 alike, summed over the colluding underwriter's pairs (at most ρK of cover) |
@@ -590,17 +591,23 @@ Worked on the fixture pair (1,000 units at 10 KAS, long margin 1,000 KAS, short 
 | a genesis pair naming a real slot | **exploit, bounded** (as slice A): uncounted cover for at most one period; no order enters it without the slot counting the part; a signing taker relies on its wallet |
 | look-alike pending parts and disputes | **holds** for its bond (its own, reaching no slot). The claim "no output can carry an existing part's id without that part as an input" was false (review 6, R6-F1: any input of the id authorizes, a plain key's included); since review 6 every entered part and every claim starts a fresh id its party checks, section 24 |
 | a twin of any template at a pair's genesis | **holds** (the scan) |
+| two inputs accepting one fresh output (R7-F1): two pairs filled at one price against one stayer handed over into one part, whole or partly; a restored half and its remainder proposed into one pending part; two hosts or two donors into one P3; two pairs into the part an order takes; an order's fill sharing a pair's hand-over part; twins of one id | **holds since review 7** (section 25): every fresh output names its makers by outpoint, one field per role, and each creating entry zeroes every role its shape cannot share. Before the fix the first two were accepted and the builder kept the second input's value: a bystander took a stayer's 2,000 KAS of margin with no price and no claim (`audit7_tests`) |
 | a hostile market within the bounds (W 1 DAA, no quiet time, a 0.02 KAS bond, ρ 5, the whole bond to the disputer, settlement right after a lapse) | **exploit, only a wallet can flag it**: the contracts open a pair on it and a false claim finalizes one DAA after it lands; `market_warnings` names each. A feed definition whose hash matches can still render misleadingly (bidirectional overrides, homoglyphs, invisible characters, carriage returns): `check_feed` flags them, and only a wallet can |
 
-**The conservation run** (`seeded_conservation_and_replay_across_pairs_bonds_and_stakes`): 10 seeds of 150 steps (107
-opens and 97 refused for capacity, 135 claims, 41 contests, 41 resolutions, 129 finalizes, 6 cures, 10 renewals and 101
-refused for capacity, 6 lapse settles), every step built from the model and accepted by the engine, 387 hostile variants
-(one sompi less, one DAA early, another key) refused. After every step: the slot counts at most ρK and counts every live
-pair's cover; no branch requires more than its inputs hold; every bond ends with its proposer (48,600 KAS of 81,000),
-its defender (29,280) or a disputer (3,120), to the sompi; every committed stake ends as a winner's payout (6,760 of
-6,900 KAS) or burned (140), the rounding below one sompi a receipt; a false claim contested in time never settles (26
-restored); a false claim not contested in time settles (24). A party that did not act loses value only through such a
-claim, an upheld one, the agreed premium at a renewal, or the lapse settle at its entry price.
+**The conservation run** (`seeded_conservation_and_replay_across_pairs_bonds_and_stakes`, as run after review 7): 10
+seeds of 150 steps (111 opens and 89 refused for capacity, 131 claims, 28 contests in time and 1 late, 28 resolutions,
+126 finalizes, 5 cures, 16 renewals and 57 refused for capacity, 7 lapse settles, 87 hand-overs), every step built from
+the model and accepted by the engine, 478 hostile variants (one sompi less, one DAA early, another key, the old id kept)
+refused, and 2,578 hostile merges of two family inputs into one output refused (section 25.3). After every step: the
+slot counts at most ρK and counts every live pair's cover; no branch requires more than its inputs hold; every account
+of family inputs is covered by the outputs that name it and its documented payouts (the statement of 25.3, 692 steps);
+every bond ends with its proposer (54,600 KAS of 78,600), its defender (21,960) or a disputer (2,040), to the sompi;
+every committed stake ends as a winner's payout (4,700 of 4,800 KAS) or burned (100), the rounding below one sompi a
+receipt; a false claim contested in time never settles (17 restored); a false claim not contested in time settles
+(27). A party that did not act loses value only through such a claim, an upheld one, the agreed premium at a renewal,
+or the lapse settle at its entry price. (This sentence was false between the fixes of reviews 6 and 7, when two inputs
+could accept one output, R7-F1; the run then checked lineages but not that each output is relied on once. It is true of
+the code since section 25, whose statement the run now checks.)
 
 ## 22. Public wording (oracle-only markets, as built; O2§6 corrected)
 
@@ -612,8 +619,9 @@ window is reversed: your position comes back as it was, and the claim's bond is 
 "Disputes are won by the side committing more aged bonded KAS, by a factor `μ`; if colluders control that, false prices
 stand." "A false price nobody contests within the window stands: you can lose your whole margin in that pair." "If your
 underwriter stops, you can still leave without any price (transfer, mutual or cooperative close), and once its cover has
-lapsed anyone can settle your pair at its entry price, after a fixed time nobody can postpone." (Review 6: the contest wording holds again only since the fixes of section 24; before them it was false for a part entered into an id another UTXO held.) "The winner bears gaps beyond the loser's margin." "Prices are in
-KAS."
+lapsed anyone can settle your pair at its entry price, after a fixed time nobody can postpone." (Review 6: the contest wording holds again only since the fixes of section 24; before them it was false for a part entered into an id another UTXO held. Review 7: it was false again between the fixes of reviews 6 and 7, when a bystander could take a stayer's margin by handing two pairs over into one part, and an underwriter could delete half a pair inside a proposal nobody could contest; it holds since section 25.) "The winner bears gaps beyond the loser's margin." "Prices are in
+KAS." "Before you commit stake to a dispute, your wallet traces it to its opening and its claim to a pair's proposal;
+without a node it tells you what it could not check." (Review 7, R7-F2: since section 25.)
 
 **False.** "Trustless", "no trusted oracle", "decentralized oracle" as a security claim. "Insured", "covered by the
 underwriter's bond", "repaid from the bond": in this version the underwriter's bond only limits how much it underwrites
@@ -654,7 +662,9 @@ not `OpCovOutputCount`, proves "exactly one"). Step: only an input of an id auth
 reproduce an existing id: it is a hash of an unspent outpoint), every input of the id is a template instance by
 hypothesis, and every entry of `KpfPairO`, `KpfPendingO` and `KpfStake` that spends a UTXO of an id counts that id's
 outputs exactly and fixes each one's script (enumerated in review 6, "What was checked and found sound"). Tests:
-`audit6_tests` (every route); the seeded run checks it on every accepted step (24.5).
+`audit6_tests` (every route); the seeded run checks it on every accepted step (24.5). (Review 7: the induction is about
+ids. Value conservation also needs that each input's continuation is its own, which the fresh scan alone did not give:
+two inputs computing one script accepted one fresh output, R7-F1. Section 25 restores it with the makers.)
 
 ### 24.2 The decisions as built
 
@@ -671,7 +681,8 @@ outputs exactly and fixes each one's script (enumerated in review 6, "What was c
 induction does not reach a claim or dispute written by a genesis instead of by a pair's `propose`, and there the forger
 writes every field and every object of its id, so no field a contract could check helps. No party of a real pair is in
 such a claim; a staker who joins its dispute is protected only by its wallet tracing the claim's id to a `propose` (as in
-section 13; the `KpfStake` header). (b) The fresh-id scan admits at most 8 outputs, so one proposal transaction now
+section 13; the `KpfStake` header). (Review 7, R7-F2: the shipped wallet did not trace; since section 25 `kpf deposit` and
+`kpf contest` do, `oracle_build::trace_dispute` and `trace_claim`.) (b) The fresh-id scan admits at most 8 outputs, so one proposal transaction now
 carries at most 7 whole-pair claims (before review 6 only the mass limited it: 12 measured, 14 by bytes); 8 in one
 transaction are refused (`oracle_metrics_tests`). (c) A renewal by the underwriter still moves the expiry of a lapsed pair
 (the back-dated renewal of section 21, paid from both margins): no party can postpone the lapse settle, only the
@@ -750,3 +761,179 @@ market's artifacts are byte for byte as before.
 | 7 proposals vouched by one input (the most since review 6) | 617,539 to 617,562 each | 173,903 | 126,253 | 0.2525 |
 
 One pair-month (open, one renewal, a close proposed and finalized): **0.1752 KAS** of network fees (was 0.1674).
+
+## 25. Changes after review 7
+
+Review 7 (`docs/audit/REVIEW-7.md`) found one Critical and one Medium finding. R7-F1's root: review 6 gave every part a
+party enters and every claim a fresh covenant id checked by an output scan (`fresh`). That proves the output new and
+unique; it does not say which input made it. Before review 6 every part was counted under its creating pair's own id,
+which no other pair holds; since then two inputs whose entries compute one script both accepted one output and the
+builder kept the second input's value (the aliasing class "two inputs satisfied by one output" that the book family
+closed with its tags, DESIGN 4.4). R7-F2: `kpf deposit` committed stake into any dispute file without the trace the
+documents relied on. The decisions below are built; every deviation is a `// DESIGN:` comment.
+
+### 25.1 Makers
+
+**Every output a script of this family creates and accepts names its makers.** The state of every output kind has one
+field per role an input can create it in, each the creating input's maker commitment `me` = blake2b(outpoint txid ||
+index as 8 bytes) (`KpfPairO.me`, `KpfOpenO.me`, `oracle::maker_of`; the outpoint is unique per input even for twins
+of one id, and is spent once). A creating input requires its own role's field to hold its own commitment, the
+co-maker role of its transaction shape to hold the argument it is given, and every other role to hold zero.
+
+| Output kind | Roles (fields; the rest zero) | Who writes and checks each |
+|---|---|---|
+| a pair opened by orders (`KpfOpenO.fill`) | `mkLong` the long order, `mkShort` the short order | each order its own; the other's is its `counterMk` argument (zero for a counterparty that is no order) |
+| a part handed over to a signing taker (`KpfPairO.transfer`) | `mkParent` the pair | the pair; the entrant's side is the argument `et`, zero for a taker |
+| a part an order takes (`transfer` + `KpfOpenO.take`) | `mkParent` the pair, `mkLong` or `mkShort` the order | the pair writes itself and `et`; the order itself and `pm` |
+| P3 of close-versus-close (`closeHost`, `closeDonor`) | `mkHost` the host, `mkDonor` the donor | the host itself and `dm`; the donor itself and `hm` |
+| a pending part (`KpfPairO.propose`) | `mkParent` (KpfPendingO state `[780..813)`) the pair | the pair |
+
+Pair state `[558..723)` holds the five fields (long, short, parent, host, donor) where the two tags were (`tagL`, `tagS`
+are gone: their only use was to carry the order or donor ids these fields now carry by outpoint). Interfaces that
+changed: `KpfOpenO.fill`'s `counterTag` is `counterMk`; `take` has a new argument `pm` after `counterKey`;
+`closeHost`'s `tl3` is `dm`; `closeDonor` has a new last argument `hm`; `oracle_build::contest` and `deposit` take a
+`Trust`.
+
+Two inputs in one role can never accept one output: one field holds one commitment, and no two inputs share an
+outpoint. Across roles, two entries can share an output only if no field is their own for both and no field is one's
+own and the other's zero; that leaves exactly the documented compositions, two orders opening a pair, a pair and the
+order taking its listing, a host and its donor, and no three inputs ever
+(`holds_two_inputs_of_any_two_roles_accept_one_output_only_in_the_documented_compositions`). In particular an order's
+fill can never share a pair's hand-over part (the fill zeroes the parent, the pair writes itself), and a transfer
+never shares P3.
+
+**DESIGN:** "a role nobody fills in this transaction must hold zero" cannot be checked by an input that does not fill it.
+A creating input forces zero on every role its shape cannot share; the one co-maker role of its shape (the counter
+order of a fill, the order of a take, the donor or host) is an argument it cannot verify, which only that co-maker's
+own check gives meaning. A nonzero co-maker field with no co-maker present is accepted and harmless: no input relies on
+the output through it, so its value is the builder's own.
+
+### 25.2 Makers live for one transaction
+
+No entry copies a maker field: every continuation, remainder, renewal, amend, add-margin, and every state a pending part
+becomes (restore, cure, forfeit, precomputed by `propose`) carries every maker zero; contest and decide write the
+pending part's maker zero. A stale field cannot satisfy a later input: a maker field is read only by its own input,
+in the transaction that spends that input, against that transaction's outputs (`tx.outputs`), and the outpoint it
+commits to is spent there and nowhere else. An output written earlier with a field naming a live UTXO is no output of
+the transaction that spends the UTXO; spent beside it, its continuation carries an input's id (not fresh) and zero
+makers (`holds_a_stale_maker_field_never_satisfies_a_later_input`, `holds_contest_clears_the_pending_parts_maker`).
+
+### 25.3 The conservation statement
+
+In every transaction the engine accepts, partition the family inputs into accounts (the inputs of one covenant id, or
+one id-less input such as a free stake). An output of the family **names** an account when (a) it carries the
+account's id (a continuation, which only an input of the id authorizes), (b) it starts a fresh id and one of its maker
+fields holds the commitment of an input of the account, or (c) it is the family output at an input's own index and one
+of the two has no covenant id (a stake's receipt, a winner's free stake). Then: **(C1)** every fresh family output
+names at least one input of the transaction, and no input is named in two fields or by two fresh outputs; **(C2)** the
+value of each account's inputs is at most the value of the outputs naming it (an output of a documented composition
+counted for each of its makers) plus its payouts at the positional slots `i` and `M - 1 - i` plus what the step declares
+(the premium a renewal releases, the pool's base and burn at `close`). So each input's value is accounted for by the
+outputs that name it and its documented payouts, and no builder keeps an input's value by merging. The seeded run
+checks C1 and C2 on every accepted step (692 over the 10 seeds, 329 fresh outputs named by their makers) and, at every
+step, lets a hostile builder merge two family inputs into one output (two proposals into one pending part, 149 times
+between two real pairs of the run that share a state, otherwise with a look-alike twin; two hand-overs into one part;
+two long orders into one pair; a claim and a look-alike into one settled part): 2,578 merges, every one refused.
+
+### 25.4 The sibling book-market family (no contract changed)
+
+The class was checked once more across `KpfPair`, `KpfOpen`, `KpfPending` and `KpfLock` (`audit7_book_tests`, 12
+tests). No exploit: every output an entry checks is tied to the input that checks it.
+
+| Entry | Output | What stops a second input | Test |
+|---|---|---|---|
+| `KpfPair.transfer` | the part, the remainder | own-id count, `OpCovInputCount(selfId) == 1` | `holds_two_pairs_never_hand_over_into_one_part`, `holds_two_partial_hand_overs_never_share_one_part` (new) |
+| `transfer`, `closeHost`, `closeDonor`, `mutualClose`, `idleSettle` | payouts | positional slot (`self`, `M - 1 - self >= inputs`) | `holds_two_idle_settles_never_share_payouts` (new) |
+| `KpfPair.closeHost` | P3 (under the host's id), the remainder | own-id count | `holds_two_hosts_never_share_one_p3` (new) |
+| `KpfPair.closeDonor` | P3 | tag `tagL` = the donor's own id, with the guard | `kpf_close_tests::p4_one_p3_cannot_be_claimed_twice` |
+| `KpfPair.amend`, `addMargin` | continuation | own-id count | `holds_two_pairs_never_amend_into_one_continuation` (new) |
+| `KpfPair.propose` | pending part (under the pair's id), remainder | own-id count | `holds_two_pairs_never_propose_into_one_pending_part` (new, whole and partial) |
+| `KpfPair.coopClose` | any | both owners sign SIGHASH_ALL | none needed |
+| `KpfOpen.fill` | the new pair | tag = the order's own id, with the guard; the id on no input | `kpf_open_tests::a_pair_output_claimed_by_another_long_is_refused`, `two_long_orders_sharing_an_id_cannot_claim` |
+| `KpfOpen.fill` beside a pair's hand-over | the part | the fill needs `OpCovInputCount(pairId) == 0`, the pair its own id | `holds_an_order_fill_never_accepts_a_pairs_hand_over_part` (new) |
+| `KpfOpen.take` | the part | tag = the order's own id, with the guard | `kpf_transfer_tests::p3_two_orders_cannot_claim_one_part` |
+| a host's P3 that is also a take part | P3 | one tag field: the donor or the order claims it, never both (and a host's P3 as a take part is a plain transfer) | `holds_a_host_p3_is_claimed_by_the_donor_or_by_a_take_never_both` (new) |
+| `KpfOpen.fill`, `take` | the escrow continuation | own-id count | `holds_two_orders_never_share_one_escrow_continuation` (new) |
+| `KpfOpen.fill`, `take`, `refund` | the owner's refund | positional slot | none needed |
+| `KpfPending.challenge` | restore | own-id count | `holds_two_challenges_never_restore_into_one_pair` (new) |
+| `KpfPending.cure` | cured pair, refund | own-id count, positional slot | `holds_two_cures_never_share_one_cured_pair` (new) |
+| `KpfPending.finalize`, `guarantee` | forfeit, payouts | own-id count, positional slot | `holds_two_finalizes_never_share_one_forfeited_pair` (new) |
+| `KpfPending.guarantee` | the lock | the claim's own id in the lock's state, with the guard | `kpf_guarantee_tests::one_lock_for_two_claims_is_refused_in_one_transaction_and_across_transactions` |
+| `KpfLock.dispute`, `release` | victim, burn, owner | positional slot | `guarantee_attack_tests::holds_two_locks_never_share_a_payout_or_a_burn` |
+
+### 25.5 R7-F2: the wallet's trace
+
+`oracle_build::trace_claim(id, birth, pending_redeem)` proves a claim's origin from its birth transaction: the claim's id
+is carried by exactly one output of it and is the genesis hash of that one output (so, by the induction of 24.1, every
+later UTXO of the id was written by a template of the family); the output's script is a pinned `KpfPendingO` in status
+pending; and its maker field names a pair input that ran the pinned `KpfPairO`'s `propose` and writes exactly this
+pending state. `trace_dispute(dispute, opening, birth)` adds the opening: three outputs of the claim's id, a contest
+input spending the claim's birth output and carrying its redeem script, and the dispute's recorded script hash among
+them. A transaction's id binds its outpoints, outputs and covenant bindings but not its signature scripts, so the one
+step read from the body as given is that the pair input ran `propose` (the pending template and the clean birth are
+bound by the output's script and the genesis hash). `contest` and `deposit` take a `Trust`: `Traced` (of this claim)
+or `Untraced`.
+
+`kpf deposit` (`--opening`, `--claim-tx`) and `kpf contest` (`--claim-tx`): with `--node` the dispute and the stakes are
+read through the node and the trace is required (a failing or missing trace refuses); without `--node` the command
+refuses unless `--accept-untraced` is given, and then prints what it did not check (the UTXO's liveness, and the trace
+when no transaction files are given). These are the commands where the documents say the wallet must trace (13, 14,
+24.2 (a)); a signing taker's check of a pair's genesis (20.8) has no command in this tool.
+
+**DESIGN:** the trace reads the transaction bodies from files (a `kpf-tx/1` file the tool wrote, a node's `rpc` object, or
+the bare transaction JSON): the node API this tool uses looks UTXOs up by address and has no transaction lookup by id.
+A body is bound to the UTXO by its id, so any source will do; the node confirms the UTXO itself.
+
+### 25.6 The change attacked
+
+| Attack on the makers | Verdict |
+|---|---|
+| sizes: the stack limit 244 and the scan caps | **holds**: the pair state grows by 99 bytes and three fields, the pending part's by 33 and one; largest stack 197 of 244, the take (25.8); the fresh scan's 8 outputs and the bind's 7 claims are unchanged; 7 whole-pair proposals in one transaction still fit |
+| a maker commitment a builder can influence | **holds**: it hashes the input's own outpoint, which the input's UTXO fixes; a builder chooses only the co-maker arguments, which mean something only to the co-maker's own check |
+| an input that should not be a maker accepted as one | **holds**: only the creating entries read maker fields, each only its own role of the output it creates; an input named in a field it does not check (a pending part, a stake, an amend) neither gains nor loses (the spec table and the merge tests) |
+| a correct maker field on an output created in another transaction than the one spending its maker | **impossible**: the field is read only by its maker, against the outputs of the transaction that spends it, and an outpoint is spent once (25.2) |
+| the fresh scan | **holds**: both are required; a part naming its maker but keeping the pair's id, and a fresh part naming no maker, are refused (`holds_the_maker_and_the_fresh_scan_are_both_required`) |
+| the cover binding | **holds**: a bind still names the output or input index (`OUT_REF + out`), unchanged; take, open and renew run as before |
+| the vouch | **holds**: SIGHASH_ALL covers the maker fields with every output; one vouch covers only its own key's pairs (`holds_one_vouch_never_covers_a_proposal_of_another_underwriter`); several proposals under one vouch each write their own pending part |
+| the quiet time | **holds**: unchanged; every party entry still needs `quietDaa` |
+| the judge's deliveries | **holds**: contest and decide clear the pending part's maker, the dispute records the contested part's script with it zero, resolve and decide run as before (the lifecycle and seeded tests) |
+| an honest shape that can no longer be built | **no documented one**: the 46 builder shapes, the multi-pair proposals and renewals, a take without a pair (`pm` zero), close-versus-close with a plain donor (`dm` zero) and a transfer to a signing taker all build, sign and verify. Two undocumented compositions the tags admitted are gone: an order taking a host's P3 (`closeHost` in place of `transfer`) and a donor moving into a transfer's part (`transfer` in place of `closeHost`); each is a transfer or a close-versus-close in another shape, which remain |
+
+### 25.7 Tests
+
+`audit7_tests` (17): the review's three exploits are now `holds_` tests of the same transactions (each with the part
+named by either input: the named one accepts, the other refuses), the four unproven routes built (`closeHost` merge,
+a merge inside an order's take, a fill sharing a hand-over part, one vouch over two underwriters: all hold), two donors,
+two long orders, twins of one pair id and of one order id, a stale maker, the contest's maker, the maker with the fresh
+scan, the spec table of every pair of roles. `audit7_tooling` (`holds_deposit_refuses_a_dispute_its_trace_does_not_reach`:
+the forged dispute of the review in every arrangement the forger controls), `oracle_builders` (a real claim and dispute
+traced before the stake is committed), `oracle_cli` (contest and deposit refused without a node or flag; traced from the
+tool's own transaction files; a wrong opening refused), `ocmds::tests::the_trace_gate_of_contest_and_deposit`,
+`audit7_book_tests` (12, 25.4), and the seeded run (25.3). Tests whose premise changed: `oracle_tests::layout_state_at_byte_one_and_lengths`
+(the new offsets), `oracle_tests::a_restored_part_comes_back_unlisted_and_bound` (makers instead of tags),
+`oracle_attack_tests::holds_an_order_enters_a_pair_only_with_its_cover_counted` (the part's makers),
+`audit6_tests` (the take's `pm`, the donor's `hm`, makers instead of tags), `oracle_metrics_tests` (the pending parts'
+maker), the 41 changed golden vectors of `oracle_builders` (5 unchanged: slot, stake and order creation), and the
+pinned artifacts.
+
+### 25.8 Numbers after review 7
+
+Script bytes: `KpfOpenO` 6,204 (was 6,027), `KpfPairO` 14,613 (14,222; state 723, was 624), `KpfPendingO` 4,395 (4,298;
+state 813, was 780), `KpfBond` 4,453 and `KpfStake` 9,652 (unchanged). Largest stack 197 of 244 (the take; was 180),
+the pair's largest 178 (propose). The pinned artifacts and the golden vectors were regenerated
+(`CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`, `KPF_GOLDEN=print`); the book market's artifacts
+are byte for byte as before. The whole workspace: 600 tests.
+
+| Transaction | Script units per input | Compute mass | Bytes | Fee (KAS), was |
+|---|---|---|---|---|
+| open (2 orders, slot bind, funder) | 286,243 / 286,393 / 169,945 / 100,001 | 56,322 | 45,922 | 0.0918, 0.0900 |
+| propose a liquidation / a close | 631,388 / 424,313 (pair) | 27,852 / 25,752 | 18,822 | 0.0376, 0.0367 |
+| take by an order with the slot's bind | 259,071 / 287,156 / 169,945 / 100,001 | 50,065 | 40,335 | 0.0807, 0.0789 |
+| transfer to a signing taker | 258,925 / 100,001 | 19,753 | 15,163 | 0.0303, 0.0295 |
+| amend / cooperative close | 324,512 / 230,319 | 20,032 / 19,557 | 15,102 / 15,177 | 0.0302 / 0.0304, 0.0294 / 0.0296 |
+| lapse settle / mutual close | 30,183 / 30,818 | 17,425 / 17,435 | 15,045 / 15,055 | 0.0301 / 0.0301, 0.0293 / 0.0293 |
+| renew 1 / 4 / 7 pairs | each pair 300,690 to 300,724 | 27,063 / 81,465 / 135,867 | 19,903 / 64,195 / 108,487 | 0.0398 / 0.1284 / 0.2170 |
+| contest / deposit 1 / resolve and decide / settle 2 receipts | 186,347 / 298,671 / 128,357 / 349,197 (first input) | 22,079 / 27,188 / 19,629 / 36,884 | 14,809 / 19,988 / 14,629 / 29,584 | 0.0296 / 0.0400 / 0.0293 / 0.0592 |
+| 7 proposals vouched by one input | 631,820 to 631,846 each | 178,488 | 129,438 | 0.2589, 0.2525 |
+
+One pair-month (open, one renewal, a close proposed and finalized): **0.1789 KAS** of network fees (was 0.1752).

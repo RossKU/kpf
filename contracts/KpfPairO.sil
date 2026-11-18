@@ -31,6 +31,11 @@ pragma silverscript ^0.1.0;
 // does (KpfOpenO.fill, KpfOpenO.take, transfer, closeHost, closeDonor, propose); every entry that spends a UTXO of
 // the id counts the id's outputs exactly and fixes each one's script, and only a UTXO of an id authorizes outputs of
 // it, so the property carries to every later transaction.
+// The makers of review 7: every fresh output this family accepts also names, in one field per creating role, the
+// outpoint commitment of each input that creates it (`me`), and every creating input requires its own role's field to
+// hold its own commitment and every role that cannot share its transaction shape to hold zero; every other output has
+// every maker zero. So each output a family input relies on is relied on by at most one input per role, and the value
+// of every input is accounted for by the outputs that name it (by id or by maker) and its own payouts.
 // Entries of the underwriter:
 //   renew(u, k)       the slot at input u binds this pair's cover at expiry + termDaa (claim k names this input); the
 //                     premium leaves the margins, half from each side, bounds moved inward; nobody else signs
@@ -100,8 +105,11 @@ contract KpfPairO(
     int init_shortBid,
     int init_shortMin,
     int init_shortTip,
-    byte[32] init_tagL,
-    byte[32] init_tagS
+    byte[32] init_mkLong,
+    byte[32] init_mkShort,
+    byte[32] init_mkParent,
+    byte[32] init_mkHost,
+    byte[32] init_mkDonor
 ) {
     // The oracle market block (state [0..309)).
     byte[32] market = init_market;       // blake3 of state [33..309): every parameter below and the feed hash
@@ -151,8 +159,19 @@ contract KpfPairO(
     int shortBid = init_shortBid;        // * short listing (0 = unlisted)
     int shortMin = init_shortMin;        // *
     int shortTip = init_shortTip;        // *
-    byte[32] tagL = init_tagL;           // * tags live for one transaction (DESIGN 4.4)
-    byte[32] tagS = init_tagS;           // *
+    // The makers (review 7): who created this UTXO, one field per creating role, each the maker commitment of that
+    // input (blake2b of its outpoint, `me`) or zero. Written only by the transaction that creates a fresh part, and zero
+    // in every output any other entry writes: they live for one transaction, as the book market's tags (DESIGN 4.4).
+    byte[32] mkLong = init_mkLong;       // * the long-side entrant: a long order (fill, take)
+    byte[32] mkShort = init_mkShort;     // * the short-side entrant: a short order (fill, take)
+    byte[32] mkParent = init_mkParent;   // * the pair whose part this is (transfer, also the pair side of a take)
+    byte[32] mkHost = init_mkHost;       // * the host of close-versus-close (closeHost)
+    byte[32] mkDonor = init_mkDonor;     // * the donor of close-versus-close (closeDonor)
+    // DESIGN: review 7 asks that a role nobody fills in this transaction hold zero. An input cannot check that for a
+    // role it does not fill: each creating entry forces zero on every role its transaction shape cannot share, and the
+    // one co-maker role of its shape (the counter order of a fill, the order of a take, the host or the donor) is an
+    // argument it cannot verify, which only that co-maker's own check gives meaning. A nonzero co-maker field with no
+    // co-maker present is harmless: no input relies on the output through it (docs/DESIGN-ORACLE-IMPL.md 25.1).
 
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_LONG = 1;
@@ -198,7 +217,8 @@ contract KpfPairO(
     int constant BODY_AT = 34;
     int constant BLOCK_END = 310;
     // Position: size payload [311..319), bl [320..328), bs [329..337); the entry push 337; the binding [412..505) with
-    // the expiry push at 487; the listings [505..559); the tags [559..625); the state ends at 625.
+    // the expiry push at 487; the listings [505..559); the makers [559..724) (long, short, parent, host, donor); the
+    // state ends at 724.
     int constant SIZE_AT = 311;
     int constant BL_AT = 320;
     int constant BS_AT = 329;
@@ -209,7 +229,7 @@ contract KpfPairO(
     int constant LISTS_AT = 505;
     int constant LISTS_END = 559;
     int constant LIST_LEN = 27;
-    int constant STATE_END = 625;
+    int constant STATE_END = 724;
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
 
     function quoteOf(int n, int r, int c) : int {
@@ -255,10 +275,27 @@ contract KpfPairO(
         return byte[32](z8 + z8 + z8 + z8);
     }
 
-    function noTags() : byte[] {
-        byte[] z = byte[](zero32());
-        return byte[](0x20) + z + byte[](0x20) + z;
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
     }
+
+    // Every maker zero: what every output gets that is not a fresh part made in this transaction.
+    function noMakers() : byte[] {
+        byte[] z = p33(zero32());
+        return z + z + z + z + z;
+    }
+
+    // BEGIN maker
+    // This input's maker commitment (review 7, R7-F1): blake2b of its outpoint, the transaction id and then the index
+    // as 8 bytes. An outpoint is spent once and two inputs of one transaction never share one, so the commitment is
+    // unique to this input even beside a twin or a split part of its covenant id, and no other input, in this
+    // transaction or a later one, can present it as its own. A creating input requires its own role's field of the
+    // fresh output to hold it; one field holds one commitment, so two inputs in one role never accept one output.
+    function me() : byte[32] {
+        int self = this.activeInputIndex;
+        return blake2b(byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[8]));
+    }
+    // END maker
 
     function i9(int c) : byte[] {
         return byte[](0x08) + byte[](c as byte[8]);
@@ -269,37 +306,35 @@ contract KpfPairO(
         require(this.ageDaa >= quietDaa);
     }
 
-    // P2SH of this script with bl, bs and the two listing windows replaced and both tags zero.
+    // P2SH of this script with bl, bs and the two listing windows replaced and every maker zero.
     function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
             rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
-                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noTags() + rs.slice(STATE_END, this.bytecodeSize)
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noMakers() + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
 
     // The redeem script of a KpfPairO with this script's template and market and the given position: size, range,
-    // entry, keys, the binding (93 bytes with their push opcodes), the listings (54) and tags.
-    function pairRs(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[32] tl, byte[32] ts) : byte[] {
+    // entry, keys, the binding (93 bytes with their push opcodes), the listings (54) and the makers (165).
+    function pairRs(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[] mk) : byte[] {
         return rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + byte[](0x08) + byte[](b0 as byte[8]) + byte[](0x08)
             + byte[](b1 as byte[8]) + byte[](0x08) + byte[](e as byte[8]) + byte[](0x20) + byte[](lk) + byte[](0x20)
-            + byte[](sk) + bnd + lists + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts)
-            + rs.slice(STATE_END, this.bytecodeSize);
+            + byte[](sk) + bnd + lists + mk + rs.slice(STATE_END, this.bytecodeSize);
     }
 
-    function pairSpk(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[32] tl, byte[32] ts) : byte[] {
-        return byte[](new ScriptPubKeyP2SHFromRedeemScript(pairRs(rs, sz, b0, b1, e, lk, sk, bnd, lists, tl, ts)));
+    function pairSpk(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[] mk) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(pairRs(rs, sz, b0, b1, e, lk, sk, bnd, lists, mk)));
     }
 
-    // The P2SH hash of a pair state propose fixes for KpfPendingO: this binding, the entry kept, tags 0.
+    // The P2SH hash of a pair state propose fixes for KpfPendingO: this binding, the entry kept, every maker zero.
     function pairHash(byte[] rs, int sz, int b0, int b1, byte[32] lk, byte[32] sk, byte[] lists) : byte[32] {
-        byte[32] z = zero32();
-        return blake2b(pairRs(rs, sz, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lists, z, z));
+        return blake2b(pairRs(rs, sz, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lists, noMakers()));
     }
 
-    // P2SH of the remainder: this script with the size replaced and both tags zero.
+    // P2SH of the remainder: this script with the size replaced and every maker zero.
     function restSpk(byte[] rs, int sz) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
-            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noTags()
+            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noMakers()
                 + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
@@ -332,9 +367,13 @@ contract KpfPairO(
         }
     }
 
-    // The part a party enters at output c, under a fresh covenant id (`fresh`), and the remainder (n < s) as the only
-    // output of this pair's id, as KpfPair.partAndRest (the remainder keeps the old carrier, the excess and the rounding
-    // slack).
+    // The part a party enters at output c, under a fresh covenant id (`fresh`) and naming this input as its maker in
+    // the role partSpk fixes (`me`), and the remainder (n < s) as the only output of this pair's id, as
+    // KpfPair.partAndRest (the remainder keeps the old carrier, the excess and the rounding slack).
+    // DESIGN: review 7 (R7-F1): `fresh` proves the part new and unique but not whose it is: two pairs computing one part
+    // script (a stayer filled twice at one price, a restored half beside its remainder) both accepted one output and the
+    // builder kept the second pair's value. The part's script now carries this input's maker commitment in its role's
+    // field, which no second input can match (docs/DESIGN-ORACLE-IMPL.md 25).
     // DESIGN: review 6 (R6-F1): KpfPair continues the pair's id into the part. Here every part a party enters without
     // having been in this lineage (a transfer to a signing taker or an order, P3 of close-versus-close) starts a fresh
     // lineage checked by this script, so nothing of the old id is carried into it; the remainder, which nobody enters,
@@ -603,8 +642,9 @@ contract KpfPairO(
         byte[32] sk = byte[32](shortKey);
         byte[] lw = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN);
         byte[] sw = rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        byte[32] tl = zero32();
-        byte[32] ts = tl;
+        byte[32] z = zero32();
+        byte[32] tl = z;
+        byte[32] ts = z;
         int b0 = bl;
         int b1 = bs;
         pubkey payKey = longKey;
@@ -634,13 +674,17 @@ contract KpfPairO(
             p = 0;
         }
         payTo(self, payKey, p);
-        partAndRest(selfId, rs, n, c, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
+        // The makers: the entrant's side names et (the order of a take, which checks it there; zero for a signing taker),
+        // the parent is this input, host and donor are zero.
+        byte[] mk = p33(tl) + p33(ts) + p33(me()) + p33(z) + p33(z);
+        partAndRest(selfId, rs, n, c, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lw + sw, mk), quoteOf(n, b1 - b0, 0), keep);
     }
 
     // P4 close-versus-close, host side (as KpfPair), after quietDaa. P3, at output c under a fresh covenant id (checked
     // here and by the donor), keeps this pair's binding; its long (the donor's) is not the underwriter and its range
-    // stays within this pair's cover rate.
-    entry closeHost(int n, int x, int e3, int c, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
+    // stays within this pair's cover rate. P3 names this input as its host and dm as its donor (review 7; dm takes the
+    // place of the long tag tl3, and the donor checks it).
+    entry closeHost(int n, int x, int e3, int c, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] dm) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -666,17 +710,20 @@ contract KpfPairO(
         }
         payTo(self, longKey, pay);
         byte[] lists = win(la3, lm3, lt3) + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        partAndRest(selfId, rs, n, c, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
+        byte[] z = p33(zero32());
+        byte[] mk = z + z + z + p33(me()) + p33(dm);
+        partAndRest(selfId, rs, n, c, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, mk), quoteOf(n, bs - bl3, 0), keep);
     }
 
     // P4 close-versus-close, donor side (as KpfPair), after quietDaa. The long moves into the host's P3 at output c,
     // which carries this pair's underwriter (uwId, uwKey) with the host's cover rate cr3, expiry x3 and premium pr3: P3's
     // range is within both cover rates, x3 <= this expiry and pr3 <= this premium, so the moving long is never covered
     // less, for longer or at a higher premium than this pair's own counted cover, even if the host is a look-alike; the
-    // host's short is not the underwriter.
+    // host's short is not the underwriter. P3 names hm as its host and this input as its donor (review 7; this takes the
+    // place of the long tag that carried this pair's id).
     // DESIGN: the note requires only the same uwId; a look-alike host would then move the donor's long into uncounted
     // cover for longer or at a higher premium.
-    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, int cr3, int x3, int pr3) {
+    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, int cr3, int x3, int pr3, byte[32] hm) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -702,7 +749,8 @@ contract KpfPairO(
         fresh(c);
         byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win(sa3, sm3, st3);
         byte[] bnd = rs.slice(BIND_AT, COVER_AT) + i9(cr3) + i9(x3) + i9(pr3);
-        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, bnd, lists, selfId, zero32()));
+        byte[] z = p33(zero32());
+        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, bnd, lists, z + z + z + p33(hm) + p33(me())));
         require(tx.outputs[c].value >= quoteOf(n, bs3 - bl, 0) + carrier);
         int pay = owed(n, bs - x, shortTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -858,7 +906,7 @@ contract KpfPairO(
         int c = OpCovOutputIdx(selfId, 0);
         require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, BL_AT) + byte[](nbl as byte[8])
             + rs.slice(BL_AT + 8, BS_AT) + byte[](nbs as byte[8]) + rs.slice(BS_AT + 8, EXPIRY_AT) + i9(x2)
-            + rs.slice(EXPIRY_AT + 9, LISTS_END) + noTags() + rs.slice(STATE_END, this.bytecodeSize))));
+            + rs.slice(EXPIRY_AT + 9, LISTS_END) + noMakers() + rs.slice(STATE_END, this.bytecodeSize))));
         require(tx.outputs[c].value >= tx.inputs[self].value - pay);
     }
 
@@ -896,7 +944,9 @@ contract KpfPairO(
     //          part), and no cure when the cured range would exceed coverRate or the short's bound priceMax; the
     //          forfeit bound fb as KpfPair.
     // Every pair state the part may become (restore, cure, forfeit) is fixed here with this binding, the entry kept,
-    // both sides unlisted and both tags 0. The pending part is written at output k under a fresh covenant id.
+    // both sides unlisted and every maker 0. The pending part is written at output k under a fresh covenant id and
+    // names this input as its parent (its maker field, review 7): two pairs that would write one pending state, such as
+    // a restored half and its remainder, never both accept one pending output.
     // DESIGN: review 6 (R6-F1, R6-F2): KpfPair.propose writes the pending part under the pair's id. The claim's id is
     // what its dispute, receipts and pool are keyed by, so it must be unique to this claim and held by no UTXO outside
     // the family: two claims on parts of one lineage (equal DAA scores included) then never share a pool, and a
@@ -986,7 +1036,7 @@ contract KpfPairO(
         byte[] z8 = byte[](0 as byte[8]);
         byte[] st = rs.slice(1, BLOCK_END) + i9(kind) + i9(side) + i9(n) + i9(bl) + i9(bs) + i9(p) + i9(t0) + i9(cb) + i9(fee)
             + i9(bond) + i9(refund) + i9(PENDING) + i9(0) + byte[](0x20) + z8 + z8 + z8 + z8 + rs.slice(ENTRY_AT, LISTS_END)
-            + byte[](0x20) + byte[](rh) + byte[](0x20) + byte[](ch) + byte[](0x20) + byte[](fh);
+            + byte[](0x20) + byte[](rh) + byte[](0x20) + byte[](ch) + byte[](0x20) + byte[](fh) + p33(me());
         require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDING_TPL);
         byte[] pend = byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf));
         int v = tx.inputs[self].value;

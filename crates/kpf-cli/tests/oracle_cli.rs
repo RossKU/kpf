@@ -159,7 +159,19 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let f = h.funding(10);
     h.n += 1;
     let out = h.p(&format!("out{}", h.n));
-    h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out]);
+    // Review 7 (R7-F2): without a node a contest is refused unless the user accepts an untraced claim; with the claim's
+    // birth transaction (the vouch's, written by the tool) the claim is traced to the pair's propose.
+    let claim_tx = std::fs::read_dir(std::path::Path::new(&pend).parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with("-tx.json"))
+        .expect("the vouch's transaction file")
+        .display()
+        .to_string();
+    let err = h.fail(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out]);
+    assert!(err.contains("refused without --node") && err.contains("--accept-untraced"), "{err}");
+    let o = h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out, "--claim-tx", &claim_tx, "--accept-untraced"]);
+    assert!(o.contains("traced: the claim was born alone") && o.contains("NOT CHECKED that the claim is live"), "{o}");
     let cw = h.obj(&out, "oracle pending part", 8_100_000);
     // Review 6 (note 2): a contested part whose contest landed after the window (its UTXO at P + W or later) is shown
     // as one whose verdict will be ignored.
@@ -182,6 +194,22 @@ fn oracle_market_lifecycle_from_the_command_line() {
         std::fs::write(&d, serde_json::to_string_pretty(&v).unwrap()).unwrap();
         d.display().to_string()
     };
+    // Review 7 (R7-F2): a deposit is refused without a node unless the user accepts an untraced dispute; with the
+    // opening (the contest's transaction file) and the claim's birth, the dispute is traced and the deposit builds and
+    // verifies (nothing saved).
+    {
+        let opening = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).find(|p| p.to_string_lossy().ends_with("-tx.json")).unwrap().display().to_string();
+        let f = h.funding(10);
+        let err = h.fail(&["deposit", "--dispute", &dispute, "--side", "yes", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f]);
+        assert!(err.contains("refused without --node") && err.contains("genesis keeps every stake"), "{err}");
+        let err = h.fail(&["deposit", "--dispute", &dispute, "--side", "yes", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--opening", &opening]);
+        assert!(err.contains("both --opening and --claim-tx"), "{err}");
+        let o = h.ok(&["deposit", "--dispute", &dispute, "--side", "yes", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--opening", &opening, "--claim-tx", &claim_tx, "--accept-untraced", "--no-save"]);
+        assert!(o.contains("traced: the dispute was opened on the claim born alone") && o.contains("NOT CHECKED that the dispute is live"), "{o}");
+        // The claim's birth given as the opening: the trace fails and the command refuses.
+        let err = h.fail(&["deposit", "--dispute", &dispute, "--side", "yes", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--opening", &claim_tx, "--claim-tx", &claim_tx, "--accept-untraced"]);
+        assert!(err.contains("the dispute's trace failed"), "{err}");
+    }
     let f = h.funding(10);
     let decided = h.step(&["resolve", "--dispute", &dispute, "--pending", &cw, "--funder", &ex, "--funding", &f], "oracle pending part", 8_600_000);
     let f = h.funding(10);

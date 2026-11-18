@@ -89,49 +89,49 @@ const GOLDEN: &[(&str, &str, &str)] = &[
     ("create slot", "0a7a8004089c7a8cb98c3ce06d8c5dc6b18fddd50edb78c0530a5d684828c1b0", "e0b47cd5efe2f0b88a8a2ca62e8f773936a1212c40461633440e626bdef6e51d"),
     ("create stake", "03660e0650773c70a99a1d2d8daa2fab686770308b8e258b6b16b6a78f8fb9d5", "33679faf9367c079899fab174777f36ec93324c7925f531223fe653398e5fc65"),
     ("create the underwriter's stake", "9efee37daef0df3ec923e6714f24a61fbd12b2ae84e101631430fd686e191051", "e493dd963bae803bccfb2522a6eb59dbf20c8856ffc8ccc1ec059a288b8747f0"),
-    ("create long order", "986bde6dfa059595b355a21c9c855f61531ef2f88279576c3b298e4ba746d714", "42fc1408ee7489e914662d6eb971a2c3d3a691b2865a38fca1f2985e47b2a35c"),
-    ("create short order", "3c9c7a4e666bbfabe9e87a26f1424b70bf043e8dbe66cce6bf3dd800d805d2fe", "2592210da011fbaac1eab7cf5e5ff22f1acc70bda3e5f2e13d256188ff3a4543"),
-    ("open pair A", "6e7f337a3886637701d3675f53f148e643310168c9a76812d9104755c5718db6", "08bc612c2334e4586f0f65d82b0307add3f5ce0476a0a9df7e33172ffa752ba4"),
-    ("open pair B", "03efde917817720bd66c4b3c100ace36ec89dd405f566739e2464c0b32ef2ccb", "837beed033da8ad8f8eb143f0c4e7a4ddd24020bc3ef17276c7a1de57073931b"),
-    ("propose a liquidation", "0748681ea8a167970c5f207478ac070a83248b411303c751397a3a2262fd9204", "37fee9b14f334040636df0267f70435e498a76bf357b57d52c9a7c8fcef99260"),
-    ("contest", "ec6dee3f15333c7f7bf55b336808390543534ee0cbb940bdb3665c42de72e657", "2a3c25d82877b2901e6cbf6171e7ea30b0b1f8efbed03519166503b1612cbeaa"),
-    ("resolve and decide (refuted)", "3bd39e8c1dac907017c4a30a9fee41ca16e89c6382e5d13c31ea7f3d3c724ff5", "5d61481408b0b8f791f2d370599502477a33c95caad83cb90c5f27600b525304"),
-    ("finalize refuted (restore)", "fa4a295172d4f181e7bde83655381f442f82fcef79a1f6d2eca0472cfd60265c", "84c7cc37645580b03a82c106d481ff7f0fc6c0805927d72c021490d4efe33187"),
-    ("settle the opener's receipt", "b2331d3b95093e702e897e7686ee9ec15a7a673f7dd96f5fd7742a7e899b51ec", "ad7c7adbe032eb4c1df2f7bd6d26c348d1f82a2b56d38f4208579a231f5607d0"),
-    ("close the pool", "ba0c83a7aed617b976dc9d158a2b58b1deed66b8016073e4eaf58778e5b6205f", "c4d497222bfb7b36c73701ea42ace646044842411b914787a3e44e98038fd163"),
-    ("propose again", "70885e641ffcb367f8f912e2ea87a6e85a501b1aa8ca23a70b01c02c74bbc435", "2e0be20d9577be45d8dba89e5cb11f3f34c16800c53ff0e63a77179b9a502734"),
+    ("create long order", "8d30fdc395b4536ee0bbf3f97bf55535428376410ecdea51ac5725b2aea79870", "2a5ca870f44662c4bb95667b25fd6d81225c4c3de12efbd79b87f9da999bb9ae"),
+    ("create short order", "9fae47a9748b39cc17e3c91c8c575eaac1669ebd5e7ee440d619329d6a24ba83", "c3ff5a6e98fdf92b324225c22938f56ae56d5863db05f3332929eb4a8269b3ba"),
+    ("open pair A", "a6666ca373261ca6b768a467a1e63bc85bdaa0808543574e1f06fd8dde84e0f2", "26a204135c190351f37d52e35db582f8b928dd07e4b0b9bf0d9ad67d0c6cf2da"),
+    ("open pair B", "98d3efcc2d34e4bfc4ad1b3aca25b99c885523561fc723dd046298e6ad521e64", "44e99c89d242f6024438f0997fb966a9831b7d4eb227e14ff11a4e5dddcbd040"),
+    ("propose a liquidation", "6a330c8e850639e07149bc340575f0a48df81da24aa07cd2d40ad6979fa0cddc", "34fd3059e82c5cec767aa3ed34ffec934501efd427e862ede1882b26fc517514"),
+    ("contest", "d5199188800c57ed6bdb0f136838c393356a5cf97fd320e5dec233f8beec794c", "5ca8edfea17ca9597423cdc223326af043725ccb2628cd32f43a1200d7e3eeef"),
+    ("resolve and decide (refuted)", "947a9a6188f0770657c0d61bc9a6b31c9dd4f52690655dd116ff4ac987945706", "78de7246142bc4ddf0abad2bfc8a652df42a3bc3c34bf2b337f7ae98f1dc8940"),
+    ("finalize refuted (restore)", "9ddfb99bc53fa0bfb980079e9df6d7306995bcf3c026b7d3bbfa3d604de54c07", "c1f4765763c16e502e52e49c6de0848d9915374af1cbe0574b2dc59730f8ffb6"),
+    ("settle the opener's receipt", "3fc8c70c389a4102ddf433b727408135c69722070a42876ba8dd2f209379da66", "76d46fb8442f7c64c4444ca42e140f077cf54b0af5ac474a5cbf1764788000a2"),
+    ("close the pool", "cc5efccbec03f58e5310ca28f34ca336e1b81e2f8a207a074060bdc2ee807c69", "27e8cb5550712a967ac12eca462b107b036f803875d0e5e5c388bcedd38f7b23"),
+    ("propose again", "e1f90b48468fd5c4bb0e6b79ee7653e11ed60be3f64bf84e9b2def3ac62ebbcd", "38247dd0317ae67130d9ace27d24b2f83e58604894412070db8cf758fcfef226"),
     ("create a second stake", "4f70794569c748301bef78e2806255354c4f6b6745257445c46bdfab89e0d975", "aa2d43d936c89687e31388fed49d01470925c7557892feb47a926bf7a8a28907"),
-    ("contest a true claim", "488828a9670fc5ee2c0c01acba5d603592cd2d08a3b9503c569fb839b4937fc1", "adca4afe4d788fb6ecf34d6d440d2ae058237ff6c01719969eb25188f53960c4"),
-    ("deposit the defence", "72ccd5ed5c924077a5c441fb14a2ee7e88b1aa42ea80113bcf4b9d119e74df78", "ab08d30af9f79a1a63f4e9854afc2b34cd7e2b0757f40f3912f511a43fe8a72a"),
-    ("resolve and decide (upheld)", "24246043aa6d7e99fe82638b7423c60ee21518e7d24f50bb757c925146421897", "e4f07005a8c845199634e29b8a6ae29fd46954abf2a834a4018bf614f2d3170d"),
-    ("finalize upheld (forfeit)", "4cb39b25db5e6fedad2b733c09737c03b53d212308273404884848cd9bf6bad7", "6dc0bc537167f05a5294aff323ab86809c5ddb4d0ac4363f86a1e3bdd6d37e34"),
-    ("settle a winning and a losing receipt", "303979f395ec8a2442360d25b77ea1bd85788eae06e62f3325fc6f798be7b722", "968c5cd3f0bf9b46aaaf819d5055263ba3e9e9d8d2889abd2f29a31519357135"),
-    ("close the pool with a burn", "b3a47f80ae9475d5482bb88abe8288083634d90e49ad865f4fd00a8c0a3ccbc3", "289dc954225179bc836d669e04841f7741cf6bce5cfb8b8ba24c65cb407fa777"),
-    ("propose on B", "469f986c71241bde6b663f1fee727cb7d305463a8f95823bdacd1027929f0ac9", "c9c163376a85c48ea976b01b7e667277c151e200793a98d730aa52c0bfaf667a"),
-    ("cure", "8a58f19bbbabc5ca4651d4739c7dbca0da36723cdba4091a6f51cf0a34d686c4", "2f75c569fdd302e12bd741b974bd5b4913061df8e858c6b7d92c4c38c0531d5c"),
-    ("renew B", "3b75ed93392fd24c7316b69a1bff58561a38ae8aed46e03bdb9e713d1d2204b1", "5167a8751e8dbf86a5bf35a2f1b8cc6210f9ba7d7b2ce374ae09b679ffda77a3"),
-    ("amend: list the long", "410583ba96dbad68ce25863e35056aed2e561d9c5841f7a32e62ccc50399e8d6", "09846aafbea82c1d36a197fff10e1993be75187241d1030760ceb7c110c6a8df"),
-    ("transfer the long to a signing taker", "425aa7a5001eb3600c8afe5f85558826207897f771386bdd54931fcca458022d", "d106c5e47768304c62466c9f110eb147a3da7cdd0385d8382ec1d9504b53f77f"),
-    ("amend: the taker lists", "a3031acf87aced2208feb0a790516c75ee857eacc87941204392cecf43dd03ec", "beddab24310bf01becf9b163113dd5fd792b15ea88fc1b4cf4b2a08fb6c6d365"),
-    ("amend: the short lists", "cbde5b74669801ad32a54c2d5fbb4d8c58aeca9b93f26ef9904e0538f5f535ce", "9a5cf0825dc2810a5b06407b7a090f6dcee2f70d4fb8c77668643f22f6371cdb"),
-    ("mutual close", "8b866572fbbc8056d3b2de47fab01f10f84e103f89955937b2f03cd9d9a2a56c", "b0553175a879000c3988895b35b3da82a72d9db4e3cfadc06aaeacce017700da"),
-    ("lapse settle", "260f229261c4548bef3704a2b8fc9dec2c9211745a7f9e87fca7dece142ac7d3", "762f57af549b855669762545cbffecba0e1e730092a05db0cf5e1fb2940a2713"),
-    ("create long order 3", "32034432860d7eb51252caf5999724f897a85933bb8f71f5505feba5afefe9b6", "e4bba9f91e82db0d003578162747e43ecaf409e9c1c7065b03c610cb3c2a2a04"),
-    ("create short order 3", "8db3fc017679be3c5a646b4f638273401a585bda773e47073a073c3d39e2bac0", "6b500a9ad8af3f031e6f876ce7bc9bbc09d39fdd1e7fbfd52388c87a160310e3"),
-    ("open pair C", "0b70f4414983f554ff6fef709c1b1a9b64cbe439400b380e7a0b18be083f84df", "f4ef7187666bbcc845ee3e36d356f7096123c0c9b7f42e0999d68595c4ec9986"),
-    ("cooperative close", "0035ae061c160d8213a1f724ee8f177500e7f9d6ef9bbf00660557fb3067cb17", "7153e64669124bf5ad84eeea2655c01b004ed46078533748ede2f0e20e5e3469"),
-    ("advance the slot", "3148be4d0ca2bae41484405815c628ad5bb543b02ab2898abe6f6a712f24db80", "21449ac7cf68b9e8819354f6267d877a5721fa059159c1546fa5a47fe7ce95ea"),
-    ("split the slot", "68d34619d4b11075d35307510b935693fff6c389f945365dccaf3524de003838", "6fff0ac69e92ce312aee75c12f01ca6678ea164d686063e88a9542a3cf51178f"),
-    ("unbond child A", "0d27ce15fd48e206ca0eda4284fc0c5983ac0ae6093903ef202b8b1d13b0c932", "01ace824896a6a16a0206531192250e4ebba480004d6665815235e63d6381b9c"),
-    ("withdraw child A", "d132b80a41a3e01c31fa6cb2c43acae38c45020ed5cbc50c8a476a982323b69a", "3958a03f630a0aa4756ab6394304947fb1a36f7f730632f2b4bba4892c71eddd"),
-    ("unbond a stake", "0bf78e62b077e5203b676fe286dc6c4e929df264731b60e5aa2803abb05f9df8", "3ec012526cb3fce2fd983764b86064b5f108bede7502ccf974293e6c4c409b9c"),
-    ("withdraw a stake", "d461c029c7e92afc1b9d6238ce9bd821de1a2e8f9a688387ae81ec6e1c985e16", "c96d17d3bf5765b1c115ce5903f00699310dfa5ffd26cebb0028279871ada531"),
-    ("create long order 4", "1192fb952c4b5ca2ebd5142b30637b746972bd29460d7081f43eabf9cada9f99", "e3a0502e4c7635f077b39f10f8bae286585903b0f66aae35a724c00076485ead"),
-    ("create short order 4", "392d3971233e0efa2fd52bd532ad9134147646d6a571c3103974379f64db9665", "eaa6b874f428a39465b964f702df583f75cb0d0e93d26f29e662ba42183031d9"),
+    ("contest a true claim", "d178be7ce6dbfab242ea24fb4f4d85cba9e186968914b675231ad7008769f03c", "8df9c0adab7441ffa336ea037aa972b82cba0264de4c8e2c9653417df1038a54"),
+    ("deposit the defence", "8fe991cc10abb777e13dd85efb2b9cc5764d6fe653d83c8beed4f7b8c8b6ab27", "b441a63b49630ca30f9cefbd069f88c0c269e812a88895847a96cb911146d9f1"),
+    ("resolve and decide (upheld)", "54faf5c72aeea0a3ba396d368700e145567d11b3e62ab5831f19ad8a9e908eff", "69f3fc7536cf09eeffadb662d3928b70bbb302b9f464228f22ac7bd3c2177599"),
+    ("finalize upheld (forfeit)", "82890f07c08d20d290307d491411484ddf7be6a9a725b7dc097bed43824fdcd1", "21d29088a4017ab252c6a82b80ffd048b5ab2deeec6bc78deb95c81f337052cb"),
+    ("settle a winning and a losing receipt", "952e27f1b99520ba84b6894ffa47b4e35e7cd190110aa5134b83c42f23523aac", "78dbb801f6f57fdc8674185159bdb670af15744eb5ae45f26cb3ed1092ad7c89"),
+    ("close the pool with a burn", "27ee832c425b2babd2a56e063ced9fdcbef857392bc3017d9ce17b208676f3d9", "e1e532e2f04e11c9a154a47fe90b28f650ed3a6d8a74affb0464c59add2024e7"),
+    ("propose on B", "40a0eba7396b627b71f0eea3fd2ce83bc14746cbe62589daba8bf88b12869fff", "1ae74d73d59943552724ba974740e7b84e7f9edd7c84ca26d6bc110566fc380d"),
+    ("cure", "1fab8df5b667cdcf974b1062cf20b6f4c7bb24c3997ac9fe22ef88122726bb06", "52e7fb7f3b588a11711112305c55ffad1369544ba2e0d52ae3f52e3cf4a25096"),
+    ("renew B", "9d10a45249c4814351cedf353e7173ad43be2fa73347df131d3db0179ae7dfd3", "6b10406c078c5cf6ce2a31015a897783f1386eec2809f8eb23a9dc86ff8a3d2c"),
+    ("amend: list the long", "f41f7e9b30abbe3c011a8a0fdc299b273869c88ad6d7db9a4ce381160d6559ba", "2813a1c7cdeca578d01cef92069896ef90e97feb3167e7baf6de0273b5b84b55"),
+    ("transfer the long to a signing taker", "83abb3d3178ddfc240bd99404d974f29d622a8b65adb7e95f5f863d1762e43b7", "fe899713a933258464d4a8d8aa0adc4766d87409fbf5f647cb59f82242da199a"),
+    ("amend: the taker lists", "5132aaffdb6ee848afb622675fc9e51260c40d49aab9ce450e4c8cb76aaca17c", "f4b64e976eff94957f1438e6569b0fb2252c58a8fc62786074f9b83bc6e556c0"),
+    ("amend: the short lists", "584a0ea8aeaad6e464b37ff441eeb4f0b96b2de57a957a00f05256f29ab2b893", "04f41c2cbef5b7e861d7175a6ee661bf8035fd131c9083f8957ba2279ddd2fa1"),
+    ("mutual close", "e0e3a1bfa1b2207180168c2bca411b0bd6168b538f9d8c1b288b51be489f15ad", "d135a8f5fd3189ce32dbd4b2ba0f0fc60556c1ad4fec479ca482975887d59a42"),
+    ("lapse settle", "3300333fc93987cfdd46676305e403b07a4ef406495217e5b6813f0a5c3d86f8", "dd96557fb888de3139e211d5d12e6ef4bd9a26ef1f171f093a68cfc9136ade37"),
+    ("create long order 3", "6111562188dc173cf6062cdb673a87409a202f99612bc48f22b75c4604af2fc2", "05630999200ed4fdb67f3af82bc3e22791e5ba7d680deb284ce4a448ec59da12"),
+    ("create short order 3", "c70fe9405312ee11cb5202c4a0a4ca34c0cf166540d2a60c05b6e28d0ee538cd", "c03dcf6d7797bb244de8663f6b328dda73193a8d8ca934975f46c6b730fa62bf"),
+    ("open pair C", "044d2c589d3a5e20148595f9f9fef02b906af15d5ab4ff2e20c679091934fd3b", "3218e493481bc9d75b35f50b39c496a87b17893ef03a4df27d9180b9c6736895"),
+    ("cooperative close", "9406143b42f7f604606c447f5142dcab2f44a9cbab09938878a1dc7e742c7c85", "f48aeef7df9ae280d51cac4bd681b82624df712258d13f2c722523cab22089a2"),
+    ("advance the slot", "14aeaeb1817cd72fa6696d5baca2de88bee254172048eec761ca2c0110907355", "c0a1a4f82a61f42021d672d8d3dc480d60464eecc3d3689f8d11d0785e004f4e"),
+    ("split the slot", "7e85ca28e0ca2309159e958fc8e545a36f7931972c669b5db50bb6834c3a826d", "6ce346b259d1b3316f6d732517cae7224dfa327410fc07395fc79193dccefbc3"),
+    ("unbond child A", "6468b266339ec852845b1a7cdcac27c9ddec6dd168839f3c60778a4bb6d732a0", "565fe04cebc8a1b41ff81a1a216a8a685e514a84791440ce77e779d4f5aec53c"),
+    ("withdraw child A", "d6a145e2524e4be300d99bd5bfd0043874cec71de4780bfd9bfecd87ffea423d", "d80c8628e0e5d9528d3f06a98b887030fa208189f29c1863c86a063baaea6739"),
+    ("unbond a stake", "535c6212349f096093f7d8db7e03ac80eb4fb1a8b54d7adefaa915cdcdeca065", "e513a8a9b13b94eda0b67f8403c551bce73c38b6be06796c6e1b790694a687be"),
+    ("withdraw a stake", "9a957b9591e30743049eac6aa2c4c79bf3053adab1eeb2185355db9760aaff37", "6cd034b8bdcb46be372920aa6e1ddb569f9a56cf38625df107798d585c4f2d47"),
+    ("create long order 4", "05e7f85f89087fbdf2489864b03da1132987c318a036c341e32bbc77d54a3d5e", "d0bbdcd3012abad2927ee6b5c9dd22d03ca538254e882298dd24f808ba62c4b4"),
+    ("create short order 4", "c3eaf8b045b0ce6922f5e87bace8438e1342ce94f92b571f84eacba14fa1d8b4", "33c009b7cdadcf3da99f76b0d66430083e021a0bc9a1f5bb31b8f2fa6ee301db"),
     ("create a second slot", "99cde7f0151cec52b0056b168c7f96f4d1c481f22045c03e1baa50aba766ad05", "d8074749166facddae6856fc8dac1fd5ae5ce5e61a169307501d861b75ed8ca5"),
-    ("open pair D", "c21565233486fb2ef20df8d8f8ff0cdb9a2f31eb2df100131c851a8ad3c977e8", "d987a3becf6fe848d103227b676cb2e75c5f7be0d59483998b411f8a2bebf820"),
-    ("propose a close", "e57f96d7496389d911a43f70fd085368aa9b53beb810b55c293d96b5a5b7bbc0", "5a4b042dfef3604c8404437b29b8ecb69570dd5543a36ea7f466f2f9b7e0023e"),
-    ("finalize the close", "303faa95d071a3650a8029fe2c87796ddf7a0941d45a4f8a6ec740e7491ec25f", "2314fb4184d3d277f4badbd1eba2cec8cb5d92b4ea220471cd35e186455f22ad"),
+    ("open pair D", "038c01eace96b4d2179efda97e1114b9141f6128f7cf8ea4a1613435b1da7105", "5683747910521aac0be9bcfc181b8c928e9fec66659fc4e15ff7a9edff4158d0"),
+    ("propose a close", "dffdff60472b57ebeba1becf924e1fbfa5f814a5aa29c4efcb60fd80650a6d75", "f1df9e795cf3bd168b5a43bd3699ac0f1fcff7d704e7ef905f5adfb80b75cfc4"),
+    ("finalize the close", "5cf22a14260d6e960065170c0011de86eb86601f64646f8fdc415c640277125a", "6a3f1a4f2f7d08e5e70a4806b9d21b5b61535b65a9f84b6e579a8dd3f5982eeb"),
 ];
 
 struct Chain {
@@ -226,7 +226,7 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let sg = c.sign("propose a liquidation", &b);
     let pend = nth(&sg, 0, w, 8_000_000);
     let f = c.mint(ek, 10, 0);
-    let (b, cw, d) = contest(&pend, &opener, 50_000_000, &[f], &ek, r).unwrap();
+    let (b, cw, d) = contest(&pend, &opener, 50_000_000, &[f], &ek, r, &Trust::Untraced).unwrap();
     let sg = c.sign("contest", &b);
     let (cpart, dispute) = (nth(&sg, 0, cw, 8_100_000), nth(&sg, 2, d, 8_100_000));
     let receipt = nth(&sg, 1, Js::receipt(stk, m.judge_market(), kpf_protocol::judge::NO, opener.value as i64, 0, 8_000_000), 8_100_000);
@@ -251,19 +251,26 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let f = c.mint(ek, 10, 0);
     let (b, w) = propose(&restored, &ClaimTerms { kind: KIND_LIQ, side: LONG, n: terms.n, price: 920_000_000, t0: 8_999_000 }, &vouch, &[f], &ek, r).unwrap();
     let sg = c.sign("propose again", &b);
+    let birth = sg.tx.clone();
     let pend = nth(&sg, 0, w, 9_000_000);
     let opener2 = won; // the winner's stake came back fresh: too young to open a dispute on this claim
     let f = c.mint(stk, 1_010, 0);
     let sg2 = c.sign("create a second stake", &create_stake(&m, stk, 100 * KAS, &[f], &stk, r).unwrap());
     let opener3 = nth(&sg2, 1, Js::free(stk, m.judge_market()), 0);
-    assert!(contest(&pend, &opener2, 50_000_000, &[], &ek, r).is_err(), "stake younger than M_age before the claim");
+    assert!(contest(&pend, &opener2, 50_000_000, &[], &ek, r, &Trust::Untraced).is_err(), "stake younger than M_age before the claim");
     let f = c.mint(ek, 10, 0);
-    let (b, cw, d) = contest(&pend, &opener3, 50_000_000, &[f], &ek, r).unwrap();
+    // Review 7 (R7-F2): the claim traced to its propose before the stake is committed.
+    let ct = trace_claim(pend.id.unwrap(), &birth, &pend.s.redeem(kpf_protocol::oracle_artifacts::kit())).expect("the claim traces to its propose");
+    assert_eq!(ct.pair_in, restored.op);
+    let (b, cw, d) = contest(&pend, &opener3, 50_000_000, &[f], &ek, r, &Trust::Traced(&ct)).unwrap();
     let sg = c.sign("contest a true claim", &b);
+    let opening = sg.tx.clone();
     let (cpart, dispute) = (nth(&sg, 0, cw, 9_050_000), nth(&sg, 2, d, 9_050_000));
     let r_no = nth(&sg, 1, Js::receipt(stk, m.judge_market(), kpf_protocol::judge::NO, 100 * KAS as i64, 0, 9_000_000), 9_050_000);
     let f = c.mint(ek, 10, 0);
-    let (b, d2) = deposit(&dispute, YES, &[defence.clone()], &[f], &ek, r).unwrap();
+    let dt = trace_dispute(&dispute, &opening, &birth).expect("the dispute traces to its opening and its claim to a propose");
+    assert_eq!(dt, ct);
+    let (b, d2) = deposit(&dispute, YES, &[defence.clone()], &[f], &ek, r, &Trust::Traced(&dt)).unwrap();
     let sg = c.sign("deposit the defence", &b);
     let dispute = nth(&sg, 0, d2, 9_060_000);
     let r_yes = nth(&sg, 1, Js::receipt(uk, m.judge_market(), YES, 130 * KAS as i64, 0, 9_000_000), 9_060_000);
