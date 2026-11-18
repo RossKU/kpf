@@ -1,0 +1,188 @@
+//! The pinned compiled artifacts of `KpfPair` and `KpfOpen`.
+//!
+//! The compiler is not a dependency of this crate. `contracts/artifacts/` holds the compiler's output (the
+//! `SilAbiArtifact` JSON of each contract compiled with a fixed sample state), a manifest with source and artifact
+//! digests, the template prefix and suffix lengths and the template hashes, and `SHA256SUMS`. They are embedded here.
+//! `kpf-artifacts check` (and its test) recompiles the sources with the vendored compiler and fails if one byte
+//! differs. Regenerate with `cargo run -p kpf-artifacts -- write` (see `README.md`).
+//!
+//! An instance of a template is `prefix || state || suffix`. The state is a fixed sequence of canonical pushes
+//! (`0x08` + 8-byte script number, `0x20` + 32 bytes), see [`crate::state`].
+
+use std::sync::OnceLock;
+
+use serde::Deserialize;
+use silverscript_abi::SilAbiArtifact;
+
+use crate::error::{Error, Result};
+
+const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
+const PAIR_JSON: &str = include_str!("../../../contracts/artifacts/KpfPair.json");
+const OPEN_JSON: &str = include_str!("../../../contracts/artifacts/KpfOpen.json");
+
+/// The embedded manifest, as text (for digest checks).
+pub fn manifest_text() -> &'static str {
+    MANIFEST_JSON
+}
+/// The embedded pair artifact, as text.
+pub fn pair_artifact_text() -> &'static str {
+    PAIR_JSON
+}
+/// The embedded order artifact, as text.
+pub fn open_artifact_text() -> &'static str {
+    OPEN_JSON
+}
+
+/// One pinned contract of the manifest.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ManifestContract {
+    pub source: String,
+    pub source_sha256: String,
+    pub artifact: String,
+    pub artifact_sha256: String,
+    pub template_hash: String,
+    pub prefix_len: usize,
+    pub suffix_len: usize,
+    pub state_len: usize,
+}
+
+/// A KOB evidence template (`KobAsk` or `KobBid`) the pair pins as build constants.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ManifestKob {
+    pub source: String,
+    pub source_sha256: String,
+    pub template_hash: String,
+    pub prefix_len: i64,
+    pub suffix_len: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Manifest {
+    pub format: String,
+    pub compiler: String,
+    pub kob_commit: String,
+    pub kob_ask: ManifestKob,
+    pub kob_bid: ManifestKob,
+    pub kpf_pair: ManifestContract,
+    pub kpf_open: ManifestContract,
+}
+
+/// The parsed manifest.
+pub fn manifest() -> &'static Manifest {
+    static M: OnceLock<Manifest> = OnceLock::new();
+    M.get_or_init(|| serde_json::from_str(MANIFEST_JSON).expect("contracts/artifacts/manifest.json"))
+}
+
+/// The six build constants of `KpfPair`: the `KobAsk` and `KobBid` templates (hash, prefix length, suffix length).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KobConsts {
+    pub ask_tpl: [u8; 32],
+    pub ask_pre: i64,
+    pub ask_suf: i64,
+    pub bid_tpl: [u8; 32],
+    pub bid_pre: i64,
+    pub bid_suf: i64,
+}
+
+/// The pinned KOB evidence constants.
+pub fn kob_consts() -> KobConsts {
+    let m = manifest();
+    KobConsts {
+        ask_tpl: crate::error::hex32(&m.kob_ask.template_hash).expect("ask template hash"),
+        ask_pre: m.kob_ask.prefix_len,
+        ask_suf: m.kob_ask.suffix_len,
+        bid_tpl: crate::error::hex32(&m.kob_bid.template_hash).expect("bid template hash"),
+        bid_pre: m.kob_bid.prefix_len,
+        bid_suf: m.kob_bid.suffix_len,
+    }
+}
+
+/// The pinned `KpfPair` artifact (compiled with the manifest's sample state).
+pub fn pair_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(PAIR_JSON).expect("contracts/artifacts/KpfPair.json"))
+}
+
+/// The pinned `KpfOpen` artifact.
+pub fn open_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(OPEN_JSON).expect("contracts/artifacts/KpfOpen.json"))
+}
+
+/// The template hash of a prefix and suffix, as the contracts compute it:
+/// `blake3(len(prefix) as 8 bytes || prefix || len(suffix) as 8 bytes || suffix)`, lengths little-endian.
+pub fn template_hash_of(prefix: &[u8], suffix: &[u8]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(&(prefix.len() as u64).to_le_bytes());
+    h.update(prefix);
+    h.update(&(suffix.len() as u64).to_le_bytes());
+    h.update(suffix);
+    *h.finalize().as_bytes()
+}
+
+/// A contract template: what surrounds the state.
+#[derive(Clone, Debug)]
+pub struct Template {
+    pub name: &'static str,
+    pub prefix: Vec<u8>,
+    pub suffix: Vec<u8>,
+    pub state_len: usize,
+    pub hash: [u8; 32],
+}
+
+impl Template {
+    fn of(name: &'static str, art: &SilAbiArtifact) -> Template {
+        let c = &art.contracts.values().next().expect("one contract").compiled;
+        let (pre, _, suf) = c.script_parts(&c.bytecode).expect("state span");
+        Template { name, prefix: pre.to_vec(), suffix: suf.to_vec(), state_len: c.state_span.len, hash: c.template_hash }
+    }
+
+    /// The redeem script of an instance with this encoded state.
+    pub fn redeem(&self, state: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(self.prefix.len() + state.len() + self.suffix.len());
+        v.extend_from_slice(&self.prefix);
+        v.extend_from_slice(state);
+        v.extend_from_slice(&self.suffix);
+        v
+    }
+
+    /// The encoded state of a redeem script of this template, or why it is not an instance.
+    pub fn state_of<'a>(&self, redeem: &'a [u8]) -> Result<&'a [u8]> {
+        let want = self.prefix.len() + self.state_len + self.suffix.len();
+        if redeem.len() != want {
+            return Err(Error::Decode(format!("{}: script is {} bytes, an instance is {want}", self.name, redeem.len())));
+        }
+        if !redeem.starts_with(&self.prefix) || !redeem.ends_with(&self.suffix) {
+            return Err(Error::Decode(format!("{}: script does not match the pinned template", self.name)));
+        }
+        Ok(&redeem[self.prefix.len()..self.prefix.len() + self.state_len])
+    }
+}
+
+/// The `KpfPair` template.
+pub fn pair_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KpfPair", pair_base()))
+}
+
+/// The `KpfOpen` template.
+pub fn open_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KpfOpen", open_base()))
+}
+
+/// The artifact of an instance: `base` with its bytecode replaced by prefix + `state` + suffix.
+pub fn splice(base: &SilAbiArtifact, state: &[u8]) -> SilAbiArtifact {
+    let c = &base.contracts.values().next().expect("one contract").compiled;
+    let (pre, _, suf) = c.script_parts(&c.bytecode).expect("state span");
+    let mut a = base.clone();
+    let cc = a.contracts.values_mut().next().expect("one contract");
+    assert_eq!(state.len(), cc.compiled.state_span.len, "state length");
+    cc.compiled.bytecode = [pre, state, suf].concat();
+    a
+}
+
+/// The name of the single contract of an artifact.
+pub fn contract_name(art: &SilAbiArtifact) -> &str {
+    art.contracts.keys().next().expect("one contract")
+}

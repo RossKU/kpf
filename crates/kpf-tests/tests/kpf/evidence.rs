@@ -217,87 +217,17 @@ pub struct PairLeg {
     pub act: Act,
 }
 
-/// The keeper fee before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))).
-pub fn fee_of(m: &Market, n: i64, p: i64) -> i64 {
-    q(n, p * m.liq_fee_bps / 10_000, m.scale, 0).max(m.keeper_fee_min)
-}
-
-/// The trigger price T of a loser `side` (DESIGN 4.5b), from the pair's own state, clamped to [bl, bs]:
-/// floor(bl * 10^4 / (10^4 - mmrBps)) for a long, ceil(bs * 10^4 / (10^4 + mmrBps)) for a short.
-pub fn trigger_of(p: &Pair, side: i64) -> i64 {
-    let m = p.m.mmr_bps;
-    let t = if side == LONG { p.bl * 10_000 / (10_000 - m) } else { (p.bs * 10_000 + 10_000 + m - 1) / (10_000 + m) };
-    t.clamp(p.bl, p.bs)
-}
-
-/// The maintenance slice of n for a loser `side`: q(n, T - bl) (long), q(n, bs - T) (short).
-pub fn slice_of(p: &Pair, n: i64, side: i64) -> i64 {
-    let t = trigger_of(p, side);
-    if side == LONG { q(n, t - p.bl, p.m.scale, 0) } else { q(n, p.bs - t, p.m.scale, 0) }
-}
-
-/// The liquidation fee of P6 and P7 (DESIGN 4.5b): fee_of capped at the maintenance slice.
-pub fn liq_fee(p: &Pair, n: i64, quote: i64, side: i64) -> i64 {
-    fee_of(&p.m, n, quote).min(slice_of(p, n, side))
-}
-
-/// The winner's payoff at the trigger price for n of a loser `side`: q(n, bs - T) for a long loser, q(n, T - bl)
-/// for a short loser.
-pub fn winner_at_trigger(p: &Pair, n: i64, side: i64) -> i64 {
-    let t = trigger_of(p, side);
-    if side == LONG { q(n, p.bs - t, p.m.scale, 0) } else { q(n, t - p.bl, p.m.scale, 0) }
-}
-
-/// The loser's bankruptcy price: where P6 settles (the loser is owed 0).
-pub fn loser_price(p: &Pair, side: i64) -> i64 {
-    if side == LONG { p.bl } else { p.bs }
-}
+#[allow(unused_imports)]
+pub use kpf_protocol::payoff::{fee_of, liq_fee, loser_price, slice_of, trigger_of, winner_at_trigger, winner_key};
 
 /// KpfPair.closeAt: (long payout, short payout, remainder and its least value).
 pub fn close_at(l: &Live, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Option<(Pair, i64)>) {
-    let p = &l.p;
-    let v = l.value as i64;
-    let part = p.range_of(n);
-    let (mut keep, avail) = if n == p.size { (0, v) } else { (v - part, part) };
-    let mut owe = if side == LONG { q(n, c - p.bl, p.m.scale, 0) } else { q(n, p.bs - c, p.m.scale, 0) };
-    // The fee is capped at the other party's rest: the owed party (the winner of P6) never pays it.
-    let mut other = (avail - owe - fee).max(0);
-    let rest = if n == p.size {
-        if owe < DUST {
-            other += owe;
-            owe = 0;
-        }
-        if other < DUST {
-            owe += other;
-            other = 0;
-        }
-        if owe < DUST {
-            owe = 0;
-        }
-        None
-    } else {
-        if owe < DUST {
-            keep += owe;
-            owe = 0;
-        }
-        if other < DUST {
-            keep += other;
-            other = 0;
-        }
-        let r = p.rest_of(p.size - n);
-        let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
-        Some((r, rv))
-    };
-    if side == LONG {
-        (owe, other, rest)
-    } else {
-        (other, owe, rest)
-    }
+    kpf_protocol::payoff::close_at(&l.p, l.value, n, c, side, fee)
 }
 
 /// The settlement price of an evidence quote for a pair: clamped to [bl, bs].
 pub fn clamp(p: &Pair, x: i64) -> i64 {
-    x.clamp(p.bl, p.bs)
+    kpf_protocol::payoff::clamp_price(p, x)
 }
 
 /// The entrant of P7 for a loser `side` sold at x: an order of that side with its own rate.
@@ -306,17 +236,9 @@ pub fn p7_spec(n: i64, side: i64, x: i64, open: &LiveOpen, k: i64) -> TransferSp
     TransferSpec { side, n, x, nb, ek: open.o.owner, et: open.id, k }
 }
 
-/// The winner's payout of P7 before the dust rule (DESIGN 4.5b): the entrant's payment q(n, x - bl) (long loser)
-/// or q(n, bs - x) (short loser) less the fee, never below 0.
+/// The winner's payout of P7 before the dust rule (DESIGN 4.5b).
 pub fn p7_pay(l: &Live, n: i64, side: i64, x: i64, p: i64) -> i64 {
-    let pr = &l.p;
-    let o = if side == LONG { owed(n, x - pr.bl, 0, pr.m.scale) } else { owed(n, pr.bs - x, 0, pr.m.scale) };
-    (o - liq_fee(pr, n, p, side)).max(0)
-}
-
-/// The winner's key of a loser `side`.
-pub fn winner_key(p: &Pair, side: i64) -> [u8; 32] {
-    if side == LONG { p.short_key } else { p.long_key }
+    kpf_protocol::payoff::p7_pay(&l.p, n, side, x, p)
 }
 
 fn nbq(n: i64, qq: i64) -> [Arg; 2] {

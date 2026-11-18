@@ -15,10 +15,9 @@
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
-use kaspa_consensus_core::hashing::sighash::{calc_schnorr_signature_hash, SigHashReusedValuesUnsync};
-use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
 use kaspa_consensus_core::tx::{
-    CovenantBinding, MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput,
+    CovenantBinding, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput,
     TransactionOutpoint, TransactionOutput, UtxoEntry,
 };
 use kaspa_consensus_core::Hash;
@@ -199,13 +198,9 @@ pub fn build_ext(ins: &[In], outputs: Vec<TransactionOutput>, lock_time: u64, se
 }
 
 fn sign(tx: &Transaction, entries: &[UtxoEntry], idx: usize, kp: &Keypair) -> Vec<u8> {
-    let mt = MutableTransaction::with_entries(tx.clone(), entries.to_vec());
-    let reused = SigHashReusedValuesUnsync::new();
-    let h = calc_schnorr_signature_hash(&mt.as_verifiable(), idx, SIG_HASH_ALL, &reused);
-    let msg = secp256k1::Message::from_digest_slice(h.as_bytes().as_slice()).expect("msg");
-    let mut s = kp.sign_schnorr(msg).as_ref().to_vec();
-    s.push(SIG_HASH_ALL.to_u8());
-    s
+    let mut keys = kpf_protocol::tx::KeySet::new();
+    let k = keys.add_keypair(*kp);
+    keys.sign(&k, &kpf_protocol::tx::sighash(tx, entries, idx)).expect("sign")
 }
 
 /// The UTXO that output `idx` of an accepted `tx` becomes: its covenant id is the output's binding id
@@ -222,24 +217,7 @@ pub fn utxo_of(tx: &Transaction, idx: usize) -> (TransactionOutpoint, UtxoEntry)
 /// bindings (`CovenantsContext::from_tx`, `crypto/txscript/src/covenants.rs:101-163`; an error here rejects the whole
 /// transaction), then every input's script with that context. Returns one result per input.
 pub fn run(tx: &Transaction, entries: &[UtxoEntry]) -> Result<Vec<Result<(), TxScriptError>>, CovenantsError> {
-    let populated = PopulatedTransaction::new(tx, entries.to_vec());
-    let cov_ctx = CovenantsContext::from_tx(&populated)?;
-    let reused = SigHashReusedValuesUnsync::new();
-    let cache = Cache::new(10_000);
-    Ok((0..tx.inputs.len())
-        .map(|i| {
-            let input = tx.inputs[i].clone();
-            let mut vm = TxScriptEngine::from_transaction_input(
-                &populated,
-                &input,
-                i,
-                &entries[i],
-                EngineCtx::new(&cache).with_reused(&reused).with_covenants_ctx(&cov_ctx),
-                EngineFlags { sigop_script_units: 0.into() },
-            );
-            vm.execute()
-        })
-        .collect())
+    kpf_protocol::verify::run_raw(tx, entries, kpf_protocol::verify::Meter::Free).map(|v| v.into_iter().map(|r| r.map(|_| ())).collect())
 }
 
 /// One input measured with consensus engine flags (`EngineFlags::default()`, which also charges signature checks

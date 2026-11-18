@@ -17,7 +17,7 @@ use crate::common::*;
 
 pub const FEE: u64 = 10_000;
 /// A plain payout below 0.02 KAS is not created (DESIGN 4.6).
-pub const DUST: i64 = 2_000_000;
+pub const DUST: i64 = kpf_protocol::state::PLAIN_DUST;
 pub const IDLE_SEQ: u64 = IDLE as u64;
 
 pub fn iv(v: i64) -> Arg {
@@ -59,50 +59,8 @@ pub struct LiveOpen {
     pub op: TransactionOutpoint,
 }
 
-/// What a leaver of n is owed at price distance r less tip rate t (KpfPair.owed).
-pub fn owed(n: i64, r: i64, t: i64, scale: i64) -> i64 {
-    let rr = r.max(0);
-    let tt = t.min(rr).max(0);
-    q(n, rr, scale, 0) - q(n, tt, scale, 0)
-}
-
-impl Pair {
-    pub fn with_size(&self, s: i64) -> Pair {
-        let mut p = self.clone();
-        p.size = s;
-        p
-    }
-    /// This state with both tags cleared: what every continuation that hands over no side carries (DESIGN 4.4).
-    pub fn cleared(&self) -> Pair {
-        let mut p = self.clone();
-        p.tag_l = Hash::default();
-        p.tag_s = Hash::default();
-        p
-    }
-    /// The remainder of a split: size s, tags cleared, every other field kept.
-    pub fn rest_of(&self, s: i64) -> Pair {
-        self.with_size(s).cleared()
-    }
-    /// q(n, bs - bl), rounded down.
-    pub fn range_of(&self, n: i64) -> i64 {
-        q(n, self.bs - self.bl, self.m.scale, 0)
-    }
-    /// Long payout at price p (DESIGN 3.1), without the carrier.
-    pub fn long_at(&self, p: i64) -> i64 {
-        let c = p.clamp(self.bl, self.bs);
-        q(self.size, c - self.bl, self.m.scale, 0)
-    }
-    pub fn short_at(&self, p: i64) -> i64 {
-        let c = p.clamp(self.bl, self.bs);
-        q(self.size, self.bs - c, self.m.scale, 0)
-    }
-    pub fn long_window(&self) -> (i64, i64, i64) {
-        (self.long_ask, self.long_min, self.long_tip)
-    }
-    pub fn short_window(&self) -> (i64, i64, i64) {
-        (self.short_bid, self.short_min, self.short_tip)
-    }
-}
+#[allow(unused_imports)]
+pub use kpf_protocol::payoff::owed;
 
 /// A transaction under construction.
 #[derive(Clone)]
@@ -181,21 +139,15 @@ pub fn funder(f: &Keypair, n: u32, value: u64) -> In {
 
 pub const F_FUNDS: u64 = 100_000_000_000_000; // 1,000,000 KAS
 
-/// What a KpfOpen fill or take may spend for n.
-pub fn order_spend(o: &Open, n: i64) -> u64 {
-    (q(n, o.my_rate + o.tip, o.m.scale, 0) + o.m.carrier) as u64
-}
+#[allow(unused_imports)]
+pub use kpf_protocol::payoff::order_spend;
 
 /// The continuation-or-refund a KpfOpen requires for a fill of n, at output `idx`.
 pub fn order_out(lo: &LiveOpen, n: i64, idx: u16) -> (TransactionOutput, Option<Open>) {
-    let left = lo.o.size_left - n;
-    let rest = lo.value - order_spend(&lo.o, n);
-    if left > 0 {
-        let mut c = lo.o.clone();
-        c.size_left = left;
-        (out(rest, p2sh(&c.art()), bind(idx, lo.id)), Some(c))
-    } else {
-        (out(rest, p2pk_x(&lo.o.owner), None), None)
+    let (rest, cont) = kpf_protocol::payoff::order_rest(&lo.o, lo.value, n);
+    match cont {
+        Some(c) => (out(rest, p2sh(&c.art()), bind(idx, lo.id)), Some(c)),
+        None => (out(rest, p2pk_x(&lo.o.owner), None), None),
     }
 }
 
@@ -243,18 +195,7 @@ pub fn amend_draft(l: &Live, signer: &Keypair, side: i64, w: (i64, i64, i64), f:
 
 // ---------------------------------------------------------------- P3 transfer
 
-#[derive(Clone, Debug)]
-pub struct TransferSpec {
-    pub side: i64,
-    pub n: i64,
-    pub x: i64,
-    /// The entrant's new bound: bl' for a long, bs' for a short.
-    pub nb: i64,
-    pub ek: [u8; 32],
-    pub et: Hash,
-    /// Ordinal of the part among this pair's two continuations.
-    pub k: i64,
-}
+pub use kpf_protocol::payoff::{CloseOut, CloseSpec, MutualOut, TransferOut, TransferSpec};
 
 #[derive(Clone)]
 pub enum Entrant {
@@ -264,54 +205,13 @@ pub enum Entrant {
     Direct(Keypair),
 }
 
-/// The part and remainder a transfer writes, at the least values the pair accepts, and the leaver's payout.
-pub struct TransferOut {
-    pub pay: i64,
-    pub leaver: [u8; 32],
-    pub part: Pair,
-    pub part_value: i64,
-    pub rest: Option<(Pair, i64)>,
-}
-
 pub fn transfer_out(l: &Live, t: &TransferSpec) -> TransferOut {
-    let p = &l.p;
-    let sc = p.m.scale;
-    let pay = if t.side == LONG { owed(t.n, t.x - p.bl, p.long_tip, sc) } else { owed(t.n, p.bs - t.x, p.short_tip, sc) };
-    hand_over_out(l, t, pay)
+    kpf_protocol::payoff::transfer_out(&l.p, l.value, t)
 }
 
 /// The hand-over of P3 and P7 (KpfPair.handOver) for a leaver owed `pay`.
 pub fn hand_over_out(l: &Live, t: &TransferSpec, pay: i64) -> TransferOut {
-    let p = &l.p;
-    // The entry price is kept (DESIGN 4.5a); the stayer's tag is cleared, the entrant's is et.
-    let mut part = p.rest_of(t.n);
-    let mut pay = pay;
-    let leaver = if t.side == LONG {
-        part.bl = t.nb;
-        part.long_key = t.ek;
-        part.tag_l = t.et;
-        (part.long_ask, part.long_min, part.long_tip) = (0, 0, 0);
-        p.long_key
-    } else {
-        part.bs = t.nb;
-        part.short_key = t.ek;
-        part.tag_s = t.et;
-        (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
-        p.short_key
-    };
-    let mut keep = l.value as i64 - p.range_of(t.n);
-    if pay < DUST {
-        keep += pay;
-        pay = 0;
-    }
-    let pr = part.range_of(t.n);
-    if t.n == p.size {
-        TransferOut { pay, leaver, part_value: (pr + p.m.carrier).max(pr + keep), part, rest: None }
-    } else {
-        let r = p.rest_of(p.size - t.n);
-        let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
-        TransferOut { pay, leaver, part_value: pr + p.m.carrier, part, rest: Some((r, rv)) }
-    }
+    kpf_protocol::payoff::hand_over_out(&l.p, l.value, t, pay)
 }
 
 /// P3: in 0 pair, 1 entrant (KpfOpen or direct taker), 2 F (KpfOpen case only). out 0 leaver, 1 entrant's
@@ -387,64 +287,8 @@ pub fn take_args(part: &Pair, side: i64, part_out: i64, n: i64, x: i64) -> Vec<A
 
 // ---------------------------------------------------------------- P4 close-versus-close
 
-#[derive(Clone, Debug)]
-pub struct CloseSpec {
-    pub n: i64,
-    pub x: i64,
-    /// The entry price written into P3: E(donor) <= e3 <= E(host) (DESIGN 4.5a).
-    pub e3: i64,
-}
-
-pub struct CloseOut {
-    pub host_pay: i64,
-    pub donor_pay: i64,
-    pub p3: Pair,
-    pub p3_value: i64,
-    pub host_rest: Option<(Pair, i64)>,
-    pub donor_rest: Option<(Pair, i64)>,
-}
-
 pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
-    let (hp, dp) = (&h.p, &d.p);
-    let sc = hp.m.scale;
-    let mut p3 = hp.rest_of(c.n);
-    p3.bl = dp.bl;
-    p3.entry = c.e3;
-    p3.long_key = dp.long_key;
-    (p3.long_ask, p3.long_min, p3.long_tip) = dp.long_window();
-    p3.tag_l = d.id;
-    let mut hpay = owed(c.n, c.x - hp.bl, hp.long_tip, sc);
-    let mut hkeep = h.value as i64 - hp.range_of(c.n);
-    if hpay < DUST {
-        hkeep += hpay;
-        hpay = 0;
-    }
-    let r3 = p3.range_of(c.n);
-    let (p3_value, host_rest) = if c.n == hp.size {
-        ((r3 + hp.m.carrier).max(r3 + hkeep), None)
-    } else {
-        let r = hp.rest_of(hp.size - c.n);
-        let rv = (r.range_of(r.size) + hp.m.carrier).max(hkeep);
-        (r3 + hp.m.carrier, Some((r, rv)))
-    };
-    let mut dpay = owed(c.n, dp.bs - c.x, dp.short_tip, sc);
-    let mut dkeep = d.value as i64 - dp.range_of(c.n);
-    let donor_rest = if c.n == dp.size {
-        dpay += dkeep;
-        if dpay < DUST {
-            dpay = 0;
-        }
-        None
-    } else {
-        if dpay < DUST {
-            dkeep += dpay;
-            dpay = 0;
-        }
-        let r = dp.rest_of(dp.size - c.n);
-        let rv = (r.range_of(r.size) + dp.m.carrier).max(dkeep);
-        Some((r, rv))
-    };
-    CloseOut { host_pay: hpay, donor_pay: dpay, p3, p3_value, host_rest, donor_rest }
+    kpf_protocol::payoff::close_out(&h.p, h.value, &d.p, d.value, d.id, c)
 }
 
 pub fn host_args(d: &Live, c: &CloseSpec, k: i64) -> Vec<Arg> {
@@ -485,45 +329,8 @@ pub fn close_draft(h: &Live, d: &Live, c: &CloseSpec, f: &Keypair, fn_: u32) -> 
 
 // ---------------------------------------------------------------- P4 mutual close
 
-pub struct MutualOut {
-    pub lp: i64,
-    pub sp: i64,
-    pub rest: Option<(Pair, i64)>,
-}
-
 pub fn mutual_out(l: &Live, n: i64, x: i64) -> MutualOut {
-    let p = &l.p;
-    let sc = p.m.scale;
-    let mut lp = owed(n, x - p.bl, p.long_tip, sc);
-    let mut sp = owed(n, p.bs - x, p.short_tip, sc);
-    let mut keep = l.value as i64 - p.range_of(n);
-    if n == p.size {
-        sp += keep;
-        if lp < DUST {
-            sp += lp;
-            lp = 0;
-        }
-        if sp < DUST {
-            lp += sp;
-            sp = 0;
-        }
-        if lp < DUST {
-            lp = 0;
-        }
-        MutualOut { lp, sp, rest: None }
-    } else {
-        if lp < DUST {
-            keep += lp;
-            lp = 0;
-        }
-        if sp < DUST {
-            keep += sp;
-            sp = 0;
-        }
-        let r = p.rest_of(p.size - n);
-        let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
-        MutualOut { lp, sp, rest: Some((r, rv)) }
-    }
+    kpf_protocol::payoff::mutual_out(&l.p, l.value, n, x)
 }
 
 /// T3': in 0 pair, 1 F. out 0 long, then the remainder if any, then F's change, then the short at M - 1.
@@ -548,18 +355,7 @@ pub fn mutual_draft(l: &Live, n: i64, x: i64, f: &Keypair, fn_: u32) -> Draft {
 
 /// (long payout, short payout) of P8, with the dust rule.
 pub fn idle_out(l: &Live) -> (i64, i64) {
-    let p = &l.p;
-    let e = p.entry.clamp(p.bl, p.bs);
-    let v = l.value as i64;
-    let lp = q(p.size, e - p.bl, p.m.scale, 0);
-    let sp = v - lp;
-    if lp < DUST {
-        (0, v)
-    } else if sp < DUST {
-        (v, 0)
-    } else {
-        (lp, sp)
-    }
+    kpf_protocol::payoff::idle_out(&l.p, l.value)
 }
 
 /// P8: in 0 pair (age idleDaa), 1 F. out 0 long, 1 change, 2 short.

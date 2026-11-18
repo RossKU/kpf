@@ -1,0 +1,586 @@
+//! State of the two contracts: structs, canonical encoding, decoding and validation.
+//!
+//! The state of an instance is a fixed sequence of canonical pushes, in the order of the contract's fields
+//! (DESIGN 4.2): an integer is `0x08` + 8 bytes (script number, magnitude little-endian, sign in the top bit), a key
+//! or hash is `0x20` + 32 bytes. [`Pair::decode_redeem`] and [`Open::decode_redeem`] take a whole redeem script, check
+//! it against the pinned template and decode the state; `encode(decode(x)) == x` holds for every accepted script.
+//!
+//! `validate` applies the bounds the contracts enforce at their entries (`checkPair`, `checkMarket`, DESIGN 5), so a
+//! builder refuses a state its contract would refuse. They are necessary, not sufficient: some contract checks depend
+//! on the transaction.
+
+use kaspa_consensus_core::tx::ScriptPublicKey;
+use kaspa_consensus_core::Hash;
+use kaspa_txscript::pay_to_script_hash_script;
+use serde_json::{json, Value};
+use silverscript_abi::{ArtifactValue, SilAbiArtifact};
+
+use crate::artifacts::{self, kob_consts, open_template, pair_template};
+use crate::error::{invalid, to_hex, Error, Result};
+use crate::payoff::q;
+
+pub const LONG: i64 = 1;
+pub const SHORT: i64 = 2;
+
+/// Contract bounds (DESIGN 5; the constants of `KpfPair.sil` and `KpfOpen.sil`).
+pub const SCALE_MAX: i64 = 1_000_000_000;
+pub const PRICE_CAP: i64 = 100_000_000_000_000;
+pub const K_MAX: i64 = 100_000;
+pub const MMR_CAP: i64 = 5_000;
+pub const BPS: i64 = 10_000;
+pub const CSV_LIMIT: i64 = 4_294_967_296;
+pub const LOCK_TIME_THRESHOLD: i64 = 500_000_000_000;
+/// 90 days of DAA at 10 per second: an order untouched this long is refundable by anyone.
+pub const MAX_IDLE: u64 = 77_760_000;
+/// A plain payout below 0.02 KAS is not created (DESIGN 4.6).
+pub const PLAIN_DUST: i64 = 2_000_000;
+
+pub const ZERO: Hash = Hash::from_bytes([0; 32]);
+
+/// A state field: an 8-byte int or a 32-byte value.
+enum F {
+    I(i64),
+    B([u8; 32]),
+}
+
+/// Script-number form of an int padded to 8 bytes (what 8-byte state pushes and `byte[8]` arguments carry).
+pub fn sm8(x: i64) -> [u8; 8] {
+    let mut b = x.unsigned_abs().to_le_bytes();
+    if x < 0 {
+        b[7] |= 0x80;
+    }
+    b
+}
+
+fn encode(fields: &[F]) -> Vec<u8> {
+    let mut v = Vec::new();
+    for f in fields {
+        match f {
+            F::I(x) => {
+                v.push(0x08);
+                v.extend_from_slice(&sm8(*x));
+            }
+            F::B(b) => {
+                v.push(0x20);
+                v.extend_from_slice(b);
+            }
+        }
+    }
+    v
+}
+
+fn to_args(fields: &[F]) -> Vec<ArtifactValue> {
+    fields
+        .iter()
+        .map(|f| match f {
+            F::I(x) => ArtifactValue::Int(*x),
+            F::B(b) => ArtifactValue::Bytes(b.to_vec()),
+        })
+        .collect()
+}
+
+struct Cursor<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn int(&mut self) -> Result<i64> {
+        let s = self.b.get(self.at..self.at + 9).ok_or_else(|| Error::Decode("state ends inside an integer".into()))?;
+        if s[0] != 0x08 {
+            return Err(Error::Decode(format!("byte {}: expected an 8-byte integer push (0x08), found {:#04x}", self.at, s[0])));
+        }
+        let mut m = [0u8; 8];
+        m.copy_from_slice(&s[1..9]);
+        let neg = m[7] & 0x80 != 0;
+        m[7] &= 0x7f;
+        let mag = u64::from_le_bytes(m);
+        if mag > i64::MAX as u64 || (neg && mag == 0) {
+            return Err(Error::Decode(format!("byte {}: integer is not in canonical form", self.at)));
+        }
+        self.at += 9;
+        Ok(if neg { -(mag as i64) } else { mag as i64 })
+    }
+    fn b32(&mut self) -> Result<[u8; 32]> {
+        let s = self.b.get(self.at..self.at + 33).ok_or_else(|| Error::Decode("state ends inside a 32-byte value".into()))?;
+        if s[0] != 0x20 {
+            return Err(Error::Decode(format!("byte {}: expected a 32-byte push (0x20), found {:#04x}", self.at, s[0])));
+        }
+        self.at += 33;
+        Ok(s[1..33].try_into().expect("32 bytes"))
+    }
+    fn hash(&mut self) -> Result<Hash> {
+        Ok(Hash::from_bytes(self.b32()?))
+    }
+    fn done(&self) -> Result<()> {
+        if self.at != self.b.len() {
+            return Err(Error::Decode(format!("{} trailing state bytes", self.b.len() - self.at)));
+        }
+        Ok(())
+    }
+}
+
+fn check_key(key: &[u8; 32], what: &str) -> Result<()> {
+    secp256k1::XOnlyPublicKey::from_slice(key).map(|_| ()).map_err(|_| Error::Invalid(format!("{what} is not a valid x-only public key")))
+}
+
+// ---------------------------------------------------------------- market
+
+/// The market block (state bytes 0..207), identical in every pair and open order of one market (DESIGN 4.2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Market {
+    pub token_cov_id: Hash,
+    pub token_tpl_hash: Hash,
+    pub ext: Hash,
+    pub tpl_prefix_len: i64,
+    pub tpl_suffix_len: i64,
+    pub scale: i64,
+    pub mmr_bps: i64,
+    pub k_bps: i64,
+    pub min_rest_daa: i64,
+    pub liq_fee_bps: i64,
+    pub keeper_fee_min: i64,
+    pub min_size: i64,
+    pub carrier: i64,
+    pub idle_daa: i64,
+    pub price_max: i64,
+}
+
+impl Market {
+    fn fields(&self) -> Vec<F> {
+        vec![
+            F::B(self.token_cov_id.as_bytes()),
+            F::B(self.token_tpl_hash.as_bytes()),
+            F::B(self.ext.as_bytes()),
+            F::I(self.tpl_prefix_len),
+            F::I(self.tpl_suffix_len),
+            F::I(self.scale),
+            F::I(self.mmr_bps),
+            F::I(self.k_bps),
+            F::I(self.min_rest_daa),
+            F::I(self.liq_fee_bps),
+            F::I(self.keeper_fee_min),
+            F::I(self.min_size),
+            F::I(self.carrier),
+            F::I(self.idle_daa),
+            F::I(self.price_max),
+        ]
+    }
+
+    fn read(c: &mut Cursor) -> Result<Market> {
+        Ok(Market {
+            token_cov_id: c.hash()?,
+            token_tpl_hash: c.hash()?,
+            ext: c.hash()?,
+            tpl_prefix_len: c.int()?,
+            tpl_suffix_len: c.int()?,
+            scale: c.int()?,
+            mmr_bps: c.int()?,
+            k_bps: c.int()?,
+            min_rest_daa: c.int()?,
+            liq_fee_bps: c.int()?,
+            keeper_fee_min: c.int()?,
+            min_size: c.int()?,
+            carrier: c.int()?,
+            idle_daa: c.int()?,
+            price_max: c.int()?,
+        })
+    }
+
+    /// The bounds `KpfOpen.checkMarket` and `KpfPair.checkPair` / `onEvidence` enforce on the market block.
+    pub fn validate(&self) -> Result<()> {
+        let req = |ok: bool, what: &str| if ok { Ok(()) } else { invalid(format!("market: {what}")) };
+        req(self.scale > 0 && self.scale <= SCALE_MAX, "scale must be in 1..=10^9")?;
+        req(self.price_max > 0 && self.price_max <= PRICE_CAP, "priceMax must be in 1..=10^14")?;
+        req(self.carrier >= 0, "carrier must be >= 0")?;
+        req(self.min_size > 0, "minSize must be > 0")?;
+        req(self.idle_daa >= 0 && self.idle_daa < CSV_LIMIT, "idleDaa must be in 0..2^32")?;
+        req(self.k_bps > 0 && self.k_bps <= K_MAX, "kBps must be in 1..=10^5")?;
+        req(self.mmr_bps >= 0 && self.mmr_bps < MMR_CAP, "mmrBps must be in 0..5000")?;
+        req(self.liq_fee_bps >= 0 && self.liq_fee_bps <= BPS, "liqFeeBps must be in 0..=10^4")?;
+        req(self.keeper_fee_min >= 0, "keeperFeeMin must be >= 0")?;
+        req(self.min_rest_daa >= 0 && self.min_rest_daa < LOCK_TIME_THRESHOLD, "minRestDaa must be in 0..5*10^11")?;
+        req(self.tpl_prefix_len >= 0 && self.tpl_suffix_len >= 0, "token template cut must be >= 0")?;
+        Ok(())
+    }
+
+    /// Reads the market block from its JSON form (the keys of [`Market::to_json`]).
+    pub fn from_json(v: &Value) -> Result<Market> {
+        let int = |k: &str| -> Result<i64> {
+            v.get(k).and_then(Value::as_i64).ok_or_else(|| Error::Invalid(format!("market: `{k}` is missing or not an integer")))
+        };
+        let hash = |k: &str| -> Result<Hash> {
+            let s = v.get(k).and_then(Value::as_str).ok_or_else(|| Error::Invalid(format!("market: `{k}` is missing or not a hex string")))?;
+            Ok(Hash::from_bytes(crate::error::hex32(s).map_err(|e| Error::Invalid(format!("market: `{k}`: {e}")))?))
+        };
+        let m = Market {
+            token_cov_id: hash("tokenCovId")?,
+            token_tpl_hash: hash("tokenTplHash")?,
+            ext: hash("extensionCommitment")?,
+            tpl_prefix_len: int("tplPrefixLen")?,
+            tpl_suffix_len: int("tplSuffixLen")?,
+            scale: int("scale")?,
+            mmr_bps: int("mmrBps")?,
+            k_bps: int("kBps")?,
+            min_rest_daa: int("minRestDaa")?,
+            liq_fee_bps: int("liqFeeBps")?,
+            keeper_fee_min: int("keeperFeeMin")?,
+            min_size: int("minSize")?,
+            carrier: int("carrier")?,
+            idle_daa: int("idleDaa")?,
+            price_max: int("priceMax")?,
+        };
+        m.validate()?;
+        Ok(m)
+    }
+
+    /// The largest `size / scale` the contracts accept: `(INT_MAX - carrier) / priceMax - 1` whole tokens.
+    pub fn max_whole_tokens(&self) -> i64 {
+        (i64::MAX - self.carrier) / self.price_max - 1
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "tokenCovId": to_hex(&self.token_cov_id.as_bytes()), "tokenTplHash": to_hex(&self.token_tpl_hash.as_bytes()),
+            "extensionCommitment": to_hex(&self.ext.as_bytes()), "tplPrefixLen": self.tpl_prefix_len, "tplSuffixLen": self.tpl_suffix_len,
+            "scale": self.scale, "mmrBps": self.mmr_bps, "kBps": self.k_bps, "minRestDaa": self.min_rest_daa,
+            "liqFeeBps": self.liq_fee_bps, "keeperFeeMin": self.keeper_fee_min, "minSize": self.min_size,
+            "carrier": self.carrier, "idleDaa": self.idle_daa, "priceMax": self.price_max,
+        })
+    }
+}
+
+// ---------------------------------------------------------------- KpfPair
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pair {
+    pub m: Market,
+    pub size: i64,
+    pub bl: i64,
+    pub bs: i64,
+    pub entry: i64,
+    pub long_key: [u8; 32],
+    pub short_key: [u8; 32],
+    pub long_ask: i64,
+    pub long_min: i64,
+    pub long_tip: i64,
+    pub short_bid: i64,
+    pub short_min: i64,
+    pub short_tip: i64,
+    pub tag_l: Hash,
+    pub tag_s: Hash,
+}
+
+impl Pair {
+    fn fields(&self) -> Vec<F> {
+        let mut f = self.m.fields();
+        f.extend([
+            F::I(self.size),
+            F::I(self.bl),
+            F::I(self.bs),
+            F::I(self.entry),
+            F::B(self.long_key),
+            F::B(self.short_key),
+            F::I(self.long_ask),
+            F::I(self.long_min),
+            F::I(self.long_tip),
+            F::I(self.short_bid),
+            F::I(self.short_min),
+            F::I(self.short_tip),
+            F::B(self.tag_l.as_bytes()),
+            F::B(self.tag_s.as_bytes()),
+        ]);
+        f
+    }
+
+    /// The canonical encoded state (429 bytes).
+    pub fn state_bytes(&self) -> Vec<u8> {
+        encode(&self.fields())
+    }
+
+    /// The constructor arguments the compiler takes: the pinned KOB evidence constants, then the state.
+    pub fn ctor(&self) -> Vec<ArtifactValue> {
+        self.ctor_with(&kob_consts())
+    }
+
+    /// [`Pair::ctor`] with explicit KOB constants (the artifact generator, before any are pinned).
+    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
+        let mut a = vec![
+            ArtifactValue::Bytes(k.ask_tpl.to_vec()),
+            ArtifactValue::Int(k.ask_pre),
+            ArtifactValue::Int(k.ask_suf),
+            ArtifactValue::Bytes(k.bid_tpl.to_vec()),
+            ArtifactValue::Int(k.bid_pre),
+            ArtifactValue::Int(k.bid_suf),
+        ];
+        a.extend(to_args(&self.fields()));
+        a
+    }
+
+    /// The redeem script of this instance.
+    pub fn redeem(&self) -> Vec<u8> {
+        pair_template().redeem(&self.state_bytes())
+    }
+
+    /// The artifact of this instance (the pinned artifact with this state spliced in).
+    pub fn art(&self) -> SilAbiArtifact {
+        artifacts::splice(artifacts::pair_base(), &self.state_bytes())
+    }
+
+    /// The P2SH script public key of this instance.
+    pub fn spk(&self) -> ScriptPublicKey {
+        pay_to_script_hash_script(&self.redeem())
+    }
+
+    /// Decodes the state of a `KpfPair` redeem script (checked against the pinned template).
+    pub fn decode_redeem(redeem: &[u8]) -> Result<Pair> {
+        Pair::decode_state(pair_template().state_of(redeem)?)
+    }
+
+    /// Decodes an encoded state. Rejects a state that does not re-encode to the same bytes.
+    pub fn decode_state(state: &[u8]) -> Result<Pair> {
+        let mut c = Cursor { b: state, at: 0 };
+        let m = Market::read(&mut c)?;
+        let p = Pair {
+            m,
+            size: c.int()?,
+            bl: c.int()?,
+            bs: c.int()?,
+            entry: c.int()?,
+            long_key: c.b32()?,
+            short_key: c.b32()?,
+            long_ask: c.int()?,
+            long_min: c.int()?,
+            long_tip: c.int()?,
+            short_bid: c.int()?,
+            short_min: c.int()?,
+            short_tip: c.int()?,
+            tag_l: c.hash()?,
+            tag_s: c.hash()?,
+        };
+        c.done()?;
+        Ok(p)
+    }
+
+    /// `checkPair` and the field bounds of the entries (DESIGN 5), plus valid keys.
+    pub fn validate(&self) -> Result<()> {
+        self.m.validate()?;
+        let req = |ok: bool, what: &str| if ok { Ok(()) } else { invalid(format!("pair: {what}")) };
+        req(self.size > 0, "size must be > 0")?;
+        req(self.size / self.m.scale <= self.m.max_whole_tokens(), "size exceeds the 63-bit bound of the contracts")?;
+        req(self.bl >= 0 && self.bl < self.bs && self.bs <= self.m.price_max, "need 0 <= bl < bs <= priceMax")?;
+        req(self.entry >= 0 && self.entry <= self.m.price_max, "entry must be in 0..=priceMax")?;
+        for (n, v) in [("longAsk", self.long_ask), ("shortBid", self.short_bid)] {
+            req(v >= 0 && v <= self.m.price_max, &format!("{n} must be in 0..=priceMax"))?;
+        }
+        for (n, v) in [("longMin", self.long_min), ("longTip", self.long_tip), ("shortMin", self.short_min), ("shortTip", self.short_tip)] {
+            req(v >= 0, &format!("{n} must be >= 0"))?;
+        }
+        check_key(&self.long_key, "longKey")?;
+        check_key(&self.short_key, "shortKey")?;
+        Ok(())
+    }
+
+    /// q(s, bs - bl) + C: what every output of this pair must hold.
+    pub fn floor(&self) -> i64 {
+        q(self.size, self.bs - self.bl, self.m.scale, 0) + self.m.carrier
+    }
+
+    pub fn with_size(&self, s: i64) -> Pair {
+        let mut p = self.clone();
+        p.size = s;
+        p
+    }
+    /// This state with both tags cleared: what every continuation that hands over no side carries (DESIGN 4.4).
+    pub fn cleared(&self) -> Pair {
+        let mut p = self.clone();
+        p.tag_l = Hash::default();
+        p.tag_s = Hash::default();
+        p
+    }
+    /// The remainder of a split: size s, tags cleared, every other field kept.
+    pub fn rest_of(&self, s: i64) -> Pair {
+        self.with_size(s).cleared()
+    }
+    /// q(n, bs - bl), rounded down.
+    pub fn range_of(&self, n: i64) -> i64 {
+        q(n, self.bs - self.bl, self.m.scale, 0)
+    }
+    /// Long payout at price p (DESIGN 3.1), without the carrier.
+    pub fn long_at(&self, p: i64) -> i64 {
+        let c = p.clamp(self.bl, self.bs);
+        q(self.size, c - self.bl, self.m.scale, 0)
+    }
+    pub fn short_at(&self, p: i64) -> i64 {
+        let c = p.clamp(self.bl, self.bs);
+        q(self.size, self.bs - c, self.m.scale, 0)
+    }
+    pub fn long_window(&self) -> (i64, i64, i64) {
+        (self.long_ask, self.long_min, self.long_tip)
+    }
+    pub fn short_window(&self) -> (i64, i64, i64) {
+        (self.short_bid, self.short_min, self.short_tip)
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "contract": "KpfPair", "market": self.m.to_json(), "size": self.size, "bl": self.bl, "bs": self.bs, "entry": self.entry,
+            "longKey": to_hex(&self.long_key), "shortKey": to_hex(&self.short_key),
+            "longListing": {"ask": self.long_ask, "minPart": self.long_min, "tip": self.long_tip},
+            "shortListing": {"bid": self.short_bid, "minPart": self.short_min, "tip": self.short_tip},
+            "tagL": to_hex(&self.tag_l.as_bytes()), "tagS": to_hex(&self.tag_s.as_bytes()),
+            "floorValue": self.floor(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------- KpfOpen
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Open {
+    pub m: Market,
+    pub side: i64,
+    pub owner: [u8; 32],
+    pub size_left: i64,
+    pub limit: i64,
+    pub my_rate: i64,
+    pub min_counter_rate: i64,
+    pub min_fill: i64,
+    pub tip: i64,
+    pub active_from: i64,
+    pub expiry_daa: i64,
+}
+
+impl Open {
+    fn fields(&self) -> Vec<F> {
+        let mut f = self.m.fields();
+        f.extend([
+            F::I(self.side),
+            F::B(self.owner),
+            F::I(self.size_left),
+            F::I(self.limit),
+            F::I(self.my_rate),
+            F::I(self.min_counter_rate),
+            F::I(self.min_fill),
+            F::I(self.tip),
+            F::I(self.active_from),
+            F::I(self.expiry_daa),
+        ]);
+        f
+    }
+
+    /// The canonical encoded state (321 bytes).
+    pub fn state_bytes(&self) -> Vec<u8> {
+        encode(&self.fields())
+    }
+
+    /// The constructor arguments: the pair template hash, then the state.
+    pub fn ctor(&self) -> Vec<ArtifactValue> {
+        self.ctor_with(pair_template().hash)
+    }
+
+    /// [`Open::ctor`] with an explicit pair template hash.
+    pub fn ctor_with(&self, pair_tpl: [u8; 32]) -> Vec<ArtifactValue> {
+        let mut a = vec![ArtifactValue::Bytes(pair_tpl.to_vec())];
+        a.extend(to_args(&self.fields()));
+        a
+    }
+
+    pub fn redeem(&self) -> Vec<u8> {
+        open_template().redeem(&self.state_bytes())
+    }
+
+    pub fn art(&self) -> SilAbiArtifact {
+        artifacts::splice(artifacts::open_base(), &self.state_bytes())
+    }
+
+    pub fn spk(&self) -> ScriptPublicKey {
+        pay_to_script_hash_script(&self.redeem())
+    }
+
+    pub fn decode_redeem(redeem: &[u8]) -> Result<Open> {
+        Open::decode_state(open_template().state_of(redeem)?)
+    }
+
+    pub fn decode_state(state: &[u8]) -> Result<Open> {
+        let mut c = Cursor { b: state, at: 0 };
+        let m = Market::read(&mut c)?;
+        let o = Open {
+            m,
+            side: c.int()?,
+            owner: c.b32()?,
+            size_left: c.int()?,
+            limit: c.int()?,
+            my_rate: c.int()?,
+            min_counter_rate: c.int()?,
+            min_fill: c.int()?,
+            tip: c.int()?,
+            active_from: c.int()?,
+            expiry_daa: c.int()?,
+        };
+        c.done()?;
+        Ok(o)
+    }
+
+    /// `checkMarket` and the order bounds a fill or take relies on.
+    pub fn validate(&self) -> Result<()> {
+        self.m.validate()?;
+        let req = |ok: bool, what: &str| if ok { Ok(()) } else { invalid(format!("order: {what}")) };
+        req(self.side == LONG || self.side == SHORT, "side must be 1 (long) or 2 (short)")?;
+        check_key(&self.owner, "owner")?;
+        req(self.my_rate > 0, "myRate must be > 0")?;
+        req(self.min_counter_rate >= 0, "minCounterRate must be >= 0")?;
+        req(self.tip >= 0, "tip must be >= 0")?;
+        req(self.min_fill >= 0, "minFill must be >= 0")?;
+        req(self.size_left >= self.m.min_size, "sizeLeft must be >= minSize")?;
+        req(self.size_left / self.m.scale <= self.m.max_whole_tokens(), "sizeLeft exceeds the 63-bit bound of the contracts")?;
+        req(self.limit >= 0 && self.limit <= self.m.price_max, "limit must be in 0..=priceMax")?;
+        req(self.my_rate <= self.m.price_max, "myRate must be <= priceMax")?;
+        req(self.active_from >= 0 && self.expiry_daa >= 0, "activeFrom and expiryDaa must be >= 0")?;
+        Ok(())
+    }
+
+    /// This order in another market.
+    pub fn with_market(mut self, m: Market) -> Open {
+        self.m = m;
+        self
+    }
+
+    /// Escrow of DESIGN 4.2: q(sizeLeft, myRate + tip) rounded up, plus the pair carrier a fill funds and the order's
+    /// own carrier.
+    pub fn escrow(&self) -> i64 {
+        q(self.size_left, self.my_rate + self.tip, self.m.scale, self.m.scale - 1) + 2 * self.m.carrier
+    }
+
+    /// What a fill or take of `n` may spend from the escrow: its margin and tip for n (rounded down) and one carrier.
+    pub fn spend_for(&self, n: i64) -> i64 {
+        q(n, self.my_rate + self.tip, self.m.scale, 0) + self.m.carrier
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "contract": "KpfOpen", "market": self.m.to_json(), "side": if self.side == LONG { "long" } else { "short" },
+            "owner": to_hex(&self.owner), "sizeLeft": self.size_left, "limit": self.limit, "myRate": self.my_rate,
+            "minCounterRate": self.min_counter_rate, "minFill": self.min_fill, "tip": self.tip,
+            "activeFrom": self.active_from, "expiryDaa": self.expiry_daa, "escrowValue": self.escrow(),
+        })
+    }
+}
+
+/// Which contract a redeem script is an instance of, decoded.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Decoded {
+    Pair(Pair),
+    Open(Open),
+}
+
+/// Decodes a redeem script as a pair, else as an order.
+pub fn decode_redeem(redeem: &[u8]) -> Result<Decoded> {
+    match Pair::decode_redeem(redeem) {
+        Ok(p) => Ok(Decoded::Pair(p)),
+        Err(pe) => match Open::decode_redeem(redeem) {
+            Ok(o) => Ok(Decoded::Open(o)),
+            Err(oe) => Err(Error::Decode(format!("not a KpfPair ({pe}) and not a KpfOpen ({oe})"))),
+        },
+    }
+}

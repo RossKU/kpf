@@ -1,0 +1,40 @@
+{
+  "compiler": "silverscript-lang (vendor/kob @ ed16148, SilverScript v1.0.0), CompileOptions::default(); 0.1.0",
+  "format": "kpf-artifacts/1",
+  "kob_ask": {
+    "prefix_len": 1,
+    "source": "contracts/orders/KobAsk.sil",
+    "source_sha256": "e3b7856a382607f371a8aa328282259ff137971b05a588b2a118af86c4178178",
+    "suffix_len": 1407,
+    "template_hash": "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"
+  },
+  "kob_bid": {
+    "prefix_len": 1,
+    "source": "contracts/orders/KobBid.sil",
+    "source_sha256": "e0f16161f8014a3f341a26b9d96fbc830c2f99fb1f4a841cf415a4604c96c66e",
+    "suffix_len": 1343,
+    "template_hash": "dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef"
+  },
+  "kob_commit": "ed16148",
+  "kpf_open": {
+    "artifact": "KpfOpen.json",
+    "artifact_sha256": "ff48d02c00d32f73213e8f67fd821287475fc25d661c09c44cb311d14c6f0a8c",
+    "prefix_len": 1,
+    "source": "contracts/KpfOpen.sil",
+    "source_sha256": "955dd4d64c02ccd3e8a9e4b0c0a6992a7649b3f95d4212375b5dace3e1d7d855",
+    "state_len": 321,
+    "suffix_len": 2312,
+    "template_hash": "f61dd656349aa2279600595cb338de5e3b99807267702cc080c55897a11b4e03"
+  },
+  "kpf_pair": {
+    "artifact": "KpfPair.json",
+    "artifact_sha256": "0e927d67c6869fa0818bbe827164c94d47b0443cf8e9cf86e6c04ba9a5900875",
+    "prefix_len": 1,
+    "source": "contracts/KpfPair.sil",
+    "source_sha256": "af47b338568ea613af1fc7d7d136ce43354aa42917bc4e56e2ac9b33b18f955a",
+    "state_len": 429,
+    "suffix_len": 11137,
+    "template_hash": "785bea8298d15fee62496009a1e57bb5f6ce28430d242bc938a46fad5f65a5f3"
+  },
+  "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write"
+}

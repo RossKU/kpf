@@ -1,0 +1,24 @@
+[package]
+name = "kpf-cli"
+description = "KPF command line: keys, addresses, state inspection, quotes and transaction builders for testnet-10"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "kpf_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kpf"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kpf-protocol.workspace = true
+secp256k1.workspace = true
+serde_json.workspace = true
+# Plain ws:// wRPC to a node the user names; no TLS code is linked.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }

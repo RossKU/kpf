@@ -1,0 +1,17 @@
+[package]
+name = "kpf-artifacts"
+description = "Regenerates and checks the pinned compiled artifacts of KpfPair and KpfOpen (the only crate that links the SilverScript compiler)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake3.workspace = true
+kaspa-consensus-core.workspace = true
+kpf-protocol.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+silverscript-abi.workspace = true
+silverscript-lang.workspace = true

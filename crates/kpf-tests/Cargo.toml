@@ -12,5 +12,6 @@ kaspa-consensus-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-txscript-errors.workspace = true
 secp256k1.workspace = true
+kpf-protocol.workspace = true
 silverscript-abi.workspace = true
 silverscript-lang.workspace = true
