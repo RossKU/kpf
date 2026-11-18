@@ -72,6 +72,39 @@ impl Live {
     }
 }
 
+/// A live KpfPending UTXO (DESIGN 4.5d).
+#[derive(Clone, Debug)]
+pub struct LivePend {
+    pub w: Pending,
+    pub value: u64,
+    pub id: Hash,
+    pub op: TransactionOutpoint,
+    /// The UTXO's DAA score P: the clock of its counter-evidence.
+    pub daa: u64,
+}
+
+impl LivePend {
+    pub fn at(mut self, daa: u64) -> LivePend {
+        self.daa = daa;
+        self
+    }
+}
+
+pub fn pending_input(l: &LivePend, entry: &'static str, args: Vec<Arg>) -> In {
+    In { outpoint: l.op, utxo: UtxoEntry::new(l.value, p2sh(&l.w.art()), l.daa, false, Some(l.id)), spend: Spend::Signed { art: l.w.art(), entry, args } }
+}
+
+/// The pending parts an accepted draft creates, as live UTXOs (DAA score 0; set it with `at`).
+pub fn live_pendings(tx: &Transaction, d: &Draft) -> Vec<LivePend> {
+    d.pendings
+        .iter()
+        .map(|(idx, w)| {
+            let (op, u) = utxo_of(tx, *idx);
+            LivePend { w: w.clone(), value: u.amount, id: u.covenant_id.expect("pending output has an id"), op, daa: u.block_daa_score }
+        })
+        .collect()
+}
+
 /// A live KpfOpen UTXO.
 #[derive(Clone, Debug)]
 pub struct LiveOpen {
@@ -97,13 +130,15 @@ pub struct Draft {
     pub change: Option<usize>,
     /// The KpfPair states written to outputs (for X6 bookkeeping).
     pub pairs: Vec<(usize, Pair)>,
+    /// The KpfPending parts written to outputs (DESIGN 4.5d).
+    pub pendings: Vec<(usize, Pending)>,
     /// The KpfOpen continuations written to outputs.
     pub opens: Vec<(usize, Open)>,
 }
 
 impl Draft {
     pub fn new(ins: Vec<In>, outs: Vec<TransactionOutput>, change: Option<usize>) -> Draft {
-        Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change, pairs: vec![], opens: vec![] }
+        Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change, pairs: vec![], pendings: vec![], opens: vec![] }
     }
 
     pub fn build(&self) -> (Transaction, Vec<UtxoEntry>) {

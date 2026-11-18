@@ -404,7 +404,7 @@ fn p4_third_party_pair_cannot_be_the_re_pair_target() {
         out(0, p2pk_spk(&taker), None),
     ];
     // Both hand-overs wait for their pair's rate limit (DESIGN 4.5c).
-    let dr = Draft { ins, outs, lock: ql.handover_from().max(d.handover_from()), seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], opens: vec![] };
+    let dr = Draft { ins, outs, lock: ql.handover_from().max(d.handover_from()), seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], pendings: vec![], opens: vec![] };
     // The honest part (tagL = 0): Q accepts its own transfer, the donor finds no hand-over to it.
     refused_only(&dr, 1, &[0]);
     // The stale tag copied into the part: the donor alone would accept; Q refuses.
@@ -430,7 +430,7 @@ fn p4_one_p3_cannot_be_claimed_twice() {
         ins.insert(2, pair_input(d2, "closeDonor", donor_args(&h, &cs(n), 3)));
         let mut outs = base.outs.clone();
         outs.insert(2, out(base.outs[1].value, p2pk_x(&d2.p.short_key), None));
-        let mut dr = Draft { ins, outs, lock: base.lock, seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], opens: vec![] };
+        let mut dr = Draft { ins, outs, lock: base.lock, seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], pendings: vec![], opens: vec![] };
         let mut a = dr.args(1);
         a[3] = iv(3);
         dr.set_args(1, a);
@@ -532,7 +532,7 @@ fn p4_mutual_close_payouts_slots_and_sizes() {
     let mo = mutual_out(&live_as(&crossing(&k), H_ID, 10), 1_000_000_000, X);
     let ins = vec![pair_input(&l, "mutualClose", vec![iv(1_000_000_000), iv(X)]), funder(&k.f, 3, F_FUNDS)];
     let outs = vec![out(mo.lp as u64, p2pk_spk(&k.l1), None), out(mo.sp as u64, p2pk_spk(&k.s1), None)];
-    first_refused(&Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: None, pairs: vec![], opens: vec![] });
+    first_refused(&Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: None, pairs: vec![], pendings: vec![], opens: vec![] });
     // Below a listing minimum; a remainder below minSize.
     first_refused(&md(&l, 99_999_999, X, &k));
     first_refused(&md(&l, 999_999_999, X, &k));

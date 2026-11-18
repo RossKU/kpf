@@ -11,6 +11,10 @@
 //!   - KpfOpen.fill and take check the evidence parameters with the pair's bounds (F4).
 //! It also re-derives the stale-tag double claim of slice 1b against every entry, and records the review's three
 //! unproven attacks.
+//!
+//! Premise changed by DESIGN 4.5d: the evidence entries propose; their pair outputs are the remainders, and the pair
+//! states of the second step (the restored, cured and forfeited parts) join every check of "every entry" in place of
+//! the P7 part. The fee is read from the pending part and the finalize.
 
 mod common;
 mod kpf;
@@ -295,11 +299,15 @@ fn every_entry() -> Vec<(&'static str, Draft, Vec<(i64, Hash)>)> {
         v.push(("P5 short", ev_draft(&[leg(Act::Close { side: SHORT, signer: sk() })], &Evidence::ask(1_100_000_000, n), &fk(), 7), vec![]));
         v.push(("P6 long", ev_draft(&[leg(Act::Liq { side: LONG })], &Evidence::ask(LIQ_ASK, n), &fk(), 8), vec![]));
         v.push(("P6 short", ev_draft(&[leg(Act::Liq { side: SHORT })], &Evidence::bid(LIQ_BID, n), &fk(), 9), vec![]));
-        let p7l = Act::LiqTransfer { side: LONG, x: 950_000_000, open: o_long.clone(), k: 0 };
-        v.push(("P7 long", ev_draft(&[leg(p7l)], &Evidence::ask(LIQ_ASK, n), &fk(), 10), vec![(LONG, L_ID)]));
-        let p7s = Act::LiqTransfer { side: SHORT, x: 1_140_000_000, open: o_short.clone(), k: 1 };
-        v.push(("P7 short", ev_draft(&[leg(p7s)], &Evidence::bid(LIQ_BID, n), &fk(), 11), vec![(SHORT, o_short.id)]));
+        // The second step (DESIGN 4.5d): the restored, cured and forfeited parts.
+        let w = pend(&leg(Act::Liq { side: LONG }), LIQ_ASK);
+        v.push(("challenge (restore)", ch_draft(&[w.clone()], &Evidence::bid(966_315_790, n), &fk(), 10), vec![]));
+        v.push(("cure", cure_draft(&w, &lk(), &fk(), 11), vec![]));
+        v.push(("finalize (forfeit)", finalize_draft(&w, &fk(), 12), vec![]));
+        let ws = pend(&leg(Act::Liq { side: SHORT }), LIQ_BID);
+        v.push(("finalize (forfeit, short)", finalize_draft(&ws, &fk(), 13), vec![]));
     }
+    let _ = o_short;
     v
 }
 
@@ -335,8 +343,9 @@ fn holds_no_entry_copies_a_tag() {
 }
 
 /// holds_entry_kept_by_every_entry_but_t1_and_p4 (DESIGN 4.5a): every continuation of every entry other than
-/// P4's P3 keeps the input's E (transfer part and remainder, P7 part and remainder, every remainder, amend, add
-/// margin), and one written with another E (the old P3/P7 shape E = x included) is refused.
+/// P4's P3 keeps the input's E (transfer part and remainder, every remainder, amend, add margin, and the restored,
+/// cured and forfeited parts of DESIGN 4.5d), and one written with another E (the old P3 shape E = x included) is
+/// refused.
 #[test]
 fn holds_entry_kept_by_every_entry_but_t1_and_p4() {
     let old = listed();
@@ -381,7 +390,6 @@ fn holds_stale_tag_never_satisfies_a_live_claimer() {
     lo.size_left = 4 * N;
     let l1 = LiveOpen { value: lo.escrow() as u64, o: lo, id: L_ID, op: outpoint(0x51) };
     let x0 = qp.bl + l1.o.my_rate;
-    let short_ent = LiveOpen { value: short_order(&keypair(22)).escrow() as u64, o: short_order(&keypair(22)), id: Hash::from_bytes([0x73; 32]), op: outpoint(0x52) };
     let mut host = pair(&keypair(31), &keypair(32));
     (host.long_ask, host.long_min, host.long_tip) = (1_000_000_000, 0, 0);
     let host = live_at(&host, 0x42);
@@ -390,10 +398,13 @@ fn holds_stale_tag_never_satisfies_a_live_claimer() {
         ("amend", amend_draft(&q, &sk(), SHORT, (1_000_000_000, 0, 0), &fk(), 1), 0),
         ("addMargin", add_margin_draft(&q, &sk(), SHORT, 10_000_000), 0),
         ("transfer short", transfer_draft(&q, &TransferSpec { side: SHORT, n: HALF, x: 1_050_000_000, nb: 1_200_000_000, ek: xonly(&taker()), et: ZERO, k: 0 }, &Entrant::Direct(taker()), &fk(), 2), 0),
-        ("P5 short", ev_draft(&[leg(HALF, Act::Close { side: SHORT, signer: sk() })], &Evidence::ask(1_100_000_000, HALF), &fk(), 3), 1),
-        ("P6 short", ev_draft(&[leg(HALF, Act::Liq { side: SHORT })], &Evidence::bid(LIQ_BID, HALF), &fk(), 4), 1),
-        ("P7 short", ev_draft(&[leg(HALF, Act::LiqTransfer { side: SHORT, x: 1_140_000_000, open: short_ent, k: 0 })], &Evidence::bid(LIQ_BID, HALF), &fk(), 5), 0),
+        ("P5 short", ev_draft(&[leg(HALF, Act::Close { side: SHORT, signer: sk() })], &Evidence::ask(1_100_000_000, HALF), &fk(), 3), 0),
+        ("P6 short", ev_draft(&[leg(HALF, Act::Liq { side: SHORT })], &Evidence::bid(LIQ_BID, HALF), &fk(), 4), 0),
         ("P4 donor", close_draft(&host, &q, &CloseSpec { n: HALF, x: 1_020_000_000, e3: 1_000_000_000 }, &fk(), 6), 0),
+        // DESIGN 4.5d: the restored part of a refuted claim on Q's short, and the forfeited part of Q's short (both sides
+        // Q's long, which is exactly what L' would rebuild).
+        ("challenge (restore)", ch_draft(&[pend(&leg(HALF, Act::Liq { side: SHORT }), LIQ_BID)], &Evidence::ask(1_120_000_000, HALF), &fk(), 7), 0),
+        ("finalize (forfeit)", finalize_draft(&pend(&leg(HALF, Act::Liq { side: SHORT }), LIQ_BID), &fk(), 8), 0),
     ];
     let mut checked = 0;
     for (name, d, tail) in cases {
@@ -533,15 +544,22 @@ fn holds_fee_capped_at_the_maintenance_slice() {
         let l = live_at(&p, 0x61);
         let slice = slice_of(&p, n, LONG);
         assert!(fee_of(&p.m, n, a) > slice);
-        let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side: LONG } }], &Evidence::ask(a, n), &fk(), 12);
-        let tx = accept_d(&d);
-        let m = tx.outputs.len();
+        let g = PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side: LONG } };
+        let d = ev_draft(&[g.clone()], &Evidence::ask(a, n), &fk(), 12);
+        accept_d(&d);
+        assert_eq!(d.pendings[0].1.fee, slice);
+        // Finalize (DESIGN 4.5d): the winner keeps the forfeited part, the part less the slice (plus the carrier the
+        // proposer funded for a part), which is at least its payoff at T; nothing pays the loser.
+        let w = pend(&g, a);
+        let fd = finalize_draft(&w, &fk(), 13);
+        let tx = accept_d(&fd);
         let avail = if n == N { l.value as i64 } else { p.range_of(n) };
-        assert_eq!(tx.outputs[m - 1].value as i64, avail - slice, "the winner gets the part less the slice");
-        assert!(tx.outputs[m - 1].value as i64 >= winner_at_trigger(&p, n, LONG));
-        assert_eq!(tx.outputs[0].value, 0, "the loser gets nothing");
-        let mut x = d.clone();
-        x.outs[m - 1].value -= 1;
+        let got = fd.outs[1].value as i64 - (w.w.refund - w.w.bond);
+        assert_eq!(got, avail - slice, "the winner gets the part less the slice");
+        assert!(got >= winner_at_trigger(&p, n, LONG));
+        assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&p.long_key)), "the loser gets nothing");
+        let mut x = fd.clone();
+        x.outs[1].value -= 1;
         refused0(&x);
     }
 }
@@ -559,13 +577,16 @@ fn holds_fee_floor_never_takes_the_winner_below_its_trigger_payoff_in_pieces() {
     let mut winner = 0i64;
     for i in 0..5 {
         let n = MIN_SIZE;
-        let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side: LONG } }], &Evidence::ask(a, n), &fk(), 20 + i);
+        let g = PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side: LONG } };
+        let d = ev_draft(&[g.clone()], &Evidence::ask(a, n), &fk(), 20 + i);
         let tx = accept_d(&d);
-        let m = tx.outputs.len();
-        let got = tx.outputs[m - 1].value as i64;
+        let w = pend(&g, a);
+        let fd = finalize_draft(&w, &fk(), 40 + i);
+        let ftx = accept_d(&fd);
+        let got = fd.outs[1].value as i64 - (w.w.refund - w.w.bond);
         let avail = if i == 4 { l.value as i64 } else { p.range_of(n) };
         assert_eq!(got, avail - slice_of(&p, n, LONG), "piece {i}");
-        assert_eq!(tx.outputs[0].value, 0, "piece {i}: the loser gets nothing");
+        assert!(ftx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&p.long_key)), "piece {i}: the loser gets nothing");
         winner += got;
         let rest = live_pairs(&tx, &d);
         if rest.is_empty() {
@@ -598,15 +619,33 @@ fn bad_markets() -> Vec<(&'static str, Market)> {
     add("minRestDaa at the lock-time threshold", &|x| x.min_rest_daa = 500_000_000_000);
     // Review 3 (DESIGN 4.5c): the hand-over limit S + 4R is a lock time, so 4R must stay below the threshold.
     add("minRestDaa at a quarter of the lock-time threshold", &|x| x.min_rest_daa = 125_000_000_000);
+    // DESIGN 4.5d: the two-step parameters.
+    add("bondBps negative", &|x| x.bond_bps = -1);
+    add("bondBps above 10^4", &|x| x.bond_bps = 10_001);
+    add("bondMin negative", &|x| x.bond_min = -1);
+    add("bondMin above the KAS supply", &|x| x.bond_min = 2_900_000_000_000_000_001);
+    add("kcBps 0", &|x| x.kc_bps = 0);
+    add("kcBps above 10^5", &|x| x.kc_bps = 100_001);
+    add("gBps 0", &|x| x.g_bps = 0);
+    add("gBps 10^4", &|x| x.g_bps = 10_000);
+    add("challengeDaa below minRestDaa", &|x| x.challenge_daa = x.min_rest_daa - 1);
+    add("challengeDaa at 2^32", &|x| x.challenge_daa = 4_294_967_296);
+    add("minEvidenceLife negative", &|x| x.min_evidence_life = -1);
+    add("minEvidenceLife + minRestDaa above 90 days", &|x| x.min_evidence_life = 77_760_000 - x.min_rest_daa + 1);
     v
 }
 
+/// Premise changed by DESIGN 4.5d: the second edge market used minRestDaa = 124,999,999,999, at which no evidence could
+/// ever qualify (its rest window passes the 90-day limit), so the market is now refused by L + R <= 90 days; the edge
+/// is the largest R with the testnet L, with the window at its lowest admissible value W = R.
 fn edge_markets() -> Vec<Market> {
     let m = market();
     let mut a = m.clone();
     (a.k_bps, a.mmr_bps, a.liq_fee_bps, a.keeper_fee_min, a.min_rest_daa) = (100_000, 4_999, 10_000, 0, 0);
+    (a.bond_bps, a.bond_min, a.kc_bps, a.g_bps, a.min_evidence_life) = (10_000, 2_900_000_000_000_000_000, 100_000, 9_999, 77_760_000);
     let mut b = m.clone();
-    (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 124_999_999_999);
+    (b.k_bps, b.mmr_bps, b.liq_fee_bps, b.min_rest_daa) = (1, 0, 0, 76_896_000);
+    (b.bond_bps, b.bond_min, b.kc_bps, b.g_bps, b.challenge_daa) = (0, 0, 1, 1, 76_896_000);
     vec![a, b]
 }
 

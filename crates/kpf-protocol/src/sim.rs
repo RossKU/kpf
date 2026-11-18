@@ -12,7 +12,7 @@ use kaspa_consensus_core::Hash;
 
 use crate::error::{invalid, Error, Result};
 use crate::state::{Open, Pair};
-use crate::tx::{p2pk_key, KeyUtxo, LiveOpen, LivePair, Obj, Signed};
+use crate::tx::{p2pk_key, KeyUtxo, LiveOpen, LivePair, LivePending, Obj, Signed};
 use crate::verify::verify;
 
 #[derive(Default)]
@@ -76,6 +76,7 @@ impl Chain {
         match obj {
             Obj::Pair(p) => Live::Pair(LivePair { p, value, id, op, daa }),
             Obj::Open(o) => Live::Open(LiveOpen { o, value, id, op, daa }),
+            Obj::Pending(w) => Live::Pending(LivePending { w, value, id, op, daa }),
             Obj::Kob(k) => Live::Kob(KobLive { obj: k, value, id, op, daa }),
         }
     }
@@ -120,6 +121,37 @@ impl Chain {
             Some(Obj::Pair(p)) => Ok(LivePair { p: p.clone(), value: e.amount, id: e.covenant_id.unwrap_or_default(), op: *op, daa: e.block_daa_score }),
             _ => invalid("not a known pair"),
         }
+    }
+
+    pub fn live_pending(&self, op: &TransactionOutpoint) -> Result<LivePending> {
+        let e = self.utxos.get(op).ok_or_else(|| Error::Invalid(format!("no UTXO {}:{}", op.transaction_id, op.index)))?;
+        match self.objs.get(op) {
+            Some(Obj::Pending(w)) => Ok(LivePending { w: w.clone(), value: e.amount, id: e.covenant_id.unwrap_or_default(), op: *op, daa: e.block_daa_score }),
+            _ => invalid("not a known pending part"),
+        }
+    }
+
+    /// Every live object of the chain (what an indexer of KPF outputs would list).
+    pub fn objects(&self) -> Vec<Live> {
+        let mut v: Vec<(TransactionOutpoint, Live)> = self
+            .objs
+            .iter()
+            .filter_map(|(op, obj)| {
+                let e = self.utxos.get(op)?;
+                let (value, id, daa) = (e.amount, e.covenant_id.unwrap_or_default(), e.block_daa_score);
+                Some((
+                    *op,
+                    match obj.clone() {
+                        Obj::Pair(p) => Live::Pair(LivePair { p, value, id, op: *op, daa }),
+                        Obj::Open(o) => Live::Open(LiveOpen { o, value, id, op: *op, daa }),
+                        Obj::Pending(w) => Live::Pending(LivePending { w, value, id, op: *op, daa }),
+                        Obj::Kob(k) => Live::Kob(KobLive { obj: k, value, id, op: *op, daa }),
+                    },
+                ))
+            })
+            .collect();
+        v.sort_by_key(|(op, _)| (op.transaction_id, op.index));
+        v.into_iter().map(|(_, l)| l).collect()
     }
 
     pub fn live_open(&self, op: &TransactionOutpoint) -> Result<LiveOpen> {
@@ -186,6 +218,7 @@ impl Chain {
                 match &c.obj {
                     Obj::Pair(p) => Live::Pair(LivePair { p: p.clone(), value, id: cid, op, daa }),
                     Obj::Open(o) => Live::Open(LiveOpen { o: o.clone(), value, id: cid, op, daa }),
+                    Obj::Pending(w) => Live::Pending(LivePending { w: w.clone(), value, id: cid, op, daa }),
                     Obj::Kob(k) => Live::Kob(KobLive { obj: k.clone(), value, id: cid, op, daa }),
                 }
             })
@@ -198,6 +231,7 @@ impl Chain {
 pub enum Live {
     Pair(LivePair),
     Open(LiveOpen),
+    Pending(LivePending),
     Kob(KobLive),
 }
 
@@ -243,6 +277,12 @@ impl Live {
         match self {
             Live::Open(o) => o,
             _ => panic!("expected an order"),
+        }
+    }
+    pub fn pending(self) -> LivePending {
+        match self {
+            Live::Pending(w) => w,
+            _ => panic!("expected a pending part"),
         }
     }
     pub fn kob(self) -> KobLive {
@@ -292,4 +332,9 @@ pub fn spent_open(tx: &Transaction, idx: usize) -> Option<Open> {
 /// The covenant id of a UTXO of the chain.
 pub fn covenant_of(chain: &Chain, op: &TransactionOutpoint) -> Option<Hash> {
     chain.entry(op).and_then(|e| e.covenant_id)
+}
+
+/// Decodes the pending part spent by input `idx` of a transaction, from its signature script.
+pub fn spent_pending(tx: &Transaction, idx: usize) -> Option<crate::state::Pending> {
+    crate::state::Pending::decode_redeem(&redeem_of_input(&tx.inputs[idx].signature_script)?).ok()
 }

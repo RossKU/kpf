@@ -74,7 +74,7 @@ fn decoding_is_strict() {
     assert!(Pair::decode_state(&bad).is_err());
     // Negative zero is not canonical.
     let mut nz = s.clone();
-    nz[317] = 0x80; // longAsk = 0 with the sign bit: "negative zero"
+    nz[371] = 0x80; // longAsk = 0 with the sign bit: "negative zero"
     assert!(Pair::decode_state(&nz).is_err());
     // A redeem script of another template, or of the wrong length.
     let mut rs = p.redeem();

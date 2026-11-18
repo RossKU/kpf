@@ -1,10 +1,15 @@
-//! KpfPair evidence paths (DESIGN 3.3, 3.6, 4.4, 4.5 T4, T6, T7): P5 unilateral close, P6 liquidation (close
-//! both), P7 liquidation by transfer, and the evidence block.
+//! KpfPair evidence (DESIGN 3.3, 3.6, 4.4, 4.5d): the evidence checks of `KpfPair.propose` (P5 unilateral close and
+//! P6 liquidation, both two-step since 4.5d) and the evidence block.
 //!
 //! Every transaction here carries a real KOB evidence order (KobAsk / KobBid compiled from
 //! `vendor/kob/contracts/orders`) and its counterparty on KOB's reference KCC-20 program, so the accepted shapes are
 //! valid end to end: every input, the KOB order and the token included, passes its own script. A negative case
 //! mutates one thing and asserts that the pair input is refused.
+//!
+//! Premise changed by DESIGN 4.5d: an evidence transaction settles nothing any more. What these tests accepted as a
+//! settlement is now a proposal (the part moves into a KpfPending with a bond), and the payouts they asserted are
+//! asserted at finalize (`kpf_two_step_tests` has the rest of the second step). P7 (liquidation by transfer) is gone:
+//! its tests are removed or converted to forfeit and keep.
 
 mod common;
 mod kpf;
@@ -67,15 +72,6 @@ fn liq(l: &Live, n: i64, side: i64) -> PairLeg {
     PairLeg { l: l.clone(), n, q: 0, act: Act::Liq { side } }
 }
 
-fn entrant(side: i64, tag: u8) -> LiveOpen {
-    let o = if side == LONG { long_order(&keypair(21)) } else { short_order(&keypair(22)) };
-    LiveOpen { value: o.escrow() as u64, o, id: Hash::from_bytes([tag; 32]), op: outpoint(tag) }
-}
-
-fn liq_t(l: &Live, n: i64, side: i64, x: i64, k: i64) -> PairLeg {
-    PairLeg { l: l.clone(), n, q: 0, act: Act::LiqTransfer { side, x, open: entrant(side, 0x71), k } }
-}
-
 fn d1(g: PairLeg, e: &Evidence) -> Draft {
     ev_draft(&[g], e, &f(), 1)
 }
@@ -86,11 +82,6 @@ fn ask(p: i64, fill: i64) -> Evidence {
 
 fn bid(p: i64, fill: i64) -> Evidence {
     Evidence::bid(p, fill)
-}
-
-/// The outputs of the draft's built transaction.
-fn outs_len(d: &Draft) -> usize {
-    d.outs.len()
 }
 
 // ---------------------------------------------------------------- the KOB templates
@@ -120,30 +111,40 @@ fn kob_templates_match_kobs_own_pins() {
 
 // ---------------------------------------------------------------- end to end, one per path
 
+/// Premise changed (DESIGN 4.5d): the close is proposed, then finalized; the long gets exactly q(n, b - bl) plus the
+/// refund at finalize, the short the rest (with n = s carrier and excess).
 #[test]
 fn p5_long_closes_at_a_bid_end_to_end() {
     let l = live(&base(), 0x31);
     for n in [N, HALF] {
-        let d = d1(close(&l, n, LONG), &bid(1_050_000_000, n));
+        let g = close(&l, n, LONG);
+        let d = d1(g.clone(), &bid(1_050_000_000, n));
         ok(&d);
-        // The long gets exactly q(n, b - bl), the short the rest of the part (and with n = s carrier and excess).
-        let lp = q(n, 1_050_000_000 - l.p.bl, SCALE, 0) as u64;
-        assert_eq!(d.outs[0].value, lp);
-        let sp = if n == N { l.value - lp } else { (l.p.range_of(n) as u64) - lp };
-        assert_eq!(d.outs[outs_len(&d) - 1].value, sp);
+        let w = pend(&g, 1_050_000_000);
+        let fd = finalize_draft(&w, &f(), 2);
+        ok(&fd);
+        let lp = q(n, 1_050_000_000 - l.p.bl, SCALE, 0) as u64 + w.w.refund as u64;
+        assert_eq!(fd.outs[0].value, lp);
+        let sp = if n == N { l.value - (lp - w.w.refund as u64) } else { (l.p.range_of(n) as u64) - (lp - w.w.refund as u64) };
+        assert_eq!(fd.outs[fd.outs.len() - 1].value, sp);
     }
-    // Outside the range the price is clamped: a bid below bl pays the long nothing.
+    // Outside the range the price is clamped: a bid below bl pays the long nothing but its refund.
     ok(&d1(close(&l, N, LONG), &bid(500_000_000, N)));
+    let w = pend(&close(&l, N, LONG), 500_000_000);
+    assert_eq!(w.w.finalize_close(w.value).0, w.w.refund);
 }
 
 #[test]
 fn p5_short_closes_at_an_ask_end_to_end() {
     let l = live(&base(), 0x32);
     for n in [N, HALF] {
-        let d = d1(close(&l, n, SHORT), &ask(1_100_000_000, n));
-        ok(&d);
-        let sp = q(n, l.p.bs - 1_100_000_000, SCALE, 0) as u64;
-        assert_eq!(d.outs[outs_len(&d) - 1].value, sp);
+        let g = close(&l, n, SHORT);
+        ok(&d1(g.clone(), &ask(1_100_000_000, n)));
+        let w = pend(&g, 1_100_000_000);
+        let fd = finalize_draft(&w, &f(), 2);
+        ok(&fd);
+        let sp = q(n, l.p.bs - 1_100_000_000, SCALE, 0) as u64 + w.w.refund as u64;
+        assert_eq!(fd.outs[fd.outs.len() - 1].value, sp);
     }
     ok(&d1(close(&l, N, SHORT), &ask(1_500_000_000, N)));
 }
@@ -171,34 +172,43 @@ fn p6_liquidates_a_short_at_a_bid_end_to_end() {
     }
 }
 
+/// Converted from the P7 test of review 2 (DESIGN 4.5d resolution 3): there is no liquidation by transfer. The
+/// finalized liquidation forfeits the loser's side to the winner, who keeps its own side: the forfeited part holds both
+/// sides under the winner's key, the winner's bound and the entry price kept, tags cleared.
 #[test]
-fn p7_liquidates_by_transfer_end_to_end() {
-    let l = live(&base(), 0x35);
-    for (n, k) in [(N, 0), (HALF, 0), (HALF, 1)] {
-        ok(&d1(liq_t(&l, n, LONG, 950_000_000, k), &ask(LIQ_ASK, n)));
-        ok(&d1(liq_t(&l, n, SHORT, 1_140_000_000, k), &bid(LIQ_BID, n)));
-    }
-}
-
-#[test]
-fn p7_winner_keeps_its_position_and_is_paid_at_x_less_fee() {
-    // Premise changed by review 2 (DESIGN 4.5b): the entrant's payment less the fee goes to the winner, not the
-    // loser.
+fn p6_winner_keeps_both_sides_after_finalize() {
     let l = live(&base(), 0x36);
-    let x = 950_000_000;
-    let d = d1(liq_t(&l, N, LONG, x, 0), &ask(LIQ_ASK, N));
-    ok(&d);
-    let fee = liq_fee(&l.p, N, LIQ_ASK, LONG);
-    assert_eq!(d.outs[0].value as i64, q(N, x - l.p.bl, SCALE, 0) - fee);
-    assert_eq!(d.outs[0].script_public_key, p2pk_x(&l.p.short_key));
-    // Paying the loser instead is refused.
-    let mut to_loser = d.clone();
-    to_loser.outs[0].script_public_key = p2pk_x(&l.p.long_key);
-    bad(&to_loser, 0);
-    let part = &d.pairs[0].1;
-    // The winner keeps its key and bound; its tag is cleared (DESIGN 4.4) and the entry is kept (DESIGN 4.5a).
-    assert_eq!((part.bs, part.short_key, part.tag_s, part.entry), (l.p.bs, l.p.short_key, ZERO, l.p.entry));
-    assert!(part.bl <= l.p.bl);
+    for (side, e) in [(LONG, ask(LIQ_ASK, N)), (SHORT, bid(LIQ_BID, N))] {
+        let g = liq(&l, N, side);
+        ok(&d1(g.clone(), &e));
+        let w = pend(&g, e.price());
+        let fd = finalize_draft(&w, &f(), 2);
+        ok(&fd);
+        let part = &fd.pairs[0].1;
+        let wk = winner_key(&l.p, side);
+        assert_eq!((part.long_key, part.short_key), (wk, wk));
+        assert_eq!((part.tag_l, part.tag_s, part.entry, part.since), (ZERO, ZERO, l.p.entry, 0));
+        if side == LONG {
+            assert_eq!(part.bs, l.p.bs);
+            assert!(part.bl > l.p.bl, "the forfeited bound moves inward by the fee");
+        } else {
+            assert_eq!(part.bl, l.p.bl);
+            assert!(part.bs < l.p.bs);
+        }
+        // Paying the loser instead of the proposer, or writing the loser's key into the part, is refused.
+        let mut x = fd.clone();
+        x.outs[0].script_public_key = p2pk_x(if side == LONG { &l.p.long_key } else { &l.p.short_key });
+        bad(&x, 0);
+        let mut c = part.clone();
+        if side == LONG {
+            c.long_key = l.p.long_key;
+        } else {
+            c.short_key = l.p.short_key;
+        }
+        let mut x = fd.clone();
+        x.set_pair(1, &c);
+        bad(&x, 0);
+    }
 }
 
 // ---------------------------------------------------------------- evidence identity
@@ -450,12 +460,15 @@ fn non_pair_input_in_the_block_is_refused_unless_it_pushes_n_and_q() {
     // Input 1 becomes a plain key input (its signature script is one 65-byte push): the block reader refuses.
     let mut x = d.clone();
     x.ins[1] = p2pk_in(outpoint(0x90), 1_000_000, None, &keypair(15));
+    // Its positional output was its pending part, bound to its covenant id; a plain input cannot authorize it.
+    x.outs[1] = out(1_000_000, p2pk_spk(&keypair(15)), None);
     bad(&x, 0);
     // Control: the same plain input just before the block (pair 1 names [1, 2)) does not concern it.
     let mut gb = liq(&b, N, LONG);
     gb.q = 1;
     let mut x = ev_draft(&[liq(&a, N, LONG), gb], &ask(LIQ_ASK, N), &f(), 1);
     x.ins[0] = p2pk_in(outpoint(0x91), 1_000_000, None, &keypair(15));
+    x.outs[0] = out(1_000_000, p2pk_spk(&keypair(15)), None);
     let (tx, e) = x.build();
     assert!(run(&tx, &e).unwrap()[1].is_ok());
 }
@@ -525,37 +538,28 @@ fn wrong_bound_is_refused() {
     // P5: the long needs a bid, the short an ask.
     bad(&d1(close(&l, N, LONG), &ask(B, N)), 0);
     bad(&d1(close(&l, N, SHORT), &bid(A, N)), 0);
-    // P6 / P7: a long is liquidated on an ask, a short on a bid.
+    // P6: a long is liquidated on an ask, a short on a bid.
     bad(&d1(liq(&l, N, LONG), &bid(LIQ_ASK, N)), 0);
     bad(&d1(liq(&l, N, SHORT), &ask(LIQ_BID, N)), 0);
-    bad(&d1(liq_t(&l, N, LONG, 950_000_000, 0), &bid(LIQ_ASK, N)), 0);
-    bad(&d1(liq_t(&l, N, SHORT, 1_140_000_000, 0), &ask(LIQ_BID, N)), 0);
 }
 
+/// Premise changed (DESIGN 4.5d): the path selector is the claim's `kind` (1 close, 2 liquidation; 7 is gone).
 #[test]
-fn unknown_path_or_a_liquidation_posing_as_p5_is_refused() {
+fn unknown_kind_or_a_liquidation_posing_as_p5_is_refused() {
     let l = live(&base(), 0x24);
     let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
     ok(&d);
-    for path in [0, 4, 8, -6] {
+    for kind in [0, 3, 5, 6, 7, -2] {
         let mut x = d.clone();
         let mut a = x.args(0);
-        a[ARG_PATH] = iv(path);
+        a[ARG_KIND] = iv(kind);
         x.set_args(0, a);
         bad(&x, 0);
     }
-    // The same transaction as path 5 needs the owner's signature.
+    // The same transaction as kind 1 needs the owner's signature.
     let mut x = d.clone();
     let mut a = x.args(0);
-    a[ARG_PATH] = iv(5);
-    x.set_args(0, a);
-    bad(&x, 0);
-    // P7 arguments with path 6 settle as P6: the outputs of P7 do not satisfy it.
-    let d = d1(liq_t(&l, N, LONG, 950_000_000, 0), &ask(LIQ_ASK, N));
-    ok(&d);
-    let mut x = d.clone();
-    let mut a = x.args(0);
-    a[ARG_PATH] = iv(6);
+    a[ARG_KIND] = iv(1);
     x.set_args(0, a);
     bad(&x, 0);
 }
@@ -572,23 +576,35 @@ fn p5_by_a_non_owner_is_refused() {
     bad(&d1(PairLeg { l: l.clone(), n: N, q: 0, act: Act::Close { side: 3, signer: lk() } }, &bid(B, N)), 0);
 }
 
+/// Premise changed (DESIGN 4.5d): the payouts are made at finalize; at propose the pending part and the remainder
+/// must each hold what they keep.
 #[test]
 fn p5_payout_one_sompi_short_is_refused() {
     let l = live(&base(), 0x49);
     for (side, e) in [(LONG, bid(B, N)), (SHORT, ask(A, N))] {
         for n in [N, HALF] {
-            let d = d1(close(&l, n, side), &e.clone());
-            let m = outs_len(&d);
-            for j in [0, m - 1] {
-                let mut x = d.clone();
-                x.outs[j].value -= 1;
-                bad(&x, 0);
-            }
+            let g = close(&l, n, side);
+            let d = d1(g.clone(), &e.clone());
+            ok(&d);
+            // The pending part one sompi below its value (the pair's value, or the part, plus the bond).
+            let mut x = d.clone();
+            x.outs[0].value -= 1;
+            bad(&x, 0);
             if n < N {
                 // The remainder one sompi below what it must keep.
                 let r = d.pairs[0].0;
                 let mut x = d.clone();
                 x.outs[r].value -= 1;
+                bad(&x, 0);
+            }
+            // Finalize: each payout one sompi short.
+            let w = pend(&g, e.price());
+            let fd = finalize_draft(&w, &f(), 2);
+            ok(&fd);
+            let m = fd.outs.len();
+            for j in [0, m - 1] {
+                let mut x = fd.clone();
+                x.outs[j].value -= 1;
                 bad(&x, 0);
             }
         }
@@ -628,11 +644,6 @@ fn p6_trigger_exactly_at_and_one_tick_before() {
     assert_eq!(b, 1_142_857_143);
     ok(&d1(liq(&l, N, SHORT), &bid(b, N)));
     bad(&d1(liq(&l, N, SHORT), &bid(b - 1, N)), 0);
-    // P7 shares the trigger.
-    ok(&d1(liq_t(&l, N, LONG, a, 0), &ask(a, N)));
-    bad(&d1(liq_t(&l, N, LONG, a + 1, 0), &ask(a + 1, N)), 0);
-    ok(&d1(liq_t(&l, N, SHORT, 1_140_000_000, 0), &bid(b, N)));
-    bad(&d1(liq_t(&l, N, SHORT, 1_140_000_000, 0), &bid(b - 1, N)), 0);
 }
 
 #[test]
@@ -648,70 +659,70 @@ fn p6_out_of_range_parameters_are_refused() {
     bad(&d1(liq(&live(&p, 0x4c), N, LONG), &ask(LIQ_ASK, N)), 0);
 }
 
-/// Premise changed by review 2 (F1, DESIGN 4.5b): the loser of P6 receives 0 and the winner the whole liquidated
-/// value less the fee, the fee capped at the maintenance slice. Before, the winner was owed its distance to the
-/// quote and the loser took the rest less the fee.
+/// Premise changed by review 2 (F1, DESIGN 4.5b) and again by 4.5d: the loser forfeits its side, the fee (capped at
+/// the maintenance slice) goes to the proposer at finalize, the winner keeps the part less the fee and the bond it
+/// never had. A fee above the formula is refused: the pending state written with a higher fee does not match.
 #[test]
 fn p6_fee_above_the_formula_is_refused() {
     let l = live(&base(), 0x4d);
     for n in [N, HALF] {
-        let avail = if n == N { l.value as i64 } else { l.p.range_of(n) };
-        // Long liquidated: the winner (short) is at M - 1, the loser at output 0 gets nothing.
-        let d = d1(liq(&l, n, LONG), &ask(LIQ_ASK, n));
-        ok(&d);
-        let m = outs_len(&d);
-        assert_eq!(d.outs[0].value, 0);
-        assert_eq!(d.outs[m - 1].value as i64, avail - liq_fee(&l.p, n, LIQ_ASK, LONG));
-        let mut x = d.clone();
-        x.outs[m - 1].value -= 1;
-        bad(&x, 0);
-        // Short liquidated: the winner (long) is at output 0.
-        let d = d1(liq(&l, n, SHORT), &bid(LIQ_BID, n));
-        ok(&d);
-        let m = outs_len(&d);
-        assert_eq!(d.outs[m - 1].value, 0);
-        assert_eq!(d.outs[0].value as i64, avail - liq_fee(&l.p, n, LIQ_BID, SHORT));
-        let mut x = d.clone();
-        x.outs[0].value -= 1;
-        bad(&x, 0);
+        for (side, e) in [(LONG, ask(LIQ_ASK, n)), (SHORT, bid(LIQ_BID, n))] {
+            let g = liq(&l, n, side);
+            let d = d1(g.clone(), &e);
+            ok(&d);
+            let w = &d.pendings[0].1;
+            assert_eq!(w.fee, liq_fee(&l.p, n, e.price(), side));
+            // The state written with one sompi more fee.
+            let mut x = d.clone();
+            let mut w2 = w.clone();
+            w2.fee += 1;
+            x.outs[0].script_public_key = p2sh(&w2.art());
+            bad(&x, 0);
+            // Finalize: the forfeited part keeps the value less bond and fee, the proposer gets bond and fee.
+            let lw = pend(&g, e.price());
+            let fd = finalize_draft(&lw, &f(), 2);
+            ok(&fd);
+            assert_eq!(fd.outs[0].value as i64, lw.w.bond + lw.w.fee);
+            assert_eq!(fd.outs[1].value as i64, lw.value as i64 - lw.w.bond - lw.w.fee);
+            for j in [0, 1] {
+                let mut x = fd.clone();
+                x.outs[j].value -= 1;
+                bad(&x, 0);
+            }
+        }
     }
 }
 
-/// Premise changed by review 2: one sompi moved from the winner to the loser is refused (the loser is owed 0).
+/// Premise changed by review 2 and 4.5d: the loser's side is forfeited; one sompi moved from the forfeited part (the
+/// winner's) to the loser is refused.
 #[test]
 fn p6_value_moved_from_the_winner_to_the_loser_is_refused() {
     let l = live(&base(), 0x4e);
-    let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
-    let m = outs_len(&d);
-    let mut x = d.clone();
-    x.outs[m - 1].value -= 1;
-    x.outs[0].value += 1;
-    bad(&x, 0);
-    let d = d1(liq(&l, N, SHORT), &bid(LIQ_BID, N));
-    let mut x = d.clone();
-    x.outs[0].value -= 1;
-    x.outs[m - 1].value += 1;
-    bad(&x, 0);
+    let g = liq(&l, N, LONG);
+    let w = pend(&g, LIQ_ASK);
+    let mut fd = finalize_draft(&w, &f(), 2);
+    fd.outs[1].value -= 1;
+    fd.outs.push(out(1, p2pk_x(&l.p.long_key), None));
+    bad(&fd, 0);
 }
 
-/// Premise changed by review 2 (DESIGN 4.5b; review 1 F5 had capped the fee at the loser's residual, so a bankrupt
-/// piece paid none). A bankrupt piece now pays the fee out of the part like any other, and the winner still
-/// receives at least its payoff at the trigger price.
+/// Premise changed by review 2 (DESIGN 4.5b): a bankrupt piece pays the fee out of the part like any other, and the
+/// winner still receives at least its payoff at the trigger price (now: the forfeited part's value less the bond).
 #[test]
 fn p6_bankrupt_piece_pays_the_capped_fee() {
     let l = live(&base(), 0x4f);
     let a = 500_000_000;
-    let d = d1(liq(&l, HALF, LONG), &ask(a, HALF));
-    ok(&d);
-    let m = outs_len(&d);
+    let g = liq(&l, HALF, LONG);
+    ok(&d1(g.clone(), &ask(a, HALF)));
+    let w = pend(&g, a);
     let fee = liq_fee(&l.p, HALF, a, LONG);
     assert_eq!(fee, fee_of(&l.p.m, HALF, a));
-    assert_eq!(d.outs[0].value, 0);
-    assert_eq!(d.outs[m - 1].value as i64, l.p.range_of(HALF) - fee);
-    assert!(d.outs[m - 1].value as i64 >= winner_at_trigger(&l.p, HALF, LONG));
-    let mut x = d.clone();
-    x.outs[m - 1].value -= 1;
-    bad(&x, 0);
+    assert_eq!(w.w.fee, fee);
+    let fd = finalize_draft(&w, &f(), 2);
+    ok(&fd);
+    let (fv, _) = w.w.finalize_forfeit(w.value);
+    assert_eq!(fv, l.p.range_of(HALF) + C - fee);
+    assert!(fv - C >= winner_at_trigger(&l.p, HALF, LONG));
 }
 
 #[test]
@@ -721,8 +732,7 @@ fn p6_keeper_fee_floor_applies_up_to_the_maintenance_slice() {
     let l = live(&p, 0x2a);
     let d = d1(liq(&l, N, LONG), &ask(LIQ_ASK, N));
     ok(&d);
-    let m = outs_len(&d);
-    assert_eq!(d.outs[m - 1].value as i64, l.value as i64 - p.m.keeper_fee_min);
+    assert_eq!(d.pendings[0].1.fee, p.m.keeper_fee_min);
     // A floor above the slice is capped at the slice q(n, T - bl), T = floor(bl * 10^4 / 9500) = 947,368,421.
     p.m.keeper_fee_min = 100_000_000_000; // 1,000 KAS
     let l = live(&p, 0x2a);
@@ -730,84 +740,7 @@ fn p6_keeper_fee_floor_applies_up_to_the_maintenance_slice() {
     ok(&d);
     let slice = q(N, 947_368_421 - p.bl, SCALE, 0);
     assert_eq!(slice_of(&p, N, LONG), slice);
-    assert_eq!(d.outs[m - 1].value as i64, l.value as i64 - slice);
-    let mut x = d.clone();
-    x.outs[m - 1].value -= 1;
-    bad(&x, 0);
-}
-
-// ---------------------------------------------------------------- P7
-
-#[test]
-fn p7_downgrade_is_refused() {
-    let l = live(&base(), 0x2b);
-    // A long entrant whose bound x - myRate is above bl.
-    let mut g = liq_t(&l, N, LONG, 950_000_000, 0);
-    if let Act::LiqTransfer { open, .. } = &mut g.act {
-        open.o.my_rate = 40_000_000; // bl' = 910,000,000 > 900,000,000
-        open.value = open.o.escrow() as u64;
-    }
-    bad(&d1(g, &ask(LIQ_ASK, N)), 0);
-    // A short entrant whose bound x + myRate is below bs.
-    let mut g = liq_t(&l, N, SHORT, 1_140_000_000, 0);
-    if let Act::LiqTransfer { open, .. } = &mut g.act {
-        open.o.my_rate = 50_000_000; // bs' = 1,190,000,000 < 1,200,000,000
-        open.o.min_counter_rate = 0;
-        open.value = open.o.escrow() as u64;
-    }
-    bad(&d1(g, &bid(LIQ_BID, N)), 0);
-}
-
-#[test]
-fn p7_price_on_the_wrong_side_of_the_quote_is_refused() {
-    let l = live(&base(), 0x2c);
-    ok(&d1(liq_t(&l, N, LONG, LIQ_ASK, 0), &ask(LIQ_ASK, N)));
-    bad(&d1(liq_t(&l, N, LONG, LIQ_ASK - 1, 0), &ask(LIQ_ASK, N)), 0);
-    ok(&d1(liq_t(&l, N, SHORT, LIQ_BID, 0), &bid(LIQ_BID, N)));
-    bad(&d1(liq_t(&l, N, SHORT, LIQ_BID + 1, 0), &bid(LIQ_BID, N)), 0);
-}
-
-#[test]
-fn p7_entrant_whose_bound_does_not_match_its_rate_is_refused_by_the_entrant() {
-    let l = live(&base(), 0x2d);
-    let d = d1(liq_t(&l, N, LONG, 950_000_000, 0), &ask(LIQ_ASK, N));
-    ok(&d);
-    // The pair is told a lower bound (still no downgrade for the short) than the entrant's own rate gives.
-    let mut x = d.clone();
-    let mut a = x.args(0);
-    a[ARG_NBD] = iv(800_000_000);
-    x.set_args(0, a);
-    let pi = x.pairs[0].0;
-    let mut part = x.pairs[0].1.clone();
-    part.bl = 800_000_000;
-    x.set_pair(pi, &part);
-    x.outs[pi].value = part.floor() as u64;
-    let (tx, e) = x.build();
-    let r = run(&tx, &e).unwrap();
-    assert!(r[0].is_ok(), "the pair accepts any non-downgrading bound");
-    assert!(r[3].is_err(), "the KpfOpen refuses a bound other than x - myRate");
-}
-
-#[test]
-fn p7_winner_payout_one_sompi_short_and_stayer_changes_are_refused() {
-    let l = live(&base(), 0x2e);
-    for (side, x, e) in [(LONG, 950_000_000, ask(LIQ_ASK, N)), (SHORT, 1_140_000_000, bid(LIQ_BID, N))] {
-        let d = d1(liq_t(&l, HALF, side, x, 0), &e);
-        ok(&d);
-        let mut y = d.clone();
-        y.outs[0].value -= 1;
-        bad(&y, 0);
-        // The stayer's key in the part changed.
-        let (pi, mut part) = d.pairs.iter().find(|(_, p)| p.size == HALF).cloned().unwrap();
-        if side == LONG {
-            part.short_key = xonly(&keypair(13));
-        } else {
-            part.long_key = xonly(&keypair(13));
-        }
-        let mut y = d.clone();
-        y.set_pair(pi, &part);
-        bad(&y, 0);
-    }
+    assert_eq!(d.pendings[0].1.fee, slice);
 }
 
 // ---------------------------------------------------------------- guards on every new entry
@@ -819,9 +752,9 @@ fn tagged(tag_l: Hash) -> Live {
 }
 
 /// Premise changed by review 1 (F1, F2, DESIGN 4.4): the live-tag guard is gone, so a tag that names an input
-/// of the transaction (the evidence order, the token, the entrant, the pair itself) no longer blocks any evidence
-/// path; instead every continuation clears the tags (asserted by the builders' expected outputs), and one that
-/// copies the old tag is refused.
+/// of the transaction (the evidence order, the token, the pair itself) blocks no proposal; instead every
+/// continuation clears the tags (asserted by the builders' expected outputs), and one that copies the old tag is
+/// refused. The pending part carries no tag at all, and every pair state it may become has both tags 0.
 #[test]
 fn tags_never_block_an_evidence_entry() {
     let e_a = ask(A, N);
@@ -833,23 +766,22 @@ fn tags_never_block_an_evidence_entry() {
     ok(&d1(liq(&tagged(market().token_cov_id), N, LONG), &ask(LIQ_ASK, N)));
     let own = tagged(ZERO);
     ok(&d1(liq(&tagged(own.id), N, LONG), &ask(LIQ_ASK, N)));
-    // P7 with the tag naming the entrant itself.
-    ok(&d1(liq_t(&tagged(Hash::from_bytes([0x71; 32])), N, LONG, 950_000_000, 0), &ask(LIQ_ASK, N)));
-    // A remainder (P5, P6) or the winner's side of a P7 part that copies the old tag is refused.
+    // A remainder that copies the old tag is refused.
     let l = tagged(e.id);
-    for g in [close(&l, HALF, SHORT), liq(&l, HALF, LONG), liq_t(&l, HALF, LONG, 950_000_000, 0)] {
+    for g in [close(&l, HALF, SHORT), liq(&l, HALF, LONG)] {
         let d = d1(g, &ask(LIQ_ASK, HALF));
         ok(&d);
         for (pi, p) in d.pairs.clone() {
             let mut y = d.clone();
             let mut c = p.clone();
-            if c.long_key == l.p.long_key {
-                c.tag_l = l.p.tag_l;
-            } else {
-                c.tag_s = l.p.tag_s;
-            }
+            c.tag_l = l.p.tag_l;
             y.set_pair(pi, &c);
             bad(&y, 0);
+        }
+        // The restore, cure and forfeit states of the pending part carry tag 0 on both sides.
+        let w = &d.pendings[0].1;
+        for s in [w.restore_pair(), w.cure_pair(), w.forfeit_pair()].into_iter().flatten() {
+            assert_eq!((s.tag_l, s.tag_s), (ZERO, ZERO));
         }
     }
 }
@@ -864,7 +796,6 @@ fn single_input_guard_on_every_evidence_entry() {
         (vec![close(&a, N, SHORT), close(&b, N, SHORT)], ask(A, 2 * N)),
         (vec![close(&a, N, LONG), close(&b, N, LONG)], bid(B, 2 * N)),
         (vec![liq(&a, N, LONG), liq(&b, N, LONG)], ask(LIQ_ASK, 2 * N)),
-        (vec![liq_t(&a, N, LONG, 950_000_000, 0), liq(&b, N, LONG)], ask(LIQ_ASK, 2 * N)),
     ];
     for (legs, e) in cases {
         let d = ev_draft(&legs, &e, &f(), 1);
@@ -877,7 +808,7 @@ fn single_input_guard_on_every_evidence_entry() {
     ok(&ev_draft(&[liq(&a, N, LONG), liq(&b, N, LONG)], &ask(LIQ_ASK, 2 * N), &f(), 1));
 }
 
-/// The pair bound checks run on the evidence entries too (DESIGN 5).
+/// The pair bound checks run on the evidence entry too (DESIGN 5).
 #[test]
 fn malformed_pair_is_refused_on_evidence_entries() {
     let mut p = base();

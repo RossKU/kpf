@@ -15,9 +15,23 @@
 //!     exactly once), so no tag outlives its transaction (review 1, F1/F2; DESIGN 4.4);
 //!   - the evidence clock (review 3, DESIGN 4.5c): no pair output's clock moves backwards, and a clock restarts
 //!     (since = 0) only on an output where a side changed hands; every other output carries since = S of its input;
-//!   - every evidence transaction is accepted exactly when the order was fillable through max(exposed, S) + R and
-//!     the lock time proves that end (stale and dead orders and the review-2 lock time are mixed in), and no
-//!     accepted liquidation counts evidence for any time before the liquidated side entered.
+//!   - every evidence transaction is accepted exactly when the order was fillable through max(exposed, S) + R + L and
+//!     the lock time proves max(exposed, S) + R (stale and dead orders and the review-2 lock time are mixed in), and
+//!     no accepted liquidation counts evidence for any time before the liquidated side entered.
+//!
+//! Two-step evidence (DESIGN 4.5d): the evidence walk proposes, challenges, cures and finalizes. A pending part counts
+//! in its owners' payoffs as the pair it would be restored to. In addition to the above:
+//!   - a challenge is accepted exactly when its counter quote contradicts the claim by g and the counter order was
+//!     fillable through max(exposed, P) + R + L with the lock time proving max(exposed, P) + R (P the pending UTXO's
+//!     DAA score; old orders, orders placed after P, short-lived orders and quotes one tick short are mixed in);
+//!   - a party that did not act never loses value except through a finalized, unrefuted proposal: a proposal, a
+//!     challenge and a cure leave every non-acting party's payoff unchanged or better at every grid price (up to the
+//!     rounding of a split); a finalize takes from the loser (its side, forfeited) and from the winner at most the fee;
+//!     a finalized close leaves the other party its payoff at the quote;
+//!   - every bond ends with exactly one of the proposer or the challenger: the proposer's cash grows by exactly bond
+//!     and fee (a finalized liquidation), refund (a cure), its payout plus refund (a finalized close), and by nothing
+//!     at a challenge, whose bond is the challenger's; the bonds posted equal the bonds returned to proposers plus
+//!     those taken by challengers.
 
 mod common;
 mod kpf;
@@ -27,6 +41,7 @@ use std::collections::HashMap;
 use common::*;
 use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
 use kaspa_consensus_core::Hash;
+use kpf::evidence::{cure_draft, finalize_draft, KIND_CLOSE};
 use kpf::paths::*;
 use kpf::*;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
@@ -71,8 +86,16 @@ struct Stats {
     idle: usize,
     ev_close: usize,
     ev_liq: usize,
-    ev_transfer: usize,
     ev_refused: usize,
+    challenged: usize,
+    challenge_refused: usize,
+    cured: usize,
+    finalized_close: usize,
+    finalized_liq: usize,
+    coop_forfeited: usize,
+    bonds_posted: i128,
+    bonds_to_proposers: i128,
+    bonds_to_challengers: i128,
     clock_kept: usize,
     clock_restarted: usize,
     txs: usize,
@@ -82,6 +105,8 @@ struct Stats {
 #[derive(Clone)]
 struct World {
     pairs: Vec<Live>,
+    /// Parts with a pending claim (DESIGN 4.5d), counted in payoffs as the pair they would be restored to.
+    pendings: Vec<LivePend>,
     cash: HashMap<[u8; 32], i128>,
 }
 
@@ -99,14 +124,20 @@ struct Sim {
 }
 
 impl World {
+    /// Every position: the live pairs and the restore state of every pending part.
+    fn positions(&self) -> Vec<Pair> {
+        let mut v: Vec<Pair> = self.pairs.iter().map(|l| l.p.clone()).collect();
+        v.extend(self.pendings.iter().map(|w| w.w.restore_pair().expect("restore state")));
+        v
+    }
     fn payoff(&self, key: &[u8; 32], p: i64) -> i128 {
         let mut v = *self.cash.get(key).unwrap_or(&0);
-        for l in &self.pairs {
-            if &l.p.long_key == key {
-                v += l.p.long_at(p) as i128;
+        for q in self.positions() {
+            if &q.long_key == key {
+                v += q.long_at(p) as i128;
             }
-            if &l.p.short_key == key {
-                v += l.p.short_at(p) as i128;
+            if &q.short_key == key {
+                v += q.short_at(p) as i128;
             }
         }
         v
@@ -118,12 +149,12 @@ impl World {
     /// at that pair's own entry price E (review 1, F3).
     fn idle_payoff(&self, key: &[u8; 32]) -> i128 {
         let mut v = self.cash(key);
-        for l in &self.pairs {
-            if &l.p.long_key == key {
-                v += l.p.long_at(l.p.entry) as i128;
+        for q in self.positions() {
+            if &q.long_key == key {
+                v += q.long_at(q.entry) as i128;
             }
-            if &l.p.short_key == key {
-                v += l.p.short_at(l.p.entry) as i128;
+            if &q.short_key == key {
+                v += q.short_at(q.entry) as i128;
             }
         }
         v
@@ -133,7 +164,7 @@ impl World {
 impl Sim {
     fn new(seed: u64) -> Sim {
         Sim {
-            w: World { pairs: vec![], cash: HashMap::new() },
+            w: World { pairs: vec![], pendings: vec![], cash: HashMap::new() },
             keys: HashMap::new(),
             rng: Rng(seed),
             ctr: (seed as u32) << 12,
@@ -218,14 +249,35 @@ impl Sim {
         // (since = S); one where a side changed hands (T1's new pair, the part of P3 and P7, P4's re-paired output)
         // restarts it (since = 0, its clock is its own UTXO). So no clock moves backwards, and a clock restarts only
         // on a hand-over.
-        let in_pairs: Vec<(usize, Live)> =
-            d.ins.iter().enumerate().filter_map(|(i, inp)| self.w.pairs.iter().find(|l| l.op == inp.outpoint).map(|l| (i, l.clone()))).collect();
+        // The inputs that carry a position: the pairs, and the pending parts (as the pair they were cut from, with the
+        // clock S they recorded).
+        struct Src {
+            idx: usize,
+            op: TransactionOutpoint,
+            p: Pair,
+            clock: i64,
+            restore: Option<Pair>,
+        }
+        let mut in_pos: Vec<Src> = vec![];
+        for (i, inp) in d.ins.iter().enumerate() {
+            if let Some(l) = self.w.pairs.iter().find(|l| l.op == inp.outpoint) {
+                in_pos.push(Src { idx: i, op: l.op, p: l.p.clone(), clock: l.clock(), restore: None });
+            }
+            if let Some(w) = self.w.pendings.iter().find(|w| w.op == inp.outpoint) {
+                in_pos.push(Src { idx: i, op: w.op, p: w.w.pair_view(), clock: w.w.since, restore: w.w.restore_pair() });
+            }
+        }
         for (idx, p) in &d.pairs {
             let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
-            let src = auth.and_then(|a| in_pairs.iter().find(|(i, _)| *i == a)).map(|(_, l)| l.clone());
-            match &src {
+            let src = auth.and_then(|a| in_pos.iter().find(|s| s.idx == a));
+            match src {
+                // A refuted claim restores the part with a fresh clock (DESIGN 4.5d).
+                Some(s) if s.restore.as_ref() == Some(p) => {
+                    assert_eq!(p.since, 0, "output {idx}: the restored part restarts its clock");
+                    self.st.clock_restarted += 1;
+                }
                 Some(s) if s.p.long_key == p.long_key && s.p.short_key == p.short_key => {
-                    assert_eq!(p.since, s.clock(), "output {idx}: a pair output that changes no hands keeps the clock S");
+                    assert_eq!(p.since, s.clock, "output {idx}: a pair output that changes no hands keeps the clock S");
                     self.st.clock_kept += 1;
                 }
                 _ => {
@@ -233,20 +285,33 @@ impl Sim {
                     self.st.clock_restarted += 1;
                 }
             }
-            if let Some(s) = &src {
-                assert!(p.clock_start(now) >= s.clock(), "output {idx}: the clock moved backwards");
+            if let Some(s) = src {
+                assert!(p.clock_start(now) >= s.clock, "output {idx}: the clock moved backwards");
             }
+        }
+        // A pending part records the clock S of the pair it was cut from.
+        for (idx, w) in &d.pendings {
+            let auth = tx.outputs[*idx].covenant.map(|c| c.authorizing_input as usize);
+            let s = in_pos.iter().find(|s| Some(s.idx) == auth).expect("a pending part comes from a pair");
+            assert_eq!(w.since, s.clock, "output {idx}: the pending part records the pair's clock S");
         }
         let spent: Vec<TransactionOutpoint> = d.ins.iter().map(|i| i.outpoint).collect();
         let created: Vec<Live> = live_pairs(&tx, d).into_iter().map(|l| l.at(now)).collect();
-        // When each side of a created pair entered its position: inherited from the input pair it comes from (the same
-        // key on the same side), or now for an entrant.
-        for c in &created {
-            for (side, key) in [(LONG, c.p.long_key), (SHORT, c.p.short_key)] {
-                let from = in_pairs.iter().find(|(_, s)| (if side == LONG { s.p.long_key } else { s.p.short_key }) == key);
-                let at = from.map(|(_, s)| self.entered[&(s.op, side)]).unwrap_or(now);
-                self.entered.insert((c.op, side), at);
+        let created_w: Vec<LivePend> = live_pendings(&tx, d).into_iter().map(|w| w.at(now)).collect();
+        // When each side of a created position entered it: inherited from the input it comes from (the same key on the
+        // same side), or now for an entrant.
+        let enter = |op: TransactionOutpoint, lk: [u8; 32], sk: [u8; 32], ent: &mut HashMap<(TransactionOutpoint, i64), u64>| {
+            for (side, key) in [(LONG, lk), (SHORT, sk)] {
+                let from = in_pos.iter().find(|s| (if side == LONG { s.p.long_key } else { s.p.short_key }) == key);
+                let at = from.and_then(|s| ent.get(&(s.op, side)).copied()).unwrap_or(now);
+                ent.insert((op, side), at);
             }
+        };
+        for c in &created {
+            enter(c.op, c.p.long_key, c.p.short_key, &mut self.entered);
+        }
+        for w in &created_w {
+            enter(w.op, w.w.long_key, w.w.short_key, &mut self.entered);
         }
         for op in &spent {
             self.entered.remove(&(*op, LONG));
@@ -254,6 +319,8 @@ impl Sim {
         }
         self.w.pairs.retain(|l| !spent.contains(&l.op));
         self.w.pairs.extend(created);
+        self.w.pendings.retain(|w| !spent.contains(&w.op));
+        self.w.pendings.extend(created_w);
         self.daa += self.rng.range(1, 3_000) as u64;
         for l in &self.w.pairs {
             assert!(l.value as i64 >= l.p.floor(), "pair below its floor");
@@ -388,9 +455,30 @@ impl Sim {
         s
     }
 
+    /// A random pair whose two sides belong to two keys (the actions below check a stayer against a leaver); a
+    /// forfeited part, both of whose sides are the winner's, is closed by `coop_forfeited` instead.
     fn pick(&mut self) -> Live {
-        let i = self.rng.range(0, self.w.pairs.len() as i64 - 1) as usize;
-        self.w.pairs[i].clone()
+        let cands: Vec<Live> = self.w.pairs.iter().filter(|l| l.p.long_key != l.p.short_key).cloned().collect();
+        if cands.is_empty() {
+            return self.open(None).expect("a fresh pair");
+        }
+        let i = self.rng.range(0, cands.len() as i64 - 1) as usize;
+        cands[i].clone()
+    }
+
+    /// Forfeit and keep, second half (DESIGN 4.5d): the winner closes a forfeited part with its own two signatures and
+    /// receives its whole value.
+    fn coop_forfeited(&mut self) {
+        let Some(l) = self.w.pairs.iter().find(|l| l.p.long_key == l.p.short_key).cloned() else { return };
+        let kp = self.keys[&l.p.long_key];
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let ins = vec![pair_input(&l, "coopClose", vec![Arg::Sig(kp), Arg::Sig(kp)]), funder(&self.f.clone(), fnn, F_FUNDS)];
+        let outs = vec![out(l.value, p2pk_x(&l.p.long_key), None), out(0, p2pk_spk(&self.f), None)];
+        let d = Draft::new(ins, outs, Some(1));
+        self.apply(&d, &[]);
+        assert_eq!(self.w.cash(&l.p.long_key) - before.cash(&l.p.long_key), l.value as i128);
+        self.st.coop_forfeited += 1;
     }
 
     /// P3: list one side, then fill it by a KpfOpen or a direct taker, fully or in part.
@@ -493,6 +581,7 @@ impl Sim {
         let ok = |h: &Live, d: &Live| {
             let hk = [h.p.long_key, h.p.short_key];
             h.id != d.id
+                && d.p.long_key != d.p.short_key
                 && d.p.bl <= h.p.bl
                 && d.p.bs <= h.p.bs
                 && d.p.entry <= h.p.entry
@@ -576,92 +665,49 @@ impl Sim {
         self.st.mutual += 1;
     }
 
-    // ------------------------------------------------------------ evidence paths (P5, P6, P7)
+    // ------------------------------------------------------------ two-step evidence paths (DESIGN 4.5d)
 
-    /// One evidence action on a random pair: P5 by either side, P6 or P7 of a liquidatable side, at a random quote
-    /// with a fill of exactly ceil(k n) (or more), whole or in part. After it:
-    ///   - no sompi is created (`apply`);
-    ///   - the other side of a P5 has, at the evidence quote, at least its payoff before at that quote; the stayer
-    ///     of P7 at every grid price (no-downgrade); each up to 1 sompi per split, or DUST when a payout of it fell
-    ///     below dust and stayed in the remainder;
-    ///   - review 2 (DESIGN 4.5b): the loser of P6 and P7 receives exactly 0; the winner of P6 receives the
-    ///     liquidated value less the capped fee, at least its payoff at the trigger price T; the winner of P7
-    ///     receives the entrant's payment less the fee, and that plus its part's payoff at x is at least its
-    ///     payoff at T; the winner of P6 loses at most the fee at the quote and at E;
-    ///   - the stayer of P7 keeps its idle-settle payout (payoff at E). The other side of a P5 is settled at the
-    ///     adverse quote, which DESIGN compares at the quote, not at E, so it is not checked at E.
-    fn evidence(&mut self) {
+    /// One proposal on a random pair: P5 by either side, or P6 of a liquidatable side with a fresh proposer, at a
+    /// random quote with a fill of exactly ceil(k n) (or more), whole or in part. A third of the orders are fresh; the
+    /// others were placed around the pair's clock start S with a soft expiry that may end before the order has rested R
+    /// (and L after it) on the pair's clock, and half of those are used with the lock time of review 2. The engine must
+    /// accept exactly when the order was fillable through max(exposed, S) + R + L and the lock time proves
+    /// max(exposed, S) + R. After an accepted proposal every party's payoff is unchanged (the pending part counts as
+    /// its restore state), up to the rounding of a split.
+    fn propose(&mut self) {
         use kpf::evidence::*;
         let l = self.pick();
         let p = l.p.clone();
         let m = p.m.clone();
         let partial = self.rng.coin();
         let n = self.random_n(p.size, partial);
-        let what = self.rng.range(0, 5);
+        let what = self.rng.range(0, 3);
         let a_max = (p.bl * 10_000 - 1) / (10_000 - m.mmr_bps);
         let b_min = p.bs * 10_000 / (10_000 + m.mmr_bps) + 1;
         let fill = n * m.k_bps / 10_000 + if self.rng.coin() { 0 } else { self.rng.range(0, n) };
         let (long, short) = (p.long_key, p.short_key);
-        let (act, e, quote) = match what {
+        let proposer = self.fresh_key();
+        let (act, e) = match what {
             0 => {
                 let b = self.rng.range((p.bl - 100_000_000).max(1), p.bs + 100_000_000);
-                (Act::Close { side: LONG, signer: self.keys[&long] }, Evidence::bid(b, fill), b)
+                (Act::Close { side: LONG, signer: self.keys[&long] }, Evidence::bid(b, fill))
             }
             1 => {
                 let a = self.rng.range((p.bl - 100_000_000).max(1), p.bs + 100_000_000);
-                (Act::Close { side: SHORT, signer: self.keys[&short] }, Evidence::ask(a, fill), a)
+                (Act::Close { side: SHORT, signer: self.keys[&short] }, Evidence::ask(a, fill))
             }
-            2 | 4 if a_max >= 1 => {
+            2 if a_max >= 1 => {
                 let a = self.rng.range((a_max - 300_000_000).max(1), a_max);
-                if what == 2 {
-                    (Act::Liq { side: LONG }, Evidence::ask(a, fill), a)
-                } else {
-                    // The entrant accepts any counter rate >= 0, so x stays at most bs; a long KpfOpen takes
-                    // only at x <= E (the entry is kept, KpfOpen.take).
-                    if p.entry < a {
-                        return;
-                    }
-                    let x = self.rng.range(a, (a + 100_000_000).min(p.bs).min(p.entry).max(a));
-                    let who = self.fresh_key();
-                    let mut o = long_order(&who);
-                    (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
-                    // Review 3 (F3, DESIGN 4.5c): the entrant is healthy at the quote, bound <= a * (1 - mmr).
-                    let hb = a * (10_000 - m.mmr_bps) / 10_000;
-                    let lo = (x - p.bl).max(x - hb).max(1);
-                    o.my_rate = self.rng.range(lo, x.max(lo));
-                    let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb3), op: self.fresh_op() };
-                    (Act::LiqTransfer { side: LONG, x, open, k: self.rng.range(0, 1) }, Evidence::ask(a, fill), a)
-                }
+                (Act::LiqBy { side: LONG, proposer: xonly(&proposer) }, Evidence::ask(a, fill))
             }
-            3 | 5 if b_min <= PRICE_MAX => {
+            3 if b_min <= PRICE_MAX => {
                 let b = self.rng.range(b_min, (b_min + 300_000_000).min(PRICE_MAX));
-                if what == 3 {
-                    (Act::Liq { side: SHORT }, Evidence::bid(b, fill), b)
-                } else {
-                    // A short KpfOpen takes only at x >= E.
-                    if p.entry > b {
-                        return;
-                    }
-                    let x = self.rng.range((b - 100_000_000).max(p.bl).max(p.entry).min(b), b);
-                    let who = self.fresh_key();
-                    let mut o = short_order(&who);
-                    (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
-                    // Review 3: healthy at the bid, bound >= b * (1 + mmr).
-                    let hb = (b * (10_000 + m.mmr_bps) + 9_999) / 10_000;
-                    let lo = (p.bs - x).max(hb - x).max(1);
-                    o.my_rate = self.rng.range(lo, lo + 300_000_000);
-                    let open = LiveOpen { value: o.escrow() as u64, o, id: self.fresh_hash(0xb4), op: self.fresh_op() };
-                    (Act::LiqTransfer { side: SHORT, x, open, k: self.rng.range(0, 1) }, Evidence::bid(b, fill), b)
-                }
+                (Act::LiqBy { side: SHORT, proposer: xonly(&proposer) }, Evidence::bid(b, fill))
             }
             _ => return,
         };
-        // Evidence timing (review 3, DESIGN 4.5c). A third of the orders are fresh (placed now, GTC). The others were
-        // placed around the pair's clock start S, up to 3R before it, with a soft expiry (GTD) that may end before the
-        // order has rested R on the pair's clock; and half of those are used with the lock time of review 2 (the end of
-        // the order's own rest, ignoring the clock). The engine must accept exactly when the order was fillable through
-        // max(exposed, S) + R and the lock time proves that end.
         let r = m.min_rest_daa as u64;
+        let life = m.min_evidence_life;
         let s_clock = l.clock() as u64;
         let mut e = e;
         let stale = self.rng.range(0, 2) > 0;
@@ -669,7 +715,7 @@ impl Sim {
         if stale {
             let at = self.rng.range(s_clock.saturating_sub(3 * r) as i64, (s_clock + r) as i64) as u64;
             (e.daa, e.tok_daa) = (at, at);
-            expiry = self.rng.range((at + r) as i64, (s_clock + 2 * r) as i64);
+            expiry = self.rng.range((at + r) as i64, (s_clock + 2 * r) as i64) + if self.rng.coin() { life } else { 0 };
             e.ask.expiry_daa = expiry;
             e.bid.expiry_daa = expiry;
         } else {
@@ -678,9 +724,10 @@ impl Sim {
         }
         let rest_end = e.daa.max(s_clock) + r;
         let fnn = self.fn_();
-        let mut d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: act.clone() }], &e, &self.f.clone(), fnn);
+        let g = PairLeg { l: l.clone(), n, q: 0, act: act.clone() };
+        let mut d = ev_draft(&[g.clone()], &e, &self.f.clone(), fnn);
         d.lock = if stale && self.rng.coin() { e.daa + r } else { rest_end.max(self.daa) + self.rng.range(0, 50) as u64 };
-        let predicted = expiry >= rest_end as i64 && d.lock >= rest_end;
+        let predicted = expiry >= rest_end as i64 + life && d.lock >= rest_end;
         let (tx0, en0) = d.build();
         let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
         assert_eq!(ok, predicted, "evidence at DAA {} (expiry {expiry}) on a pair whose clock starts at {s_clock}, lock {}: the clock rule", e.daa, d.lock);
@@ -688,71 +735,154 @@ impl Sim {
             self.st.ev_refused += 1;
             return;
         }
-        // No accepted liquidation counts evidence for any time before the liquidated side entered: the order was
-        // fillable for R DAA after max(exposed, entry), and the lock time proves the end of that rest.
-        if let Act::Liq { side } | Act::LiqTransfer { side, .. } = &act {
+        if let Act::LiqBy { side, .. } = &act {
             let entry = self.entered[&(l.op, *side)];
             let start = e.daa.max(entry);
-            assert!(expiry >= (start + r) as i64 && d.lock >= start + r, "a liquidation used evidence from before the loser entered (DAA {entry})");
+            assert!(expiry >= (start + r) as i64 + life && d.lock >= start + r, "a liquidation used evidence from before the loser entered (DAA {entry})");
         }
         let before = self.w.clone();
-        let handed = match &act {
-            Act::LiqTransfer { side, open, .. } => vec![(*side, open.id)],
-            _ => vec![],
-        };
-        self.apply(&d, &handed);
+        self.apply(&d, &[]);
+        let w = &d.pendings[0].1;
+        self.st.bonds_posted += w.bond as i128;
+        // Nothing changes hands at a proposal: every party keeps its payoff at every price, up to one split.
+        let g = self.grid(&[&p]);
         let split = (n < p.size) as i128;
-        let c = quote.clamp(p.bl, p.bs);
-        let dust = |v: i64| if v > 0 && v < DUST { DUST as i128 } else { 0 };
-        match act {
-            Act::Close { side, .. } => {
-                let (lp, sp, _) = close_at(&l, n, c, side, 0);
-                let slack = split + dust(if side == LONG { q(n, p.bs - c, SCALE, 0) } else { q(n, c - p.bl, SCALE, 0) });
-                let other = if side == LONG { short } else { long };
-                self.at_quote(&before, &other, quote, slack);
-                // The closer is paid exactly what it is owed (a payout of 0 only under dust).
-                let got = self.w.cash(if side == LONG { &long } else { &short }) - before.cash(if side == LONG { &long } else { &short });
-                assert_eq!(got, if side == LONG { lp } else { sp } as i128);
-                self.st.ev_close += 1;
-            }
-            Act::Liq { side } => {
-                // Review 2 (DESIGN 4.5b): the loser receives 0; the winner the liquidated value less the fee, at
-                // least its payoff at the trigger price T (unless that payout fell below dust).
-                let (winner, loser) = if side == LONG { (short, long) } else { (long, short) };
-                let fee = liq_fee(&p, n, quote, side);
-                let avail = if n == p.size { l.value as i64 } else { p.range_of(n) };
-                let wo = avail - fee;
-                if winner != loser {
-                    assert_eq!(self.w.cash(&loser) - before.cash(&loser), 0, "P6: the loser received something");
-                    let got = self.w.cash(&winner) - before.cash(&winner);
-                    assert_eq!(got, if wo < DUST { 0 } else { wo as i128 }, "P6: winner's receipt");
-                    assert!(wo < DUST || got >= winner_at_trigger(&p, n, side) as i128, "P6: winner below its trigger payoff");
-                }
-                self.at_quote(&before, &winner, quote, split + fee as i128 + dust(wo));
-                self.idle_kept(&before, &winner, split + fee as i128 + dust(wo));
-                self.st.ev_liq += 1;
-            }
-            Act::LiqTransfer { side, x, .. } => {
-                // Review 2: the entrant's payment less the fee goes to the winner (the stayer), the loser gets 0;
-                // the winner's part payoff at x plus that cash is at least its payoff at T.
-                let (stayer, loser) = if side == LONG { (short, long) } else { (long, short) };
-                let g = self.grid(&[&p]);
-                self.non_consenting(&before, &stayer, split, &g);
-                self.idle_kept(&before, &stayer, split);
-                if stayer != loser {
-                    assert_eq!(self.w.cash(&loser) - before.cash(&loser), 0, "P7: the loser received something");
-                    let pay = p7_pay(&l, n, side, x, quote);
-                    let got = self.w.cash(&stayer) - before.cash(&stayer);
-                    assert_eq!(got, if pay < DUST { 0 } else { pay as i128 }, "P7: winner's receipt");
-                    let cx = x.clamp(p.bl, p.bs);
-                    let at_x = if side == LONG { q(n, p.bs - cx, SCALE, 0) } else { q(n, cx - p.bl, SCALE, 0) };
-                    assert!(pay < DUST || at_x as i128 + got >= winner_at_trigger(&p, n, side) as i128, "P7: winner below its trigger payoff");
-                }
-                self.st.ev_transfer += 1;
-            }
+        for k in [long, short] {
+            self.non_consenting(&before, &k, split, &g);
+            self.idle_kept(&before, &k, split);
+        }
+        if matches!(act, Act::Close { .. }) {
+            self.st.ev_close += 1;
+        } else {
+            self.st.ev_liq += 1;
         }
         if split == 1 {
             self.st.split += 1;
+        }
+    }
+
+    fn pick_pending(&mut self) -> Option<LivePend> {
+        if self.w.pendings.is_empty() {
+            return None;
+        }
+        let i = self.rng.range(0, self.w.pendings.len() as i64 - 1) as usize;
+        Some(self.w.pendings[i].clone())
+    }
+
+    /// A challenge of a random pending part with a counter quote at or beyond its refutation bound (or one tick short),
+    /// from an order placed before or after P, sometimes short-lived. Accepted exactly as the module docs say; then the
+    /// part is restored with every owner's payoff unchanged, the proposer gets nothing and the bond is the challenger's.
+    fn challenge(&mut self) {
+        use kpf::evidence::*;
+        let Some(w) = self.pick_pending() else { return };
+        let Some(bound) = w.w.contradiction_bound() else { return };
+        let m = w.w.m.clone();
+        let (r, life) = (m.min_rest_daa as u64, m.min_evidence_life);
+        let ask = w.w.counter_is_ask();
+        let short_of = self.rng.range(0, 4) == 0;
+        let quote = match (ask, short_of) {
+            (true, false) => bound - self.rng.range(0, bound.min(20_000_000)),
+            (true, true) => bound + 1,
+            (false, false) => bound + self.rng.range(0, (PRICE_MAX - bound).min(20_000_000)),
+            (false, true) => bound - 1,
+        };
+        if quote < 1 || quote > PRICE_MAX {
+            return;
+        }
+        let n = w.w.n;
+        let fill = n * m.kc_bps / 10_000 + if self.rng.coin() { 0 } else { self.rng.range(0, n) };
+        let mut e = if ask { Evidence::ask(quote, fill) } else { Evidence::bid(quote, fill) };
+        let p_clock = w.daa;
+        let before_p = self.rng.coin();
+        let at = if before_p { p_clock.saturating_sub(self.rng.range(0, 3 * r as i64) as u64) } else { (p_clock + self.rng.range(0, r as i64) as u64).max(1) };
+        (e.daa, e.tok_daa) = (at, at);
+        let rest_end = at.max(p_clock) + r;
+        let short_lived = self.rng.range(0, 3) == 0;
+        let expiry = if short_lived { rest_end as i64 + life - self.rng.range(0, 1) } else { 1_000_000_000_000 };
+        e.ask.expiry_daa = expiry;
+        e.bid.expiry_daa = expiry;
+        let fnn = self.fn_();
+        let mut d = ch_draft(&[w.clone()], &e, &self.f.clone(), fnn);
+        d.lock = if before_p && self.rng.coin() { at + r } else { rest_end.max(self.daa) + self.rng.range(0, 50) as u64 };
+        let predicted = !short_of && expiry >= rest_end as i64 + life && d.lock >= rest_end;
+        let (tx0, en0) = d.build();
+        let ok = run(&tx0, &en0).unwrap().iter().all(|x| x.is_ok());
+        assert_eq!(ok, predicted, "challenge at {quote} (bound {bound}) by an order of DAA {at} expiring {expiry} on P = {p_clock}, lock {}", d.lock);
+        if !ok {
+            self.st.challenge_refused += 1;
+            return;
+        }
+        let before = self.w.clone();
+        self.apply(&d, &[]);
+        assert_eq!(d.outs[0].value as i64, w.value as i64 - w.w.bond, "the restored part holds the value less the bond");
+        assert_eq!(self.w.cash(&w.w.proposer_key), before.cash(&w.w.proposer_key), "a refuted proposer gets nothing back");
+        self.st.bonds_to_challengers += w.w.bond as i128;
+        let g = self.grid(&[&w.w.pair_view()]);
+        for k in [w.w.long_key, w.w.short_key] {
+            self.non_consenting(&before, &k, 0, &g);
+        }
+        self.st.challenged += 1;
+    }
+
+    /// A cure by the loser of a random pending liquidation: the proposer gets exactly its refund, the winner's payoff
+    /// does not fall at any price (the loser's bound only moves outward).
+    fn cure(&mut self) {
+        let Some(w) = self.pick_pending() else { return };
+        if !w.w.can_cure() {
+            return;
+        }
+        let loser = if w.w.side == LONG { w.w.long_key } else { w.w.short_key };
+        let signer = self.keys[&loser];
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let d = cure_draft(&w, &signer, &self.f.clone(), fnn);
+        self.apply(&d, &[]);
+        assert_eq!(self.w.cash(&w.w.proposer_key) - before.cash(&w.w.proposer_key), w.w.refund as i128, "a cure repays the proposer its refund");
+        self.st.bonds_to_proposers += w.w.bond as i128;
+        let winner = w.w.winner_key();
+        if winner != loser && winner != w.w.proposer_key {
+            let g = self.grid(&[&w.w.pair_view(), &d.pairs[0].1]);
+            self.non_consenting(&before, &winner, 0, &g);
+        }
+        self.st.cured += 1;
+    }
+
+    /// A finalize of a random pending part once W old. A close pays the closer its payoff at the clamped quote plus the
+    /// refund and leaves the other party its payoff at the quote; a liquidation forfeits the loser's side, the winner
+    /// loses at most the fee at any price, and the proposer gets exactly bond and fee.
+    fn finalize(&mut self) {
+        let Some(w) = self.pick_pending() else { return };
+        // The relative lock: the chain moves to P + W.
+        self.daa = self.daa.max(w.daa + w.w.m.challenge_daa as u64);
+        let before = self.w.clone();
+        let fnn = self.fn_();
+        let d = finalize_draft(&w, &self.f.clone(), fnn);
+        self.apply(&d, &[]);
+        let pv = w.w.pair_view();
+        let split_dust = |v: i64| if v > 0 && v < DUST { DUST as i128 } else { 0 };
+        if w.w.kind == KIND_CLOSE {
+            let (lp, sp) = w.w.finalize_close(w.value);
+            let (closer, other, pay) = if w.w.side == LONG { (w.w.long_key, w.w.short_key, lp) } else { (w.w.short_key, w.w.long_key, sp) };
+            assert_eq!(self.w.cash(&closer) - before.cash(&closer), pay as i128, "the closer is paid its payoff and the refund");
+            self.st.bonds_to_proposers += w.w.bond as i128;
+            if other != closer {
+                let c = w.w.quote.clamp(w.w.bl, w.w.bs);
+                let owed_other = if w.w.side == LONG { q(w.w.n, w.w.bs - c, SCALE, 0) } else { q(w.w.n, c - w.w.bl, SCALE, 0) };
+                self.at_quote(&before, &other, w.w.quote, split_dust(owed_other) + 1);
+            }
+            self.st.finalized_close += 1;
+        } else {
+            assert_eq!(self.w.cash(&w.w.proposer_key) - before.cash(&w.w.proposer_key), (w.w.bond + w.w.fee) as i128, "the proposer gets bond and fee");
+            self.st.bonds_to_proposers += w.w.bond as i128;
+            let winner = w.w.winner_key();
+            if winner != w.w.proposer_key {
+                let g = self.grid(&[&pv, &d.pairs[0].1]);
+                // The forfeit bound moves in whole ticks: the range floor may sit up to one tick (q(n, 1)) below the
+                // value the part keeps, which stays in the UTXO as excess, outside the DESIGN 3.1 payoff.
+                let tick = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
+                self.non_consenting(&before, &winner, w.w.fee as i128 + tick + 2, &g);
+            }
+            self.st.finalized_liq += 1;
         }
     }
 
@@ -818,31 +948,50 @@ fn walk(seed: u64, st_total: &mut Stats) {
     st_total.clock_restarted += t.clock_restarted;
     st_total.max_slack = st_total.max_slack.max(t.max_slack);
 }
-
-/// The X6 walk with the evidence paths mixed in: transfers (which bring entrants, tags and new bounds) and
-/// close-versus-close between evidence actions, then idle settles.
+/// The X6 walk with the two-step evidence paths mixed in (DESIGN 4.5d): transfers (which bring entrants, tags and new
+/// bounds) and close-versus-close between proposals, challenges, cures and finalizes; then every pending part is
+/// finalized and every pair idle-settled. Every bond posted ends with a proposer or a challenger.
 fn walk_ev(seed: u64, st_total: &mut Stats) {
     let mut s = Sim::new(seed ^ 0x5eed_0000);
     s.open(None);
     s.open(None);
-    for _ in 0..12 {
-        match s.rng.range(0, 5) {
+    for _ in 0..16 {
+        match s.rng.range(0, 9) {
             0 => s.transfer(true, true),
             1 => s.close(),
-            _ => s.evidence(),
+            2 | 3 => s.challenge(),
+            4 => s.cure(),
+            5 => s.finalize(),
+            6 => s.coop_forfeited(),
+            _ => s.propose(),
         }
         if s.w.pairs.is_empty() {
             s.open(None);
         }
     }
+    while !s.w.pendings.is_empty() {
+        s.finalize();
+    }
+    while s.w.pairs.iter().any(|l| l.p.long_key == l.p.short_key) {
+        s.coop_forfeited();
+    }
     while !s.w.pairs.is_empty() {
         s.idle();
     }
     let t = &s.st;
+    assert_eq!(t.bonds_posted, t.bonds_to_proposers + t.bonds_to_challengers, "every bond ends with a proposer or a challenger");
     st_total.ev_close += t.ev_close;
     st_total.ev_liq += t.ev_liq;
-    st_total.ev_transfer += t.ev_transfer;
     st_total.ev_refused += t.ev_refused;
+    st_total.challenged += t.challenged;
+    st_total.challenge_refused += t.challenge_refused;
+    st_total.cured += t.cured;
+    st_total.finalized_close += t.finalized_close;
+    st_total.finalized_liq += t.finalized_liq;
+    st_total.coop_forfeited += t.coop_forfeited;
+    st_total.bonds_posted += t.bonds_posted;
+    st_total.bonds_to_proposers += t.bonds_to_proposers;
+    st_total.bonds_to_challengers += t.bonds_to_challengers;
     st_total.clock_kept += t.clock_kept;
     st_total.clock_restarted += t.clock_restarted;
     st_total.split += t.split;
@@ -852,14 +1001,16 @@ fn walk_ev(seed: u64, st_total: &mut Stats) {
 #[test]
 fn x6_evidence_random_walk() {
     let mut st = Stats::default();
-    for seed in 1..=12u64 {
+    for seed in 1..=16u64 {
         walk_ev(seed, &mut st);
     }
     println!("X6 evidence: {st:?}");
-    assert!(st.ev_close > 0 && st.ev_liq > 0 && st.ev_transfer > 0 && st.split > 0);
+    assert!(st.ev_close > 0 && st.ev_liq > 0 && st.split > 0, "{st:?}");
+    assert!(st.challenged > 0 && st.challenge_refused > 0 && st.cured > 0 && st.finalized_close > 0 && st.finalized_liq > 0 && st.coop_forfeited > 0, "{st:?}");
     // Review 3: some evidence was refused by the clock rule (stale or dead before resting R on the pair's clock), and
     // clocks were both kept and restarted.
     assert!(st.ev_refused > 0 && st.clock_kept > 0 && st.clock_restarted > 0, "{st:?}");
+    assert_eq!(st.bonds_posted, st.bonds_to_proposers + st.bonds_to_challengers);
 }
 
 #[test]

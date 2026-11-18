@@ -5,6 +5,11 @@
 //! (item 6 of the fix task: the since sentinel, forged clocks, one lock time for several bounds, splits and
 //! re-pairing with different clocks, the rate limit against the idle timeout and liquidation by transfer). Every
 //! input runs its real script: the pairs, the KpfOpen orders, the KOB evidence order and the token program.
+//!
+//! Premise changed by DESIGN 4.5d: an evidence entry now proposes (the clock and fillability rules are the same, and
+//! the order must stay fillable for the market's evidence life L after its rest: the boundaries below move by L), and
+//! P7 is gone. Its tests are converted: R3-F3's health check now binds the ordinary transfer by which the winner sells a
+//! forfeited side, and the clock restart of the T7 part is that of the forfeited and the restored part.
 
 mod common;
 mod kpf;
@@ -106,12 +111,19 @@ fn with_rate(mut o: LiveOpen, rate: i64) -> LiveOpen {
     o
 }
 
-fn liq_t(l: &Live, n: i64, side: i64, x: i64, tag: u8) -> PairLeg {
-    PairLeg { l: l.clone(), n, q: 0, act: Act::LiqTransfer { side, x, open: order_for(&l.p.m, side, tag), k: 0 } }
+/// The market's evidence life L (DESIGN 4.5d).
+fn life() -> u64 {
+    market().min_evidence_life as u64
 }
 
-fn liq_to(l: &Live, n: i64, side: i64, x: i64, open: &LiveOpen) -> PairLeg {
-    PairLeg { l: l.clone(), n, q: 0, act: Act::LiqTransfer { side, x, open: open.clone(), k: 0 } }
+/// The forfeited part a finalized liquidation of the loser `side` of `l` leaves (both sides the winner's), as a
+/// live UTXO of DAA `daa`.
+fn forfeited(l: &Live, side: i64, quote: i64, daa: u64) -> Live {
+    let g = liq(l, l.p.size, side);
+    let w = pend(&g, quote);
+    let d = finalize_draft(&w, &fk(), 90);
+    let tx = accept(&d);
+    live_pairs(&tx, &d).remove(0).at(daa)
 }
 
 /// Ask evidence whose maker and buyer are both `who`.
@@ -142,14 +154,6 @@ fn with_expiry(mut e: Evidence, expiry: i64) -> Evidence {
     e.ask.expiry_daa = expiry;
     e.bid.expiry_daa = expiry;
     e
-}
-
-fn long_out(d: &Draft) -> i64 {
-    d.outs[0].value as i64
-}
-
-fn short_out(d: &Draft) -> i64 {
-    d.outs[d.outs.len() - 1].value as i64
 }
 
 /// An evidence order (and an ask's custody) placed at DAA 1,000 with a soft expiry exactly at the end of its own rest
@@ -234,11 +238,10 @@ fn holds_stale_ask_cannot_liquidate_a_pair_opened_after_it_died() {
     let e = placed(own_ask(945_000_000, N, &sk()), 1_000);
     let d = locked(&ev_draft(&[liq(&l, N, LONG)], &e, &sk(), 2), 1_000 + 4 * MAX_IDLE);
     accept(&d);
-    assert_eq!(long_out(&d), 0);
-    // GTC whose 90 days were over before the pair's clock had rested R: refused.
-    let late = at(&base(), 0x31, 1_000 + MAX_IDLE - R + 1);
+    // GTC whose 90 days were over before the pair's clock had rested R plus the evidence life L: refused.
+    let late = at(&base(), 0x31, 1_000 + MAX_IDLE - R - life() + 1);
     refused(&locked(&ev_draft(&[liq(&late, N, LONG)], &e, &sk(), 2), 1_000 + 4 * MAX_IDLE), 0);
-    let edge = at(&base(), 0x31, 1_000 + MAX_IDLE - R);
+    let edge = at(&base(), 0x31, 1_000 + MAX_IDLE - R - life());
     accept(&locked(&ev_draft(&[liq(&edge, N, LONG)], &e, &sk(), 2), 1_000 + 4 * MAX_IDLE));
 }
 
@@ -285,33 +288,38 @@ fn holds_evidence_resting_before_the_clock_counts_only_from_s() {
     // unchanged; the amount does not depend on when.
     let d = locked(&ev_draft(&[liq(&l, N, LONG)], &e, &fk(), 5), 9_000_000);
     accept(&d);
-    assert_eq!(short_out(&d), l.value as i64 - liq_fee(&l.p, N, 940_000_000, LONG));
+    assert_eq!(d.pendings[0].1.fee, liq_fee(&l.p, N, 940_000_000, LONG));
 }
 
-/// Evidence that died before exposed' + R is refused, for each soft expiry: a GTD order (expiryDaa), an IOC order
+/// Evidence that died before exposed' + R + L is refused, for each soft expiry: a GTD order (expiryDaa), an IOC order
 /// (kill = max(UTXO DAA, activeFrom) + 600) and a GTC order (90 days idle), one DAA inside and one outside. S = 50,000.
+/// The IOC boundary is shown in a market with L = 0 (with the testnet L no IOC order is evidence at all).
 #[test]
 fn holds_evidence_that_died_before_it_rested_on_the_clock_is_refused() {
     let s = 50_000u64;
     let l = at(&base(), 0x36, s);
     let lock = NOW;
-    // GTD placed before S: alive through S + R is required.
+    // GTD placed before S: alive through S + R + L is required.
     let e = placed(Evidence::ask(940_000_000, N), s - 5_000);
-    accept(&locked(&ev_draft(&[liq(&l, N, LONG)], &with_expiry(e.clone(), (s + R) as i64), &fk(), 6), lock));
-    refused(&locked(&ev_draft(&[liq(&l, N, LONG)], &with_expiry(e, (s + R) as i64 - 1), &fk(), 6), lock), 0);
-    // IOC: placed at S its kill is S + 600 = S + R; placed one DAA earlier it dies one DAA too soon.
+    accept(&locked(&ev_draft(&[liq(&l, N, LONG)], &with_expiry(e.clone(), (s + R + life()) as i64), &fk(), 6), lock));
+    refused(&locked(&ev_draft(&[liq(&l, N, LONG)], &with_expiry(e, (s + R + life()) as i64 - 1), &fk(), 6), lock), 0);
+    // IOC (L = 0): placed at S its kill is S + 600 = S + R; placed one DAA earlier it dies one DAA too soon.
+    let mut p0 = base();
+    p0.m.min_evidence_life = 0;
+    let l0 = at(&p0, 0x36, s);
     let mut ioc = placed(Evidence::ask(940_000_000, N), s);
     ioc.ask.tif = 1;
-    accept(&locked(&ev_draft(&[liq(&l, N, LONG)], &ioc, &fk(), 7), lock));
+    accept(&locked(&ev_draft(&[liq(&l0, N, LONG)], &ioc, &fk(), 7), lock));
+    refused(&locked(&ev_draft(&[liq(&l, N, LONG)], &ioc, &fk(), 7), lock), 0);
     let mut ioc = placed(Evidence::ask(940_000_000, N), s - 1);
     ioc.ask.tif = 1;
-    refused(&locked(&ev_draft(&[liq(&l, N, LONG)], &ioc, &fk(), 7), lock), 0);
-    // GTC: placed at ud, the 90 days end at ud + MAX_IDLE; the pair's clock must leave R before that.
+    refused(&locked(&ev_draft(&[liq(&l0, N, LONG)], &ioc, &fk(), 7), lock), 0);
+    // GTC: placed at ud, the 90 days end at ud + MAX_IDLE; the pair's clock must leave R + L before that.
     let ud = 1_000u64;
     let gtc = placed(Evidence::bid(1_150_000_000, N), ud);
-    let ok = at(&base(), 0x37, ud + MAX_IDLE - R);
+    let ok = at(&base(), 0x37, ud + MAX_IDLE - R - life());
     accept(&locked(&ev_draft(&[liq(&ok, N, SHORT)], &gtc, &fk(), 8), ud + MAX_IDLE + 5));
-    let late = at(&base(), 0x37, ud + MAX_IDLE - R + 1);
+    let late = at(&base(), 0x37, ud + MAX_IDLE - R - life() + 1);
     refused(&locked(&ev_draft(&[liq(&late, N, SHORT)], &gtc, &fk(), 8), ud + MAX_IDLE + 5), 0);
 }
 
@@ -319,7 +327,8 @@ fn holds_evidence_that_died_before_it_rested_on_the_clock_is_refused() {
 /// since = S (here S = 2,000, the UTXO's DAA, and for the second pair S = since = 1,500 on a UTXO of DAA 7,000), and
 /// an output with since 0 (a restart) or S + 1 is refused by the pair. The parts that change hands carry since 0 and
 /// one with since = S (no restart) is refused. Listed: P1, P2, P3 (remainder), P4 (host and donor remainders), P4'
-/// (remainder), P5, P6, P7 (remainder).
+/// (remainder), and the remainders of the proposals of P5 and P6 (DESIGN 4.5d; P7 is gone). The pending part records S
+/// itself (the cure keeps it, the restore and the forfeit restart: `holds_the_clock_restarts_on_each_hand_over`).
 #[test]
 fn holds_the_clock_is_kept_by_every_output_that_changes_no_hands() {
     let mut second = listed();
@@ -358,8 +367,10 @@ fn holds_the_clock_is_kept_by_every_output_that_changes_no_hands() {
         }
         check(&mutual_draft(&l, HALF, 1_050_000_000, &fk(), 13), 0, "P4' mutual close");
         check(&ev_draft(&[close(&l, HALF, LONG, lk())], &Evidence::bid(1_050_000_000, HALF), &fk(), 14), 0, "P5 close");
-        check(&ev_draft(&[liq(&l, HALF, LONG)], &Evidence::ask(940_000_000, HALF), &fk(), 15), 0, "P6 liquidation");
-        check(&ev_draft(&[liq_t(&l, HALF, LONG, 950_000_000, 0x71)], &Evidence::ask(940_000_000, HALF), &fk(), 16), 0, "P7 liquidation by transfer");
+        let d = ev_draft(&[liq(&l, HALF, LONG)], &Evidence::ask(940_000_000, HALF), &fk(), 15);
+        check(&d, 0, "P6 liquidation");
+        assert_eq!(d.pendings[0].1.since, s, "the pending part records S");
+        assert_eq!(d.pendings[0].1.cure_pair().unwrap().since, s, "a cure keeps S");
     }
 }
 
@@ -418,12 +429,18 @@ fn holds_the_clock_restarts_on_each_hand_over() {
     assert_eq!(p3.p.since, 0, "P3 restarts its clock");
     let bid = placed(Evidence::bid(1_150_000_000, N), 2_100);
     refused(&locked(&ev_draft(&[liq(&p3, N, SHORT)], &bid, &fk(), 25), 4_400 + R - 1), 0);
-    // T7: the part of a liquidation by transfer.
+    // DESIGN 4.5d (in place of T7): the forfeited part and the restored part restart their clocks too; the same live
+    // ask counts against them only R after their own UTXO.
     let e = placed(Evidence::ask(940_000_000, N), 2_100);
-    let d = locked(&ev_draft(&[liq_t(&l, N, LONG, 950_000_000, 0x74)], &e, &fk(), 26), 2_100 + R);
-    let tx = accept(&d);
-    let p7 = live_pairs(&tx, &d).into_iter().find(|x| x.p.long_key != l.p.long_key).unwrap();
-    assert_eq!(p7.p.since, 0);
+    let fp = forfeited(&l, SHORT, 1_150_000_000, 9_000);
+    assert_eq!(fp.p.since, 0);
+    let w = pend(&liq(&l, N, LONG), 940_000_000);
+    let cd = ch_draft(&[w], &Evidence::bid(966_315_790, N), &fk(), 26);
+    let tx = accept(&cd);
+    let restored = live_pairs(&tx, &cd).remove(0).at(9_000);
+    assert_eq!(restored.p.since, 0);
+    refused(&locked(&ev_draft(&[liq(&restored, N, LONG)], &e, &fk(), 27), 9_000 + R - 1), 0);
+    accept(&locked(&ev_draft(&[liq(&restored, N, LONG)], &e, &fk(), 27), 9_000 + R));
 }
 
 // ---------------------------------------------------------------- the hand-over rate limit
@@ -434,9 +451,9 @@ fn holds_the_clock_restarts_on_each_hand_over() {
 /// keeper liquidates the new part with evidence that rested R on the new clock (the same live order).
 ///
 /// Residual, as 4.5c states it ("a side cannot dodge liquidation by handing itself over faster than evidence can
-/// rest"): a quote that starts resting in the last R before S + 4R and dies before resting R after the restart is
-/// dodged. Here an ask placed at S + 3.5R that dies at S + 4.5R would have liquidated the old pair at S + 4.5R; after
-/// the self-transfer at S + 4R it is refused against the part.
+/// rest"): a quote that starts resting in the last R before S + 4R and dies before resting R (plus the life L) after
+/// the restart is dodged. Here an ask placed at S + 3.5R that dies at S + 4.5R + L would have liquidated the old pair at
+/// S + 4.5R; after the self-transfer at S + 4R it is refused against the part.
 #[test]
 fn holds_self_transfer_before_s_plus_4r_is_refused_and_keepers_keep_the_window() {
     let s = 100_000u64;
@@ -458,7 +475,7 @@ fn holds_self_transfer_before_s_plus_4r_is_refused_and_keepers_keep_the_window()
     refused(&locked(&ev_draft(&[liq(&part, N, LONG)], &touch, &fk(), 32), s + 5 * R - 1), 0);
     accept(&locked(&ev_draft(&[liq(&part, N, LONG)], &touch, &fk(), 32), s + 5 * R));
     // The residual: a late touch that dies within R of the restart.
-    let late = with_expiry(placed(Evidence::ask(940_000_000, N), s + 4 * R - R / 2), (s + 4 * R + R / 2) as i64);
+    let late = with_expiry(placed(Evidence::ask(940_000_000, N), s + 4 * R - R / 2), (s + 4 * R + R / 2 + life()) as i64);
     accept(&locked(&ev_draft(&[liq(&l, N, LONG)], &late, &fk(), 33), s + 4 * R + R / 2));
     refused(&locked(&ev_draft(&[liq(&part, N, LONG)], &late, &fk(), 33), s + 4 * R + R / 2), 0);
     // And the new part cannot be handed over again before its own S' + 4R.
@@ -528,24 +545,25 @@ fn holds_split_pieces_with_different_clocks_re_paired() {
     assert!(r.is_err() || r.unwrap().iter().take(2).all(|x| x.is_err()));
 }
 
-/// Liquidation by transfer of a part handed over moments ago: the part (DAA 4,400) cannot be liquidated before it has
-/// R of evidence on its own clock (4,999 refused, 5,000 accepted with a live order placed before the hand-over), and
-/// P7 is not rate-limited, while a transfer of that part would wait until 4,400 + 4R. The winner's part of the P7
-/// restarts its clock as well (4.5c: the part of T7 carries since 0).
+/// Converted from the P7 test (DESIGN 4.5d): the liquidation of a part handed over moments ago. The part (DAA 4,400)
+/// cannot be proposed against before it has R of evidence on its own clock (4,999 refused, 5,000 accepted with a live
+/// order placed before the hand-over); a proposal is not rate-limited, while a transfer of that part waits until
+/// 4,400 + 4R. The winner's forfeited part restarts its clock (since 0), so selling it waits for its own S' + 4R.
 #[test]
-fn holds_liquidation_by_transfer_of_a_part_handed_over_moments_ago() {
+fn holds_liquidation_of_a_part_handed_over_moments_ago() {
     let l = at(&listed(), 0x4b, 2_000);
     let t = TransferSpec { side: LONG, n: N, x: 1_000_000_000, nb: 900_000_000, ek: xonly(&keypair(16)), et: ZERO, k: 0 };
     let d = transfer_draft(&l, &t, &Entrant::Direct(keypair(16)), &fk(), 39);
     let tx = accept(&d);
     let part = live_pairs(&tx, &d).remove(0).at(4_400);
     let e = placed(Evidence::ask(940_000_000, N), 3_000);
-    refused(&locked(&ev_draft(&[liq_t(&part, N, LONG, 950_000_000, 0x75)], &e, &fk(), 40), 4_400 + R - 1), 0);
-    let d7 = locked(&ev_draft(&[liq_t(&part, N, LONG, 950_000_000, 0x75)], &e, &fk(), 40), 4_400 + R);
-    let tx7 = accept(&d7);
-    assert!(d7.lock < part.handover_from(), "P7 runs before a transfer of the part could");
-    let new = live_pairs(&tx7, &d7).remove(0);
-    assert_eq!((new.p.since, new.p.short_key), (0, part.p.short_key), "the winner stays, on a fresh clock");
+    refused(&locked(&ev_draft(&[liq(&part, N, LONG)], &e, &fk(), 40), 4_400 + R - 1), 0);
+    let dp = locked(&ev_draft(&[liq(&part, N, LONG)], &e, &fk(), 40), 4_400 + R);
+    accept(&dp);
+    assert!(dp.lock < part.handover_from(), "a proposal runs before a transfer of the part could");
+    let fp = forfeited(&part, LONG, 940_000_000, 20_000);
+    assert_eq!((fp.p.since, fp.p.short_key, fp.p.long_key), (0, part.p.short_key, part.p.short_key), "the winner stays, on a fresh clock");
+    assert_eq!(fp.handover_from(), 20_000 + 4 * R);
 }
 
 /// The rate limit counts from S, not from the latest UTXO: an amend at DAA 4,000 keeps S = 2,000, so a transfer is
@@ -588,7 +606,6 @@ fn holds_profitable_side_never_forfeits_in_a_narrow_pair() {
         for bid in [850_000_000, 955_000_000, 2_000_000_000] {
             refused(&ev_draft(&[liq(&l, N, SHORT)], &Evidence::bid(bid, N), &lk(), 51), 0);
         }
-        refused(&ev_draft(&[liq_t(&l, N, LONG, 1_000_000_000, 0x76)], &Evidence::ask(850_000_000, N), &fk(), 52), 0);
         // The exits that need no liquidation still work: a unilateral close at the adverse bound.
         accept(&ev_draft(&[close(&l, N, LONG, lk())], &Evidence::bid(p.bs, N), &fk(), 53));
     }
@@ -678,40 +695,36 @@ fn holds_add_margin_transfer_and_re_pairing_keep_the_range() {
 
 // ================================================================ R3-F3 (Medium): P7 entrant born liquidatable
 
-/// R3-F3 after the fix. The review's transaction: the long order (rate 1) takes the loser's part with the loser's bl 9
-/// at a 9.4 KAS ask, with the pair's x at the quote (the executor keeping the 600 KAS gap) or at 10. The pair now
-/// requires the entrant to be healthy at the quote itself (DESIGN 4.5c, read at the quote, see the `// DESIGN:` note in
-/// KpfPair.onEvidence): both are refused. At x = 9.93 (bound 8.93 = floor(9.4 * 0.95)) it is accepted, and the same
-/// 9.4 ask does not liquidate the entrant afterwards (it is not liquidatable, and the ask rested before its clock).
+/// R3-F3 is moot (DESIGN 4.5d): there is no entrant chosen in an evidence transaction. Its check moves to the later
+/// transfer by which the winner sells the forfeited side (health at entry at its own price x, DESIGN 4.5c): the
+/// forfeited long side (bound fb, just above 9 KAS) listed at 9.4 KAS, taken by a long order of rate 0.46999999 (not
+/// healthy at 9.4: 0.47 is 5 %) is refused by the pair and the order; rate 0.47 is accepted, and the entrant's bound
+/// stays at or below the forfeited bound (no-downgrade for the winner's own short).
 #[test]
-fn holds_p7_entrant_is_healthy_at_the_quote() {
-    let l = live(&base(), 0x38);
-    let quote = 940_000_000;
-    let mut d = ev_draft(&[liq_t(&l, N, LONG, 1_000_000_000, 0x71)], &Evidence::ask(quote, N), &fk(), 9);
-    refused(&d, 0);
-    let mut a = d.args(0);
-    a[ARG_X] = iv(quote);
-    d.set_args(0, a);
-    d.outs[0].value = p7_pay(&l, N, LONG, quote, quote) as u64;
-    refused(&d, 0);
-    let x = kpf_protocol::evidence::entrant_health_bound(&l.p.m, LONG, quote, 100_000_000);
-    assert_eq!(x, 993_000_000);
-    let d = ev_draft(&[liq_t(&l, N, LONG, x, 0x71)], &Evidence::ask(quote, N), &fk(), 9);
-    let tx = accept(&d);
-    let part = live_pairs(&tx, &d).into_iter().find(|p| p.p.long_key != l.p.long_key).expect("the entrant's part").at(NOW);
-    assert_eq!(part.p.bl, 893_000_000);
-    assert!(!kpf_protocol::payoff::long_liquidatable(&part.p, quote));
-    let mut e2 = Evidence::ask(quote, N);
-    e2.id = Hash::from_bytes([0xe5; 32]);
-    refused(&locked(&ev_draft(&[liq(&part, N, LONG)], &e2, &sk(), 10), NOW + R), 0);
-}
-
-/// R3-F3 control: the no-downgrade rule still bounds the entrant at the loser's bl (an entrant bound above it is
-/// refused), and the health rule binds independently of it.
-#[test]
-fn holds_p7_entrant_bound_never_above_the_losers() {
-    let l = live(&base(), 0x39);
-    refused(&ev_draft(&[liq_t(&l, N, LONG, 1_050_000_000, 0x72)], &Evidence::ask(940_000_000, N), &fk(), 11), 0);
+fn holds_r3_f3_check_binds_the_sale_of_a_forfeited_side() {
+    let l = at(&base(), 0x38, 1_000);
+    let fp = forfeited(&l, LONG, 940_000_000, 50_000);
+    let x = 940_000_000;
+    let ad = amend_draft(&fp, &sk(), LONG, (x, 0, 0), &fk(), 9);
+    let tx = accept(&ad);
+    let listed_fp = live_pairs(&tx, &ad).remove(0).at(50_010);
+    for (rate, ok) in [(46_999_999, false), (47_000_000, true)] {
+        let mut lo = with_rate(order_for(&market(), LONG, 0x71), rate);
+        (lo.o.min_counter_rate, lo.o.limit) = (0, 1_000_000_000);
+        lo.value = lo.o.escrow() as u64;
+        let t = TransferSpec { side: LONG, n: N, x, nb: x - rate, ek: lo.o.owner, et: lo.id, k: 0 };
+        let d = transfer_draft(&listed_fp, &t, &Entrant::Open(lo), &fk(), 10);
+        if ok {
+            accept(&d);
+        } else {
+            let (tx, e) = d.build();
+            let r = run(&tx, &e).unwrap();
+            assert!(r[0].is_err() && r[1].is_err(), "rate {rate}: the pair and the order refuse");
+        }
+    }
+    // A bound above the forfeited bound would downgrade the winner's short: refused by the pair.
+    let t = TransferSpec { side: LONG, n: N, x, nb: listed_fp.p.bl + 1, ek: xonly(&keypair(16)), et: ZERO, k: 0 };
+    refused(&transfer_draft(&listed_fp, &t, &Entrant::Direct(keypair(16)), &fk(), 11), 0);
 }
 
 // ================================================================ R3-F4 (Low): an order filled at its limit
@@ -739,7 +752,6 @@ fn holds_order_filled_at_its_limit_is_healthy_at_entry() {
     // Residual: a live ask still resting R after the open liquidates it.
     let d2 = locked(&ev_draft(&[liq(&pl, N, LONG)], &before, &fk(), 13), NOW - 100 + R);
     accept(&d2);
-    assert_eq!(long_out(&d2), 0);
     // A rate below the maintenance of the limit.
     let thin = with_rate(order_for(&market(), LONG, 0x75), 50_000_000);
     let mut so2 = so.clone();
@@ -755,8 +767,8 @@ fn holds_order_filled_at_its_limit_is_healthy_at_entry() {
 /// An entrant unhealthy at entry by one sompi is refused, each side and each path; at the boundary it is accepted.
 /// T1 (both orders check the whole new pair): long rate 0.49999999 / 0.5 and short rate 0.49999999 / 0.5 at x = 10.
 /// T2 order taker at x = 9.4 (long, rate 0.46999999 / 0.47) and x = 11.5 (short, rate 0.57499999 / 0.575); T2
-/// signing taker with bound 8.93000001 / 8.93 and 12.07499999 / 12.075. T7 at an ask of 9.4 (entrant x 9.93000001 /
-/// 9.93) and a bid of 11.5 (x 10.07499999 / 10.075).
+/// signing taker with bound 8.93000001 / 8.93 and 12.07499999 / 12.075. (T7 is gone, DESIGN 4.5d; the sale of a
+/// forfeited side is a T2: `holds_r3_f3_check_binds_the_sale_of_a_forfeited_side`.)
 #[test]
 fn holds_entrant_unhealthy_by_one_tick_is_refused() {
     // T1.
@@ -815,12 +827,6 @@ fn holds_entrant_unhealthy_by_one_tick_is_refused() {
         refused(&transfer_draft(&l, &t(bad), &Entrant::Direct(keypair(16)), &fk(), 63), 0);
         accept(&transfer_draft(&l, &t(good), &Entrant::Direct(keypair(16)), &fk(), 63));
     }
-    // T7.
-    let l = live(&base(), 0x59);
-    refused(&ev_draft(&[liq_t(&l, N, LONG, 993_000_001, 0x84)], &Evidence::ask(940_000_000, N), &fk(), 64), 0);
-    accept(&ev_draft(&[liq_t(&l, N, LONG, 993_000_000, 0x84)], &Evidence::ask(940_000_000, N), &fk(), 64));
-    refused(&ev_draft(&[liq_t(&l, N, SHORT, 1_007_499_999, 0x85)], &Evidence::bid(1_150_000_000, N), &fk(), 65), 0);
-    accept(&ev_draft(&[liq_t(&l, N, SHORT, 1_007_500_000, 0x85)], &Evidence::bid(1_150_000_000, N), &fk(), 65));
 }
 
 // ================================================================ attacks on the fix (item 6)
@@ -847,7 +853,7 @@ fn holds_since_sentinel_against_unknown_and_zero_daa() {
     accept(&amend_draft(&at(&p, 0x5b, u64::MAX), &lk(), LONG, (1_020_000_000, 0, 0), &fk(), 73));
     // DAA 0.
     let z = at(&listed(), 0x5c, 0);
-    let dead = with_expiry(placed(Evidence::ask(940_000_000, N), 100), 700);
+    let dead = with_expiry(placed(Evidence::ask(940_000_000, N), 100), (700 + life()) as i64);
     accept(&locked(&ev_draft(&[liq(&z, N, LONG)], &dead, &fk(), 74), 700));
     let d = amend_draft(&z, &lk(), LONG, (1_020_000_000, 0, 0), &fk(), 75);
     assert_eq!(d.pairs[0].1.since, 0, "S = 0 is written as the sentinel");
@@ -887,7 +893,8 @@ fn holds_forged_past_since_binds_only_the_look_alike() {
     let mut p = listed();
     p.since = 1;
     let l = at(&p, 0x5e, 5_000_000);
-    let e = stale(own_ask(945_000_000, N, &sk()), 0);
+    // Dead since DAA 1,600 + L (it lived exactly the evidence life after its rest).
+    let e = with_expiry(stale(own_ask(945_000_000, N, &sk()), 0), (1_000 + R + life()) as i64);
     accept(&ev_draft(&[liq(&l, N, LONG)], &e, &sk(), 81));
     let lo = order_for(&market(), LONG, 0x86);
     let t = TransferSpec { side: LONG, n: N, x: 1_000_000_000, nb: 900_000_000, ek: lo.o.owner, et: lo.id, k: 0 };
@@ -901,7 +908,8 @@ fn holds_forged_past_since_binds_only_the_look_alike() {
 /// One lock time serves several lower bounds at once (the evidence rest on the pair's clock, the hand-over limit, an
 /// order's activeFrom); each is checked by its own covenant against the same lock time, so satisfying one never
 /// satisfies another: the transaction needs their maximum. T2 with an entrant whose activeFrom is 1,000 after the
-/// hand-over limit; T2 with activeFrom before the limit; P7 with an entrant active 500 after the rest end.
+/// hand-over limit; T2 with activeFrom before the limit; (DESIGN 4.5d, in place of P7) a proposal on the pair's clock
+/// and a challenge on its pending part's clock P in one block: the lock time must cover both rests.
 #[test]
 fn holds_one_lock_time_must_cover_every_bound() {
     let l = at(&listed(), 0x5f, 2_000);
@@ -916,11 +924,12 @@ fn holds_one_lock_time_must_cover_every_bound() {
     let d = transfer_draft(&l, &t, &Entrant::Open(lo), &fk(), 85);
     refused_only(&locked(&d, limit - 1_000), 0, &[1]);
     accept(&locked(&d, limit));
-    // P7: the evidence proves NOW, the entrant needs NOW + 500.
-    let lv = live(&base(), 0x60);
-    let mut e7 = order_for(&market(), LONG, 0x88);
-    e7.o.active_from = (NOW + 500) as i64;
-    let d = ev_draft(&[liq_to(&lv, N, LONG, 950_000_000, &e7)], &Evidence::ask(940_000_000, N), &fk(), 86);
-    refused_only(&d, 3, &[0]);
+    // A proposal (the pair's rest proves NOW) and a challenge whose pending part P = NOW - R + 500 needs NOW + 500.
+    let a = live(&base(), 0x60);
+    let b = live(&base(), 0x61);
+    let w = pend_of(&close(&b, N, LONG, lk()), 1_050_000_000, NOW - R + 500);
+    let m = vec![Member::P(liq(&a, N, LONG)), Member::W(PendLeg { w, q: 0 })];
+    let d = blk_draft(&m, &Evidence::ask(940_000_000, 2 * N), &fk(), 86);
+    refused_only(&d, 1, &[0]);
     accept(&locked(&d, NOW + 500));
 }

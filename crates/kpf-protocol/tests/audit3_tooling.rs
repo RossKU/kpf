@@ -1,52 +1,60 @@
-//! Review 3 (docs/audit/REVIEW-3.md), tooling: the library the `kpf` command line builds with. After the fixes of
-//! DESIGN 4.5c every test here asserts the refusal (or the safe default) the review asked for.
+//! Review 3 (docs/audit/REVIEW-3.md), tooling: the library the `kpf` command line builds with.
+//!
+//! Premise changed by DESIGN 4.5d: R3-T1 (the default P7 price `p7_default_x`) is moot, liquidation by transfer is gone
+//! and with it the entrant chosen in an evidence transaction. The tests here hold the helpers the two-step tools use to
+//! the contracts' rules: the counter quote that refutes a claim, the cure bound, the forfeit bound.
 
-use kpf_protocol::evidence::{entrant_health_bound, p7_default_x};
-use kpf_protocol::fixtures::{long_order, pair, pubkey, short_order};
-use kpf_protocol::payoff::{long_liquidatable, short_liquidatable};
-use kpf_protocol::state::{healthy_at, LONG, SHORT};
+use kpf_protocol::fixtures::{pair, pubkey};
+use kpf_protocol::payoff::{long_liquidatable, q, short_liquidatable};
+use kpf_protocol::pending::{claim_fee, cure_bound_of, forfeit_bound_of, pending_of};
+use kpf_protocol::state::{KIND_CLOSE, KIND_LIQ, LONG, SHORT};
 
-/// R3-T1 (with R3-F3), fixed. `p7_default_x`, the price `kpf liquidate-transfer` uses when `--x` is not given, used to
-/// be the highest x the entrant allows (10 KAS in the DESIGN 5 pair, TESTNET.md step 23: bl 9, bs 12, E 10, ask 9.4),
-/// which gave the entrant exactly the loser's bl, so the evidence ask of the same transaction already made it
-/// liquidatable. It now also bounds x by the entrant's health at the quote (DESIGN 4.5c): x <= floor(9.4 * 0.95) + 1 =
-/// 9.93, and the entrant it builds is not liquidatable at the quote. Mirrored for a short loser.
+/// The refutation bound `contradiction_bound` (what `kpf watch` prints) is exactly where `contradicts` flips, for each
+/// claim of the DESIGN 5 pair (g = 2 %): 9.6632 for a long's liquidation, 11.20 for a short's, 0.98 of a long's close
+/// bid, 1.02 of a short's close ask.
 #[test]
-fn holds_default_p7_price_keeps_the_entrant_healthy_at_the_quote() {
+fn holds_refutation_bound_is_where_the_contract_rule_flips() {
     let p = pair(pubkey(21), pubkey(22));
-    let quote = 940_000_000;
-    assert!(long_liquidatable(&p, quote));
-    let lo = long_order(pubkey(31));
-    let x = p7_default_x(&p, LONG, quote, &lo).unwrap();
-    assert_eq!(x, 993_000_000);
-    assert_eq!(x, entrant_health_bound(&p.m, LONG, quote, lo.my_rate));
-    let mut part = p.clone();
-    part.bl = x - lo.my_rate;
-    part.long_key = lo.owner;
-    assert!(part.bl < p.bl, "the entrant is deeper than the loser");
-    assert!(!long_liquidatable(&part, quote), "and the same ask does not liquidate it");
-    assert!(healthy_at(&p.m, LONG, part.bl, quote));
-    // One sompi more and the entrant is liquidatable at the quote.
-    assert!(!healthy_at(&p.m, LONG, x + 1 - lo.my_rate, quote));
-    // Mirror: a short loser sold to the fixture short order.
-    let b = 1_150_000_000;
-    assert!(short_liquidatable(&p, b));
-    let so = short_order(pubkey(32));
-    let x = p7_default_x(&p, SHORT, b, &so).unwrap();
-    let mut part = p.clone();
-    part.bs = x + so.my_rate;
-    assert_eq!(x, 1_007_500_000);
-    assert!(part.bs > p.bs && !short_liquidatable(&part, b), "the short entrant is not liquidatable at the bid");
-    assert!(!healthy_at(&p.m, SHORT, x - 1 + so.my_rate, b));
+    for (kind, side, quote, bound) in [
+        (KIND_LIQ, LONG, 940_000_000, 966_315_790),
+        (KIND_LIQ, SHORT, 1_150_000_000, 1_120_000_000),
+        (KIND_CLOSE, LONG, 1_050_000_000, 1_029_000_000),
+        (KIND_CLOSE, SHORT, 1_100_000_000, 1_122_000_000),
+    ] {
+        let w = pending_of(&p, p.size, kind, side, quote, pubkey(23));
+        assert_eq!(w.contradiction_bound(), Some(bound), "kind {kind} side {side}");
+        assert!(w.contradicts(bound));
+        let one_short = if w.counter_is_ask() { bound + 1 } else { bound - 1 };
+        assert!(!w.contradicts(one_short));
+    }
 }
 
-/// R3-T1: an entrant whose margin rate cannot be healthy at the quote at any admissible x is refused with a plain
-/// reason, instead of being entered liquidatable.
+/// The cure bound is the nearest bound at which the claim's own quote no longer liquidates the side, and the forfeit
+/// bound is the nearest inward bound at which the narrowed range and the fee fit the part (unique, one tick wider does
+/// not fit).
 #[test]
-fn holds_default_p7_price_refuses_an_entrant_too_thin_for_the_quote() {
+fn holds_cure_and_forfeit_bounds_match_the_contract_rules() {
     let p = pair(pubkey(21), pubkey(22));
-    let mut lo = long_order(pubkey(31));
-    lo.my_rate = 40_000_000; // 0.4 KAS: below 5 % of the 9.4 ask
-    let e = p7_default_x(&p, LONG, 940_000_000, &lo).unwrap_err().to_string();
-    assert!(e.contains("liquidatable at the evidence ask") && e.contains("forfeit"), "{e}");
+    let cb = cure_bound_of(&p.m, LONG, 940_000_000).unwrap();
+    let mut c = p.clone();
+    c.bl = cb;
+    assert!(long_liquidatable(&p, 940_000_000) && !long_liquidatable(&c, 940_000_000));
+    c.bl = cb + 1;
+    assert!(long_liquidatable(&c, 940_000_000), "one tick less margin and the quote liquidates again");
+    let cb = cure_bound_of(&p.m, SHORT, 1_150_000_000).unwrap();
+    let mut c = p.clone();
+    c.bs = cb;
+    assert!(!short_liquidatable(&c, 1_150_000_000));
+    c.bs = cb - 1;
+    assert!(short_liquidatable(&c, 1_150_000_000));
+    for (side, quote) in [(LONG, 940_000_000), (SHORT, 1_150_000_000)] {
+        let fee = claim_fee(&p, p.size, side, quote);
+        let fb = forfeit_bound_of(&p, p.size, side, fee);
+        let w = if side == LONG { p.bs - fb } else { fb - p.bl };
+        let part = p.range_of(p.size);
+        assert!(q(p.size, w, p.m.scale, 0) + fee <= part);
+        assert!(q(p.size, w + 1, p.m.scale, 0) + fee > part);
+    }
+    // No cure for a short whose cure bound would exceed priceMax.
+    assert_eq!(cure_bound_of(&p.m, SHORT, p.m.price_max), None);
 }

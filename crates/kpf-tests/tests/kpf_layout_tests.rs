@@ -1,5 +1,5 @@
-//! State layout of KpfPair and KpfOpen (DESIGN 4.2): the byte windows the contracts hard-code are where the
-//! compiler puts those fields, and an instance spliced from the template equals the compiled one.
+//! State layout of KpfPair, KpfOpen and KpfPending (DESIGN 4.2, 4.5d): the byte windows the contracts hard-code are
+//! where the compiler puts those fields, and an instance spliced from the template equals the compiled one.
 
 mod common;
 mod kpf;
@@ -11,26 +11,31 @@ use kpf::*;
 fn pair_state_span_and_windows() {
     let base = pair_base();
     let c = &base.contracts.values().next().unwrap().compiled;
-    // The state starts at redeem-script byte 1 and is 438 bytes: market block 207, size..tags 222, since 9 (review 3).
+    // The state starts at redeem-script byte 1 and is 492 bytes: market block 261 (207 + the six two-step parameters of
+    // DESIGN 4.5d), size..tags 222, since 9.
     assert_eq!(c.state_span.offset, 1);
-    assert_eq!(c.state_span.len, 438);
+    assert_eq!(c.state_span.len, 492);
     let p = pair(&keypair(1), &keypair(2));
     let bc = bytecode(base);
     let rd = |at: usize| i64::from_le_bytes(bc[at..at + 8].try_into().unwrap());
-    // KpfPair constants BL_AT = 218, BS_AT = 227, LISTS_AT = 310, LISTS_END = 364.
-    assert_eq!(rd(209), p.size);
-    assert_eq!(rd(218), p.bl);
-    assert_eq!(rd(227), p.bs);
-    assert_eq!(rd(236), p.entry);
-    assert_eq!(&bc[245..277], &p.long_key);
-    assert_eq!(&bc[278..310], &p.short_key);
-    assert_eq!(bc[310], 0x08);
-    assert_eq!(bc[364], 0x20);
-    assert_eq!(&bc[365..397], &p.tag_l.as_bytes());
-    assert_eq!(&bc[398..430], &p.tag_s.as_bytes());
-    // The since window [430..439) (KpfPair STATE_END = 439).
-    assert_eq!(bc[430], 0x08);
-    assert_eq!(rd(431), p.since);
+    // The two-step parameters at the end of the market block (KpfPair MARKET_END = 262).
+    for (i, v) in [p.m.bond_bps, p.m.bond_min, p.m.kc_bps, p.m.g_bps, p.m.challenge_daa, p.m.min_evidence_life].into_iter().enumerate() {
+        assert_eq!(rd(208 + 9 * i + 1), v, "two-step parameter {i}");
+    }
+    // KpfPair constants SIZE_AT = 263, BL_AT = 272, BS_AT = 281, LISTS_AT = 364, LISTS_END = 418.
+    assert_eq!(rd(263), p.size);
+    assert_eq!(rd(272), p.bl);
+    assert_eq!(rd(281), p.bs);
+    assert_eq!(rd(290), p.entry);
+    assert_eq!(&bc[299..331], &p.long_key);
+    assert_eq!(&bc[332..364], &p.short_key);
+    assert_eq!(bc[364], 0x08);
+    assert_eq!(bc[418], 0x20);
+    assert_eq!(&bc[419..451], &p.tag_l.as_bytes());
+    assert_eq!(&bc[452..484], &p.tag_s.as_bytes());
+    // The since window [484..493) (KpfPair STATE_END = 493).
+    assert_eq!(bc[484], 0x08);
+    assert_eq!(rd(485), p.since);
 }
 
 #[test]
@@ -38,18 +43,47 @@ fn open_state_span_and_windows() {
     let base = open_base();
     let c = &base.contracts.values().next().unwrap().compiled;
     assert_eq!(c.state_span.offset, 1);
-    assert_eq!(c.state_span.len, 321);
+    assert_eq!(c.state_span.len, 375);
     let o = long_order(&keypair(1));
     let bc = bytecode(base);
-    // KpfOpen constants MARKET_AT = 1, MARKET_LEN = 207, LEFT_AT = 251.
-    assert_eq!(&bc[1..208], &pair_base_market());
-    assert_eq!(i64::from_le_bytes(bc[251..259].try_into().unwrap()), o.size_left);
+    // KpfOpen constants MARKET_AT = 1, MARKET_LEN = 261, LEFT_AT = 305.
+    assert_eq!(&bc[1..262], &pair_base_market());
+    assert_eq!(i64::from_le_bytes(bc[305..313].try_into().unwrap()), o.size_left);
 }
 
 fn pair_base_market() -> Vec<u8> {
-    bytecode(pair_base())[1..208].to_vec()
+    bytecode(pair_base())[1..262].to_vec()
 }
 
+/// KpfPending (DESIGN 4.5d): its state is the pair's market block, the claim, the pair's entry, keys and listings in
+/// the pair's own order (one slice of the pair's script, `rs.slice(BS_AT + 8, LISTS_END)`), the clock S, the
+/// proposer and the three hashes: 621 bytes, from byte 1. KpfPair.propose writes exactly this sequence, so the pair's
+/// [BS_AT + 8, LISTS_END) window must land at pending bytes [352, 481).
+#[test]
+fn pending_state_span_and_windows() {
+    let base = kpf_protocol::artifacts::pending_base();
+    let c = &base.contracts.values().next().unwrap().compiled;
+    assert_eq!((c.state_span.offset, c.state_span.len), (1, 621));
+    let bc = bytecode(base);
+    assert_eq!(&bc[1..262], &pair_base_market()[..], "the pending's market block is the pair's");
+    let rd = |at: usize| i64::from_le_bytes(bc[at..at + 8].try_into().unwrap());
+    // kind, side, n, bl, bs, quote, cureBound, fee, bond, refund (the sample of kpf-artifacts).
+    let want = [2, 1, 1_000_000_000, 900_000_000, 1_200_000_000, 940_000_000, 893_000_000, 4_700_000_000, 9_000_000_000, 9_000_000_000];
+    for (i, v) in want.into_iter().enumerate() {
+        assert_eq!(bc[262 + 9 * i], 0x08);
+        assert_eq!(rd(263 + 9 * i), v, "claim field {i}");
+    }
+    // The pair's entry .. short listing window, byte for byte the shape of the pair's [290 - 1, 418).
+    let pair_win = &bytecode(pair_base())[289..418];
+    assert_eq!(bc[352], pair_win[0]);
+    assert_eq!(bc[352 + 9], 0x20);
+    assert_eq!(bc[352 + 129], 0x08, "since follows the window");
+    assert_eq!(rd(482), 1, "since of the sample");
+    assert_eq!(bc[490], 0x20, "proposer key");
+    assert_eq!(&bc[524..556], &[0x2a; 32], "restore hash");
+    assert_eq!(&bc[557..589], &[0x2b; 32], "cure hash");
+    assert_eq!(&bc[590..622], &[0x2c; 32], "forfeit hash");
+}
 /// The KobAsk and KobBid state offsets KpfPair.evQuote hard-codes (relative to the state span), checked against
 /// the real KOB templates compiled from `vendor/kob` with a distinct value in every field (review 2, F2 added tif
 /// and expiryDaa). If KOB's layout changes, this fails. Also the soft-expiry constants KpfPair repeats.
@@ -99,4 +133,9 @@ fn splice_equals_compile() {
     let mut o = short_order(&keypair(5));
     o.size_left = 123_456_789;
     assert_eq!(bytecode(&o.art()), bytecode(&compile("KpfOpen.sil", &o.ctor())));
+    // A pending part as KpfPair.propose writes it (the library's state of a real claim).
+    let l = kpf::evidence::live(&pair(&keypair(3), &keypair(4)), 0x11).at(1_000);
+    let g = kpf::evidence::PairLeg { l: l.clone(), n: 400_000_000, q: 0, act: kpf::evidence::Act::Liq { side: LONG } };
+    let w = kpf::evidence::pend(&g, 940_000_000).w;
+    assert_eq!(bytecode(&w.art()), bytecode(&compile("KpfPending.sil", &w.ctor())));
 }

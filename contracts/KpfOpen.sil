@@ -14,8 +14,8 @@ pragma silverscript ^0.1.0;
 //          the part at output partOut continues that pair's covenant id. Anyone, once tx.daa >= activeFrom.
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
-// Liquidation by transfer (T7) uses take unchanged: the pair's liqTransfer entry replaces the listing by price
-// evidence and pays the winner (DESIGN 4.5b), and this order checks only its own guarantees, as for T2.
+// Liquidation by transfer (T7) is gone (DESIGN 4.5d): a finalized liquidation forfeits the loser's side to the
+// winner, who sells it through an ordinary listing, which this order takes with `take` as any T2.
 // Review 3 (DESIGN 4.5c): every pair output this order rebuilds carries since = 0 (a fresh evidence clock), the
 // order's side is healthy at its own entry price x, and the range is wider than both maintenance bands. The
 // order's activeFrom is a lower bound on tx.daa (CLTV); it shares the transaction's one lock time with the bounds
@@ -45,6 +45,12 @@ contract KpfOpen(
     int init_carrier,
     int init_idleDaa,
     int init_priceMax,
+    int init_bondBps,
+    int init_bondMin,
+    int init_kcBps,
+    int init_gBps,
+    int init_challengeDaa,
+    int init_minEvidenceLife,
     int init_side,
     pubkey init_ownerKey,
     int init_sizeLeft,
@@ -56,7 +62,7 @@ contract KpfOpen(
     int init_activeFrom,
     int init_expiryDaa
 ) {
-    // Market block (state [0..207)), byte for byte the pair's.
+    // Market block (state [0..261)), byte for byte the pair's.
     byte[32] tokenCovId = init_tokenCovId;
     byte[32] tokenTplHash = init_tokenTplHash;
     byte[32] extensionCommitment = init_extensionCommitment;
@@ -72,7 +78,13 @@ contract KpfOpen(
     int carrier = init_carrier;
     int idleDaa = init_idleDaa;
     int priceMax = init_priceMax;
-    // Order (state [207..321)).
+    int bondBps = init_bondBps;
+    int bondMin = init_bondMin;
+    int kcBps = init_kcBps;
+    int gBps = init_gBps;
+    int challengeDaa = init_challengeDaa;
+    int minEvidenceLife = init_minEvidenceLife;
+    // Order (state [261..375)).
     int side = init_side;                    // 1 long, 2 short
     pubkey ownerKey = init_ownerKey;         // maker (x-only)
     int sizeLeft = init_sizeLeft;            // * base units still to open
@@ -98,15 +110,17 @@ contract KpfOpen(
     int constant LOCK_TIME_THRESHOLD = 500000000000;
     // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
+    // The largest bond floor (KpfPair.SOMPI_MAX).
+    int constant SOMPI_MAX = 2900000000000000000;
     // The six listing fields of a new pair, all zero (unlisted), with their 0x08 push opcodes.
     byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
     // One empty listing window.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
-    // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..208), sizeLeft
-    // payload [251..259).
+    // Redeem-script offsets. The state starts at byte 1 (checked by the tests): market block [1..262), sizeLeft
+    // payload [305..313).
     int constant MARKET_AT = 1;
-    int constant MARKET_LEN = 207;
-    int constant LEFT_AT = 251;
+    int constant MARKET_LEN = 261;
+    int constant LEFT_AT = 305;
 
     // As KpfPair.quoteOf.
     function quoteOf(int n, int r, int c) : int {
@@ -116,7 +130,7 @@ contract KpfOpen(
     }
 
     // The market and order bounds a fill or take relies on: every bound the pair it creates checks on its entries
-    // (DESIGN 5), including the evidence parameters its P5, P6 and P7 need (DESIGN 4.5a, review 1 F4), so no order
+    // (DESIGN 5), including the evidence parameters its P5 and P6 need (DESIGN 4.5a, review 1 F4), so no order
     // creates a pair with a dead path.
     // DESIGN: 4.5a lists kBps, minRestDaa, mmrBps, liqFeeBps, keeperFeeMin with the pair's bounds; the pair also
     // needs minRestDaa below the lock-time threshold, since tx.daa >= exposed + minRestDaa is proven by CLTV, so
@@ -145,6 +159,23 @@ contract KpfOpen(
         // DESIGN: 4.5c adds the rate limit but no bound; this one is required so no order creates a pair with a dead
         // path (the rule of 4.5a, review 1 F4).
         require(minRestDaa * 4 < LOCK_TIME_THRESHOLD);
+        // The two-step evidence parameters (DESIGN 4.5d), with the bounds KpfPair.propose checks, so every pending
+        // part of the pair has a live challenge, cure and finalize.
+        // DESIGN: 4.5d asks W >= R + detection and L <= 77,760,000 - R without making them rules. Both are required
+        // here: with W < R a stale claim could be finalized before any counter-evidence can have rested, and with
+        // L + R above the 90-day limit no evidence could ever qualify, so the pair could never be liquidated.
+        require(bondBps >= 0);
+        require(bondBps <= BPS);
+        require(bondMin >= 0);
+        require(bondMin <= SOMPI_MAX);
+        require(kcBps > 0);
+        require(kcBps <= K_MAX);
+        require(gBps > 0);
+        require(gBps < BPS);
+        require(challengeDaa >= minRestDaa);
+        require(challengeDaa < CSV_LIMIT);
+        require(minEvidenceLife >= 0);
+        require(minEvidenceLife + minRestDaa <= MAX_IDLE);
         require(myRate > 0);
         require(minCounterRate >= 0);
         require(tip >= 0);

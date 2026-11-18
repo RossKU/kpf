@@ -1,0 +1,413 @@
+pragma silverscript ^0.1.0;
+
+// KpfPending: a part of a KpfPair against which a claim on price evidence is pending (docs/DESIGN.md 4.5d).
+//
+// KpfPair.propose (kind 1, P5: the owner of `side` closes n at its quote; kind 2, P6: the loser `side` is
+// liquidatable) moves the part n into this template under the pair's own covenant id, with a bond B, and writes
+// every field below; nothing here is mutable. The part is the price range [bl, bs] of size n, as in the pair.
+//
+// Entries, each the only input of its covenant id (OpCovInputCount(selfId) == 1), so a pending part is never
+// spent with the remainder of its own split, or with a second part of the same id:
+//   challenge(nb, qb, ev, tk)  anyone, with counter-evidence at input ev that rested minRestDaa from this UTXO's DAA
+//                              score P and contradicts the claim by the margin g: the part returns to the pair
+//                              state `restoreHash` (since = 0) with value >= v - B; the bond is what no output must
+//                              hold, the challenge executor's. No upper bound in time: valid until a finalize lands.
+//   cure(s)                    kind 2 only, the loser's owner (signature s): the part returns to `cureHash` (the
+//                              loser's bound moved to cureBound, since = S) with the added margin, and the proposer
+//                              is repaid `refund` at output i.
+//   finalize()                 anyone, once this UTXO is challengeDaa old (CSV). kind 1: the closer is paid its
+//                              payoff at the clamped quote plus `refund`, the other party the rest, at the slots of
+//                              DESIGN 4.4 (the long at i, the short at M - 1 - i). kind 2 (forfeit and keep): the
+//                              part becomes `forfeitHash` (both sides the winner's) with value >= v - B - fee, and the
+//                              proposer is paid B + fee at output i.
+// Every branch ends in an ordinary KpfPair or in plain outputs, and finalize needs no key and no evidence, so no
+// pending part is locked: anyone ends it after challengeDaa.
+//
+// Counter-evidence (DESIGN 4.5d section 3). A plain resting KobAsk or KobBid of this market, read exactly as the pair
+// reads evidence (template hash and P2SH, its fill n_ev as the first push, token covenant id, scale, extension
+// commitment, slope 0, interval >= 0), with this UTXO's DAA score P as the clock: exposed' = max(exposed, P),
+// tx.daa >= exposed' + minRestDaa by CLTV, and fillable by conforming matchers through exposed' + minRestDaa +
+// minEvidenceLife. An order that rested since before P therefore counts from P. Its evidence block covers this
+// part's n with the multiple kcBps. It is of the opposite kind and contradicts the claim:
+//   close long at bid b    counter ask a   c(a) * 10^4 <= c(b) * (10^4 - g)
+//   close short at ask a   counter bid b   c(b) * 10^4 >= c(a) * (10^4 + g)
+//   liquidate long         counter bid b   b * (10^4 - mmrBps) >= bl * (10^4 + g)
+//   liquidate short        counter ask a   a * (10^4 + mmrBps) <= bs * (10^4 - g)
+// c(p) = min(max(p, bl), bs).
+// DESIGN: 4.5d compares the close rows on the raw quotes; a counter quote outside [bl, bs] that changes no payout
+// (both quotes beyond the same bound) would then refute a close whose payout is exact, so the close rows compare the
+// clamped prices, the ones the payout uses.
+//
+// The pair states this part may become are P2SH hashes KpfPair.propose computed from its own script (restore, cure,
+// forfeit; DESIGN 4.5d resolution 4), paid to with new ScriptPubKeyP2SH(hash); this template never needs the pair's.
+// All three carry tag 0 on both sides, so no KpfOpen can claim them, and no entry here copies a tag.
+contract KpfPending(
+    byte[32] ASK_TPL,
+    int ASK_PRE,
+    int ASK_SUF,
+    byte[32] BID_TPL,
+    int BID_PRE,
+    int BID_SUF,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    byte[32] init_extensionCommitment,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_mmrBps,
+    int init_kBps,
+    int init_minRestDaa,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_priceMax,
+    int init_bondBps,
+    int init_bondMin,
+    int init_kcBps,
+    int init_gBps,
+    int init_challengeDaa,
+    int init_minEvidenceLife,
+    int init_kind,
+    int init_side,
+    int init_n,
+    int init_bl,
+    int init_bs,
+    int init_quote,
+    int init_cureBound,
+    int init_fee,
+    int init_bond,
+    int init_refund,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    int init_since,
+    pubkey init_proposerKey,
+    byte[32] init_restoreHash,
+    byte[32] init_cureHash,
+    byte[32] init_forfeitHash
+) {
+    // The pair's market block (state [0..261)), byte for byte.
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    byte[32] extensionCommitment = init_extensionCommitment;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;
+    int mmrBps = init_mmrBps;
+    int kBps = init_kBps;
+    int minRestDaa = init_minRestDaa;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int priceMax = init_priceMax;
+    int bondBps = init_bondBps;
+    int bondMin = init_bondMin;
+    int kcBps = init_kcBps;
+    int gBps = init_gBps;
+    int challengeDaa = init_challengeDaa;
+    int minEvidenceLife = init_minEvidenceLife;
+    // The claim (state [261..621)).
+    int kind = init_kind;                // 1 close (P5), 2 liquidation (P6)
+    int side = init_side;                // kind 1: the closer; kind 2: the loser
+    int n = init_n;                      // size of the part
+    int bl = init_bl;                    // its bounds
+    int bs = init_bs;
+    int quote = init_quote;              // the proposal's evidence quote
+    int cureBound = init_cureBound;      // kind 2: the loser's bound after a cure (0: no cure)
+    int fee = init_fee;                  // kind 2: keeper fee, to the proposer at finalize
+    int bond = init_bond;                // B
+    int refund = init_refund;            // B, plus the carrier the proposer funded when n < s
+    // The pair's entry, keys and listings and its clock start S when the claim was proposed. Only the keys are read
+    // here; the rest makes the state self-describing (a tool rebuilds the restore, cure and forfeit pairs from it).
+    int entryPrice = init_entryPrice;
+    pubkey longKey = init_longKey;
+    pubkey shortKey = init_shortKey;
+    int longAsk = init_longAsk;
+    int longMin = init_longMin;
+    int longTip = init_longTip;
+    int shortBid = init_shortBid;
+    int shortMin = init_shortMin;
+    int shortTip = init_shortTip;
+    int since = init_since;
+    pubkey proposerKey = init_proposerKey;
+    byte[32] restoreHash = init_restoreHash;
+    byte[32] cureHash = init_cureHash;
+    byte[32] forfeitHash = init_forfeitHash;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant ASK_STATE_LEN = 276;
+    int constant BID_STATE_LEN = 285;
+    int constant IOC_LIFE = 600;
+    int constant MAX_IDLE = 77760000;
+
+    // As KpfPair.quoteOf.
+    function quoteOf(int x, int r, int c) : int {
+        int m = x % scale;
+        int q = x / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    function clampP(int p) : int {
+        int c = p;
+        if (c < bl) { c = bl; }
+        if (c > bs) { c = bs; }
+        return c;
+    }
+
+    // The single output of this id: the P2SH of the hash h, holding at least v (each entry checks the single-input
+    // guard itself).
+    function only(byte[32] h, int v) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovOutputCount(selfId) == 1);
+        int o = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SH(h)));
+        require(tx.outputs[o].value >= v);
+    }
+
+    // As KpfPair.tplState.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // As KpfPair.blockN.
+    function blockN(int j, byte[8] qb) : int {
+        require(OpTxInputScriptSigSubstr(j, 0, 1) == byte[](0x08));
+        int nj = int(byte[8](OpTxInputScriptSigSubstr(j, 1, 9)));
+        require(nj >= 0);
+        require(OpTxInputScriptSigSubstr(j, 9, 10) == byte[](0x08));
+        require(byte[8](OpTxInputScriptSigSubstr(j, 10, 18)) == qb);
+        return nj;
+    }
+
+    // As KpfPair.evBlock, with the counter-evidence multiple kcBps (propose checked 0 < kcBps <= 10^5).
+    function evBlock(int ev, int nev, byte[8] qb) {
+        int self = this.activeInputIndex;
+        int q = int(qb);
+        require(q >= 0);
+        require(q <= self);
+        require(self < ev);
+        int len = ev - q;
+        require(len <= 8);
+        int sum = blockN(q, qb);
+        if (len > 1) { sum = sum + blockN(q + 1, qb); }
+        if (len > 2) { sum = sum + blockN(q + 2, qb); }
+        if (len > 3) { sum = sum + blockN(q + 3, qb); }
+        if (len > 4) { sum = sum + blockN(q + 4, qb); }
+        if (len > 5) { sum = sum + blockN(q + 5, qb); }
+        if (len > 6) { sum = sum + blockN(q + 6, qb); }
+        if (len > 7) { sum = sum + blockN(q + 7, qb); }
+        require(nev >= (sum / BPS) * kcBps + ((sum % BPS) * kcBps + BPS - 1) / BPS);
+    }
+
+    // As KpfPair.evQuote, with clk = this UTXO's DAA score P: exposed' = max(exposed, P).
+    function evQuote(int ask, int ev, int tk, byte[8] qb, int clk) : int {
+        require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
+        int nev = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
+        require(nev > 0);
+        int pre = BID_PRE;
+        int len = BID_STATE_LEN;
+        int suf = BID_SUF;
+        byte[32] tpl = BID_TPL;
+        int d = 33;
+        int w = 51;
+        if (ask == 1) {
+            pre = ASK_PRE;
+            len = ASK_STATE_LEN;
+            suf = ASK_SUF;
+            tpl = ASK_TPL;
+            d = 0;
+            w = 0;
+        }
+        byte[] o = tplState(ev, pre, len, suf, tpl);
+        require(byte[32](o.slice(34, 66)) == tokenCovId);
+        byte[] qs = o.slice(118 + d, 180 + d);
+        byte[] r = o.slice(190 + w, 216 + w);
+        require(int(byte[8](qs.slice(0, 8))) == scale);
+        require(int(byte[8](r.slice(18, 26))) == 0);
+        int iv = int(byte[8](r.slice(0, 8)));
+        require(iv >= 0);
+        int ud = OpTxInputDaaScore(ev);
+        int exposed = ud + iv;
+        int act = int(byte[8](qs.slice(45, 53)));
+        if (act > exposed) { exposed = act; }
+        if (ask == 1) {
+            require(OpInputCovenantId(tk) == tokenCovId);
+            byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+            require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            require(byte[32](ts.slice(80, 112)) == extensionCommitment);
+            int td = OpTxInputDaaScore(tk);
+            if (td > exposed) { exposed = td; }
+        } else {
+            require(byte[32](o.slice(118, 150)) == extensionCommitment);
+        }
+        if (clk > exposed) { exposed = clk; }
+        int restEnd = exposed + minRestDaa;
+        require(tx.daa >= restEnd);
+        int live = restEnd + minEvidenceLife;
+        require(int(byte[8](qs.slice(54, 62))) >= live);
+        if (int(byte[8](qs.slice(36, 44))) != 0) {
+            int kill = ud;
+            if (act > kill) { kill = act; }
+            require(kill + IOC_LIFE >= live);
+        }
+        require(live <= ud + MAX_IDLE);
+        evBlock(ev, nev, qb);
+        return int(byte[8](qs.slice(18, 26)));
+    }
+
+    // Challenge (DESIGN 4.5d). Anyone, with counter-evidence at input ev (an ask's custody at tk); this input's first
+    // two pushes are nb = n and the block start qb. The part returns to the restore state with at least this UTXO's
+    // value less the bond; the bond is the executor's. A challenge by the proposer itself only returns its own bond
+    // to it, less the cost of the counter fill.
+    // DESIGN: the clock P is this UTXO's DAA score; a negative one (a mempool spend of an unaccepted proposal, read as
+    // -1) is refused, as KpfPair.clockStart refuses one.
+    entry challenge(byte[8] nb, byte[8] qb, int ev, int tk) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        require(OpTxInputScriptSigSubstr(self, 0, 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(self, 1, 9) == byte[](nb));
+        require(int(nb) == n);
+        int clk = OpTxInputDaaScore(self);
+        require(clk >= 0);
+        // The counter-evidence is of the opposite kind: an ask against a long's close at a bid or a short's
+        // liquidation at a bid, a bid otherwise.
+        int ask = 0;
+        if (kind == KIND_CLOSE) {
+            if (side == SIDE_LONG) { ask = 1; }
+        } else {
+            if (side == SIDE_SHORT) { ask = 1; }
+        }
+        int c = evQuote(ask, ev, tk, qb, clk);
+        require(c >= 0);
+        require(c <= priceMax);
+        if (kind == KIND_CLOSE) {
+            int cc = clampP(c);
+            int cq = clampP(quote);
+            if (side == SIDE_LONG) {
+                require(cc * BPS <= cq * (BPS - gBps));
+            } else {
+                require(cc * BPS >= cq * (BPS + gBps));
+            }
+        } else {
+            if (side == SIDE_LONG) {
+                require(c * (BPS - mmrBps) >= bl * (BPS + gBps));
+            } else {
+                require(c * (BPS + mmrBps) <= bs * (BPS - gBps));
+            }
+        }
+        only(restoreHash, tx.inputs[self].value - bond);
+    }
+
+    // Cure (DESIGN 4.5d), kind 2 only. The loser's owner moves its bound exactly to cureBound (more margin is an
+    // ordinary add margin afterwards) and repays the proposer `refund` at output i; no cure fee. The cured part
+    // holds its range floor and at least this UTXO's value less the refund plus ceil(q(n, moved distance)), so the
+    // curer funds the added margin (and, when n < s, the cured part's carrier) and no value of the winner moves.
+    // DESIGN: 4.5d requires only the range floor q(n, BS - BL*) + C; that would let the curer take this part's excess
+    // (the carrier and any value above the floor when n = s), which is not its own, so the value is also kept as add
+    // margin keeps it.
+    entry cure(sig s) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        require(kind != KIND_CLOSE);
+        // No cure when propose found none (a short loser whose cure bound exceeds priceMax): an output to the P2SH of
+        // a zero hash could never be spent, and it would hold the winner's value.
+        byte[] z8 = byte[](0 as byte[8]);
+        require(cureHash != byte[32](z8 + z8 + z8 + z8));
+        int b0 = bl;
+        int b1 = bs;
+        int add = 0;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            b0 = cureBound;
+            add = quoteOf(n, bl - cureBound, scale - 1);
+        } else {
+            signedBy(s, shortKey);
+            b1 = cureBound;
+            add = quoteOf(n, cureBound - bs, scale - 1);
+        }
+        only(cureHash, quoteOf(n, b1 - b0, 0) + carrier);
+        int o = OpCovOutputIdx(OpInputCovenantId(self), 0);
+        require(tx.outputs[o].value - tx.inputs[self].value + refund >= add);
+        payTo(self, proposerKey, refund);
+    }
+
+    // Finalize (DESIGN 4.5d). Anyone, once this UTXO is challengeDaa old (CSV, a relative lower bound; propose checked
+    // 0 <= challengeDaa < 2^32). No evidence.
+    // kind 1: the closer is owed q(n, c(quote) - bl) (long) or q(n, bs - c(quote)) (short) plus `refund`, the other
+    // party this UTXO's value less that (carrier and excess included when n = s); the long is paid at output i, the
+    // short at M - 1 - i (at least the input count). A payout below dust is not created and goes to the closer.
+    // kind 2 (forfeit and keep): one output of this id with forfeitHash and at least this UTXO's value less the bond
+    // and the fee, and the proposer B + fee at output i.
+    // DESIGN: 4.5d pays the proposer `refund` (B + C) and leaves V - refund - fee in the forfeited part; when n < s the
+    // forfeited part would then lack its carrier, which no party but the proposer has funded. The proposer's carrier
+    // therefore stays in the forfeited part (it is the new pair the proposer's claim creates) and the proposer is paid
+    // B + fee.
+    entry finalize() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(this.ageDaa >= challengeDaa);
+        int v = tx.inputs[self].value;
+        if (kind == KIND_CLOSE) {
+            require(OpCovOutputCount(selfId) == 0);
+            int c = clampP(quote);
+            int owe = quoteOf(n, c - bl, 0);
+            if (side == SIDE_SHORT) { owe = quoteOf(n, bs - c, 0); }
+            int me = owe + refund;
+            int other = v - me;
+            if (other < PLAIN_DUST) {
+                me = v;
+                other = 0;
+            }
+            int lp = me;
+            int sp = other;
+            if (side == SIDE_SHORT) {
+                lp = other;
+                sp = me;
+            }
+            payTo(self, longKey, lp);
+            if (sp > 0) {
+                int j = tx.outputs.length - 1 - self;
+                require(j >= tx.inputs.length);
+                payTo(j, shortKey, sp);
+            }
+        } else {
+            only(forfeitHash, v - bond - fee);
+            payTo(self, proposerKey, bond + fee);
+        }
+    }
+}

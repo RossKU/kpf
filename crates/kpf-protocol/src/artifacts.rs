@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
 const PAIR_JSON: &str = include_str!("../../../contracts/artifacts/KpfPair.json");
 const OPEN_JSON: &str = include_str!("../../../contracts/artifacts/KpfOpen.json");
+const PENDING_JSON: &str = include_str!("../../../contracts/artifacts/KpfPending.json");
 // KOB's published artifacts (the read-only checkout `vendor/kob`, never copied): the evidence orders and the reference
 // KCC-20 token program. Their ABIs build the signature scripts of the KOB and token inputs of an evidence transaction;
 // their templates decode live orders. `tests/pinned.rs` pins their digests and checks the template hashes against the
@@ -51,6 +52,22 @@ pub fn pair_artifact_text() -> &'static str {
 /// The embedded order artifact, as text.
 pub fn open_artifact_text() -> &'static str {
     OPEN_JSON
+}
+/// The embedded pending artifact, as text.
+pub fn pending_artifact_text() -> &'static str {
+    PENDING_JSON
+}
+
+/// The pinned `KpfPending` artifact (DESIGN 4.5d).
+pub fn pending_base() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| serde_json::from_str(PENDING_JSON).expect("contracts/artifacts/KpfPending.json"))
+}
+
+/// The `KpfPending` template (its hash is the `PENDING_TPL` constant of `KpfPair`).
+pub fn pending_template() -> &'static Template {
+    static T: OnceLock<Template> = OnceLock::new();
+    T.get_or_init(|| Template::of("KpfPending", pending_base()))
 }
 
 /// One pinned contract of the manifest.
@@ -85,6 +102,7 @@ pub struct Manifest {
     pub kob_bid: ManifestKob,
     pub kpf_pair: ManifestContract,
     pub kpf_open: ManifestContract,
+    pub kpf_pending: ManifestContract,
 }
 
 /// The parsed manifest.

@@ -84,6 +84,7 @@ impl ObjFile {
         match self.decoded()? {
             Decoded::Pair(p) => Ok(LivePair { p, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Open(_) => Err("this object is an order, not a pair".into()),
+            Decoded::Pending(_) => Err("this object is a pending part (a claim on it awaits its challenge window, DESIGN 4.5d), not a pair: use challenge, cure or finalize".into()),
         }
     }
 
@@ -91,6 +92,15 @@ impl ObjFile {
         match self.decoded()? {
             Decoded::Open(o) => Ok(LiveOpen { o, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
             Decoded::Pair(_) => Err("this object is a pair, not an order".into()),
+            Decoded::Pending(_) => Err("this object is a pending part, not an order".into()),
+        }
+    }
+
+    /// The live pending part of this file (DESIGN 4.5d).
+    pub fn live_pending(&self) -> Result<LivePending, String> {
+        match self.decoded()? {
+            Decoded::Pending(w) => Ok(LivePending { w, value: self.amount, id: self.covenant_id, op: self.op, daa: self.known_daa()? }),
+            _ => Err("this object is not a pending part (a KpfPending written by a proposal)".into()),
         }
     }
 
@@ -102,6 +112,7 @@ impl ObjFile {
         let (kind, state) = match self.decoded() {
             Ok(Decoded::Pair(p)) => ("pair", p.to_json()),
             Ok(Decoded::Open(o)) => ("order", o.to_json()),
+            Ok(Decoded::Pending(w)) => ("pending", w.to_json()),
             Err(_) => match kpf_protocol::kob::KobObj::decode(&self.redeem) {
                 Ok(kpf_protocol::kob::KobObj::Ask(a)) => ("ask", a.to_json()),
                 Ok(kpf_protocol::kob::KobObj::Bid(b)) => ("bid", b.to_json()),

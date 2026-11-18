@@ -18,7 +18,7 @@
 //! | [`coop_close`] | P9 cooperative close |
 //! | [`idle_settle`] | P8 |
 //!
-//! The evidence paths (P5 unilateral close, P6 liquidation, P7 liquidation by transfer) are built in `crate::evidence`.
+//! The two-step evidence paths (DESIGN 4.5d: propose P5 and P6, challenge, cure, finalize) are built in `crate::evidence`.
 
 use kaspa_consensus_core::Hash;
 

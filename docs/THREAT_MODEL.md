@@ -12,6 +12,7 @@ defined there. *(inference)* marks conclusions not stated by a source. Attack en
 | Open-order escrows | `KpfOpen` value |
 | Evidence makers' tokens and KAS | KOB `KobAsk` custodies, `KobBid` escrows read as evidence |
 | Keeper capital | the KAS or tokens a keeper trades to produce evidence |
+| Bonds and keeper fees (D§4.5d) | `KpfPending` value: the proposer's bond `B` (and the carrier it funded), the fee owed to it at finalize |
 | Pool deposits (M2), committee bonds (M4) | pool / bond UTXOs |
 | Liveness | the ability to exit, liquidate and recover funds |
 
@@ -19,7 +20,9 @@ defined there. *(inference)* marks conclusions not stated by a source. Attack en
 
 Long and short owners (a pair's two parties); a leaver, an entrant, a bystander (the party whose counterparty
 changes); executors (anyone who builds transactions, untrusted, may trade; KOB's competing matchers,
-`[K] docs/spec/matcher.md:281-287`); keepers (anyone who liquidates); evidence makers (anyone with a resting KOB order);
+`[K] docs/spec/matcher.md:281-287`); keepers (anyone who liquidates; since D§4.5d the proposer of a claim, which posts
+the bond); challengers and watchers (anyone who refutes a pending claim with counter-evidence and takes its bond);
+evidence makers (anyone with a resting KOB order);
 the token issuer (kUSDT has a federated mint and a guardian pause, `[K] contracts/third-party/kusdt/UPSTREAM.md:5`);
 LPs (M2); committee members (M4); miners and GhostDAG ordering. Any actor may control many keys
 (`[K] docs/spec/matcher.md:761-765`).
@@ -50,8 +53,9 @@ the counterparty or pays it. I: theft of the victim's whole residual `q(n, p −
 the victim kept `q(n, a − BL)`). The mirror attack by the loser (its own free quote on the wrong side of the market,
 review 2 F1) now gains it only the keeper fee it collects as executor. M: evidence must rest `R` exposed to every matcher
 and be filled for `k·Σn` (D§3.3, D§4.4); honest matchers cross a low ask with every resting bid ≥ `a` in the next tick
-(`[K] docs/spec/matcher.md:274-287`), so the attacker first sells into all real bids between `p` and `a`.
-R: the covenant cannot tell self-dealing (`matcher.md:761-765`); cost is the depth swept plus exposure risk, zero on a
+(`[K] docs/spec/matcher.md:274-287`), so the attacker first sells into all real bids between `p` and `a`. Since
+D§4.5d the fake claim must also survive the window `W`: a fresh bid that contradicts it by `g` refutes it and takes
+the attacker's bond (A7). R: the covenant cannot tell self-dealing (`matcher.md:761-765`); cost is the depth swept plus exposure risk, zero on a
 book with no bids and no arbitrageurs. T: X9 drill on an empty book (expect success: documents the residual) and on a
 seeded book (measure cost vs gain).
 
@@ -88,9 +92,12 @@ verbatim: `interval ≥ 0` (audit 2026-10-29 F1, `[K] docs/spec/matcher.md:729-7
 `≥ exposed + R`, read from the order's own state. Review 3 (F1, D§4.5c): a covenant can prove only a lower bound on
 the time, so an order that died after resting could be used forever; evidence now counts only on the pair's own clock
 (`exposed' = max(exposed, S)`, `S` = `since` or the pair UTXO's DAA), the three conditions use `exposed'`, and
-hand-overs restart the clock at most once per `4R`. R: a dead order that rested honestly at a past price within the
-clock stays usable: the closer of a P5 gets a look-back to the best quote since `S`, and a side touched since `S`
-stays liquidatable while its bound is unchanged (barrier semantics); executors must sweep dead mispriced orders and the
+hand-overs restart the clock at most once per `4R`. Since D§4.5d the order must also stay fillable for the evidence
+life `L` after its rest (`restEnd + L`), and no claim settles at once: it is refutable for the window (A7).
+R: a dead order that rested honestly at a past price within the clock can still be proposed: the closer of a P5 gets
+a look-back to the best quote since `S`, now reduced to quotes within `g` of the market and to markets whose opposite
+book is empty during `W`; a side touched since `S` is liquidatable only if nobody refutes the claim (hold semantics,
+replacing the barrier semantics of review 3); executors must sweep dead mispriced orders and the
 tooling refuses dead evidence by default. A touch that starts resting in the last `R` before `S + 4R` and dies before
 resting `R` after a self-transfer is dodged. KOB's `KobCondAsk.touch` still lacks the soft-expiry rule. T: port KOB's
 evidence mutation suite to every KPF evidence path; `audit2_tests` expiry, kill and idle boundaries; `audit3_tests`
@@ -100,7 +107,41 @@ clock, rate-limit and sentinel tests; X6 cross-check of the clock rule.
 V: evidence of another token, another extension commitment, another `scale`, a decaying order, or a conditional /
 if-done / pair fill. P: weak identity check. I: free fake prices (units of another commitment cost nothing to fake,
 `[K] contracts/orders/KobCondAsk.sil:206-211`). M: same identity checks as KOB (`KobCondAsk.sil:219-246`), template
-constants pinned. R: KPF inherits any defect of KOB's evidence rules. T: identity mutations.
+constants pinned. Counter-evidence is read by `KpfPending` with the same checks (D§4.5d). R: KPF inherits any defect
+of KOB's evidence rules. T: identity mutations.
+
+**A7 Stale or dead evidence (two-step, D§4.5d).**
+V: a party proposes a close or a liquidation on a quote that rested honestly and has since died or moved (review 3
+F1). P: a quote that 4.5c accepts. I (before D§4.5d): settled at once at the stale quote. M: the claim only moves the
+part into `KpfPending` with a bond `B`; for at least `W` anyone may refute it with a fresh quote of the opposite kind
+that rested `R` on the pending part's own clock `P` (orders resting since before `P` count from `P`), was fillable
+through `restEnd + L`, covers `k_c·Σn` and contradicts the claim by `g` (liquidations relative to the trigger, closes
+relative to the clamped quote; equality contradicts). The part returns with `since = 0` and the bond goes to the
+challenger. A liquidation victim may instead cure (bound moved to the cure bound, the proposer repaid, no fee). Holds
+(`kpf_two_step_tests`): a stale proposal is refuted, a truthful one cannot be, a counter quote one tick short of `g` is
+refused, dead or short-lived counter-evidence is refused, a close is compared on clamped prices, `k_c` coverage is
+enforced, a challenge after `W` but before a finalize is accepted. R: the defence must be online: an offline victim
+depends on a funded watcher acting within `W`; a victim within `g` of its trigger cannot refute, only cure; on an empty
+opposite book stale closes stand and stale liquidations are stopped only by a cure. `since = 0` on restore kills only
+quotes that die before `restore + R + L`: a library quote still live requalifies after `R`. T: Y5 (watcher latency),
+Y7 (evidence supply under `L`).
+
+**A8 Self-refuted claim restarts the clock (exploit, D§4.5d residual 2).**
+V: a truly liquidatable long proposes its own close at a fake bid (rested `R`, self-filled), refutes it itself with its
+own ask rested `R` after `P`, and recovers its bond. P: a thin book (the fake bid and ask cost only fees). I: while
+pending no liquidation can be proposed; after the restore (`since = 0`) the keeper's live ask counts only `R` later, so
+each cycle delays the liquidation by at least `2R`; the winner carries the price move meanwhile. M: the cost per cycle
+is two fees and two self-fills of `k·n` and `k_c·n`. R: accepted by the engine
+(`exploit_self_refuted_claim_restarts_the_clock`). Restoring with `since = P` instead of 0 would remove the second `R`
+but keep every refuted live quote usable from `P`: open for decision, not implemented. T: the exploit test.
+
+**A9 Proposal spam (freeze).**
+V: propose against a part with a 4.5c-valid quote to freeze it. I: neither side can close, transfer, list or add margin
+(except cure) while pending: about `R` against an online victim (it refutes and takes the bond), up to `W` against an
+offline one. M: a proposal needs evidence that settles under today's rules; the bond is lost to the first challenger;
+finalize is a keyless exit. A proposer that challenges itself recovers only its own bond
+(`holds_self_challenge_only_returns_the_own_bond`). R: a cheap freeze of up to `W` per stale quote against an offline
+victim's part.
 
 ### B. Liquidation
 
@@ -109,7 +150,10 @@ V: two keepers, or a keeper and the owner (add margin, transfer, amend), spend t
 I: one transaction wins; an owner's rescue may lose to a liquidation that was valid when built. M: none needed for
 safety: each transaction is checked against the state it spends; KOB treats races as harmless
 (`[K] docs/spec/matcher.md:1090`, `:1097`). R: an owner cannot guarantee a rescue lands first; add margin early.
-T: X7.
+Unchanged by D§4.5d: a liquidatable loser's own close proposal races the liquidation proposal exactly as before
+(`holds_loser_close_races_the_liquidation_as_before`); once one proposal lands, a second one on the pending part is
+refused. New races at age `W`: challenge, cure and finalize are all valid until one lands (`W` is the earliest
+finalize, not a deadline); two challenges of one part: one wins, the other transaction is invalid as a whole. T: X7.
 
 **B2 Keeper incentive failure.**
 V: nobody liquidates. P: fee below the transaction cost (an evidence transaction costs about 0.025 KAS,
@@ -118,22 +162,30 @@ zero after a gap. I: bad debt grows; the winner absorbs it. M: `fee = min(max(ke
 q(n, T − BL))` (D§4.5b, `T` the trigger price from the pair's state): the fee is paid out of the forfeited
 maintenance slice, so the winner receives at least its payoff at `T`, and a bankrupt piece pays the fee too; the
 winner is the natural keeper; KOB executors can add
-liquidations to batches that already fill qualifying evidence (arming precedent, `matcher.md:770-812`). R: no operator
-runs keepers (Q6). T: X4 fee table vs `keeperFeeMin`; liveness drill with only the winner as keeper.
+liquidations to batches that already fill qualifying evidence (arming precedent, `matcher.md:770-812`). Since D§4.5d
+the fee is fixed at the proposal and paid to the proposer with its bond at finalize (not to the finalizer, who would
+snipe it); a proposer whose key is invalid or lost loses only its own bond and fee. The keeper now risks `B` (300 bps of
+the part's range, at least 5 KAS on testnet) for `W` and pays two transactions (D§4.5d table). R: no operator runs
+keepers (Q6); a loser's free false challenge on a thin book takes the bond (B6) and drives honest keepers away. T: X4
+fee table vs `keeperFeeMin`; liveness drill with only the winner as keeper.
 
 **B3 Evidence liveness and bad debt.**
 V: the price gaps past bankruptcy faster than evidence of `k·n` can rest. P: thin book, large pair. I: winner's payout
 capped at the loser's margin (`[L] docs/plan.md:909`); the gap is lost to the winner. M: partial liquidation; per-pair
-`maxSize`; M2 pool pays the gap first. R: inherent to an evidence-only design. T: A2 simulation.
+`maxSize`; M2 pool pays the gap first. Since D§4.5d every liquidation settles at least `W` (6,000 DAA on testnet)
+after the proposal, and the winner carries the gap risk of that delay on top of the evidence rest; the parameter
+bound `W ≥ R` keeps refutation possible, and `W` should stay below the time in which the maintenance band absorbs a
+move. R: inherent to an evidence-only design. T: A2 simulation.
 
-**B4 Liquidation by transfer at a bad price.**
-V: keeper and a colluding `KpfOpen` buy the loser's part at a price below the market. P: T7. I: the winner, which
-receives the entrant's payment (D§4.5b), is under-paid; the loser receives nothing in any case. The entrant itself can
-be entered at a bound the same quote liquidates (review 3 F3) and then forfeit its whole margin. M: T7 requires
-`X ≥ a` for a long (`X ≤ b` for a short); the winner keeps its position (no-downgrade) and its cash plus the part's
-payoff at `X` is at least its payoff at `T`; the entrant must be healthy at the evidence quote itself
-(`a·(10⁴ − mmrBps) ≥ BL′·10⁴`, D§4.5c), and `KpfOpen` checks its own health at its own `x`. R: the winner's cash depends on `X`, chosen by the entrant within its own
-limit. T: mutation `X < a`; `holds_p7_winner_at_least_its_trigger_payoff`.
+**B4 Liquidation by transfer at a bad price.** *Superseded by D§4.5d: P7 is removed.* A finalized liquidation is
+**forfeit and keep**: the forfeited part (both keys the winner's, both sides unlisted, the loser's bound moved inward by
+the fee, `since = 0`) belongs to the winner, which closes it with its own two signatures (P9) or sells the side by an
+ordinary listing (P1) and transfer (P3) at a price it chooses, after `S′ + 4R`. No entrant is chosen in the evidence
+transaction, so no third party can be entered at a bound the quote liquidates; R3-F3's health check binds the later
+P3 (the entrant healthy at its own `X`). Holds (`kpf_two_step_tests`): forfeit and keep then a two-signature cooperative
+close; forfeit and keep then the sale via amend + transfer to a `KpfOpen` at `S′ + 4R`
+(`holds_rate_limit_after_forfeit_and_cure`). R: the winner holds the part until it acts; it carries no price exposure
+meanwhile. T: the forfeit-and-keep tests.
 
 **B5 Liquidation of a healthy pair.**
 V: liquidate with evidence that does not satisfy the trigger, or with a trigger computed on the wrong side; since
@@ -145,8 +197,25 @@ evidence block; `T` affects only the fee cap; the evidence clock (A5); a pair is
 `BL·(10⁴ + mmrBps) < BS·(10⁴ − mmrBps)`, which `KpfOpen` requires at creation and no hand-over or add margin can
 break; every entrant is healthy at its entry price (D§4.5c). R: an order filled at its limit above the market is
 liquidated once the market stays below its trigger for `R` on the pair's clock (limit slippage under forfeiture; the
-order ticket warns). T: boundary vectors X11;
-`audit2_tests` `holds_winner_cannot_*` and `holds_trigger_boundary_and_rounding_of_t`.
+order ticket warns). Since D§4.5d a liquidation of a healthy pair on a stale quote is also refutable during `W` (A7).
+T: boundary vectors X11; `audit2_tests` `holds_winner_cannot_*` and `holds_trigger_boundary_and_rounding_of_t`.
+
+**B6 False challenge by the deserving loser (exploit, D§4.5d residual 1).**
+V: the loser rests its own bid at the refutation bound (beyond its trigger by `g`), self-fills it for `k_c·n` and
+refutes an honest liquidation, collecting the keeper's bond. P: a book with nobody to sell into its bid (testnet-10).
+I: the liquidation is cancelled (the part returns with `since = 0`), the keeper loses `B`; repeated, honest keepers stop
+and the winner carries the loss: the thin-book risk (T5) moves from the victim of a fake liquidation to the winner of a
+real one. M: `g > 0` (required, `gBps > 0`); on a liquid book whoever sells into the bid gains, so the bid is a gift of
+`(bound − market)·k_c·n`, larger than `B` when `g·k_c·T > bondBps·(BS − BL)/10⁴`; the keeper re-proposes with its
+still-live evidence `R` later. R: accepted by the engine (`exploit_false_challenge_by_the_loser_on_a_thin_book`); fails
+on a book without arbitrageurs. T: Y6 (false-challenge drill with a `g` and `k_c` sweep).
+
+**B7 The proposer is a party.**
+V: the loser proposes its own liquidation, or the winner proposes what it expects to be refuted. I: the loser as
+proposer gets its bond back and a fee out of its own forfeited side; the winner still receives at least its payoff at
+`T`. A winner that proposes a refutable claim loses `B` and gains a freeze of at most `R` against an online loser.
+M: the fee cap of D§4.5b; the payouts are fixed at the proposal. Holds (`holds_proposer_is_a_party`,
+`holds_no_value_moves_through_the_bond_or_the_fee`: bond, fee and refund cannot be diverted).
 
 ### C. Re-mark, re-pair and transfer
 
@@ -182,7 +251,9 @@ no-downgrade. M: the buyer's `KpfOpen` checks its own rate, i.e. it posts its ow
 **D1 Forced close.**
 V: the counterparty closes unilaterally at any time (D4 i). I: loss of the position and of re-entry costs; no loss of
 value, since the passive side is settled at the bound adverse to the closer. M: the closer needs evidence of `k·n`
-(cost) and loses its own position. R: accepted by design (D§3.5). T: none (economic).
+(cost) and loses its own position; since D§4.5d it also posts a bond for `W`, settles only at finalize, and a fresh
+opposite quote beyond its own by `g` cancels the close and takes the bond (D§4.5d resolution 7 not adopted: a refuted
+close is not re-settled). R: accepted by design (D§3.5). T: none (economic).
 
 **D2 Forced splitting into dust.**
 V: repeated partial transfers or liquidations cut a bystander's position into many pairs. I: UTXO count and future fees
@@ -192,7 +263,8 @@ funds every new carrier; listings carry `longMin`/`shortMin`. R: up to `s/minSiz
 **D3 Contention on someone else's pair.**
 V: spend the victim's pair repeatedly so its pending transactions fail. P: a path anyone can run without the owner.
 M: only listing fills (consented), liquidation (needs a true trigger and evidence) and idle settle (needs `idleDaa` of
-inactivity) are permissionless; add margin and amend need the owner's signature. R: none known. T: X7.
+inactivity) are permissionless; add margin and amend need the owner's signature. R: a liquidation proposal freezes the
+part for up to `W` (A9). T: X7.
 
 **D4 Listing sniping.**
 V: an executor fills a listing at its limit rather than at a better crossing. I: the leaver gets its limit, the executor
@@ -230,8 +302,11 @@ whose side is handed over in that very transaction can carry one (D§4.4). R: ke
 outputs may alias (only the keeper loses). T: X5.
 
 **F3 Two inputs of one covenant id.**
-V: two parts of a split pair in one transaction claim the same continuation. M: `OpCovInputCount(selfId) == 1`
-(`[K] contracts/orders/KobCondAsk.sil:310`). T: co-spend both parts (must fail).
+V: two parts of a split pair in one transaction claim the same continuation; since D§4.5d also a pending part and the
+remainder of its own split (same id, two templates). M: `OpCovInputCount(selfId) == 1` on every pair and every pending
+entry (`[K] contracts/orders/KobCondAsk.sil:310`). Holds: `holds_pending_twin_and_remainder_are_never_co_spent`,
+`pending_part_and_its_remainder_cannot_be_co_spent` (co-spend with the remainder refused). T: co-spend both parts (must
+fail).
 
 **F4 Evidence block bypass.** See A4.
 
@@ -239,6 +314,19 @@ V: two parts of a split pair in one transaction claim the same continuation. M: 
 V: KOB puts bids with refunds first and their refunds last (`[K] docs/spec/matcher.md:337-339`); a KPF shape could
 collide. M: KPF reverse slots require `M − 1 − i ≥` input count, KOB refunds sit in the same region but at other
 indices; the evidence block may start at any `q` *(inference: not yet tested in a mixed batch)*. T: mixed KOB+KPF batch.
+
+**F6 The pending template under the pair's id (D§4.5d).**
+V: `KpfPending` continues the pair's covenant id into a second template (X12); an executor could try to return the
+part to a pair state of its choosing, divert the bond, fee or refund, mix proposals and challenges in one evidence
+block so one print serves more than it covers, or pick a lock time that satisfies one bound but not another.
+M: the pending template is authenticated by `PENDING_TPL` at the proposal; the return states are fixed by P2SH hashes
+the pair computed from its own script (tags 0, entry kept), so no party can be written out of them; payouts use the
+injective slots of D§4.4; in a mixed block every member requires the threshold over the whole block with its own
+multiple; the CSV of finalize is relative and independent of the CLTV of the evidence bounds. Holds:
+`holds_return_states_are_fixed_by_the_pair`, `holds_no_value_moves_through_the_bond_or_the_fee`,
+`holds_one_lock_time_covers_every_bound_of_the_block`, `several_proposals_on_one_print`,
+`one_counter_print_serves_a_block` and a mixed proposal + challenge block in `kpf_two_step_tests`. R: none known.
+T: the tests named.
 
 ### G. Stray UTXOs and covenant-id lineage
 
@@ -255,6 +343,15 @@ someone else's transaction. R: indexers must key pairs by outpoint, not by id. T
 V: a design that trusts "this UTXO was minted by that parent". Covenant ids do not reveal their genesis
 (`[K] contracts/orders/KobIfdBid.sil:255-268`). M: KPF never relies on parentage; it relies on physical value and
 authenticated state (C3). This rules out the lead's D6 lineage enumeration as a proof of completeness (D§3.7).
+
+**G4 Look-alike pending part (D§4.5d).**
+V: a genesis authors a `KpfPending` with forged state (hashes of pair states of the author's choosing, a bond it never
+posted, a dead window) and offers it as someone's pending claim. I: none on other parties' funds: a look-alike pending
+only pays out its own value, and every check uses its physical value and its own state. `KpfPair.propose` re-checks
+the CSV range of `W` so that not even a look-alike pair can create a pending part whose finalize is dead. Holds:
+`holds_look_alike_pending_only_gives`. R: a tool must rebuild the three pair states from the pending UTXO and check
+them against its hashes before trusting it (the state is self-describing for that purpose); an indexer must key
+pending parts by outpoint.
 
 ### H. Backstop pool (M2)
 
@@ -296,18 +393,30 @@ inequalities and lists only consistent UTXOs; funds are not at risk (C3).
 makers moved off the pinned v3 templates, or an empty book. I: no unilateral close and no liquidation. M: evidence-free
 exits remain: transfer (T2), close-versus-close and mutual close (T3), cooperative close (T9), idle settle (T8).
 Transfer and close-versus-close wait for the hand-over limit `S + 4R` (D§4.5c); mutual close, cooperative close and
-idle settle do not.
-R: liquidations stop for the duration; bad debt accrues to winners. T: X13.
+idle settle do not. A part already pending still ends: finalize and cure need no evidence; a token pause blocks every
+challenge (the counter fill), so pending claims then finalize unrefuted.
+R: liquidations stop for the duration; bad debt accrues to winners. T: X13; Y10 (token pause during a pending part:
+not tested).
 **K2 Idle settle as a free option.** V: a losing party waits out `idleDaa` hoping nobody touches the pair, then settles
 at `E`. M: `idleDaa` long (90 days, as KOB, `[K] contracts/orders/KobCondAsk.sil:109-110`); the winner can close with
-evidence or amend (which resets the age) at any time; `E` changes only with both parties' consent (T1 sets it, P3/P7
-keep it, P4 writes `E(donor) ≤ E3 ≤ E(host)`, D§4.5a), so no party can move it alone (review 1, F3), and a `KpfOpen`
+evidence or amend (which resets the age) at any time; `E` changes only with both parties' consent (T1 sets it, P3 and
+every pending, restored, cured and forfeited state keep it, P4 writes `E(donor) ≤ E3 ≤ E(host)`, D§4.5a), so no party can move it alone (review 1, F3), and a `KpfOpen`
 entrant accepts the kept `E` only on its own side of its fill price. R: a winner absent for `idleDaa` with no evidence
 available loses its unrealised profit since `E`, never more. The hand-over limit does not touch P8: amend resets the age,
 never the evidence clock. T: X8, X6 (idle payout of every party that did not act).
 **K3 Lost key.** The counterparty of a lost-key owner can still close (evidence), transfer its own side, or wait for idle
-settle; the lost key's own funds are lost as with any key. **K4 Open orders.** `KpfOpen` refundable by anyone after
-`min(expiryDaa, 90 days idle)`. **K5 Censorship.** All executors refusing a pair's transactions: accepted residual (T4).
+settle; the lost key's own funds are lost as with any key. A lost proposer key loses only its own bond and fee (and
+the carrier it funded): the pending part is still finalized by anyone and the parties are paid. **K4 Open orders.**
+`KpfOpen` refundable by anyone after `min(expiryDaa, 90 days idle)`. **K5 Censorship.** All executors refusing a pair's
+transactions: accepted residual (T4).
+**K6 Pending parts (D§4.5d).** V: a proposer disappears, or nobody challenges, cures or finalizes. I: none locked:
+every pending part has an exit that needs no key and no evidence: anyone finalizes once it is `W` old (CSV), even
+with an invalid proposer key. Every branch (challenge: the restored pair; cure: the cured pair; finalize: payouts or
+the forfeited pair) leaves an ordinary pair or plain outputs; while pending, the parties' other paths are refused
+(D§4.5d). Holds: `holds_every_pending_part_has_an_exit`; `bond_conservation_in_every_branch` (every bond ends with
+exactly one of proposer or challenger). R: the parties wait at least `W` for an unrefuted claim; `kpf watch` finds
+pending parts only from object files (a node lists UTXOs by address, and a pending part's address depends on its whole
+state), so discovery on a live network needs an indexer. T: the tests named.
 
 ## 5. Residual risks no design change removes
 
@@ -323,3 +432,7 @@ settle; the lost key's own funds are lost as with any key. **K4 Open orders.** `
    liquidations do not happen. Censorship by all executors is accepted.
 6. **Forced close.** Under no funding, a counterparty may end a position at will at the spot bound.
 7. **Committee markets (M4)** carry a trust assumption equal to the value the committee can move, less its bond.
+8. **Two-step residuals (D§4.5d).** On a thin book the deserving loser refutes honest liquidations for free and
+   takes the keeper's bond (B6); a liquidatable side delays its liquidation by at least `2R` per self-refuted claim
+   (A8); a stale quote freezes an offline victim's part for up to `W` (A9); every liquidation waits `W`, gap risk to
+   the winner (B3); stale claims against offline victims stand without a live watcher (A7).

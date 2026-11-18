@@ -48,6 +48,12 @@ pub fn market() -> Market {
         carrier: C,
         idle_daa: 77_760_000,
         price_max: 100_000_000_000_000,
+        bond_bps: 300,
+        bond_min: 500_000_000,
+        kc_bps: 10_000,
+        g_bps: 200,
+        challenge_daa: 6_000,
+        min_evidence_life: 864_000,
     }
 }
 

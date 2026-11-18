@@ -733,9 +733,12 @@ pub fn check_evidence_on(ev: &Evidence, m: &Market, clock: Option<i64>, daa: Opt
             notes.push(format!("the order rested before this pair's evidence clock started (DAA {s}): its rest counts from DAA {s} only (DESIGN 4.5c)"));
         }
     }
-    if ev.expiry_daa() < end {
+    // Fillable through the end of the rest plus the market's evidence life L (DESIGN 4.5d, KpfPair.evQuote `live`).
+    let life = end.saturating_add(m.min_evidence_life.max(0));
+    let life_words = if m.min_evidence_life > 0 { format!(" plus the market's evidence life of {} DAA (DAA {life})", m.min_evidence_life) } else { String::new() };
+    if ev.expiry_daa() < life {
         problems.push(on_clock(&format!(
-            "its soft expiry (DAA {}) falls before the end of the {} DAA rest window (DAA {rest_end}): matchers would already have hidden it",
+            "its soft expiry (DAA {}) falls before the end of the {} DAA rest window (DAA {rest_end}){life_words}: matchers would already have hidden it",
             ev.expiry_daa(),
             m.min_rest_daa
         )));
@@ -744,12 +747,17 @@ pub fn check_evidence_on(ev: &Evidence, m: &Market, clock: Option<i64>, daa: Opt
         let mut kill = ev.daa() as i64;
         kill = kill.max(ev.active_from());
         kill += IOC_LIFE;
-        if kill < end {
-            problems.push(on_clock(&format!("it is an IOC/FOK order and is killed (refundable by anyone) at DAA {kill}, before its rest window ends at DAA {rest_end}")));
+        if kill < life {
+            problems.push(on_clock(&format!(
+                "it is an IOC/FOK order and is killed (refundable by anyone) at DAA {kill}, before its rest window ends at DAA {rest_end}{life_words}"
+            )));
         }
     }
-    if rest_end > ev.daa() + MAX_IDLE {
-        problems.push(on_clock(&format!("its rest window ends at DAA {rest_end}, after the 90 days (DAA {}) at which anyone may refund it", ev.daa() + MAX_IDLE)));
+    if life > (ev.daa() + MAX_IDLE) as i64 {
+        problems.push(on_clock(&format!(
+            "its rest window ends at DAA {rest_end}{life_words}, after the 90 days (DAA {}) at which anyone may refund it",
+            ev.daa() + MAX_IDLE
+        )));
     }
     let live_until = ev.live_until();
     let mut dead = vec![];
@@ -811,44 +819,44 @@ pub fn pair_verdicts(r: &EvidenceReport, p: &Pair) -> Vec<Verdict> {
     // P5
     out.push(match (is_ask, r.quote) {
         (false, b) => Verdict {
-            path: "the long closes (P5)",
+            path: "the long closes (P5, proposed)",
             ok: true,
-            why: format!("settles at the bid {} KAS, clamped to the range: price {}", kas(b), kas(clamp_price(p, b))),
+            why: format!("proposes to settle at the bid {} KAS, clamped to the range: price {}", kas(b), kas(clamp_price(p, b))),
         },
-        (true, _) => Verdict { path: "the long closes (P5)", ok: false, why: "a long closes at a resting bid; this order is an ask".into() },
+        (true, _) => Verdict { path: "the long closes (P5, proposed)", ok: false, why: "a long closes at a resting bid; this order is an ask".into() },
     });
     out.push(match (is_ask, r.quote) {
         (true, a) => Verdict {
-            path: "the short closes (P5)",
+            path: "the short closes (P5, proposed)",
             ok: true,
-            why: format!("settles at the ask {} KAS, clamped to the range: price {}", kas(a), kas(clamp_price(p, a))),
+            why: format!("proposes to settle at the ask {} KAS, clamped to the range: price {}", kas(a), kas(clamp_price(p, a))),
         },
-        (false, _) => Verdict { path: "the short closes (P5)", ok: false, why: "a short closes at a resting ask; this order is a bid".into() },
+        (false, _) => Verdict { path: "the short closes (P5, proposed)", ok: false, why: "a short closes at a resting ask; this order is a bid".into() },
     });
     // P6 / P7
     let in_range = r.quote >= 0 && r.quote <= p.m.price_max;
     out.push(if !is_ask {
-        Verdict { path: "the long is liquidated (P6, P7)", ok: false, why: "a long is liquidated by an ask; this order is a bid".into() }
+        Verdict { path: "the long is liquidated (P6, proposed: forfeit and keep at finalize)", ok: false, why: "a long is liquidated by an ask; this order is a bid".into() }
     } else if !in_range {
-        Verdict { path: "the long is liquidated (P6, P7)", ok: false, why: format!("the quote {} is outside 0..=priceMax", r.quote) }
+        Verdict { path: "the long is liquidated (P6, proposed: forfeit and keep at finalize)", ok: false, why: format!("the quote {} is outside 0..=priceMax", r.quote) }
     } else if long_liquidatable(p, r.quote) {
-        Verdict { path: "the long is liquidated (P6, P7)", ok: true, why: format!("the ask {} KAS is below the long's trigger {} KAS", kas(r.quote), kas(trigger_of(p, LONG))) }
+        Verdict { path: "the long is liquidated (P6, proposed: forfeit and keep at finalize)", ok: true, why: format!("the ask {} KAS is below the long's trigger {} KAS", kas(r.quote), kas(trigger_of(p, LONG))) }
     } else {
         Verdict {
-            path: "the long is liquidated (P6, P7)",
+            path: "the long is liquidated (P6, proposed: forfeit and keep at finalize)",
             ok: false,
             why: format!("the ask {} KAS is not below the long's trigger {} KAS (bl {} KAS, maintenance {} bps)", kas(r.quote), kas(trigger_of(p, LONG)), kas(p.bl), p.m.mmr_bps),
         }
     });
     out.push(if is_ask {
-        Verdict { path: "the short is liquidated (P6, P7)", ok: false, why: "a short is liquidated by a bid; this order is an ask".into() }
+        Verdict { path: "the short is liquidated (P6, proposed: forfeit and keep at finalize)", ok: false, why: "a short is liquidated by a bid; this order is an ask".into() }
     } else if !in_range {
-        Verdict { path: "the short is liquidated (P6, P7)", ok: false, why: format!("the quote {} is outside 0..=priceMax", r.quote) }
+        Verdict { path: "the short is liquidated (P6, proposed: forfeit and keep at finalize)", ok: false, why: format!("the quote {} is outside 0..=priceMax", r.quote) }
     } else if short_liquidatable(p, r.quote) {
-        Verdict { path: "the short is liquidated (P6, P7)", ok: true, why: format!("the bid {} KAS is above the short's trigger {} KAS", kas(r.quote), kas(trigger_of(p, SHORT))) }
+        Verdict { path: "the short is liquidated (P6, proposed: forfeit and keep at finalize)", ok: true, why: format!("the bid {} KAS is above the short's trigger {} KAS", kas(r.quote), kas(trigger_of(p, SHORT))) }
     } else {
         Verdict {
-            path: "the short is liquidated (P6, P7)",
+            path: "the short is liquidated (P6, proposed: forfeit and keep at finalize)",
             ok: false,
             why: format!("the bid {} KAS is not above the short's trigger {} KAS (bs {} KAS, maintenance {} bps)", kas(r.quote), kas(trigger_of(p, SHORT)), kas(p.bs), p.m.mmr_bps),
         }

@@ -7,7 +7,7 @@
 //!
 //! Evidence clock (DESIGN 4.5c). The output builders copy `since` from the pair they are given into every output
 //! that does not change hands (remainders, continuations), so they must be given the pair as [`Pair::clocked`] by
-//! its UTXO's DAA score; the parts that change hands (P3, P7, P4's re-paired output) are written with `since = 0`.
+//! its UTXO's DAA score; the parts that change hands (P3, P4's re-paired output) are written with `since = 0`.
 
 use kaspa_consensus_core::Hash;
 
@@ -75,7 +75,8 @@ pub fn slice_of(p: &Pair, n: i64, side: i64) -> i64 {
     }
 }
 
-/// The liquidation fee of P6 and P7 (DESIGN 4.5b): [`fee_of`] capped at the maintenance slice.
+/// The liquidation fee of P6 (DESIGN 4.5b, written into the pending part by `KpfPair.propose`): [`fee_of`] capped at the
+/// maintenance slice.
 pub fn liq_fee(p: &Pair, n: i64, quote: i64, side: i64) -> i64 {
     fee_of(&p.m, n, quote).min(slice_of(p, n, side))
 }
@@ -87,15 +88,6 @@ pub fn winner_at_trigger(p: &Pair, n: i64, side: i64) -> i64 {
         q(n, p.bs - t, p.m.scale, 0)
     } else {
         q(n, t - p.bl, p.m.scale, 0)
-    }
-}
-
-/// The loser's bankruptcy price: where P6 settles (the loser is owed 0).
-pub fn loser_price(p: &Pair, side: i64) -> i64 {
-    if side == LONG {
-        p.bl
-    } else {
-        p.bs
     }
 }
 
@@ -113,46 +105,6 @@ pub fn winner_key(p: &Pair, side: i64) -> [u8; 32] {
     }
 }
 
-/// `KpfPair.closeAt`: (long payout, short payout, remainder and its least value) of closing n at price c in [bl, bs],
-/// `side` being the party owed exactly its distance, the other party taking the rest less `fee`.
-pub fn close_at(p: &Pair, value: u64, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Option<(Pair, i64)>) {
-    let v = value as i64;
-    let part = p.range_of(n);
-    let (mut keep, avail) = if n == p.size { (0, v) } else { (v - part, part) };
-    let mut owe = if side == LONG { q(n, c - p.bl, p.m.scale, 0) } else { q(n, p.bs - c, p.m.scale, 0) };
-    let mut other = (avail - owe - fee).max(0);
-    let rest = if n == p.size {
-        if owe < PLAIN_DUST {
-            other += owe;
-            owe = 0;
-        }
-        if other < PLAIN_DUST {
-            owe += other;
-            other = 0;
-        }
-        if owe < PLAIN_DUST {
-            owe = 0;
-        }
-        None
-    } else {
-        if owe < PLAIN_DUST {
-            keep += owe;
-            owe = 0;
-        }
-        if other < PLAIN_DUST {
-            keep += other;
-            other = 0;
-        }
-        let r = p.rest_of(p.size - n);
-        let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
-        Some((r, rv))
-    };
-    if side == LONG {
-        (owe, other, rest)
-    } else {
-        (other, owe, rest)
-    }
-}
 
 // ---------------------------------------------------------------- orders
 
@@ -175,7 +127,7 @@ pub fn order_rest(o: &Open, value: u64, n: i64) -> (u64, Option<Open>) {
     }
 }
 
-// ---------------------------------------------------------------- hand-over (P3, P7)
+// ---------------------------------------------------------------- hand-over (P3)
 
 #[derive(Clone, Debug)]
 pub struct TransferSpec {
@@ -206,7 +158,7 @@ pub fn transfer_out(p: &Pair, value: u64, t: &TransferSpec) -> TransferOut {
     hand_over_out(p, value, t, pay)
 }
 
-/// `KpfPair.handOver` (P3 and P7) for a payee owed `pay`.
+/// `KpfPair.handOver` (P3) for a leaver owed `pay`.
 pub fn hand_over_out(p: &Pair, value: u64, t: &TransferSpec, pay: i64) -> TransferOut {
     let mut part = p.rest_of(t.n);
     // The part changes hands: its evidence clock restarts at its own UTXO (DESIGN 4.5c).
@@ -402,11 +354,4 @@ pub fn quote_table(p: &Pair, prices: &[i64]) -> Vec<QuoteRow> {
             short_liquidatable: short_liquidatable(p, price),
         })
         .collect()
-}
-
-/// The winner's payout of P7 before the dust rule (DESIGN 4.5b): the entrant's payment `q(n, x - bl)` (long loser) or
-/// `q(n, bs - x)` (short loser) less the fee at the evidence `quote`, never below 0.
-pub fn p7_pay(p: &Pair, n: i64, side: i64, x: i64, quote: i64) -> i64 {
-    let o = if side == LONG { owed(n, x - p.bl, 0, p.m.scale) } else { owed(n, p.bs - x, 0, p.m.scale) };
-    (o - liq_fee(p, n, quote, side)).max(0)
 }

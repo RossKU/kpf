@@ -1,15 +1,17 @@
-//! Transaction builders for the evidence paths of KpfPair (DESIGN 4.5 T4, T6, T7): a block of pair inputs acting
-//! on one KOB evidence fill, with the evidence order and its counterparty executed by their real scripts.
+//! Transaction builders for the two-step evidence paths (DESIGN 4.5d): a block of `KpfPair.propose` and
+//! `KpfPending.challenge` inputs acting on one KOB evidence fill, with the evidence order and its counterparty
+//! executed by their real scripts, and the evidence-free `KpfPending.cure` and `KpfPending.finalize`.
 //!
-//! Layout (DESIGN 4.4; indices are what the builders use, the covenants accept any order with the same rules):
-//!   inputs   [0, B) the block of pairs, B the evidence order (KobAsk settle / KobBid fill), B + 1 the token input of
-//!            the evidence (the ask's custody, leader of its own transfer; or the seller's tokens to the bid, leader
-//!            signed by the seller), then the KpfOpen entrants of P7, then the executor F;
-//!   outputs  one positional output per input (pair i: its long or leaver at i; the ask's maker KAS or the bid's
-//!            token delivery at B; the buyer's tokens or the seller's KAS at B + 1; each KpfOpen's continuation or
-//!            refund; F's change), then the pair continuations, the bid's continuation, and last the short payouts
-//!            of the block at M - 1 - i.
-//! Every party output holds the least its covenant accepts; F's change takes the rest (less FEE).
+//! Layout of an evidence transaction (DESIGN 4.4; indices are what the builders use, the covenants accept any order
+//! with the same rules):
+//!   inputs   [0, B) the block (pairs that propose, pending parts that are challenged), B the evidence order (KobAsk
+//!            settle / KobBid fill), B + 1 the token input of the evidence (the ask's custody, leader of its own
+//!            transfer; or the seller's tokens to the bid, leader signed by the seller), then the executor F;
+//!   outputs  one positional output per input (member i: its pending part, or its restored pair; the ask's maker KAS
+//!            or the bid's token delivery at B; the buyer's tokens or the seller's KAS at B + 1; F's change), then the
+//!            pair remainders and the bid's continuation.
+//! Every party output holds the least its covenant accepts; F's change takes the rest (less FEE): the bonds of the
+//! parts a challenge refutes land there.
 
 use kaspa_consensus_core::tx::{TransactionOutput, UtxoEntry};
 use kaspa_consensus_core::Hash;
@@ -21,11 +23,26 @@ use super::paths::*;
 use super::*;
 use crate::common::*;
 
+#[allow(unused_imports)]
+pub use kpf_protocol::pending::{bond_of, claim_fee, cure_bound_of, forfeit_bound_of, propose_out, refund_of, ProposeOut};
+#[allow(unused_imports)]
+pub use kpf_protocol::state::{Pending, KIND_CLOSE, KIND_LIQ};
+
 /// The lock time of every evidence transaction (what `tx.daa >= x` proves).
 pub const NOW: u64 = 10_000_000;
 
 pub fn rest_daa() -> u64 {
     market().min_rest_daa as u64
+}
+
+/// The window W of the test market (DESIGN 4.5d): the sequence a finalize needs.
+pub fn window() -> u64 {
+    market().challenge_daa as u64
+}
+
+/// The default proposer of a liquidation (its payout key).
+pub fn proposer_kp() -> Keypair {
+    keypair(77)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,6 +130,19 @@ impl Evidence {
         }
     }
 
+    /// This order with another covenant id, outpoint tag and maker: a second, independent order.
+    pub fn other(mut self, tag: u8) -> Evidence {
+        self.id = Hash::from_bytes([tag; 32]);
+        self
+    }
+
+    /// The order and its token input placed at DAA `daa`.
+    pub fn placed(mut self, daa: u64) -> Evidence {
+        self.daa = daa;
+        self.tok_daa = daa;
+        self
+    }
+
     fn order_art(&self) -> SilAbiArtifact {
         match (&self.art, self.kind) {
             (Some(a), Kind::Ask) => splice(a, &self.ask.state_bytes()),
@@ -130,6 +160,10 @@ impl Evidence {
         }
     }
 
+    fn op_tag(&self) -> u8 {
+        self.id.as_bytes()[0]
+    }
+
     /// The two inputs (order at `ev`, token input at `ev + 1`), the positional outputs at `ev` and `ev + 1`, and the
     /// extra outputs (the bid's continuation).
     fn leg(&self, ev: usize) -> (Vec<In>, Vec<TransactionOutput>, Vec<TransactionOutput>) {
@@ -137,18 +171,19 @@ impl Evidence {
         let art = self.order_art();
         let nb = ArtifactValue::Bytes(sm8(self.fill).to_vec());
         let tok_base = |t: &Tok, value: u64| UtxoEntry::new(value, p2sh(&t.art()), self.tok_daa, false, Some(self.tok_cov));
+        let tag = self.op_tag();
         match self.kind {
             Kind::Ask => {
                 let a = &self.ask;
                 let order = In {
-                    outpoint: outpoint(0xa0),
+                    outpoint: outpoint(tag.wrapping_add(0x10)),
                     utxo: UtxoEntry::new(self.value, p2sh(&art), self.daa, false, Some(self.id)),
                     spend: Spend::Signed { art, entry: "settle", args: vec![Arg::V(nb), iv(tk as i64), iv(tk as i64), iv(self.t())] },
                 };
                 let custody = Tok::covid(a.amount_left, self.custody_owner.unwrap_or(self.id), self.tok_ext);
                 let bought = Tok::p2pk(self.fill, xonly(&self.counter), self.tok_ext);
                 let tok_in = In {
-                    outpoint: outpoint(0xa1),
+                    outpoint: outpoint(tag.wrapping_add(0x11)),
                     utxo: tok_base(&custody, self.tok_value),
                     spend: Spend::Signed {
                         art: custody.art(),
@@ -164,14 +199,14 @@ impl Evidence {
             Kind::Bid => {
                 let b = &self.bid;
                 let order = In {
-                    outpoint: outpoint(0xa2),
+                    outpoint: outpoint(tag.wrapping_add(0x12)),
                     utxo: UtxoEntry::new(self.value, p2sh(&art), self.daa, false, Some(self.id)),
                     spend: Spend::Signed { art: art.clone(), entry: "fill", args: vec![Arg::V(nb), iv(tk as i64), iv(self.t())] },
                 };
                 let sold = Tok::p2pk(self.fill, xonly(&self.counter), self.tok_ext);
                 let delivered = Tok::p2pk(self.fill, b.maker, b.ext);
                 let tok_in = In {
-                    outpoint: outpoint(0xa3),
+                    outpoint: outpoint(tag.wrapping_add(0x13)),
                     utxo: tok_base(&sold, self.tok_value),
                     spend: Spend::Signed {
                         art: sold.art(),
@@ -197,15 +232,30 @@ impl Evidence {
     }
 }
 
-/// What a pair of the block does.
+/// What a pair of a proposal block claims.
 #[derive(Clone)]
 pub enum Act {
-    /// P5 by the owner of `side` (signed by `signer`).
+    /// P5, kind 1, by the owner of `side` (signed by `signer`).
     Close { side: i64, signer: Keypair },
-    /// P6 of the loser `side`.
+    /// P6, kind 2, of the loser `side`; the proposer is `proposer_kp()`.
     Liq { side: i64 },
-    /// P7 of the loser `side`: its n goes to the KpfOpen `open` at x; the part is ordinal k of the continuations.
-    LiqTransfer { side: i64, x: i64, open: LiveOpen, k: i64 },
+    /// P6 with an explicit proposer key.
+    LiqBy { side: i64, proposer: [u8; 32] },
+}
+
+impl Act {
+    pub fn kind_side(&self) -> (i64, i64) {
+        match self {
+            Act::Close { side, .. } => (KIND_CLOSE, *side),
+            Act::Liq { side } | Act::LiqBy { side, .. } => (KIND_LIQ, *side),
+        }
+    }
+    pub fn proposer(&self) -> [u8; 32] {
+        match self {
+            Act::LiqBy { proposer, .. } => *proposer,
+            _ => xonly(&proposer_kp()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -217,64 +267,89 @@ pub struct PairLeg {
     pub act: Act,
 }
 
-#[allow(unused_imports)]
-pub use kpf_protocol::payoff::{fee_of, liq_fee, loser_price, slice_of, trigger_of, winner_at_trigger, winner_key};
-
-/// KpfPair.closeAt: (long payout, short payout, remainder and its least value).
-pub fn close_at(l: &Live, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Option<(Pair, i64)>) {
-    kpf_protocol::payoff::close_at(&l.clocked(), l.value, n, c, side, fee)
+/// A pending part of a challenge block.
+#[derive(Clone)]
+pub struct PendLeg {
+    pub w: LivePend,
+    /// The block start this part names.
+    pub q: i64,
 }
+
+/// A member of an evidence block.
+#[derive(Clone)]
+pub enum Member {
+    P(PairLeg),
+    W(PendLeg),
+}
+
+#[allow(unused_imports)]
+pub use kpf_protocol::payoff::{fee_of, liq_fee, slice_of, trigger_of, winner_at_trigger, winner_key};
 
 /// The settlement price of an evidence quote for a pair: clamped to [bl, bs].
 pub fn clamp(p: &Pair, x: i64) -> i64 {
     kpf_protocol::payoff::clamp_price(p, x)
 }
 
-/// The entrant of P7 for a loser `side` sold at x: an order of that side with its own rate.
-pub fn p7_spec(n: i64, side: i64, x: i64, open: &LiveOpen, k: i64) -> TransferSpec {
-    let nb = if side == LONG { x - open.o.my_rate } else { x + open.o.my_rate };
-    TransferSpec { side, n, x, nb, ek: open.o.owner, et: open.id, k }
-}
-
-/// The winner's payout of P7 before the dust rule (DESIGN 4.5b).
-pub fn p7_pay(l: &Live, n: i64, side: i64, x: i64, p: i64) -> i64 {
-    kpf_protocol::payoff::p7_pay(&l.p, n, side, x, p)
-}
-
-fn nbq(n: i64, qq: i64) -> [Arg; 2] {
-    [bv(&sm8(n)), bv(&sm8(qq))]
-}
-
-/// The empty signature argument of the paths that read none (P6, P7).
+/// The empty signature argument of a liquidation proposal.
 pub fn no_sig() -> Arg {
     bv(&[])
 }
 
-/// Arguments of KpfPair.onEvidence: (nb, qb, path, s, side, ev, tk, x, nbd, ek, et, k).
+/// Arguments of KpfPair.propose: (nb, qb, kind, s, side, ev, tk, fb, pk, k, pPre, pSuf).
 #[allow(clippy::too_many_arguments)]
-pub fn ev_args(n: i64, qq: i64, path: i64, s: Arg, side: i64, ev: i64, tk: i64, x: i64, nbd: i64, ek: &[u8; 32], et: Hash, k: i64) -> Vec<Arg> {
-    let [a0, a1] = nbq(n, qq);
-    vec![a0, a1, iv(path), s, iv(side), iv(ev), iv(tk), iv(x), iv(nbd), bv(ek), bv(&et.as_bytes()), iv(k)]
+pub fn propose_args(n: i64, qq: i64, kind: i64, s: Arg, side: i64, ev: i64, tk: i64, fb: i64, pk: &[u8; 32], k: i64) -> Vec<Arg> {
+    let t = kpf_protocol::artifacts::pending_template();
+    vec![bv(&sm8(n)), bv(&sm8(qq)), iv(kind), s, iv(side), iv(ev), iv(tk), iv(fb), bv(pk), iv(k), bv(&t.prefix), bv(&t.suffix)]
 }
 
-/// Index of the argument x, nbd and path in `ev_args` (for mutations).
-pub const ARG_PATH: usize = 2;
-pub const ARG_X: usize = 7;
-pub const ARG_NBD: usize = 8;
+/// Arguments of KpfPending.challenge: (nb, qb, ev, tk).
+pub fn challenge_args(n: i64, qq: i64, ev: i64, tk: i64) -> Vec<Arg> {
+    vec![bv(&sm8(n)), bv(&sm8(qq)), iv(ev), iv(tk)]
+}
 
-/// The evidence transaction: the block `legs` at inputs [0, B), the evidence at B.
+/// Index of the arguments of `propose_args` (for mutations).
+pub const ARG_KIND: usize = 2;
+pub const ARG_SIDE: usize = 4;
+pub const ARG_FB: usize = 7;
+pub const ARG_PK: usize = 8;
+pub const ARG_K: usize = 9;
+pub const ARG_PRE: usize = 10;
+
+/// The pending part (with its least value) and remainder a proposal leg writes.
+pub fn propose_of(g: &PairLeg, quote: i64) -> ProposeOut {
+    let (kind, side) = g.act.kind_side();
+    propose_out(&g.l.clocked(), g.l.value, g.n, kind, side, quote, g.act.proposer())
+}
+
+/// The evidence transaction: the pair block `legs` at inputs [0, B), the evidence at B.
 pub fn ev_draft(legs: &[PairLeg], e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
-    ev_draft_at(legs, legs.len(), e, f, fn_)
+    let m: Vec<Member> = legs.iter().cloned().map(Member::P).collect();
+    blk_draft_at(&m, m.len(), e, f, fn_)
 }
 
 /// As `ev_draft` with the evidence at input `ev_at`: legs [0, ev_at) before it, the others after its token input.
 pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
-    let b = legs.len();
+    let m: Vec<Member> = legs.iter().cloned().map(Member::P).collect();
+    blk_draft_at(&m, ev_at, e, f, fn_)
+}
+
+/// A challenge of the pending parts `ws` (each naming block start 0) on the counter-evidence `e`.
+pub fn ch_draft(ws: &[LivePend], e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
+    let m: Vec<Member> = ws.iter().map(|w| Member::W(PendLeg { w: w.clone(), q: 0 })).collect();
+    blk_draft_at(&m, m.len(), e, f, fn_)
+}
+
+/// Any block of proposals and challenges on one evidence.
+pub fn blk_draft(members: &[Member], e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
+    blk_draft_at(members, members.len(), e, f, fn_)
+}
+
+pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair, fn_: u32) -> Draft {
+    let b = members.len();
     let ev = ev_at;
     let tk = ev_at + 1;
     let tk_arg = if e.kind == Kind::Ask { tk as i64 } else { -1 };
-    let n_opens = legs.iter().filter(|g| matches!(g.act, Act::LiqTransfer { .. })).count();
-    let fi = b + 2 + n_opens;
+    let fi = b + 2;
     let n_in = fi + 1;
     let (ev_ins, ev_pos, ev_extra) = e.leg(ev);
     let p = e.price();
@@ -282,104 +357,61 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
 
     let mut ins: Vec<In> = vec![];
     let mut pos: Vec<TransactionOutput> = vec![];
-    let mut extra: Vec<TransactionOutput> = ev_extra;
-    let last_pair = if b == 0 { 0 } else { at(b - 1) + 1 };
-    let mut tail: Vec<TransactionOutput> = (0..last_pair).map(|_| out(0, p2pk_spk(f), None)).collect();
-    let mut open_ins: Vec<In> = vec![];
-    let mut open_pos: Vec<TransactionOutput> = vec![];
+    let mut extra: Vec<TransactionOutput> = vec![];
     let mut pairs = vec![];
-    let mut opens = vec![];
-    let mut oi = b + 2;
-    for (j, g) in legs.iter().enumerate() {
+    let mut pendings = vec![];
+    for (j, g) in members.iter().enumerate() {
         let i = at(j);
         if j == ev_at {
             ins.extend(ev_ins.clone());
             pos.extend(ev_pos.clone());
         }
-        let lp = &g.l.p;
-        let z = [0u8; 32];
-        match &g.act {
-            Act::Close { side, signer } => {
-                let (l_pay, s_pay, rest) = close_at(&g.l, g.n, clamp(lp, p), *side, 0);
-                let a = ev_args(g.n, g.q, 5, Arg::Sig(*signer), *side, ev as i64, tk_arg, 0, 0, &z, ZERO, 0);
-                ins.push(pair_input(&g.l, "onEvidence", a));
-                pos.push(out(l_pay as u64, p2pk_x(&lp.long_key), None));
-                tail[i] = out(s_pay as u64, p2pk_x(&lp.short_key), None);
-                if let Some((r, rv)) = rest {
+        match g {
+            Member::P(g) => {
+                let (kind, side) = g.act.kind_side();
+                let s = match &g.act {
+                    Act::Close { signer, .. } => Arg::Sig(*signer),
+                    _ => no_sig(),
+                };
+                let po = propose_of(g, p);
+                let a = propose_args(g.n, g.q, kind, s, side, ev as i64, tk_arg, po.fb, &g.act.proposer(), 0);
+                ins.push(pair_input(&g.l, "propose", a));
+                pendings.push((i, po.pending.clone()));
+                // A malformed pair (a negative n, a bound beyond priceMax) gives nonsense values; they are capped so the
+                // draft can be built at all (the pair input fails on its own).
+                pos.push(out(cap(po.pending_value, g.l.value), p2sh(&po.pending.art()), bind(i as u16, g.l.id)));
+                if let Some((r, rv)) = po.rest {
                     pairs.push((n_in + extra.len(), r.clone()));
-                    extra.push(out(rv as u64, p2sh(&r.art()), bind(i as u16, g.l.id)));
+                    extra.push(out(cap(rv, g.l.value), p2sh(&r.art()), bind(i as u16, g.l.id)));
                 }
             }
-            Act::Liq { side } => {
-                let (l_pay, s_pay, rest) = close_at(&g.l, g.n, loser_price(lp, *side), *side, liq_fee(lp, g.n, p, *side));
-                ins.push(pair_input(&g.l, "onEvidence", ev_args(g.n, g.q, 6, no_sig(), *side, ev as i64, tk_arg, 0, 0, &z, ZERO, 0)));
-                pos.push(out(l_pay as u64, p2pk_x(&lp.long_key), None));
-                tail[i] = out(s_pay as u64, p2pk_x(&lp.short_key), None);
-                if let Some((r, rv)) = rest {
-                    pairs.push((n_in + extra.len(), r.clone()));
-                    extra.push(out(rv as u64, p2sh(&r.art()), bind(i as u16, g.l.id)));
-                }
-            }
-            Act::LiqTransfer { side, x, open, k } => {
-                let t = p7_spec(g.n, *side, *x, open, *k);
-                let to = hand_over_out(&g.l, &t, p7_pay(&g.l, g.n, *side, *x, p));
-                ins.push(pair_input(&g.l, "onEvidence", ev_args(g.n, g.q, 7, no_sig(), *side, ev as i64, tk_arg, *x, t.nb, &t.ek, t.et, *k)));
-                pos.push(out(to.pay as u64, p2pk_x(&winner_key(lp, *side)), None));
-                let part_o = out(to.part_value as u64, p2sh(&to.part.art()), bind(i as u16, g.l.id));
-                let part_at;
-                match &to.rest {
-                    None => {
-                        part_at = n_in + extra.len();
-                        extra.push(part_o);
-                    }
-                    Some((r, rv)) => {
-                        let rest_o = out(*rv as u64, p2sh(&r.art()), bind(i as u16, g.l.id));
-                        if *k == 0 {
-                            part_at = n_in + extra.len();
-                            extra.push(part_o);
-                            pairs.push((n_in + extra.len(), r.clone()));
-                            extra.push(rest_o);
-                        } else {
-                            pairs.push((n_in + extra.len(), r.clone()));
-                            extra.push(rest_o);
-                            part_at = n_in + extra.len();
-                            extra.push(part_o);
-                        }
-                    }
-                }
-                pairs.push((part_at, to.part.clone()));
-                let oa = take_args(&to.part, *side, part_at as i64, g.n, *x);
-                open_ins.push(open_input(open, "take", oa));
-                let (oo, oc) = order_out(open, g.n, oi as u16);
-                open_pos.push(oo);
-                if let Some(c) = oc {
-                    opens.push((oi, c));
-                }
-                oi += 1;
+            Member::W(g) => {
+                let r = g.w.w.restore_pair().expect("restore state matches its hash");
+                ins.push(pending_input(&g.w, "challenge", challenge_args(g.w.w.n, g.q, ev as i64, tk_arg)));
+                pairs.push((i, r.clone()));
+                pos.push(out(g.w.w.restore_value(g.w.value) as u64, p2sh(&r.art()), bind(i as u16, g.w.id)));
             }
         }
     }
-    let any_tail = legs.iter().any(|g| !matches!(g.act, Act::LiqTransfer { .. }));
     if ev_at >= b {
         ins.extend(ev_ins);
         pos.extend(ev_pos);
     }
-    ins.extend(open_ins);
-    pos.extend(open_pos);
     ins.push(funder(f, fn_, F_FUNDS));
     pos.push(out(0, p2pk_spk(f), None));
     assert_eq!(ins.len(), n_in);
     let mut outs = pos;
     outs.extend(extra);
-    if any_tail {
-        tail.reverse();
-        outs.extend(tail);
-    }
+    outs.extend(ev_extra);
     let mut d = Draft::new(ins, outs, Some(fi));
     d.lock = NOW;
     d.pairs = pairs;
-    d.opens = opens;
+    d.pendings = pendings;
     d
+}
+
+fn cap(v: i64, pair_value: u64) -> u64 {
+    v.clamp(0, (pair_value + F_FUNDS / 4).min(i64::MAX as u64) as i64) as u64
 }
 
 /// A live pair for the evidence tests (the DESIGN 5 worked example: 1,000 tokens, bl 9, bs 12 KAS).
@@ -387,7 +419,53 @@ pub fn live(p: &Pair, tag: u8) -> Live {
     Live { p: p.clone(), value: p.floor() as u64, id: Hash::from_bytes([tag; 32]), op: outpoint(tag), daa: 0 }
 }
 
-/// The output index of the short payout of block pair i.
-pub fn short_slot(tx_outputs: usize, i: usize) -> usize {
-    tx_outputs - 1 - i
+/// The pending part a proposal leg creates, as a live UTXO of DAA score `daa` (the clock P of its challenges).
+pub fn pend_of(g: &PairLeg, quote: i64, daa: u64) -> LivePend {
+    let po = propose_of(g, quote);
+    LivePend { w: po.pending, value: po.pending_value as u64, id: g.l.id, op: outpoint(g.l.op.index as u8 ^ 0x80), daa }
+}
+
+/// The pending part of a proposal leg at the DAA a challenge at `NOW` can count a counter order placed now from:
+/// P = NOW - R - 10 (its counter-evidence fixtures rest from before P).
+pub fn pend(g: &PairLeg, quote: i64) -> LivePend {
+    pend_of(g, quote, NOW - rest_daa() - 10)
+}
+
+// ---------------------------------------------------------------- cure and finalize
+
+/// Cure: in 0 the pending part (signed by `signer`), 1 F. out 0 the proposer's refund, 1 the cured pair, 2 change.
+pub fn cure_draft(w: &LivePend, signer: &Keypair, f: &Keypair, fn_: u32) -> Draft {
+    let c = w.w.cure_pair().expect("cure state matches its hash");
+    let ins = vec![pending_input(w, "cure", vec![Arg::Sig(*signer)]), funder(f, fn_, F_FUNDS)];
+    let outs = vec![
+        out(w.w.refund as u64, p2pk_x(&w.w.proposer_key), None),
+        out(w.w.cure_value(w.value) as u64, p2sh(&c.art()), bind(0, w.id)),
+        out(0, p2pk_spk(f), None),
+    ];
+    let mut d = Draft::new(ins, outs, Some(2));
+    d.pairs.push((1, c));
+    d
+}
+
+/// Finalize at age W (the sequence). A close: out 0 the long, then change, then the short at M - 1. A liquidation:
+/// out 0 the proposer, 1 the forfeited pair, 2 change.
+pub fn finalize_draft(w: &LivePend, f: &Keypair, fn_: u32) -> Draft {
+    let ins = vec![pending_input(w, "finalize", vec![]), funder(f, fn_, F_FUNDS)];
+    let mut d;
+    if w.w.kind == KIND_CLOSE {
+        let (lp, sp) = w.w.finalize_close(w.value);
+        let mut outs = vec![out(lp as u64, p2pk_x(&w.w.long_key), None), out(0, p2pk_spk(f), None)];
+        if sp > 0 {
+            outs.push(out(sp as u64, p2pk_x(&w.w.short_key), None));
+        }
+        d = Draft::new(ins, outs, Some(1));
+    } else {
+        let fp = w.w.forfeit_pair().expect("forfeit state matches its hash");
+        let (fv, pay) = w.w.finalize_forfeit(w.value);
+        let outs = vec![out(pay as u64, p2pk_x(&w.w.proposer_key), None), out(fv as u64, p2sh(&fp.art()), bind(0, w.id)), out(0, p2pk_spk(f), None)];
+        d = Draft::new(ins, outs, Some(2));
+        d.pairs.push((1, fp));
+    }
+    d.seqs = vec![window(), 0];
+    d
 }

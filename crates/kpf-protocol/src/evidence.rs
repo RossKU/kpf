@@ -1,55 +1,55 @@
-//! Transaction builders of the three price-evidence paths of `KpfPair.onEvidence` (DESIGN 3.3, 3.6, 4.4, 4.5 T4, T6,
-//! T7, 4.5b): P5 unilateral close, P6 liquidation (close both), P7 liquidation by transfer, alone or as a block of up to
-//! 8 pairs acting on one evidence fill.
+//! Transaction builders of the two-step evidence paths (DESIGN 3.3, 3.6, 4.4, 4.5d): `KpfPair.propose` (P5 unilateral
+//! close, P6 liquidation) on up to 8 pairs acting on one evidence fill, `KpfPending.challenge` on up to 8 pending parts
+//! acting on one counter-evidence fill (the two may share one block), and the evidence-free `KpfPending.cure` and
+//! `KpfPending.finalize`.
 //!
-//! # What the transaction contains
+//! # What an evidence transaction contains
 //!
-//! Besides the pairs, the transaction holds the fill of a live KOB `KobAsk` or `KobBid` (the evidence, DESIGN 3.3), its
-//! counterparty and the KCC-20 token inputs and outputs the token program requires, so that every input, KOB's and the
-//! token's included, passes its own script. KOB's own fill builder (`kob_protocol::build::build_batch`) lives in a
-//! crate-private draft that takes only KOB's own order and key UTXOs, not a foreign pair input, so this module lays the
-//! KOB side out itself from KOB's published artifacts ([`crate::artifacts::ask_base`] and friends).
+//! Besides the pairs and pending parts, the transaction holds the fill of a live KOB `KobAsk` or `KobBid` (the evidence,
+//! DESIGN 3.3), its counterparty and the KCC-20 token inputs and outputs the token program requires, so that every
+//! input, KOB's and the token's included, passes its own script. KOB's own fill builder (`kob_protocol::build::build_batch`)
+//! lives in a crate-private draft that takes only KOB's own order and key UTXOs, not a foreign pair input, so this module
+//! lays the KOB side out itself from KOB's published artifacts ([`crate::artifacts::ask_base`] and friends).
 //!
 //! The counterparty is the executor (the funder), which needs the fewest inputs KOB's rules allow:
 //!
-//! - **ask evidence** (a long is liquidated, a short closes): the executor *buys* the ask's tokens with its own KAS. Inputs
-//!   `KobAsk` + its custody (the leader of the token transfer); the maker gets the KAS at the ask's own index, the executor
-//!   receives the tokens as a P2PK holder UTXO.
-//! - **bid evidence** (a short is liquidated, a long closes): the executor *sells* tokens into the bid. Inputs `KobBid` +
-//!   one P2PK token UTXO of the executor holding at least the fill (the leader, signed by the executor); the bid's maker
-//!   gets the tokens at the bid's own index, the executor the KAS. Without such a token UTXO the path is closed to that
-//!   executor: a resting ask to fill against the bid would add three more inputs and the ask's own custody rules.
+//! - **ask evidence** (a long's liquidation, a short's close, the challenge of a long's close or of a short's
+//!   liquidation): the executor *buys* the ask's tokens with its own KAS. Inputs `KobAsk` + its custody (the leader of the
+//!   token transfer); the maker gets the KAS at the ask's own index, the executor receives the tokens as a P2PK holder.
+//! - **bid evidence** (the other four): the executor *sells* tokens into the bid. Inputs `KobBid` + one P2PK token UTXO
+//!   of the executor holding at least the fill (the leader, signed by the executor); the bid's maker gets the tokens at
+//!   the bid's own index, the executor the KAS.
 //!
 //! # Layout (DESIGN 4.4; the covenants accept any order with the same rules)
 //!
 //! ```text
-//! inputs   [0, B)        the block of pairs, one `onEvidence` each (first pushes n_i, q = 0)
+//! inputs   [0, B)        the block: pairs (`propose`) and pending parts (`challenge`), first pushes n_i, q = 0
 //!          B             the evidence order (settle / fill; its first push is n_ev)
 //!          B + 1         its token input: the ask's custody, or the executor's tokens sold to the bid
-//!          B + 2 ..      the `KpfOpen` entrants of P7, then the funding inputs
-//! outputs  one positional output per input up to the entrants:
-//!          i             pair i: the long's payout (P5, P6) or the winner's payout (P7), else a filler
+//!          B + 2 ..      the funding inputs (they pay the bonds, a partial proposal's carriers and the fee)
+//! outputs  i             block member i: the pending part of a proposal, or the restored pair of a challenge
 //!          B             ask: the maker's KAS; bid: the delivery of the tokens to the bid's maker
 //!          B + 1         ask: the executor's tokens; bid: the executor's KAS
-//!          B + 2 + k     the entrant's continuation or refund
-//!          then          pair remainders and parts, the order's continuation, a custody rest or token change, the
-//!                        executor's change
-//!          M - 1 - i     pair i: the short's payout (P5, P6); a terminal bid's refund at M - 1 - B
+//!          then          pair remainders, the order's continuation, a custody rest or token change, the change
+//!          M - 1 - B     a terminal bid's refund
 //! ```
 //!
 //! Every party output holds the least value its covenant accepts; the executor's change takes the rest, less the fee.
+//! The bond of a successful challenge is such a rest: it lands in the challenger's change.
 
 use kaspa_consensus_core::Hash;
 use silverscript_abi::ArtifactValue;
 
-use crate::build::{take_args, Funding, Opts};
-use crate::error::{invalid, Error, Result};
+use crate::artifacts::pending_template;
+use crate::build::{Funding, Opts};
+use crate::error::{invalid, kas_str, Error, Result};
 use crate::kob::*;
 use crate::payoff::*;
+use crate::pending::*;
 use crate::state::*;
 use crate::tx::*;
 
-/// Most pairs one evidence fill can serve (the block of DESIGN 4.4 is scanned over at most 8 inputs).
+/// Most block members one evidence fill can serve (the block of DESIGN 4.4 is scanned over at most 8 inputs).
 pub const MAX_BLOCK: usize = 8;
 
 /// Storage mass (KIP-9) is `C * p^2 / value` per output, `p` the storage plurality (2 for a covenant output), and a
@@ -62,23 +62,28 @@ pub const TOKEN_OUT_VALUE: u64 = 20_000_000;
 /// The least a plain payout to another party is made, 0.1 KAS (100,000 grams), even where its covenant asks for less.
 pub const PARTY_FLOOR: u64 = 10_000_000;
 
-/// What one pair of the block does.
+/// What one pair of a proposal block claims (DESIGN 4.5d).
 #[derive(Clone, Debug)]
 pub enum Act {
-    /// P5: the owner of `side` (signature) closes `n` at the adverse bound.
+    /// P5, kind 1: the owner of `side` (signature) proposes to close `n` at the adverse bound.
     Close { side: i64 },
-    /// P6: the loser `side` is liquidated; the winner takes the part less the fee.
-    Liq { side: i64 },
-    /// P7: the loser `side` is sold to the `KpfOpen` `entrant` at `x`; the part is ordinal `k` of the continuations.
-    LiqTransfer { side: i64, x: i64, entrant: LiveOpen, k: i64 },
+    /// P6, kind 2: the loser `side` is liquidatable; the bond and the fee go to `proposer`.
+    Liq { side: i64, proposer: [u8; 32] },
 }
 
-/// One pair of the block: the part `n` of `pair` and what is done with it.
+/// One pair of a proposal block: the part `n` of `pair` and its claim.
 #[derive(Clone, Debug)]
 pub struct Leg {
     pub pair: LivePair,
     pub n: i64,
     pub act: Act,
+}
+
+/// One member of an evidence block: a pair that proposes, or a pending part that is challenged.
+#[derive(Clone, Debug)]
+pub enum Member {
+    Propose(Leg),
+    Challenge(LivePending),
 }
 
 /// The evidence order and the executor's side of its fill.
@@ -114,14 +119,21 @@ fn side_name(side: i64) -> &'static str {
     }
 }
 
-fn zero_args() -> (Arg, Arg) {
-    (bv(&[0u8; 32]), bv(&[]))
+/// `KpfPair.propose(nb, qb, kind, s, side, ev, tk, fb, pk, k, pPre, pSuf)`.
+#[allow(clippy::too_many_arguments)]
+pub fn propose_args(n: i64, q: i64, kind: i64, s: Arg, side: i64, ev: usize, tk: i64, fb: i64, pk: &[u8; 32], k: i64) -> Vec<Arg> {
+    let t = pending_template();
+    vec![bv(&sm8(n)), bv(&sm8(q)), iv(kind), s, iv(side), iv(ev as i64), iv(tk), iv(fb), bv(pk), iv(k), bv(&t.prefix), bv(&t.suffix)]
 }
 
-/// `KpfPair.onEvidence(nb, qb, path, s, side, ev, tk, x, nbd, ek, et, k)`.
-#[allow(clippy::too_many_arguments)]
-fn ev_args(n: i64, q: i64, path: i64, s: Arg, side: i64, ev: usize, tk: i64, x: i64, nbd: i64, ek: &[u8; 32], et: Hash, k: i64) -> Vec<Arg> {
-    vec![bv(&sm8(n)), bv(&sm8(q)), iv(path), s, iv(side), iv(ev as i64), iv(tk), iv(x), iv(nbd), bv(ek), bv(&et.as_bytes()), iv(k)]
+/// `KpfPending.challenge(nb, qb, ev, tk)`.
+pub fn challenge_args(n: i64, q: i64, ev: usize, tk: i64) -> Vec<Arg> {
+    vec![bv(&sm8(n)), bv(&sm8(q)), iv(ev as i64), iv(tk)]
+}
+
+/// The least fill that covers `kBps * sum / 10^4` (the evidence block rule of DESIGN 4.4, exact as in the contracts).
+fn fill_for(k_bps: i64, sum: i64) -> i64 {
+    (sum / BPS) * k_bps + ((sum % BPS) * k_bps + BPS - 1) / BPS
 }
 
 // ---------------------------------------------------------------- planning the KOB fill
@@ -254,7 +266,7 @@ enum Kind {
     Plain([u8; 32]),
     Pair(Pair, (u16, Hash)),
     Kob(KobObj, Option<(u16, Hash)>),
-    Open(Open, (u16, Hash)),
+    Pending(Pending, (u16, Hash)),
 }
 
 fn emit(d: &mut Draft, p: Pend) -> usize {
@@ -262,7 +274,7 @@ fn emit(d: &mut Draft, p: Pend) -> usize {
         Kind::Plain(k) => d.add_plain(p.value, &k, p.label),
         Kind::Pair(pr, b) => d.add_pair_out(&pr, p.value, Some(b), p.label),
         Kind::Kob(o, b) => d.add_kob_out(o, p.value, b, p.label),
-        Kind::Open(o, b) => d.add_open_out(&o, p.value, Some(b), p.label),
+        Kind::Pending(w, b) => d.add_pending_out(&w, p.value, Some(b), p.label),
     }
 }
 
@@ -275,34 +287,118 @@ fn plain(value: u64, key: &[u8; 32], label: impl Into<String>) -> Pend {
     Pend { value, kind: Kind::Plain(*key), label: label.into() }
 }
 
-/// The transaction of one evidence fill and the block of pairs that act on it (P5, P6, P7 in any mix the covenants
-/// accept: see [`Act`]). The executor is `funding.change_key`: it receives the tokens an ask evidence sells it, or the
-/// KAS a bid evidence pays it, and pays the network fee.
-pub fn evidence_tx(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
-    let (built, _) = evidence_tx_facts(legs, eu, funding, opts)?;
+
+/// The transaction of one evidence fill and the block that acts on it: proposals of pairs ([`Act`]) and challenges of
+/// pending parts, in any mix the covenants accept. The executor is `funding.change_key`: it receives the tokens an ask
+/// evidence sells it, or the KAS a bid evidence pays it, funds the bonds (and a partial proposal's carriers), receives
+/// the bond of every pending part it refutes, and pays the network fee.
+pub fn evidence_tx(members: &[Member], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let (built, _) = evidence_tx_facts(members, eu, funding, opts)?;
     Ok(built)
 }
 
 /// [`evidence_tx`], also returning what the KOB side does.
-pub fn evidence_tx_facts(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<(Built, FillFacts)> {
-    evidence_tx_inner(legs, eu, funding, opts, true)
+pub fn evidence_tx_facts(members: &[Member], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<(Built, FillFacts)> {
+    evidence_tx_inner(members, eu, funding, opts, true)
 }
 
-/// Builds the transaction even for an order [`check_evidence`] rejects, so that tests can show that the contracts refuse
-/// what the check calls a problem. Never use it to send anything.
+/// Builds the transaction even for an order [`check_evidence`] rejects or a claim the checks refuse, so that tests can
+/// show that the contracts refuse what the check calls a problem. Never use it to send anything.
 #[doc(hidden)]
-pub fn evidence_tx_unchecked(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
-    evidence_tx_inner(legs, eu, funding, opts, false).map(|(b, _)| b)
+pub fn evidence_tx_unchecked(members: &[Member], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+    evidence_tx_inner(members, eu, funding, opts, false).map(|(b, _)| b)
 }
 
-fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &Opts, checked: bool) -> Result<(Built, FillFacts)> {
-    if legs.is_empty() {
-        return invalid("nothing to do: no pair given");
+fn valid_part(p: &Pair, n: i64) -> bool {
+    n > 0 && n <= p.size && n >= p.m.min_size && (p.size == n || p.size - n >= p.m.min_size)
+}
+
+/// Why a proposal of `act` on the part `n` of `p` at the evidence quote is refused before anything is built.
+pub fn check_claim(p: &Pair, n: i64, act: &Act, is_ask: bool, quote: i64, ev_name: &str) -> Result<()> {
+    p.validate()?;
+    if !valid_part(p, n) {
+        return invalid(format!("n = {n} is not a valid part of size {} (a part and a remainder are each 0 or at least minSize {})", p.size, p.m.min_size));
     }
-    if legs.len() > MAX_BLOCK {
-        return invalid(format!("an evidence fill serves at most {MAX_BLOCK} pairs (the block scan of KpfPair is unrolled to 8); {} given", legs.len()));
+    match act {
+        Act::Close { side } => {
+            if *side != LONG && *side != SHORT {
+                return invalid("side must be long or short");
+            }
+            if (*side == LONG) == is_ask {
+                return invalid(format!(
+                    "the {} closes at a resting {} (a long at a bid, a short at an ask), but the evidence is {} {ev_name}",
+                    side_name(*side),
+                    if *side == LONG { "bid" } else { "ask" },
+                    if is_ask { "an" } else { "a" },
+                ));
+            }
+        }
+        Act::Liq { side, .. } => {
+            if *side != LONG && *side != SHORT {
+                return invalid("side must be long or short");
+            }
+            if (*side == LONG) != is_ask {
+                return invalid(format!(
+                    "a {} is liquidated by {} (a long by an ask, a short by a bid), but the evidence is {} {ev_name}",
+                    side_name(*side),
+                    if *side == LONG { "an ask" } else { "a bid" },
+                    if is_ask { "an" } else { "a" },
+                ));
+            }
+            if quote < 0 || quote > p.m.price_max {
+                return invalid(format!("the evidence quote {quote} is outside 0..=priceMax {}: it cannot liquidate", p.m.price_max));
+            }
+            let trig = if *side == LONG { long_liquidatable(p, quote) } else { short_liquidatable(p, quote) };
+            if !trig {
+                return invalid(format!(
+                    "the {} is not liquidatable at the {ev_name} {} KAS (its trigger is {} KAS: {})",
+                    side_name(*side),
+                    kas_str(quote as i128),
+                    kas_str(trigger_of(p, *side) as i128),
+                    if *side == LONG { "a long needs an ask below it" } else { "a short needs a bid above it" }
+                ));
+            }
+        }
     }
-    let m = legs[0].pair.p.m.clone();
+    Ok(())
+}
+
+/// Why a challenge of `w` at the counter quote is refused before anything is built.
+pub fn check_challenge(w: &Pending, is_ask: bool, quote: i64, ev_name: &str) -> Result<()> {
+    if w.counter_is_ask() != is_ask {
+        return invalid(format!(
+            "this claim is refuted by {} (a long's close at a bid and a short's liquidation by an ask, the others by a bid), but the evidence is {} {ev_name}",
+            if w.counter_is_ask() { "an ask" } else { "a bid" },
+            if is_ask { "an" } else { "a" }
+        ));
+    }
+    if !w.contradicts(quote) {
+        let bound = w.contradiction_bound().map(|b| format!("{} {} KAS", if w.counter_is_ask() { "at most" } else { "at least" }, kas_str(b as i128)));
+        return invalid(format!(
+            "the {ev_name} {} KAS does not contradict the claim by the margin g = {} bps: a challenge needs {} {}",
+            kas_str(quote as i128),
+            w.m.g_bps,
+            if w.counter_is_ask() { "an ask" } else { "a bid" },
+            bound.unwrap_or_else(|| "a quote no order can have".into())
+        ));
+    }
+    if w.restore_pair().is_none() {
+        return invalid("the pending part's restore hash does not match the pair its own state describes: it was not proposed by the pinned KpfPair");
+    }
+    Ok(())
+}
+
+fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, opts: &Opts, checked: bool) -> Result<(Built, FillFacts)> {
+    if members.is_empty() {
+        return invalid("nothing to do: no pair or pending part given");
+    }
+    if members.len() > MAX_BLOCK {
+        return invalid(format!("an evidence fill serves at most {MAX_BLOCK} block members (the block scan is unrolled to 8); {} given", members.len()));
+    }
+    let m = match &members[0] {
+        Member::Propose(g) => g.pair.p.m.clone(),
+        Member::Challenge(w) => w.w.m.clone(),
+    };
     supports_token_program(&m).map_err(Error::Invalid)?;
     let ev = &eu.order;
     let quote = ev.quote();
@@ -314,146 +410,44 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
         return invalid(format!("this order cannot serve as evidence: {}", rep.problems.join("; ")));
     }
 
-    // The legs.
+    // The members.
     let mut seen = std::collections::BTreeSet::new();
-    let mut sum = 0i64;
+    let (mut sum, mut any_pair, mut any_pending) = (0i64, false, false);
     let mut lock = rep.rest_end;
-    for (j, g) in legs.iter().enumerate() {
-        let p = &g.pair.p;
-        p.validate()?;
-        // The evidence clock of this pair (DESIGN 4.5c): the rest counts from max(exposed, S), and the lock time must
-        // prove its end.
-        let s = g.pair.clock();
-        let on = check_evidence_on(ev, &m, Some(s), eu.now);
+    for (j, g) in members.iter().enumerate() {
+        let (mm, id, n, clock) = match g {
+            Member::Propose(l) => (&l.pair.p.m, l.pair.id, l.n, l.pair.clock()),
+            // The counter-evidence clock is the pending UTXO's own DAA score P (DESIGN 4.5d).
+            Member::Challenge(w) => (&w.w.m, w.id, w.w.n, w.daa as i64),
+        };
+        if *mm != m {
+            return invalid(format!("block member {j} is of another market than member 0"));
+        }
+        if !seen.insert(id) {
+            return invalid(format!(
+                "block member {j} has the covenant id of an earlier member (the same pair twice, or a pending part and a remainder of one split, which share an id): every KpfPair and KpfPending must be the only input of its covenant id"
+            ));
+        }
+        let on = check_evidence_on(ev, &m, Some(clock), eu.now);
         if checked && !on.problems.is_empty() {
-            return invalid(format!("pair {j}: this order cannot serve as evidence on the pair's clock (DAA {s}): {}", on.problems.join("; ")));
+            return invalid(format!("block member {j}: this order cannot serve as evidence on its clock (DAA {clock}): {}", on.problems.join("; ")));
         }
         lock = lock.max(on.rest_end);
-        if p.m != m {
-            return invalid(format!("pair {j} is of another market than pair 0"));
-        }
-        if !seen.insert(g.pair.id) {
-            return invalid(format!(
-                "pair {j} has the covenant id of an earlier pair of the block (the same pair twice, or the pieces of one split, which share an id): every KpfPair must be the only input of its covenant id, so one piece of an id acts per transaction"
-            ));
-        }
-        let ok_part = g.n > 0 && g.n <= p.size && g.n >= m.min_size && (p.size == g.n || p.size - g.n >= m.min_size);
-        if !ok_part {
-            return invalid(format!(
-                "pair {j}: n = {} is not a valid part of its size {} (a part and a remainder are each 0 or at least minSize {})",
-                g.n, p.size, m.min_size
-            ));
-        }
-        sum = sum.checked_add(g.n).ok_or_else(|| Error::Invalid("the parts add up beyond 63 bits".into()))?;
-        match &g.act {
-            Act::Close { side } => {
-                if *side != LONG && *side != SHORT {
-                    return invalid("side must be long or short");
-                }
-                if (*side == LONG) == is_ask {
-                    return invalid(format!(
-                        "pair {j}: the {} closes at a resting {} (a long at a bid, a short at an ask), but the evidence is {} {}",
-                        side_name(*side),
-                        if *side == LONG { "bid" } else { "ask" },
-                        if is_ask { "an" } else { "a" },
-                        ev.name()
-                    ));
+        match g {
+            Member::Propose(l) => {
+                any_pair = true;
+                if checked {
+                    check_claim(&l.pair.p, l.n, &l.act, is_ask, quote, ev.name()).map_err(|e| Error::Invalid(format!("pair {j}: {e}")))?;
                 }
             }
-            Act::Liq { side } | Act::LiqTransfer { side, .. } => {
-                if *side != LONG && *side != SHORT {
-                    return invalid("side must be long or short");
-                }
-                if (*side == LONG) != is_ask {
-                    return invalid(format!(
-                        "pair {j}: a {} is liquidated by {} (a long by an ask, a short by a bid), but the evidence is {} {}",
-                        side_name(*side),
-                        if *side == LONG { "an ask" } else { "a bid" },
-                        if is_ask { "an" } else { "a" },
-                        ev.name()
-                    ));
-                }
-                if quote < 0 || quote > m.price_max {
-                    return invalid(format!("the evidence quote {quote} is outside 0..=priceMax {}: it cannot liquidate", m.price_max));
-                }
-                let trig = if *side == LONG { long_liquidatable(p, quote) } else { short_liquidatable(p, quote) };
-                if !trig {
-                    return invalid(format!(
-                        "pair {j}: the {} is not liquidatable at the {} {} KAS (its trigger is {} KAS: {})",
-                        side_name(*side),
-                        ev.name(),
-                        crate::error::kas_str(quote as i128),
-                        crate::error::kas_str(trigger_of(p, *side) as i128),
-                        if *side == LONG { "a long needs an ask below it" } else { "a short needs a bid above it" }
-                    ));
-                }
-                if let Act::LiqTransfer { x, entrant, k, .. } = &g.act {
-                    if *k != 0 && *k != 1 {
-                        return invalid("k must be 0 or 1");
-                    }
-                    if entrant.o.side != *side || entrant.o.m != m {
-                        return invalid(format!("pair {j}: the entrant order must be a {} order of the same market", side_name(*side)));
-                    }
-                    if *x < 0 || *x > m.price_max {
-                        return invalid(format!("pair {j}: x = {x} is outside 0..=priceMax"));
-                    }
-                    if *side == LONG {
-                        if *x < quote {
-                            return invalid(format!("pair {j}: a long is sold at x >= the evidence ask: x = {x} is below {quote}"));
-                        }
-                    } else if *x > quote {
-                        return invalid(format!("pair {j}: a short is sold at x <= the evidence bid: x = {x} is above {quote}"));
-                    }
-                    let nb = if *side == LONG { *x - entrant.o.my_rate } else { *x + entrant.o.my_rate };
-                    if *side == LONG {
-                        if !(nb >= 0 && nb <= p.bl) {
-                            return invalid(format!("pair {j}: the entrant's bound {nb} would raise bl above {} (no-downgrade for the winner)", p.bl));
-                        }
-                    } else if !(nb >= p.bs && nb <= m.price_max) {
-                        return invalid(format!("pair {j}: the entrant's bound {nb} would lower bs below {} (no-downgrade for the winner)", p.bs));
-                    }
-                    // Health at entry (DESIGN 4.5c, review 3 F3): the entrant must not be liquidatable at the very quote of
-                    // this transaction (KpfPair checks it at the quote, which implies the check at x).
-                    if !healthy_at(&m, *side, nb, quote) {
-                        return invalid(format!(
-                            "pair {j}: the entrant would enter liquidatable: with its bound {} KAS it is liquidatable at the evidence {} {} KAS itself; sell at a price x {} {} KAS (or choose an entrant with more margin)",
-                            crate::error::kas_str(nb as i128),
-                            ev.name(),
-                            crate::error::kas_str(quote as i128),
-                            if *side == LONG { "at most" } else { "at least" },
-                            crate::error::kas_str(entrant_health_bound(&m, *side, quote, entrant.o.my_rate) as i128)
-                        ));
-                    }
-                    // The entrant's own rules (`KpfOpen.take`): its limit, its minimum counter rate and the entry price it
-                    // accepts (a long: entry >= x; a short: entry <= x).
-                    let eo = &entrant.o;
-                    let why = if *side == LONG {
-                        if *x > eo.limit {
-                            Some(format!("x = {x} is above the entrant long order's limit {}", eo.limit))
-                        } else if p.entry < *x {
-                            Some(format!("the pair's entry price {} is below x = {x}: a long order accepts an entry at or above its fill price", p.entry))
-                        } else if p.bs - *x < eo.min_counter_rate {
-                            Some(format!("the stayer's margin rate {} is below the entrant's minCounterRate {}", p.bs - *x, eo.min_counter_rate))
-                        } else {
-                            None
-                        }
-                    } else if *x < eo.limit {
-                        Some(format!("x = {x} is below the entrant short order's limit {}", eo.limit))
-                    } else if p.entry > *x {
-                        Some(format!("the pair's entry price {} is above x = {x}: a short order accepts an entry at or below its fill price", p.entry))
-                    } else if *x - p.bl < eo.min_counter_rate {
-                        Some(format!("the stayer's margin rate {} is below the entrant's minCounterRate {}", *x - p.bl, eo.min_counter_rate))
-                    } else {
-                        None
-                    };
-                    if let Some(w) = why {
-                        return invalid(format!("pair {j}: {w}"));
-                    }
-                    check_entrant_amount(&entrant.o, g.n)?;
-                    lock = lock.max(entrant.o.active_from.max(0) as u64);
+            Member::Challenge(w) => {
+                any_pending = true;
+                if checked {
+                    check_challenge(&w.w, is_ask, quote, ev.name()).map_err(|e| Error::Invalid(format!("pending part {j}: {e}")))?;
                 }
             }
         }
+        sum = sum.checked_add(n).ok_or_else(|| Error::Invalid("the parts add up beyond 63 bits".into()))?;
     }
     if lock as i64 >= LOCK_TIME_THRESHOLD {
         return invalid("the required lock time is above the lock-time threshold");
@@ -464,15 +458,20 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
         let r = check_evidence_on(ev, &m, None, Some(at));
         return invalid(r.dead.join("; "));
     }
-    let need = needed_fill(&m, sum);
+    let mut need = 0;
+    if any_pair {
+        need = need.max(fill_for(m.k_bps, sum));
+    }
+    if any_pending {
+        need = need.max(fill_for(m.kc_bps, sum));
+    }
 
     // The KOB side.
-    let b_cnt = legs.len();
+    let b_cnt = members.len();
     let ev_i = b_cnt;
     let tk_i = b_cnt + 1;
-    let n_opens = legs.iter().filter(|g| matches!(g.act, Act::LiqTransfer { .. })).count();
-    let n_in = b_cnt + 2 + n_opens + funding.utxos.len();
-    let idx0 = b_cnt + 2 + n_opens; // the first output after the positional ones
+    let n_in = b_cnt + 2 + funding.utxos.len();
+    let idx0 = b_cnt + 2; // the first output after the positional ones
     let mut extras: Vec<Pend> = vec![];
     let mut tail: Vec<Option<Pend>> = vec![]; // by input index i: lands at output M - 1 - i
     let set_tail = |tail: &mut Vec<Option<Pend>>, i: usize, p: Pend| {
@@ -484,86 +483,43 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     let token_cov = m.token_cov_id;
     let tk_arg = if is_ask { tk_i as i64 } else { -1 };
 
-    let mut pos_pairs: Vec<Pend> = vec![];
-    let mut open_ins: Vec<(LiveOpen, Vec<Arg>)> = vec![];
-    let mut open_pos: Vec<Pend> = vec![];
-    let mut pair_ins: Vec<(usize, Vec<Arg>, String)> = vec![];
-    let mut oi = b_cnt + 2;
-    let (z32, nosig) = zero_args();
-    let _ = z32;
-    for (j, g) in legs.iter().enumerate() {
-        let l = &g.pair;
-        // The outputs that do not change hands keep the clock S (DESIGN 4.5c).
-        let lpc = l.clocked();
-        let lp = &lpc;
-        let z = [0u8; 32];
-        match &g.act {
-            Act::Close { side } => {
-                let owner = if *side == LONG { lp.long_key } else { lp.short_key };
-                let (l_pay, s_pay, rest) = close_at(lp, l.value, g.n, clamp_price(lp, quote), *side, 0);
-                pair_ins.push((j, ev_args(g.n, 0, 5, Arg::Sig(owner), *side, ev_i, tk_arg, 0, 0, &z, ZERO, 0), format!("pair {j} (unilateral close, {})", side_name(*side))));
-                pos_pairs.push(if l_pay > 0 { plain(l_pay as u64, &lp.long_key, format!("long paid (pair {j})")) } else { filler(&exec, "pair slot") });
-                if s_pay > 0 {
-                    set_tail(&mut tail, j, plain(s_pay as u64, &lp.short_key, format!("short paid (pair {j})")));
-                }
-                if let Some((r, rv)) = rest {
-                    extras.push(Pend { value: rv as u64, kind: Kind::Pair(r, (j as u16, l.id)), label: format!("pair {j} remainder") });
-                }
-            }
-            Act::Liq { side } => {
-                let fee = liq_fee(lp, g.n, quote, *side);
-                let (l_pay, s_pay, rest) = close_at(lp, l.value, g.n, loser_price(lp, *side), *side, fee);
-                pair_ins.push((j, ev_args(g.n, 0, 6, nosig.clone(), *side, ev_i, tk_arg, 0, 0, &z, ZERO, 0), format!("pair {j} (liquidation, {} loses)", side_name(*side))));
-                pos_pairs.push(if l_pay > 0 { plain(l_pay as u64, &lp.long_key, format!("long paid (pair {j})")) } else { filler(&exec, "pair slot") });
-                if s_pay > 0 {
-                    set_tail(&mut tail, j, plain(s_pay as u64, &lp.short_key, format!("short paid (pair {j})")));
-                }
-                if let Some((r, rv)) = rest {
-                    extras.push(Pend { value: rv as u64, kind: Kind::Pair(r, (j as u16, l.id)), label: format!("pair {j} remainder") });
-                }
-            }
-            Act::LiqTransfer { side, x, entrant, k } => {
-                let nb = if *side == LONG { *x - entrant.o.my_rate } else { *x + entrant.o.my_rate };
-                let t = TransferSpec { side: *side, n: g.n, x: *x, nb, ek: entrant.o.owner, et: entrant.id, k: *k };
-                let to = hand_over_out(lp, l.value, &t, p7_pay(lp, g.n, *side, *x, quote));
-                pair_ins.push((
+    let mut pos_members: Vec<Pend> = vec![];
+    let mut member_ins: Vec<(usize, Vec<Arg>, String)> = vec![];
+    for (j, g) in members.iter().enumerate() {
+        match g {
+            Member::Propose(l) => {
+                // The outputs that do not change hands keep the clock S (DESIGN 4.5c); propose_out is given the clocked pair.
+                let lp = l.pair.clocked();
+                let (kind, side, s, pk) = match &l.act {
+                    Act::Close { side } => (KIND_CLOSE, *side, Arg::Sig(if *side == LONG { lp.long_key } else { lp.short_key }), [0u8; 32]),
+                    Act::Liq { side, proposer } => (KIND_LIQ, *side, bv(&[]), *proposer),
+                };
+                let po = propose_out(&lp, l.pair.value, l.n, kind, side, quote, pk);
+                member_ins.push((
                     j,
-                    ev_args(g.n, 0, 7, nosig.clone(), *side, ev_i, tk_arg, *x, nb, &t.ek, t.et, *k),
-                    format!("pair {j} (liquidation by transfer, {} sold)", side_name(*side)),
+                    propose_args(l.n, 0, kind, s, side, ev_i, tk_arg, po.fb, &pk, 0),
+                    format!("pair {j} (propose {} of the {})", if kind == KIND_CLOSE { "close" } else { "liquidation" }, side_name(side)),
                 ));
-                let winner = winner_key(lp, *side);
-                pos_pairs.push(if to.pay > 0 { plain(to.pay as u64, &winner, format!("winner paid (pair {j})")) } else { filler(&exec, "pair slot") });
-                let part_o = Pend { value: to.part_value as u64, kind: Kind::Pair(to.part.clone(), (j as u16, l.id)), label: format!("pair {j} part (entrant)") };
-                let part_at;
-                match &to.rest {
-                    None => {
-                        part_at = idx0 + extras.len();
-                        extras.push(part_o);
-                    }
-                    Some((r, rv)) => {
-                        let rest_o = Pend { value: *rv as u64, kind: Kind::Pair(r.clone(), (j as u16, l.id)), label: format!("pair {j} remainder") };
-                        if *k == 0 {
-                            part_at = idx0 + extras.len();
-                            extras.push(part_o);
-                            extras.push(rest_o);
-                        } else {
-                            extras.push(rest_o);
-                            part_at = idx0 + extras.len();
-                            extras.push(part_o);
-                        }
-                    }
-                }
-                open_ins.push((entrant.clone(), take_args(&to.part, *side, part_at as i64, g.n, *x)));
-                let (rest, cont) = order_rest(&entrant.o, entrant.value, g.n);
-                open_pos.push(match cont {
-                    Some(c) => Pend { value: rest, kind: Kind::Open(c, (oi as u16, entrant.id)), label: format!("entrant order continuation (pair {j})") },
-                    None => plain(rest, &entrant.o.owner, format!("entrant order refund (pair {j})")),
+                pos_members.push(Pend {
+                    value: po.pending_value as u64,
+                    kind: Kind::Pending(po.pending, (j as u16, l.pair.id)),
+                    label: format!("pair {j}: pending part (bond {} KAS)", kas_str(bond_of(&lp, l.n) as i128)),
                 });
-                oi += 1;
+                if let Some((r, rv)) = po.rest {
+                    extras.push(Pend { value: rv as u64, kind: Kind::Pair(r, (j as u16, l.pair.id)), label: format!("pair {j} remainder") });
+                }
+            }
+            Member::Challenge(w) => {
+                let r = w.w.restore_pair().ok_or_else(|| Error::Invalid(format!("pending part {j}: its restore hash does not match its own state")))?;
+                member_ins.push((j, challenge_args(w.w.n, 0, ev_i, tk_arg), format!("pending part {j} (challenge)")));
+                pos_members.push(Pend {
+                    value: w.w.restore_value(w.value).max(0) as u64,
+                    kind: Kind::Pair(r, (j as u16, w.id)),
+                    label: format!("pending part {j}: restored pair (the bond {} KAS goes to the challenger)", kas_str(w.w.bond as i128)),
+                });
             }
         }
     }
-
     // The evidence fill.
     let mut ev_pos: Vec<Pend> = vec![];
     let (ev_input, tk_input);
@@ -684,8 +640,11 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     // Assemble: inputs in index order, then outputs in layout order.
     let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
     d.lock = lock;
-    for (j, args, label) in pair_ins {
-        d.add_pair_in(&legs[j].pair, "onEvidence", args, label);
+    for (j, args, label) in member_ins {
+        match &members[j] {
+            Member::Propose(l) => d.add_pair_in(&l.pair, "propose", args, label),
+            Member::Challenge(w) => d.add_pending_in(w, "challenge", args, label),
+        };
     }
     let (w, e, op, redeem, name, args, label) = ev_input;
     let ev_idx = d.add_kob_in(op, e, w, redeem, name, args, label);
@@ -696,19 +655,13 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     let (w, e, op, redeem, name, args, label) = tk_input;
     let tk_idx = d.add_kob_in(op, e, w, redeem, name, args, label);
     debug_assert_eq!(tk_idx, tk_i);
-    for (lo, args) in &open_ins {
-        d.add_open_in(lo, "take", args.clone(), "entrant order (take)");
-    }
     let first_fund = d.fund_inputs(funding)?;
     debug_assert_eq!(first_fund, n_in - funding.utxos.len());
 
-    for p in pos_pairs {
+    for p in pos_members {
         emit(&mut d, p);
     }
     for p in ev_pos {
-        emit(&mut d, p);
-    }
-    for p in open_pos {
         emit(&mut d, p);
     }
     debug_assert_eq!(d.outs.len(), idx0);
@@ -728,96 +681,81 @@ fn evidence_tx_inner(legs: &[Leg], eu: &EvidenceUse, funding: &Funding, opts: &O
     Ok((built, facts))
 }
 
-/// The checks of `KpfOpen.take` on the amount of a P7 entrant.
-fn check_entrant_amount(o: &Open, n: i64) -> Result<()> {
-    if !(n > 0 && n <= o.size_left && n >= o.m.min_size && (n >= o.min_fill || n == o.size_left)) {
-        return invalid(format!("the entrant order cannot take n = {n}: it has {} left, minFill {}, minSize {}", o.size_left, o.min_fill, o.m.min_size));
-    }
-    let left = o.size_left - n;
-    if left != 0 && left < o.m.min_size {
-        return invalid(format!("taking {n} would leave the entrant order {left}, below minSize {}", o.m.min_size));
-    }
-    Ok(())
+// ---------------------------------------------------------------- the paths
+
+/// Propose a P5 unilateral close (kind 1): the owner of `side` of `l` (signature) closes `n` at the adverse bound, a long
+/// at a resting bid and a short at a resting ask. The executor funds the bond (and the carrier of a part); the closer is
+/// paid at finalize, unless the claim is refuted.
+pub fn propose_close(l: &LivePair, side: i64, n: i64, eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+    evidence_tx(&[Member::Propose(Leg { pair: l.clone(), n, act: Act::Close { side } })], eu, funding, opts)
 }
 
-// ---------------------------------------------------------------- the three paths
-
-/// P5 unilateral close: the owner of `side` of `l` (signature) closes `n` at the adverse bound, a long at a resting bid
-/// and a short at a resting ask.
-pub fn close_on_evidence(l: &LivePair, side: i64, n: i64, eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
-    let leg = Leg { pair: l.clone(), n, act: Act::Close { side } };
-    evidence_tx(&[leg], eu, funding, opts)
-}
-
-/// P6 liquidation (close both) of up to 8 pairs, whole or in parts, on one evidence: an ask liquidates longs, a bid
-/// shorts. The loser gets 0, the winner the part less the keeper fee.
-pub fn liquidate(parts: &[(LivePair, i64)], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+/// Propose a P6 liquidation (kind 2) of up to 8 pairs, whole or in parts, on one evidence: an ask liquidates longs, a
+/// bid shorts. At finalize the winner keeps the loser's side (forfeit and keep) and `proposer` gets the bond and the fee.
+pub fn propose_liquidate(parts: &[(LivePair, i64)], proposer: &[u8; 32], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
     let side = if eu.order.is_ask() { LONG } else { SHORT };
-    let legs: Vec<Leg> = parts.iter().map(|(p, n)| Leg { pair: p.clone(), n: *n, act: Act::Liq { side } }).collect();
-    evidence_tx(&legs, eu, funding, opts)
+    let m: Vec<Member> = parts.iter().map(|(p, n)| Member::Propose(Leg { pair: p.clone(), n: *n, act: Act::Liq { side, proposer: *proposer } })).collect();
+    evidence_tx(&m, eu, funding, opts)
 }
 
-/// P7 liquidation by transfer: the loser's part `n` of `l` is sold at `x` to the resting `KpfOpen` `entrant` of its
-/// side; the winner keeps its position and is paid the entrant's payment less the fee.
-pub fn liquidate_transfer(l: &LivePair, n: i64, x: i64, entrant: &LiveOpen, k: i64, eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
-    let side = if eu.order.is_ask() { LONG } else { SHORT };
-    let leg = Leg { pair: l.clone(), n, act: Act::LiqTransfer { side, x, entrant: entrant.clone(), k } };
-    evidence_tx(&[leg], eu, funding, opts)
+/// Challenge up to 8 pending parts on one counter-evidence fill: each returns to its restore state and its bond goes to
+/// the executor (the challenger).
+pub fn challenge(parts: &[LivePending], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let m: Vec<Member> = parts.iter().map(|w| Member::Challenge(w.clone())).collect();
+    evidence_tx(&m, eu, funding, opts)
 }
 
-/// The price bound at which a P7 entrant of `side` with margin rate `my_rate` is healthy at the evidence `quote`
-/// (DESIGN 4.5c, review 3 F3): a long entrant (bound `x - my_rate`) needs `x <= floor(quote * (10^4 - mmrBps) / 10^4) +
-/// my_rate`; a short entrant (bound `x + my_rate`) needs `x >= ceil(quote * (10^4 + mmrBps) / 10^4) - my_rate`.
-pub fn entrant_health_bound(m: &Market, side: i64, quote: i64, my_rate: i64) -> i64 {
-    let (q, mm, b) = (quote as i128, m.mmr_bps as i128, BPS as i128);
-    let v = if side == LONG { q * (b - mm) / b + my_rate as i128 } else { (q * (b + mm) + b - 1) / b - my_rate as i128 };
-    v.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+/// Cure (`KpfPending.cure`): the loser's owner moves its bound to the cure bound, funding the added margin (and the
+/// carrier of a part), and the proposer is repaid its refund. Valid at any time before a finalize lands.
+pub fn cure(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let w = &lw.w;
+    if w.kind != KIND_LIQ {
+        return invalid("only a pending liquidation can be cured; a pending close is refuted by a challenge");
+    }
+    let c = w.cure_pair().ok_or_else(|| {
+        Error::Invalid(if w.can_cure() {
+            "the pending part's cure hash does not match the pair its own state describes".into()
+        } else {
+            "this claim has no cure: the short's cure bound would exceed priceMax".into()
+        })
+    })?;
+    let loser = if w.side == LONG { w.long_key } else { w.short_key };
+    let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    d.add_pending_in(lw, "cure", vec![Arg::Sig(loser)], format!("pending part (cure by the {})", side_name(w.side)));
+    d.fund_inputs(funding)?;
+    d.add_plain(w.refund as u64, &w.proposer_key, "proposer repaid (bond and carrier)");
+    d.add_pair_out(&c, w.cure_value(lw.value) as u64, Some((0, lw.id)), format!("cured pair (the {}'s bound moved to {} KAS)", side_name(w.side), kas_str(w.cure_bound as i128)));
+    d.add_change(&funding.change_key);
+    d.finish()
 }
 
-/// The price `x` at which the loser's part is best sold to `entrant` for the winner (who receives the entrant's payment
-/// less the fee): the highest `x` for a long loser, the lowest for a short loser, within what the evidence quote, the
-/// no-downgrade rule, the entrant's health at the quote (DESIGN 4.5c) and the entrant's own limit, entry and
-/// counter-rate rules allow. When no price keeps the entrant healthy at the quote, it refuses: such an entrant would
-/// enter liquidatable by the very quote of the transaction (review 3 F3).
-pub fn p7_default_x(p: &Pair, side: i64, quote: i64, entrant: &Open) -> Result<i64> {
-    let health = entrant_health_bound(&p.m, side, quote, entrant.my_rate);
-    if side == LONG {
-        let hi = [entrant.limit, p.bl + entrant.my_rate, p.bs - entrant.min_counter_rate, p.entry, p.m.price_max, health].into_iter().min().expect("six bounds");
-        if hi < quote {
-            if health < quote {
-                return invalid(format!(
-                    "no price works: this entrant (margin rate {} KAS) would be liquidatable at the evidence ask {} KAS itself at any x >= the ask; it would forfeit its whole margin at the next liquidation. Choose an entrant with a margin rate of at least {} KAS",
-                    crate::error::kas_str(entrant.my_rate as i128),
-                    crate::error::kas_str(quote as i128),
-                    crate::error::kas_str((quote - (quote as i128 * (BPS - p.m.mmr_bps) as i128 / BPS as i128) as i64) as i128)
-                ));
-            }
-            return invalid(format!(
-                "no price works: a long is sold at x >= the evidence ask {quote}, but this entrant allows at most {hi} (its limit {}, no-downgrade {}, counter rate, the pair's entry {}, health at the ask {health})",
-                entrant.limit,
-                p.bl + entrant.my_rate,
-                p.entry
-            ));
+/// Finalize (`KpfPending.finalize`): anyone, once the pending UTXO is `challengeDaa` old. A close pays the closer its
+/// payoff at the clamped quote plus the refund and the other party the rest; a liquidation forfeits the loser's side to
+/// the winner (both sides then the winner's) and pays the proposer the bond and the fee.
+pub fn finalize(lw: &LivePending, funding: &Funding, opts: &Opts) -> Result<Built> {
+    let w = &lw.w;
+    let mut d = Draft::new(opts.fee_rate, opts.fee_mode);
+    let i = d.add_pending_in(lw, "finalize", vec![], "pending part (finalize)");
+    d.ins[i].sequence = w.m.challenge_daa.max(0) as u64;
+    d.fund_inputs(funding)?;
+    if w.kind == KIND_CLOSE {
+        let (lp, sp) = w.finalize_close(lw.value);
+        if lp > 0 {
+            d.add_plain(lp as u64, &w.long_key, if w.side == LONG { "long paid (closer, with the refund)" } else { "long paid" });
         }
-        Ok(hi)
+        d.add_change(&funding.change_key);
+        if sp > 0 {
+            while d.outs.len() < d.ins.len() {
+                d.add_plain(DUST_OUTPUT_MIN, &funding.change_key, "filler (keeps the reverse payout slot clear of the inputs)");
+            }
+            d.add_plain(sp as u64, &w.short_key, if w.side == SHORT { "short paid (closer, with the refund)" } else { "short paid" });
+        }
     } else {
-        let lo = [entrant.limit, p.bs - entrant.my_rate, p.bl + entrant.min_counter_rate, p.entry, 0, health].into_iter().max().expect("six bounds");
-        if lo > quote {
-            if health > quote {
-                return invalid(format!(
-                    "no price works: this entrant (margin rate {} KAS) would be liquidatable at the evidence bid {} KAS itself at any x <= the bid; it would forfeit its whole margin at the next liquidation. Choose an entrant with a margin rate of at least {} KAS",
-                    crate::error::kas_str(entrant.my_rate as i128),
-                    crate::error::kas_str(quote as i128),
-                    crate::error::kas_str((((quote as i128 * (BPS + p.m.mmr_bps) as i128 + BPS as i128 - 1) / BPS as i128) as i64 - quote) as i128)
-                ));
-            }
-            return invalid(format!(
-                "no price works: a short is sold at x <= the evidence bid {quote}, but this entrant needs at least {lo} (its limit {}, no-downgrade {}, counter rate, the pair's entry {}, health at the bid {health})",
-                entrant.limit,
-                p.bs - entrant.my_rate,
-                p.entry
-            ));
-        }
-        Ok(lo)
+        let f = w.forfeit_pair().ok_or_else(|| Error::Invalid("the pending part's forfeit hash does not match the pair its own state describes".into()))?;
+        let (fv, pay) = w.finalize_forfeit(lw.value);
+        d.add_plain(pay as u64, &w.proposer_key, "proposer paid (bond and fee)");
+        d.add_pair_out(&f, fv as u64, Some((0, lw.id)), format!("forfeited part (both sides the {}'s)", if w.side == LONG { "short" } else { "long" }));
+        d.add_change(&funding.change_key);
     }
+    d.finish()
 }

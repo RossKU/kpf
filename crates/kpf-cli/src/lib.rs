@@ -40,20 +40,31 @@ Builders (common: --funder KEY --funding UTXOS.json | --node URL, [--key KEY]...
   coop-close    --pair P.json --long-pay KAS [--fee-from long|short] --key LONG --key SHORT [--funder KEY]
   idle-settle   --pair P.json
 
-Price-evidence paths (a real KOB order is filled in the same transaction; the funder is the executor: it BUYS the evidence
-ask's tokens with its own KAS, or SELLS its own tokens into the evidence bid. common flags as the builders)
-  evidence  --order ORDER.json --pair P.json [--daa N | --node URL] [--json]   can this KOB order serve as evidence, and why not
-  close     --pair P.json --side long|short --n T --evidence ORDER.json [--seller TOKEN.json] [--evidence-fill T] --key OWNER
-            P5 unilateral close: a long at a resting bid, a short at a resting ask (the owner's key signs)
-  liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json]   P6, up to 8 pairs on one evidence:
-            an ask liquidates longs, a bid shorts; the loser receives nothing, the winner the part less the fee
-  liquidate-transfer --pair P.json --entrant-order O.json --evidence ORDER.json [--n T] [--x P] [--k 0|1] [--seller TOKEN.json]
-            P7: the loser's part is sold to a resting KpfOpen of its side; the winner keeps its position
+Price-evidence paths, two steps (DESIGN 4.5d: a claim is proposed with a bond, challenged, cured or finalized; a real KOB
+order is filled in every evidence transaction; the funder is the executor: it BUYS the evidence ask's tokens with its own
+KAS, or SELLS its own tokens into the evidence bid. common flags as the builders)
+  evidence  --order ORDER.json (--pair P.json | --pending W.json) [--daa N | --node URL] [--json]
+            can this KOB order serve as evidence for a pair, or refute a pending claim, and why not
+  propose-close --pair P.json --side long|short [--n T] --evidence ORDER.json [--seller TOKEN.json] [--evidence-fill T] --key OWNER
+            P5 unilateral close (a long at a resting bid, a short at a resting ask; the owner's key signs); settles at finalize
+  propose-liquidate --pair P.json [--pair P.json]... [--n T]... --evidence ORDER.json [--seller TOKEN.json] [--proposer KEY|HEX|ADDR]
+            P6, up to 8 pairs on one evidence (an ask: longs, a bid: shorts); at finalize the winner keeps both sides
+            (forfeit and keep) and the proposer (default the funder) receives the bond and the fee
+  challenge --pending W.json [--pending W.json]... --evidence ORDER.json [--seller TOKEN.json]
+            refute pending claims with a counter order of the opposite kind beyond the claim by the margin g, rested from
+            the proposal's DAA; the parts return to their pairs and the bonds go to the funder (the challenger)
+  cure      --pending W.json --key LOSER                 the threatened side of a pending liquidation adds the margin it
+                                                         needs (bound to the cure bound) and repays the proposer
+  finalize  --pending W.json [--daa N]                   anyone, once the pending part is challengeDaa old: settle the claim
+  watch     --pair P.json [--pair ...] (--pending W.json | --scan DIR)... [--order ORDER.json]... [--node URL | --daa N] [--json]
+            pending claims against these pairs, the time left before they can be finalized, which of the given resting
+            orders refute them, and the exact command to do so
   kob-file  --redeem HEX --outpoint TXID:INDEX (--node URL | --amount SOMPI --daa N --covenant-id HEX) [--custody FILE] [--out FILE]
             an ORDER.json / TOKEN.json from a KOB order's or a token holder's redeem script
   (--daa N: the DAA the time checks use when there is no --node; a transaction whose lock time is ahead of the node's DAA
-   is not submitted. Evidence counts only from the pair's evidence clock start S, and a dead (soft-expired) order is
-   refused; --allow-dead-evidence accepts one, for sweeping tests only)
+   is not submitted. Evidence counts only from the pair's evidence clock start S (counter-evidence from the proposal's DAA)
+   and must stay fillable for the market's evidence life after its rest; a dead (soft-expired) order is refused;
+   --allow-dead-evidence accepts one, for sweeping tests only)
 
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)
@@ -91,9 +102,13 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "mutual-close" => cmds::mutual_close_cmd(&a),
         "coop-close" => cmds::coop_close_cmd(&a),
         "idle-settle" => cmds::idle_settle_cmd(&a),
-        "close" => evcmds::close_cmd(&a),
-        "liquidate" => evcmds::liquidate_cmd(&a),
-        "liquidate-transfer" => evcmds::liquidate_transfer_cmd(&a),
+        "propose-close" => evcmds::propose_close_cmd(&a),
+        "propose-liquidate" => evcmds::propose_liquidate_cmd(&a),
+        "challenge" => evcmds::challenge_cmd(&a),
+        "cure" => evcmds::cure_cmd(&a),
+        "finalize" => evcmds::finalize_cmd(&a),
+        "watch" => evcmds::watch_cmd(&a),
+
         "evidence" => evcmds::evidence_cmd(&a),
         "kob-file" => evcmds::kob_file_cmd(&a),
         "verify" => cmds::verify_cmd(&a),

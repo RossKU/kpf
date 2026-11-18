@@ -15,7 +15,7 @@ use kaspa_txscript::pay_to_script_hash_script;
 use serde_json::{json, Value};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact};
 
-use crate::artifacts::{self, kob_consts, open_template, pair_template};
+use crate::artifacts::{self, kob_consts, open_template, pair_template, pending_template};
 use crate::error::{invalid, to_hex, Error, Result};
 use crate::payoff::q;
 
@@ -34,6 +34,11 @@ pub const LOCK_TIME_THRESHOLD: i64 = 500_000_000_000;
 pub const MAX_IDLE: u64 = 77_760_000;
 /// A plain payout below 0.02 KAS is not created (DESIGN 4.6).
 pub const PLAIN_DUST: i64 = 2_000_000;
+/// The largest bond floor (`KpfPair.SOMPI_MAX`, about the KAS supply).
+pub const SOMPI_MAX: i64 = 2_900_000_000_000_000_000;
+/// Kinds of a pending claim (DESIGN 4.5d).
+pub const KIND_CLOSE: i64 = 1;
+pub const KIND_LIQ: i64 = 2;
 
 pub const ZERO: Hash = Hash::from_bytes([0; 32]);
 
@@ -120,6 +125,18 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// The six KOB evidence constants as constructor arguments (`KpfPair` and `KpfPending` both start with them).
+fn kob_args(k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
+    vec![
+        ArtifactValue::Bytes(k.ask_tpl.to_vec()),
+        ArtifactValue::Int(k.ask_pre),
+        ArtifactValue::Int(k.ask_suf),
+        ArtifactValue::Bytes(k.bid_tpl.to_vec()),
+        ArtifactValue::Int(k.bid_pre),
+        ArtifactValue::Int(k.bid_suf),
+    ]
+}
+
 fn check_key(key: &[u8; 32], what: &str) -> Result<()> {
     secp256k1::XOnlyPublicKey::from_slice(key).map(|_| ()).map_err(|_| Error::Invalid(format!("{what} is not a valid x-only public key")))
 }
@@ -144,6 +161,14 @@ pub struct Market {
     pub carrier: i64,
     pub idle_daa: i64,
     pub price_max: i64,
+    /// Two-step evidence (DESIGN 4.5d): bond rate on the part's range, bond floor, counter-evidence multiple,
+    /// contradiction margin, window W (earliest finalize) and the evidence life L.
+    pub bond_bps: i64,
+    pub bond_min: i64,
+    pub kc_bps: i64,
+    pub g_bps: i64,
+    pub challenge_daa: i64,
+    pub min_evidence_life: i64,
 }
 
 impl Market {
@@ -164,6 +189,12 @@ impl Market {
             F::I(self.carrier),
             F::I(self.idle_daa),
             F::I(self.price_max),
+            F::I(self.bond_bps),
+            F::I(self.bond_min),
+            F::I(self.kc_bps),
+            F::I(self.g_bps),
+            F::I(self.challenge_daa),
+            F::I(self.min_evidence_life),
         ]
     }
 
@@ -184,10 +215,16 @@ impl Market {
             carrier: c.int()?,
             idle_daa: c.int()?,
             price_max: c.int()?,
+            bond_bps: c.int()?,
+            bond_min: c.int()?,
+            kc_bps: c.int()?,
+            g_bps: c.int()?,
+            challenge_daa: c.int()?,
+            min_evidence_life: c.int()?,
         })
     }
 
-    /// The bounds `KpfOpen.checkMarket` and `KpfPair.checkPair` / `onEvidence` enforce on the market block.
+    /// The bounds `KpfOpen.checkMarket` and `KpfPair.checkPair` / `propose` enforce on the market block.
     pub fn validate(&self) -> Result<()> {
         let req = |ok: bool, what: &str| if ok { Ok(()) } else { invalid(format!("market: {what}")) };
         req(self.scale > 0 && self.scale <= SCALE_MAX, "scale must be in 1..=10^9")?;
@@ -202,7 +239,29 @@ impl Market {
         req(self.min_rest_daa >= 0 && self.min_rest_daa < LOCK_TIME_THRESHOLD, "minRestDaa must be in 0..5*10^11")?;
         req(self.min_rest_daa.saturating_mul(4) < LOCK_TIME_THRESHOLD, "4 * minRestDaa must be below 5*10^11 (the hand-over limit S + 4R is a lock time, DESIGN 4.5c)")?;
         req(self.tpl_prefix_len >= 0 && self.tpl_suffix_len >= 0, "token template cut must be >= 0")?;
+        // The two-step evidence parameters (DESIGN 4.5d; KpfOpen.checkMarket, KpfPair.propose).
+        req(self.bond_bps >= 0 && self.bond_bps <= BPS, "bondBps must be in 0..=10^4")?;
+        req(self.bond_min >= 0 && self.bond_min <= SOMPI_MAX, "bondMin must be in 0..=2.9*10^18")?;
+        req(self.kc_bps > 0 && self.kc_bps <= K_MAX, "kcBps must be in 1..=10^5")?;
+        req(self.g_bps > 0 && self.g_bps < BPS, "gBps must be in 1..10^4")?;
+        req(self.challenge_daa >= self.min_rest_daa && self.challenge_daa < CSV_LIMIT, "challengeDaa must be in minRestDaa..2^32")?;
+        req(
+            self.min_evidence_life >= 0 && self.min_evidence_life.saturating_add(self.min_rest_daa) <= MAX_IDLE as i64,
+            "minEvidenceLife must be >= 0 with minEvidenceLife + minRestDaa <= 77,760,000",
+        )?;
         Ok(())
+    }
+
+    /// The testnet defaults of the two-step parameters (DESIGN 4.5d): bond 300 bps of the part's range with a 5 KAS
+    /// floor, `k_c = k`, `g` 200 bps, window 6,000 DAA, evidence life 864,000 DAA (one day).
+    pub fn with_two_step_defaults(mut self) -> Market {
+        self.bond_bps = 300;
+        self.bond_min = 500_000_000;
+        self.kc_bps = self.k_bps;
+        self.g_bps = 200;
+        self.challenge_daa = 6_000;
+        self.min_evidence_life = 864_000;
+        self
     }
 
     /// Reads the market block from its JSON form (the keys of [`Market::to_json`]).
@@ -230,6 +289,12 @@ impl Market {
             carrier: int("carrier")?,
             idle_daa: int("idleDaa")?,
             price_max: int("priceMax")?,
+            bond_bps: int("bondBps")?,
+            bond_min: int("bondMin")?,
+            kc_bps: int("kcBps")?,
+            g_bps: int("gBps")?,
+            challenge_daa: int("challengeDaa")?,
+            min_evidence_life: int("minEvidenceLife")?,
         };
         m.validate()?;
         Ok(m)
@@ -247,6 +312,8 @@ impl Market {
             "scale": self.scale, "mmrBps": self.mmr_bps, "kBps": self.k_bps, "minRestDaa": self.min_rest_daa,
             "liqFeeBps": self.liq_fee_bps, "keeperFeeMin": self.keeper_fee_min, "minSize": self.min_size,
             "carrier": self.carrier, "idleDaa": self.idle_daa, "priceMax": self.price_max,
+            "bondBps": self.bond_bps, "bondMin": self.bond_min, "kcBps": self.kc_bps, "gBps": self.g_bps,
+            "challengeDaa": self.challenge_daa, "minEvidenceLife": self.min_evidence_life,
         })
     }
 }
@@ -329,21 +396,17 @@ impl Pair {
         encode(&self.fields())
     }
 
-    /// The constructor arguments the compiler takes: the pinned KOB evidence constants, then the state.
+    /// The constructor arguments the compiler takes: the pinned KOB evidence constants, the `KpfPending` template
+    /// hash, then the state.
     pub fn ctor(&self) -> Vec<ArtifactValue> {
-        self.ctor_with(&kob_consts())
+        self.ctor_with(&kob_consts(), pending_template().hash)
     }
 
-    /// [`Pair::ctor`] with explicit KOB constants (the artifact generator, before any are pinned).
-    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
-        let mut a = vec![
-            ArtifactValue::Bytes(k.ask_tpl.to_vec()),
-            ArtifactValue::Int(k.ask_pre),
-            ArtifactValue::Int(k.ask_suf),
-            ArtifactValue::Bytes(k.bid_tpl.to_vec()),
-            ArtifactValue::Int(k.bid_pre),
-            ArtifactValue::Int(k.bid_suf),
-        ];
+    /// [`Pair::ctor`] with explicit KOB constants and pending template hash (the artifact generator, before any are
+    /// pinned).
+    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts, pending_tpl: [u8; 32]) -> Vec<ArtifactValue> {
+        let mut a = kob_args(k);
+        a.push(ArtifactValue::Bytes(pending_tpl.to_vec()));
         a.extend(to_args(&self.fields()));
         a
     }
@@ -631,20 +694,194 @@ impl Open {
     }
 }
 
+// ---------------------------------------------------------------- KpfPending
+
+/// A part against which a claim on price evidence is pending (DESIGN 4.5d), written by `KpfPair.propose` and immutable.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pending {
+    pub m: Market,
+    /// [`KIND_CLOSE`] (P5) or [`KIND_LIQ`] (P6).
+    pub kind: i64,
+    /// The closer (kind 1) or the loser (kind 2).
+    pub side: i64,
+    pub n: i64,
+    pub bl: i64,
+    pub bs: i64,
+    /// The proposal's evidence quote.
+    pub quote: i64,
+    /// Kind 2: the loser's bound after a cure (0 with a zero cure hash: no cure).
+    pub cure_bound: i64,
+    /// Kind 2: the keeper fee, to the proposer at finalize.
+    pub fee: i64,
+    pub bond: i64,
+    /// `bond`, plus the carrier the proposer funded when the part is smaller than the pair.
+    pub refund: i64,
+    /// The pair's entry, keys, listings and clock start S when the claim was proposed (self-describing state; only
+    /// the keys are read by the contract).
+    pub entry: i64,
+    pub long_key: [u8; 32],
+    pub short_key: [u8; 32],
+    pub long_ask: i64,
+    pub long_min: i64,
+    pub long_tip: i64,
+    pub short_bid: i64,
+    pub short_min: i64,
+    pub short_tip: i64,
+    pub since: i64,
+    pub proposer_key: [u8; 32],
+    /// P2SH script hashes of the pair states this part may become (restore, cure, forfeit; zero when none).
+    pub restore_hash: [u8; 32],
+    pub cure_hash: [u8; 32],
+    pub forfeit_hash: [u8; 32],
+}
+
+impl Pending {
+    fn fields(&self) -> Vec<F> {
+        let mut f = self.m.fields();
+        f.extend([
+            F::I(self.kind),
+            F::I(self.side),
+            F::I(self.n),
+            F::I(self.bl),
+            F::I(self.bs),
+            F::I(self.quote),
+            F::I(self.cure_bound),
+            F::I(self.fee),
+            F::I(self.bond),
+            F::I(self.refund),
+            F::I(self.entry),
+            F::B(self.long_key),
+            F::B(self.short_key),
+            F::I(self.long_ask),
+            F::I(self.long_min),
+            F::I(self.long_tip),
+            F::I(self.short_bid),
+            F::I(self.short_min),
+            F::I(self.short_tip),
+            F::I(self.since),
+            F::B(self.proposer_key),
+            F::B(self.restore_hash),
+            F::B(self.cure_hash),
+            F::B(self.forfeit_hash),
+        ]);
+        f
+    }
+
+    /// The canonical encoded state (621 bytes).
+    pub fn state_bytes(&self) -> Vec<u8> {
+        encode(&self.fields())
+    }
+
+    /// The constructor arguments: the pinned KOB evidence constants, then the state.
+    pub fn ctor(&self) -> Vec<ArtifactValue> {
+        self.ctor_with(&kob_consts())
+    }
+
+    pub fn ctor_with(&self, k: &crate::artifacts::KobConsts) -> Vec<ArtifactValue> {
+        let mut a = kob_args(k);
+        a.extend(to_args(&self.fields()));
+        a
+    }
+
+    pub fn redeem(&self) -> Vec<u8> {
+        pending_template().redeem(&self.state_bytes())
+    }
+
+    pub fn art(&self) -> SilAbiArtifact {
+        artifacts::splice(artifacts::pending_base(), &self.state_bytes())
+    }
+
+    pub fn spk(&self) -> ScriptPublicKey {
+        pay_to_script_hash_script(&self.redeem())
+    }
+
+    pub fn decode_redeem(redeem: &[u8]) -> Result<Pending> {
+        Pending::decode_state(pending_template().state_of(redeem)?)
+    }
+
+    pub fn decode_state(state: &[u8]) -> Result<Pending> {
+        let mut c = Cursor { b: state, at: 0 };
+        let m = Market::read(&mut c)?;
+        let p = Pending {
+            m,
+            kind: c.int()?,
+            side: c.int()?,
+            n: c.int()?,
+            bl: c.int()?,
+            bs: c.int()?,
+            quote: c.int()?,
+            cure_bound: c.int()?,
+            fee: c.int()?,
+            bond: c.int()?,
+            refund: c.int()?,
+            entry: c.int()?,
+            long_key: c.b32()?,
+            short_key: c.b32()?,
+            long_ask: c.int()?,
+            long_min: c.int()?,
+            long_tip: c.int()?,
+            short_bid: c.int()?,
+            short_min: c.int()?,
+            short_tip: c.int()?,
+            since: c.int()?,
+            proposer_key: c.b32()?,
+            restore_hash: c.b32()?,
+            cure_hash: c.b32()?,
+            forfeit_hash: c.b32()?,
+        };
+        c.done()?;
+        Ok(p)
+    }
+
+    /// Whether a cure exists (kind 2 with a non-zero cure hash).
+    pub fn can_cure(&self) -> bool {
+        self.kind == KIND_LIQ && self.cure_hash != [0u8; 32]
+    }
+
+    /// The owner of the threatened side: the loser (kind 2) or the party that did not close (kind 1).
+    pub fn defender_key(&self) -> [u8; 32] {
+        let other = if self.kind == KIND_CLOSE { if self.side == LONG { SHORT } else { LONG } } else { self.side };
+        if other == LONG {
+            self.long_key
+        } else {
+            self.short_key
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "contract": "KpfPending", "market": self.m.to_json(),
+            "kind": if self.kind == KIND_CLOSE { "close" } else { "liquidate" },
+            "side": if self.side == LONG { "long" } else { "short" },
+            "n": self.n, "bl": self.bl, "bs": self.bs, "quote": self.quote, "cureBound": self.cure_bound,
+            "fee": self.fee, "bond": self.bond, "refund": self.refund,
+            "longKey": to_hex(&self.long_key), "shortKey": to_hex(&self.short_key), "proposerKey": to_hex(&self.proposer_key),
+            "restoreHash": to_hex(&self.restore_hash), "cureHash": to_hex(&self.cure_hash), "forfeitHash": to_hex(&self.forfeit_hash),
+            "challengeDaa": self.m.challenge_daa,
+        })
+    }
+}
+
 /// Which contract a redeem script is an instance of, decoded.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Decoded {
     Pair(Pair),
     Open(Open),
+    Pending(Pending),
 }
 
-/// Decodes a redeem script as a pair, else as an order.
+/// Decodes a redeem script as a pair, an order or a pending part.
 pub fn decode_redeem(redeem: &[u8]) -> Result<Decoded> {
-    match Pair::decode_redeem(redeem) {
-        Ok(p) => Ok(Decoded::Pair(p)),
-        Err(pe) => match Open::decode_redeem(redeem) {
-            Ok(o) => Ok(Decoded::Open(o)),
-            Err(oe) => Err(Error::Decode(format!("not a KpfPair ({pe}) and not a KpfOpen ({oe})"))),
-        },
+    let pe = match Pair::decode_redeem(redeem) {
+        Ok(p) => return Ok(Decoded::Pair(p)),
+        Err(e) => e,
+    };
+    let oe = match Open::decode_redeem(redeem) {
+        Ok(o) => return Ok(Decoded::Open(o)),
+        Err(e) => e,
+    };
+    match Pending::decode_redeem(redeem) {
+        Ok(p) => Ok(Decoded::Pending(p)),
+        Err(we) => Err(Error::Decode(format!("not a KpfPair ({pe}), not a KpfOpen ({oe}) and not a KpfPending ({we})"))),
     }
 }

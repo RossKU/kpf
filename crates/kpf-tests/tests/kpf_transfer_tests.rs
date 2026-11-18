@@ -542,7 +542,7 @@ fn p3_same_id_parts_cannot_be_spent_together() {
         outs.push(o);
     }
     outs.push(out(0, p2pk_spk(&k.other), None));
-    let (tx, e) = Draft { ins, outs: outs.clone(), lock: 0, seqs: vec![], genesis: vec![], change: Some(outs.len() - 1), pairs: vec![], opens: vec![] }.build();
+    let (tx, e) = Draft { ins, outs: outs.clone(), lock: 0, seqs: vec![], genesis: vec![], change: Some(outs.len() - 1), pairs: vec![], pendings: vec![], opens: vec![] }.build();
     assert_input_refused(&tx, &e, 0);
     assert_input_refused(&tx, &e, 1);
 }
@@ -567,7 +567,7 @@ fn p3_two_orders_cannot_claim_one_part() {
         }
     }
     let ch = outs.len() - 1;
-    let dd = Draft { ins, outs, lock: d.lock, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], opens: vec![] };
+    let dd = Draft { ins, outs, lock: d.lock, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], pendings: vec![], opens: vec![] };
     // The take arguments name partOut = 2; the part moved to 3, so fix both orders' argument.
     let mut dd2 = dd.clone();
     for i in [1, 2] {
@@ -599,7 +599,7 @@ fn p3_two_orders_cannot_claim_one_part() {
     let (o2, _) = order_out(&tw(1), t.n, 2);
     outs.insert(2, o2);
     let ch = outs.len() - 1;
-    let mut dd = Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], opens: vec![] };
+    let mut dd = Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: Some(ch), pairs: vec![], pendings: vec![], opens: vec![] };
     for i in [1, 2] {
         let mut a = dd.args(i);
         a[0] = iv(3);

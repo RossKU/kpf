@@ -5,6 +5,11 @@
 //! trigger price, the evidence was fillable by conforming matchers for its whole rest window, and the winner
 //! cannot trigger a liquidation the stated condition does not justify (review 2 follow-up, item 5).
 //! Every input runs its real script, the KOB evidence order and the token program included.
+//!
+//! Premise changed by DESIGN 4.5d: a liquidation is proposed, then finalized (forfeit and keep). What the loser and
+//! the winner receive is read from the finalize: the loser nothing (no output pays its key), the winner the forfeited
+//! part (both sides its own), whose value is the liquidated value less the fee (and plus the carrier the proposer
+//! funded for a part). P7 (liquidation by transfer) is gone, and with it the tests of its entrant.
 
 mod common;
 mod kpf;
@@ -62,17 +67,6 @@ fn close(l: &Live, n: i64, side: i64, signer: Keypair) -> PairLeg {
     PairLeg { l: l.clone(), n, q: 0, act: Act::Close { side, signer } }
 }
 
-/// A KpfOpen entrant of `side` on the pair's own market (the fixture orders: long rate 1 KAS, short rate 2 KAS).
-fn entrant_for(p: &Pair, side: i64, tag: u8) -> LiveOpen {
-    let mut o = if side == LONG { long_order(&keypair(21)) } else { short_order(&keypair(22)) };
-    o.m = p.m.clone();
-    LiveOpen { value: o.escrow() as u64, o, id: Hash::from_bytes([tag; 32]), op: outpoint(tag) }
-}
-
-fn liq_t(l: &Live, n: i64, side: i64, x: i64, k: i64) -> PairLeg {
-    PairLeg { l: l.clone(), n, q: 0, act: Act::LiqTransfer { side, x, open: entrant_for(&l.p, side, 0x71), k } }
-}
-
 /// Ask evidence whose maker and buyer are both `who` (one party on both sides of the fill).
 fn own_ask(price: i64, fill: i64, who: &Keypair) -> Evidence {
     let mut e = Evidence::ask(price, fill);
@@ -91,74 +85,73 @@ fn own_bid(price: i64, fill: i64, who: &Keypair) -> Evidence {
     e
 }
 
-fn long_out(d: &Draft) -> i64 {
-    d.outs[0].value as i64
+/// A liquidation of the loser `side` proposed by `exec` (its executor and payout key) on `e`, then finalized by it:
+/// (the finalize draft, the pending part).
+fn settle(l: &Live, n: i64, side: i64, e: &Evidence, exec: &Keypair) -> (Draft, LivePend) {
+    let g = PairLeg { l: l.clone(), n, q: 0, act: Act::LiqBy { side, proposer: xonly(exec) } };
+    accept(&ev_draft(&[g.clone()], e, exec, 1));
+    let w = pend(&g, e.price());
+    let fd = finalize_draft(&w, exec, 2);
+    accept(&fd);
+    (fd, w)
 }
 
-fn short_out(d: &Draft) -> i64 {
-    d.outs[d.outs.len() - 1].value as i64
+/// What the winner holds after the finalize: the forfeited part, less the carrier the proposer funded for a part.
+fn winner_out(fd: &Draft, w: &LivePend) -> i64 {
+    fd.outs[1].value as i64 - (w.w.refund - w.w.bond)
 }
 
-/// The winner's receipt of a P6 draft for a loser `side`.
-fn winner_out(d: &Draft, side: i64) -> i64 {
-    if side == LONG { short_out(d) } else { long_out(d) }
-}
-
-fn loser_out(d: &Draft, side: i64) -> i64 {
-    if side == LONG { long_out(d) } else { short_out(d) }
+/// No output of a finalize pays the loser's key.
+fn loser_paid(fd: &Draft, l: &Live, side: i64) -> bool {
+    let k = if side == LONG { l.p.long_key } else { l.p.short_key };
+    fd.outs.iter().any(|o| o.script_public_key == p2pk_x(&k))
 }
 
 // ---------------------------------------------------------------- F1: the loser chooses its own quote
 
-/// F1 after the fix (DESIGN 4.5b). The review's transaction: the long of the DESIGN 5 pair, underwater at a
-/// market of 8.5 KAS, rests its own ask at the top of its trigger window (9.4737 KAS), buys it itself and runs P6
-/// as executor. Still valid, but the long's payout is 0 and the short receives the whole pair less the keeper fee;
-/// the long's whole take is the keeper fee it collects as executor, which any keeper running the liquidation
-/// would collect. Choosing the quote moves only that fee: 47.37 KAS at the inflated ask against 42.50 KAS for an
-/// honest keeper at the market, against 473.68 KAS taken before the fix. The review's shape (the long paid
+/// F1 after the fix (DESIGN 4.5b, 4.5d). The review's transaction: the long of the DESIGN 5 pair, underwater at a
+/// market of 8.5 KAS, rests its own ask at the top of its trigger window (9.4737 KAS), buys it itself and proposes the
+/// liquidation as executor. Still valid, but the long receives nothing and the short keeps the whole pair less the
+/// keeper fee; the long's whole take is the keeper fee it collects as proposer (its bond comes back to it), which any
+/// keeper would collect. Choosing the quote moves only that fee: 47.37 KAS at the inflated ask against 42.50 KAS for
+/// an honest keeper at the market, against 473.68 KAS taken before the fix. The review's shape (the long paid
 /// q(s, a - bl)) is refused.
 #[test]
 fn holds_self_liquidation_at_an_inflated_ask() {
     let l = live(&base(), 0x61);
-    let honest = ev_draft(&[liq(&l, N, LONG)], &Evidence::ask(850_000_000, N), &fk(), 1);
-    accept(&honest);
-    assert_eq!(long_out(&honest), 0);
-    assert_eq!(short_out(&honest), l.value as i64 - liq_fee(&l.p, N, 850_000_000, LONG));
-    let d = ev_draft(&[liq(&l, N, LONG)], &own_ask(TOP_ASK, N, &lk()), &lk(), 2);
-    accept(&d);
-    assert_eq!(long_out(&d), 0, "the loser receives nothing");
+    let (honest, hw) = settle(&l, N, LONG, &Evidence::ask(850_000_000, N), &fk());
+    assert!(!loser_paid(&honest, &l, LONG));
+    assert_eq!(winner_out(&honest, &hw), l.value as i64 - liq_fee(&l.p, N, 850_000_000, LONG));
+    let (d, w) = settle(&l, N, LONG, &own_ask(TOP_ASK, N, &lk()), &lk());
     let fee = liq_fee(&l.p, N, TOP_ASK, LONG);
-    assert_eq!(short_out(&d), l.value as i64 - fee, "the winner receives the pair less the fee");
-    assert!(short_out(&d) >= winner_at_trigger(&l.p, N, LONG));
-    // Every input but the pair and every output but the short's is the long's: its net take is the fee.
-    assert_eq!(l.value as i64 - short_out(&d), fee);
+    assert_eq!(winner_out(&d, &w), l.value as i64 - fee, "the winner keeps the pair less the fee");
+    assert!(winner_out(&d, &w) >= winner_at_trigger(&l.p, N, LONG));
+    // The long's only output is its proposer payout: its own bond back and the fee.
+    assert_eq!(d.outs[0].value as i64, w.w.bond + fee);
     assert_eq!(fee, 4_736_842_000);
     assert!(fee - liq_fee(&l.p, N, 850_000_000, LONG) < 50_000_000_000 / 100, "the quote moves only the fee");
     // The review's shape: the long takes q(s, a - bl) out of the pair.
-    let stolen = q(N, TOP_ASK - l.p.bl, SCALE, 0);
+    let stolen = q(N, TOP_ASK - l.p.bl, SCALE, 0) as u64;
     let mut old = d.clone();
-    old.outs[0].value = stolen as u64;
-    let m = old.outs.len();
-    old.outs[m - 1].value = (l.p.range_of(N) - stolen) as u64;
+    old.outs[0].value += stolen;
+    old.outs[1].value -= stolen;
     refused(&old, 0);
 }
 
 /// F1 mirrored after the fix: the short, underwater at 12.5 KAS, sells into its own bid at 11.4286 KAS. Valid; the
-/// short receives 0, the long the pair less the fee; the short's take is the keeper fee only.
+/// short receives its bond and the fee as proposer and nothing as a party, the long the pair less the fee.
 #[test]
 fn holds_self_liquidation_at_a_deflated_bid() {
     let l = live(&base(), 0x62);
-    let d = ev_draft(&[liq(&l, N, SHORT)], &own_bid(LOW_BID, N, &sk()), &sk(), 2);
-    accept(&d);
-    assert_eq!(short_out(&d), 0, "the loser receives nothing");
+    let (d, w) = settle(&l, N, SHORT, &own_bid(LOW_BID, N, &sk()), &sk());
     let fee = liq_fee(&l.p, N, LOW_BID, SHORT);
-    assert_eq!(long_out(&d), l.value as i64 - fee);
-    assert!(long_out(&d) >= winner_at_trigger(&l.p, N, SHORT));
-    let stolen = q(N, l.p.bs - LOW_BID, SCALE, 0);
+    assert_eq!(winner_out(&d, &w), l.value as i64 - fee);
+    assert!(winner_out(&d, &w) >= winner_at_trigger(&l.p, N, SHORT));
+    assert_eq!(d.outs[0].value as i64, w.w.bond + fee);
+    let stolen = q(N, l.p.bs - LOW_BID, SCALE, 0) as u64;
     let mut old = d.clone();
-    old.outs[0].value = (l.p.range_of(N) - stolen) as u64;
-    let m = old.outs.len();
-    old.outs[m - 1].value = stolen as u64;
+    old.outs[0].value += stolen;
+    old.outs[1].value -= stolen;
     refused(&old, 0);
 }
 
@@ -170,54 +163,29 @@ fn holds_self_liquidation_needs_the_trigger() {
     refused(&ev_draft(&[liq(&l, N, SHORT)], &own_bid(LOW_BID - 1, N, &sk()), &sk(), 1), 0);
 }
 
-/// A loser that liquidates itself at any quote in its trigger window receives 0, whole or in part, by P6 or P7;
-/// any value moved to it is refused.
+/// A loser that liquidates itself at any quote in its trigger window receives nothing as a party, whole or in part;
+/// its proposer payout is exactly its bond and the fee, and any value moved to it is refused.
 #[test]
 fn holds_self_liquidating_loser_receives_zero_at_any_quote() {
     let l = live(&base(), 0x64);
     for n in [N, HALF] {
         for a in [1, 500_000_000, l.p.bl - 1, l.p.bl, 920_000_000, TOP_ASK] {
-            let d = ev_draft(&[liq(&l, n, LONG)], &own_ask(a, n, &lk()), &lk(), 3);
-            accept(&d);
-            assert_eq!(long_out(&d), 0, "P6 long at {a}, n {n}");
-            // What leaves the pair to the long's other outputs (the executor's change) is exactly the fee.
-            let rest: i64 = d.pairs.iter().map(|(i, _)| d.outs[*i].value as i64).sum();
-            assert_eq!(l.value as i64 - short_out(&d) - rest, liq_fee(&l.p, n, a, LONG), "P6 long at {a}, n {n}");
+            let (d, w) = settle(&l, n, LONG, &own_ask(a, n, &lk()), &lk());
+            assert_eq!(d.outs[0].value as i64 - w.w.bond, liq_fee(&l.p, n, a, LONG), "long at {a}, n {n}");
             let mut x = d.clone();
-            x.outs[0].value = 1;
-            let m = x.outs.len();
-            x.outs[m - 1].value -= 1;
+            x.outs[0].value += 1;
+            x.outs[1].value -= 1;
             refused(&x, 0);
         }
         for b in [LOW_BID, 1_150_000_000, l.p.bs, l.p.bs + 1, 2_000_000_000] {
-            let d = ev_draft(&[liq(&l, n, SHORT)], &own_bid(b, n, &sk()), &sk(), 4);
-            accept(&d);
-            assert_eq!(short_out(&d), 0, "P6 short at {b}, n {n}");
+            let (d, w) = settle(&l, n, SHORT, &own_bid(b, n, &sk()), &sk());
+            assert_eq!(d.outs[0].value as i64 - w.w.bond, liq_fee(&l.p, n, b, SHORT), "short at {b}, n {n}");
         }
-        // P7 on the loser's own print: the pair pays the entrant's payment to the winner; paying it to the loser is
-        // refused. With a third party's print and executor, no output at all goes to the loser's key.
-        let d = ev_draft(&[liq_t(&l, n, LONG, 950_000_000, 0)], &own_ask(TOP_ASK, n, &lk()), &lk(), 5);
-        accept(&d);
-        assert_eq!(d.outs[0].script_public_key, p2pk_x(&l.p.short_key));
-        let mut x = d.clone();
-        x.outs[0].script_public_key = p2pk_x(&l.p.long_key);
-        refused(&x, 0);
-        let d = ev_draft(&[liq_t(&l, n, LONG, 950_000_000, 0)], &Evidence::ask(TOP_ASK, n), &fk(), 5);
-        let tx = accept(&d);
-        assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&l.p.long_key)), "P7: nothing paid to the loser");
-        // Premise changed by review 3 (F3, DESIGN 4.5c): the short entrant must be healthy at the bid itself, so it enters
-        // at x = 10.00000001 (bound 12.00000001), not at x = 10, where its bound 12 equals the loser's and the same
-        // bid liquidates it.
-        let xs = 1_000_000_001;
-        let d = ev_draft(&[liq_t(&l, n, SHORT, xs, 0)], &own_bid(LOW_BID, n, &sk()), &sk(), 6);
-        accept(&d);
-        assert_eq!(d.outs[0].script_public_key, p2pk_x(&l.p.long_key));
-        let mut x = d.clone();
-        x.outs[0].script_public_key = p2pk_x(&l.p.short_key);
-        refused(&x, 0);
-        let d = ev_draft(&[liq_t(&l, n, SHORT, xs, 0)], &Evidence::bid(LOW_BID, n), &fk(), 6);
-        let tx = accept(&d);
-        assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&l.p.short_key)), "P7: nothing paid to the loser");
+        // With a third party's print and proposer, no output at all goes to the loser's key.
+        let (d, _) = settle(&l, n, LONG, &Evidence::ask(TOP_ASK, n), &fk());
+        assert!(!loser_paid(&d, &l, LONG));
+        let (d, _) = settle(&l, n, SHORT, &Evidence::bid(LOW_BID, n), &fk());
+        assert!(!loser_paid(&d, &l, SHORT));
     }
 }
 
@@ -255,13 +223,12 @@ fn window(p: &Pair, side: i64) -> Vec<i64> {
     v
 }
 
-/// The winner's receipt in P6 as a function of the quote, long and short, partial and whole, at the boundary
-/// values of mmrBps and at the price bounds: it equals the liquidated value less the fee (so the quote enters only
-/// through the fee) and is never below the winner's payoff at the trigger price. The loser receives 0. One sompi
-/// less for the winner is refused. For a long loser the receipt never falls as the ask falls (moves against the
-/// loser). For a short loser a higher bid (against the loser) raises the rate fee, so the receipt falls by
-/// exactly that fee difference, never below the trigger payoff: the fee rule of DESIGN 4.5b is proportional to
-/// the quote.
+/// The winner's receipt as a function of the quote, long and short, partial and whole, at the boundary values of
+/// mmrBps and at the price bounds: after the finalize it holds the liquidated value less the fee (so the quote enters
+/// only through the fee), never below its payoff at the trigger price. The loser receives nothing. One sompi less for
+/// the winner is refused. For a long loser the receipt never falls as the ask falls (moves against the loser). For a
+/// short loser a higher bid (against the loser) raises the rate fee, so the receipt falls by exactly that fee
+/// difference, never below the trigger payoff: the fee rule of DESIGN 4.5b is proportional to the quote.
 #[test]
 fn holds_winner_receipt_depends_on_the_quote_only_through_the_fee() {
     let mut tag = 0x10u8;
@@ -274,7 +241,11 @@ fn holds_winner_receipt_depends_on_the_quote_only_through_the_fee() {
             for side in [LONG, SHORT] {
                 for quote in window(&p, side) {
                     let e = if side == LONG { Evidence::ask(quote, p.size) } else { Evidence::bid(quote, p.size) };
-                    refused(&ev_draft(&[liq(&l, p.size, side)], &e, &fk(), 7), 0);
+                    // The executor buys up to one token at priceMax and funds the bond: give it room.
+                    let mut d = ev_draft(&[liq(&l, p.size, side)], &e, &fk(), 7);
+                    let fi = d.change.unwrap();
+                    d.ins[fi].utxo.amount *= 4;
+                    refused(&d, 0);
                 }
             }
             continue;
@@ -288,79 +259,20 @@ fn holds_winner_receipt_depends_on_the_quote_only_through_the_fee() {
                 let mut last = i64::MIN;
                 for quote in window(&p, side) {
                     let e = if side == LONG { Evidence::ask(quote, n) } else { Evidence::bid(quote, n) };
-                    let d = ev_draft(&[liq(&l, n, side)], &e, &fk(), 7);
-                    accept(&d);
-                    let w = winner_out(&d, side);
+                    let (d, w) = settle(&l, n, side, &e, &fk());
+                    let got = winner_out(&d, &w);
                     let what = format!("mmr {} side {side} n {n} quote {quote}", p.m.mmr_bps);
-                    assert_eq!(loser_out(&d, side), 0, "{what}");
-                    assert_eq!(w + liq_fee(&p, n, quote, side), avail, "{what}");
+                    assert!(!loser_paid(&d, &l, side), "{what}");
+                    assert_eq!(got + liq_fee(&p, n, quote, side), avail, "{what}");
                     assert!(liq_fee(&p, n, quote, side) <= slice_of(&p, n, side), "{what}");
-                    assert!(w >= winner_at_trigger(&p, n, side), "{what}");
+                    assert!(got >= winner_at_trigger(&p, n, side), "{what}");
                     if side == LONG {
-                        assert!(w >= last, "{what}: the receipt fell as the ask fell");
+                        assert!(got >= last, "{what}: the receipt fell as the ask fell");
                     }
-                    last = w;
+                    last = got;
                     let mut x = d.clone();
-                    if side == LONG {
-                        let m = x.outs.len();
-                        x.outs[m - 1].value -= 1;
-                    } else {
-                        x.outs[0].value -= 1;
-                    }
+                    x.outs[1].value -= 1;
                     refused(&x, 0);
-                }
-            }
-        }
-    }
-}
-
-/// The winner of P7, long and short, partial and whole, at the boundary values of mmrBps: it receives the
-/// entrant's payment less the fee (never below 0), keeps its bound and key in the part, and that cash plus its
-/// part's payoff at x is at least its payoff at the trigger price. The loser receives 0.
-#[test]
-fn holds_p7_winner_at_least_its_trigger_payoff() {
-    let mut tag = 0x20u8;
-    for m in [0, 1, 500, 4999] {
-        let mut p = base();
-        p.m.mmr_bps = m;
-        tag += 1;
-        let l = live(&p, tag);
-        if !p.range_ok() {
-            // Premise changed by review 3 (F2, DESIGN 4.5c): at mmr 49.99 % the base pair is not wider than both
-            // maintenance bands, so neither side is liquidatable by transfer.
-            refused(&ev_draft(&[liq_t(&l, N, LONG, 1_000_000_000, 0)], &Evidence::ask(window(&p, LONG)[0], N), &fk(), 8), 0);
-            continue;
-        }
-        // The fixture entrants accept a long at x <= E = 10 KAS and a short at x >= 10 KAS.
-        let x = 1_000_000_000;
-        for (side, quotes) in [(LONG, [x.min(window(&p, LONG)[0]), 500_000_000]), (SHORT, [x.max(window(&p, SHORT)[0]), 2_000_000_000])] {
-            for n in [N, HALF] {
-                for quote in quotes {
-                    let e = if side == LONG { Evidence::ask(quote, n) } else { Evidence::bid(quote, n) };
-                    // Premise changed by review 3 (F3, DESIGN 4.5c): the entrant must be healthy at the quote, so x is
-                    // also bounded by the entrant's health (the default price of the tool, `p7_default_x`).
-                    let rate = if side == LONG { 100_000_000 } else { 200_000_000 };
-                    let hb = kpf_protocol::evidence::entrant_health_bound(&p.m, side, quote, rate);
-                    let xx = if side == LONG { x.max(quote).min(hb) } else { x.min(quote).max(hb) };
-                    let d = ev_draft(&[liq_t(&l, n, side, xx, 0)], &e, &fk(), 8);
-                    let tx = accept(&d);
-                    let what = format!("mmr {m} side {side} n {n} quote {quote}");
-                    let pay = p7_pay(&l, n, side, xx, quote);
-                    let got = if pay < DUST { 0 } else { pay };
-                    assert_eq!(d.outs[0].value as i64, got, "{what}");
-                    assert_eq!(d.outs[0].script_public_key, p2pk_x(&winner_key(&p, side)), "{what}");
-                    let loser = if side == LONG { p.long_key } else { p.short_key };
-                    assert!(tx.outputs.iter().all(|o| o.script_public_key != p2pk_x(&loser)), "{what}");
-                    let part = d.pairs.iter().find(|(_, q)| q.size == n && (q.long_key != p.long_key || q.short_key != p.short_key)).unwrap().1.clone();
-                    let c = xx.clamp(p.bl, p.bs);
-                    let at_x = if side == LONG {
-                        assert_eq!((part.bs, part.short_key), (p.bs, p.short_key));
-                        q(n, p.bs - c, SCALE, 0)
-                    } else {
-                        assert_eq!((part.bl, part.long_key), (p.bl, p.long_key));
-                        q(n, c - p.bl, SCALE, 0)
-                    };
-                    assert!(pay < DUST || at_x + got >= winner_at_trigger(&p, n, side), "{what}");
                 }
             }
         }
@@ -371,17 +283,15 @@ fn holds_p7_winner_at_least_its_trigger_payoff() {
 
 /// F2 after the fix: the review's transactions are refused. A healthy long cannot be liquidated on an ask that
 /// expired when it was placed (expiryDaa = 1), and an IOC ask counts only while its kill is at or after the end of
-/// the rest window.
+/// the rest window (plus the evidence life L of DESIGN 4.5d, which no IOC can reach while L >= 600).
 #[test]
 fn holds_expired_ask_is_not_rested_evidence() {
     let l = live(&base(), 0x64);
     let mut e = own_ask(940_000_000, N, &sk());
     e.ask.expiry_daa = 1;
     refused(&ev_draft(&[liq(&l, N, LONG)], &e, &sk(), 1), 0);
-    // An IOC ask killed one DAA before the end of its rest window (its custody arrived one DAA later).
     let mut ioc = own_ask(940_000_000, N, &sk());
     ioc.ask.tif = 1;
-    ioc.tok_daa = ioc.daa + 1;
     refused(&ev_draft(&[liq(&l, N, LONG)], &ioc, &sk(), 2), 0);
 }
 
@@ -394,35 +304,41 @@ fn holds_expired_bid_cannot_close_the_long_at_the_whole_range() {
     refused(&ev_draft(&[close(&l, N, LONG, lk())], &e, &lk(), 1), 0);
 }
 
-/// The end of the rest window in the fixtures: the order and its custody are DAA `daa`, interval 0, activeFrom 0.
-fn rest_end(e: &Evidence) -> i64 {
-    e.daa as i64 + rest_daa() as i64
+/// The end of the rest window in the fixtures (the order and its custody are DAA `daa`, interval 0, activeFrom 0),
+/// plus the market's evidence life L (DESIGN 4.5d): the order must stay fillable through it.
+fn live_end(e: &Evidence) -> i64 {
+    e.daa as i64 + rest_daa() as i64 + market().min_evidence_life
 }
 
-/// expiryDaa one DAA inside (exactly the end of the rest window) and one outside, for an ask (P6) and a bid (P5).
+/// Premise changed by DESIGN 4.5d: expiryDaa one DAA inside (exactly the end of the rest window plus L) and one
+/// outside, for an ask (P6) and a bid (P5).
 #[test]
 fn holds_expiry_boundary() {
     let l = live(&base(), 0x66);
     let mut e = Evidence::ask(940_000_000, N);
-    e.ask.expiry_daa = rest_end(&e);
+    e.ask.expiry_daa = live_end(&e);
     accept(&ev_draft(&[liq(&l, N, LONG)], &e, &fk(), 1));
     e.ask.expiry_daa -= 1;
     refused(&ev_draft(&[liq(&l, N, LONG)], &e, &fk(), 1), 0);
     let mut e = Evidence::bid(1_050_000_000, N);
-    e.bid.expiry_daa = rest_end(&e);
+    e.bid.expiry_daa = live_end(&e);
     accept(&ev_draft(&[close(&l, N, LONG, lk())], &e, &fk(), 2));
     e.bid.expiry_daa -= 1;
     refused(&ev_draft(&[close(&l, N, LONG, lk())], &e, &fk(), 2), 0);
 }
 
 /// The IOC/FOK kill max(UTXO DAA, activeFrom) + 600 one DAA inside and one outside the rest window (R = 600), for
-/// IOC and FOK asks (P6 of a long) and bids (P6 of a short). The window is moved by one DAA without moving the
-/// kill: for an ask by its custody arriving one DAA after the order, for a bid by an interval of 1 (exposed =
-/// UTXO DAA + interval; the bid's own CSV for the interval is given). activeFrom moves the kill with the window,
-/// so a later activeFrom stays inside. A GTC order has no kill.
+/// IOC and FOK asks (P6 of a long) and bids (P6 of a short), in a market with no evidence life (L = 0, so the kill
+/// boundary is the one of review 2). The window is moved by one DAA without moving the kill: for an ask by its custody
+/// arriving one DAA after the order, for a bid by an interval of 1 (exposed = UTXO DAA + interval; the bid's own CSV
+/// for the interval is given). activeFrom moves the kill with the window, so a later activeFrom stays inside. A GTC
+/// order has no kill. Premise changed by DESIGN 4.5d: with the testnet L of 864,000 DAA no IOC or FOK order is
+/// evidence at all (asserted last).
 #[test]
 fn holds_ioc_and_fok_kill_boundary() {
-    let l = live(&base(), 0x67);
+    let mut p = base();
+    p.m.min_evidence_life = 0;
+    let l = live(&p, 0x67);
     assert_eq!(rest_daa(), 600, "the kill equals R in this market");
     for tif in [1, 2] {
         let mut e = Evidence::ask(940_000_000, N);
@@ -446,16 +362,24 @@ fn holds_ioc_and_fok_kill_boundary() {
     let mut e = Evidence::ask(940_000_000, N);
     e.tok_daa += 1;
     accept(&ev_draft(&[liq(&l, N, LONG)], &e, &fk(), 3));
+    // With the market's own evidence life no IOC/FOK order qualifies.
+    let l = live(&base(), 0x67);
+    for tif in [1, 2] {
+        let mut e = Evidence::ask(940_000_000, N);
+        e.ask.tif = tif;
+        refused(&ev_draft(&[liq(&l, N, LONG)], &e, &fk(), 4), 0);
+    }
 }
 
-/// The 90-day idle limit: the rest window ending exactly 77,760,000 DAA after the order's UTXO is accepted, one
-/// DAA later is refused (the window is moved with activeFrom; the lock time is past both).
+/// The 90-day idle limit: the rest window plus L ending exactly 77,760,000 DAA after the order's UTXO is accepted,
+/// one DAA later is refused (the window is moved with activeFrom; the lock time is past both).
 #[test]
 fn holds_ninety_day_idle_boundary() {
     let l = live(&base(), 0x68);
     let r = rest_daa();
+    let life = market().min_evidence_life as u64;
     for side in [LONG, SHORT] {
-        for (af, good) in [(1_000 + MAX_IDLE - r, true), (1_000 + MAX_IDLE - r + 1, false)] {
+        for (af, good) in [(1_000 + MAX_IDLE - r - life, true), (1_000 + MAX_IDLE - r - life + 1, false)] {
             let mut e = if side == LONG { Evidence::ask(940_000_000, N) } else { Evidence::bid(1_150_000_000, N) };
             (e.daa, e.tok_daa) = (1_000, 1_000);
             e.ask.active_from = af as i64;
@@ -562,9 +486,8 @@ fn holds_trigger_boundary_and_rounding_of_t() {
     let l = live(&p, 0x6e);
     assert_eq!(trigger_of(&p, LONG), 1_000_000_000);
     refused(&ev_draft(&[liq(&l, N, LONG)], &Evidence::ask(1_000_000_000, N), &sk(), 1), 0);
-    let d = ev_draft(&[liq(&l, N, LONG)], &Evidence::ask(999_999_999, N), &sk(), 1);
-    accept(&d);
-    assert!(short_out(&d) >= q(N, p.bs - 1_000_000_000, SCALE, 0) + C);
+    let (d, w) = settle(&l, N, LONG, &Evidence::ask(999_999_999, N), &sk());
+    assert!(winner_out(&d, &w) >= q(N, p.bs - 1_000_000_000, SCALE, 0) + C);
     let mut p = base();
     p.m.mmr_bps = 2_000;
     // Premise changed by review 3 (F2, DESIGN 4.5c): at 20 % the base pair (bl 9) is narrower than both maintenance
@@ -573,9 +496,8 @@ fn holds_trigger_boundary_and_rounding_of_t() {
     let l = live(&p, 0x6f);
     assert_eq!(trigger_of(&p, SHORT), 1_000_000_000);
     refused(&ev_draft(&[liq(&l, N, SHORT)], &Evidence::bid(1_000_000_000, N), &lk(), 1), 0);
-    let d = ev_draft(&[liq(&l, N, SHORT)], &Evidence::bid(1_000_000_001, N), &lk(), 1);
-    accept(&d);
-    assert!(long_out(&d) >= q(N, 1_000_000_000 - p.bl, SCALE, 0) + C);
+    let (d, w) = settle(&l, N, SHORT, &Evidence::bid(1_000_000_001, N), &lk());
+    assert!(winner_out(&d, &w) >= q(N, 1_000_000_000 - p.bl, SCALE, 0) + C);
     // Not exact: floor for a long, ceil for a short; both quotes at T are liquidatable.
     let l = live(&base(), 0x70);
     assert_eq!((trigger_of(&l.p, LONG), trigger_of(&l.p, SHORT)), (TOP_ASK, LOW_BID));

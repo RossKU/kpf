@@ -26,7 +26,7 @@ CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2        # every test: engine t
 CARGO_BUILD_JOBS=2 cargo test -p kpf-tests --jobs 2       # only the engine tests (contracts under contracts/)
 ```
 
-Compiled contracts are pinned. `contracts/artifacts/` holds the compiler output of `KpfPair` and `KpfOpen`, a manifest
+Compiled contracts are pinned. `contracts/artifacts/` holds the compiler output of `KpfPair`, `KpfOpen` and `KpfPending`, a manifest
 (source and artifact SHA-256, template hashes and cuts, the KOB evidence templates the pair is built with) and
 `SHA256SUMS`. `cargo test -p kpf-artifacts` recompiles the sources with the vendored compiler and fails if one byte
 differs. After any change to a contract regenerate and commit the result:
@@ -44,12 +44,13 @@ exercise on testnet-10 is described in `docs/TESTNET.md`.
 
 | Path | What |
 |---|---|
-| `contracts/KpfPair.sil`, `KpfOpen.sil` | the two covenants (finished and reviewed); `probes/` are experiments |
+| `contracts/KpfPair.sil`, `KpfOpen.sil`, `KpfPending.sil` | the three covenants: the pair, the open order, and the pending part of a claim on price evidence (a second template under the pair's covenant id, `docs/DESIGN.md` 4.5d); `probes/` are experiments |
 | `contracts/artifacts/` | pinned compiled artifacts, manifest, `SHA256SUMS` |
-| `crates/kpf-protocol/` | library: pinned artifacts, state codecs, payoff math, transaction builders (including the price-evidence paths with KOB orders and the token program), KOB order codecs and the evidence check, signing, fee/mass, engine verification, in-memory chain (`sim`), test fixtures |
+| `crates/kpf-protocol/` | library: pinned artifacts, state codecs (pair, order, pending part), payoff math, transaction builders (including the two-step price-evidence paths with KOB orders and the token program: propose a close or a liquidation, challenge with counter-evidence, cure, finalize), KOB order codecs and the evidence and counter-evidence checks, signing, fee/mass, engine verification, in-memory chain (`sim`), test fixtures |
 | `crates/kpf-artifacts/` | regenerates and checks the pinned artifacts (the only crate that links the compiler) |
 | `crates/kpf-cli/` | the `kpf` binary and its integration tests (scripted lifecycle against an in-memory UTXO set) |
-| `crates/kpf-tests/` | engine tests: both contracts and the KOB evidence paths in the rusty-kaspa script engine |
+| `crates/kpf-tests/` | engine tests: the three contracts and the KOB evidence paths in the rusty-kaspa script engine |
 | `docs/DESIGN.md`, `THREAT_MODEL.md`, `audit/` | design, threat model, reviews |
+| `docs/DESIGN-TWO-STEP.md` | the design note of the two-step evidence mechanism (implemented as `DESIGN.md` 4.5d) |
 | `docs/TESTNET.md` | runbook of the first live exercise on testnet-10 |
 | `vendor/kob/` | read-only pinned clone of KOB (compiler, KOB contracts); not committed |

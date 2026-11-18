@@ -1,6 +1,8 @@
 # KPF two-step evidence (design note, draft 1)
 
-Status: proposal, not specified in `DESIGN.md`, not implemented. Cited as `D§n` (DESIGN), `TM` (THREAT_MODEL), `R3`
+Status: implemented as `DESIGN.md` 4.5d, with the resolutions of section 7 adopted for 1-6 and not adopted for 7 (a
+challenged close is cancelled, not re-settled at the counter quote), and with the deviations listed in DESIGN 4.5d.
+The rest of this note is kept as the record of the proposal. Cited as `D§n` (DESIGN), `TM` (THREAT_MODEL), `R3`
 (review 3). Section 4.5c is taken as the current rules. Numbers marked *(estimate)* are not measured.
 
 ## 1. Problem and idea

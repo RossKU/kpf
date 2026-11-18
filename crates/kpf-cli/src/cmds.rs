@@ -310,6 +310,7 @@ pub fn inspect(a: &Args) -> R<()> {
     let (kind, state, tpl) = match &d {
         Decoded::Pair(p) => ("pair", p.to_json(), kpf_protocol::artifacts::pair_template().hash),
         Decoded::Open(o) => ("order", o.to_json(), kpf_protocol::artifacts::open_template().hash),
+        Decoded::Pending(w) => ("pending", w.to_json(), kpf_protocol::artifacts::pending_template().hash),
     };
     let mut doc = json!({
         "kind": kind, "network": net.name(), "address": p2sh_address(&rs, net), "redeemBytes": rs.len(),
@@ -355,10 +356,32 @@ pub fn inspect(a: &Args) -> R<()> {
             );
             println!("owner {}   active from DAA {}   expires DAA {}   escrow {} KAS", to_hex(&o.owner), o.active_from, o.expiry_daa, fmt_kas(o.escrow() as i128));
         }
+        Decoded::Pending(w) => {
+            let sc = w.m.scale;
+            let side = if w.side == LONG { "long" } else { "short" };
+            let claim = if w.kind == KIND_CLOSE { format!("the {side} closes at {} KAS", fmt_kas(w.quote as i128)) } else { format!("the {side} is liquidatable (evidence quote {} KAS)", fmt_kas(w.quote as i128)) };
+            println!("PENDING claim (DESIGN 4.5d): {claim} on {} tokens of the range {} .. {} KAS", fmt_units(w.n as i128, sc as i128), fmt_kas(w.bl as i128), fmt_kas(w.bs as i128));
+            println!("bond {} KAS, refund {} KAS, fee {} KAS, proposer {}", fmt_kas(w.bond as i128), fmt_kas(w.refund as i128), fmt_kas(w.fee as i128), to_hex(&w.proposer_key));
+            match w.contradiction_bound() {
+                Some(b) => println!("refuted by a fresh {} {} {} KAS (margin g {} bps) resting {} DAA from this UTXO's DAA and fillable {} DAA more", if w.counter_is_ask() { "ask" } else { "bid" }, if w.counter_is_ask() { "<=" } else { ">=" }, fmt_kas(b as i128), w.m.g_bps, w.m.min_rest_daa, w.m.min_evidence_life),
+                None => println!("no quote in 0..=priceMax refutes it"),
+            }
+            if w.can_cure() {
+                println!("cure: the {side} may move its bound to {} KAS (adding margin) before a finalize", fmt_kas(w.cure_bound as i128));
+            }
+            match obj.as_ref().and_then(|o| o.daa) {
+                Some(d) => println!("finalize from DAA {} (this UTXO's DAA {d} + the window {})", w.finalize_from(d), w.m.challenge_daa),
+                None => println!("finalize once this UTXO is {} DAA old", w.m.challenge_daa),
+            }
+            if !w.hashes_match() {
+                println!("WARNING: the pair states this part may become do not match the state it describes: not written by the pinned KpfPair (a look-alike)");
+            }
+        }
     }
     let m = match &d {
         Decoded::Pair(p) => &p.m,
         Decoded::Open(o) => &o.m,
+        Decoded::Pending(w) => &w.m,
     };
     println!(
         "market token {}  template {}  maintenance {} bps  evidence k {} bps  rest {} DAA  liquidation fee {} bps (min {} KAS)  carrier {} KAS",
@@ -370,6 +393,15 @@ pub fn inspect(a: &Args) -> R<()> {
         m.liq_fee_bps,
         fmt_kas(m.keeper_fee_min as i128),
         fmt_kas(m.carrier as i128)
+    );
+    println!(
+        "two-step evidence (DESIGN 4.5d): bond {} bps of the part's range (at least {} KAS), counter-evidence k_c {} bps, margin g {} bps, window {} DAA, evidence life {} DAA",
+        m.bond_bps,
+        fmt_kas(m.bond_min as i128),
+        m.kc_bps,
+        m.g_bps,
+        m.challenge_daa,
+        m.min_evidence_life
     );
     if let Some(o) = &obj {
         println!("utxo {}:{}  {} KAS  DAA {}  covenant id {}", o.op.transaction_id, o.op.index, fmt_kas(o.amount as i128), daa_str(o.daa), short_hash(&o.covenant_id));
@@ -447,6 +479,14 @@ pub fn quote(a: &Args) -> R<()> {
     let b_min = (p.bs as i128 * 10_000) / (10_000 + p.m.mmr_bps as i128) + 1;
     let rows = quote_table(&part, &prices);
     let (liq_long, liq_short) = (liq_info(&p, &part, n, LONG), liq_info(&p, &part, n, SHORT));
+    // Two-step evidence (DESIGN 4.5d): what a claim on this part costs and what refutes it.
+    let bond = kpf_protocol::pending::bond_of(&p, n);
+    let refund = kpf_protocol::pending::refund_of(&p, n);
+    let claim = |kind: i64, side: i64, q: i64| kpf_protocol::pending::pending_of(&p.clocked(0), n, kind, side, q, [0; 32]);
+    let refute_long = claim(KIND_LIQ, LONG, liq_long.limit).contradiction_bound();
+    let refute_short = claim(KIND_LIQ, SHORT, liq_short.limit).contradiction_bound();
+    let cure_long = kpf_protocol::pending::cure_bound_of(&p.m, LONG, liq_long.limit);
+    let cure_short = kpf_protocol::pending::cure_bound_of(&p.m, SHORT, liq_short.limit);
     if a.has("json") {
         let r: Vec<Value> = rows
             .iter()
@@ -459,7 +499,16 @@ pub fn quote(a: &Args) -> R<()> {
             .iter()
             .map(|i| json!({"loser": if i.side == LONG { "long" } else { "short" }, "extremeQuote": i.limit, "trigger": i.trigger, "feeAtExtremeQuote": i.fee, "feeCap": i.slice, "winnerReceives": i.winner, "winnerReceivesAtLeast": i.winner_min, "loserReceives": 0}))
             .collect();
-        println!("{}", serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor(), "liquidation": liq})).expect("json"));
+        let two_step = json!({
+            "bond": bond, "refund": refund, "challengeDaa": p.m.challenge_daa, "gBps": p.m.g_bps, "minEvidenceLife": p.m.min_evidence_life,
+            "liquidationOfTheLongRefutedByABidAtLeast": refute_long, "liquidationOfTheShortRefutedByAnAskAtMost": refute_short,
+            "cureBoundLongAtExtremeQuote": cure_long, "cureBoundShortAtExtremeQuote": cure_short,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"size": n, "rows": r, "triggerLong": t_long, "triggerShort": t_short, "floorValue": part.floor(), "liquidation": liq, "twoStep": two_step}))
+                .expect("json")
+        );
         return Ok(());
     }
     println!(
@@ -503,6 +552,23 @@ pub fn quote(a: &Args) -> R<()> {
         println!("{:>16}  {:>20}  {:>20}  {:>12}  {:>14}", fmt_kas(r.price as i128), fmt_kas(r.long as i128), fmt_kas(r.short as i128), liq, fee);
     }
     println!("Liquidation fee: max(keeperFeeMin, q(n, quote * liqFeeBps / 10^4)) capped at the maintenance slice; the loser receives nothing (DESIGN 4.5b).");
+    let opt = |v: Option<i64>| v.map(|x| format!("{} KAS", fmt_kas(x as i128))).unwrap_or_else(|| "none".into());
+    println!(
+        "Two-step (DESIGN 4.5d): a close or a liquidation of {} tokens is first proposed with a bond of {} KAS (refund {} KAS) and settles at finalize, {} DAA later at the earliest; a liquidation finalizes as forfeit and keep (the winner holds both sides) and pays the fee and the bond to the proposer.",
+        fmt_units(n as i128, sc as i128),
+        fmt_kas(bond as i128),
+        fmt_kas(refund as i128),
+        p.m.challenge_daa
+    );
+    println!(
+        "  a claim at the extreme quote is refuted (margin g {} bps, counter order resting {} DAA from the proposal and fillable {} DAA after): the long's liquidation by a bid >= {}, the short's by an ask <= {}; a close at quote c by an opposite quote beyond c by g",
+        p.m.g_bps,
+        p.m.min_rest_daa,
+        p.m.min_evidence_life,
+        opt(refute_long),
+        opt(refute_short)
+    );
+    println!("  the threatened owner may cure instead: the long to bl {}, the short to bs {} (at the extreme quotes)", opt(cure_long), opt(cure_short));
     Ok(())
 }
 
