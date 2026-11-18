@@ -120,6 +120,8 @@ struct Stats {
     guaranteed_liq: usize,
     offers: usize,
     disputed: usize,
+    /// Review 5: disputes whose executor was the wronged party itself.
+    disputed_by_victim: usize,
     dispute_refused: usize,
     dispute_out_of_window: usize,
     released: usize,
@@ -1225,7 +1227,13 @@ impl Sim {
         e.ask.expiry_daa = expiry;
         e.bid.expiry_daa = expiry;
         let fnn = self.fn_();
-        let mut d = dp_draft(&[lock.clone()], &e, &self.f.clone(), fnn);
+        // Review 5 (DESIGN 4.5g): the disputer is a third party, the victim itself, the guarantor, or a party of the
+        // claim (the closer, the winner, the proposer); the victim's restitution must not depend on it.
+        let (w0, _) = self.lock_src.get(&lock.op).cloned().expect("every lock of the walk comes from a guarantee");
+        let others = [lock.l.victim, lock.l.owner, w0.w.long_key, w0.w.short_key, w0.w.proposer_key];
+        let pickd = self.rng.range(0, others.len() as i64) as usize;
+        let disputer = if pickd < others.len() { self.keys.get(&others[pickd]).copied().unwrap_or(self.f) } else { self.f };
+        let mut d = dp_draft(&[lock.clone()], &e, &disputer, fnn);
         d.lock = rest_end.max(self.daa) + self.rng.range(0, 50) as u64;
         let in_window = rest_end as i64 <= deadline;
         let predicted = !short_of && expiry >= rest_end as i64 + life && in_window;
@@ -1242,21 +1250,31 @@ impl Sim {
         let before = self.w.clone();
         let tx = self.apply(&d, &[]);
         let (w, settled) = self.lock_src.remove(&lock.op).expect("every lock of the walk comes from a guarantee");
-        let h = lock.l.restitution(quote);
-        let pay = lock.l.victim_pay(quote);
+        let h = lock.l.restitution();
+        let pay = lock.l.victim_pay();
+        assert_eq!(h, lock.l.cover, "DESIGN 4.5g: the restitution is the whole cover");
         let victim = lock.l.victim;
+        let dk = xonly(&disputer);
         assert_eq!(victim, w.w.defender_key());
-        assert_eq!(self.w.cash(&victim) - before.cash(&victim), pay as i128, "the victim is paid the restitution");
-        // Whole at the counter quote: the loser's side of a liquidation, the other party's payout of a close at c.
-        let c = quote.clamp(w.w.bl, w.w.bs);
-        let fair = if w.w.kind == KIND_LIQ {
-            if w.w.side == LONG { q(w.w.n, c - w.w.bl, SCALE, 0) } else { q(w.w.n, w.w.bs - c, SCALE, 0) }
+        // The restitution output (at the lock's own index, 0) pays the victim exactly the cover, whoever disputes.
+        assert_eq!(tx.outputs[0].script_public_key, p2pk_x(&victim));
+        assert_eq!(tx.outputs[0].value as i64, pay, "the victim is paid the cover whoever disputes");
+        if dk != victim {
+            assert_eq!(self.w.cash(&victim) - before.cash(&victim), pay as i128, "the victim is paid the restitution");
         } else {
-            let owe = if w.w.side == LONG { q(w.w.n, c - w.w.bl, SCALE, 0) } else { q(w.w.n, w.w.bs - c, SCALE, 0) };
-            w.value as i64 - w.w.refund - owe
-        };
-        assert!(settled + h >= fair, "the wronged party ends with {} < {fair}, what its side was worth at {quote}", settled + h);
-        let burn = lock.l.burn(lock.value, quote);
+            self.st.disputed_by_victim += 1;
+        }
+        // Whole at every price: what the settlement paid it plus the restitution is at least what its side of the
+        // claimed part (the pair a refutation would restore) was worth at every grid price, whatever the counter quote.
+        let restored = w.w.restore_pair().expect("restore state");
+        let victim_side = if w.w.kind == KIND_LIQ { w.w.side } else { 3 - w.w.side };
+        let g = self.grid(&[&restored, &w.w.pair_view()]);
+        for &p in g.iter().chain(std::iter::once(&quote)) {
+            let held = if victim_side == LONG { restored.long_at(p) } else { restored.short_at(p) };
+            assert!(settled + h >= held, "the wronged party ends with {} < {held}, what it held in the part at {p} (disputed at {quote})", settled + h);
+            assert!(h >= lock.l.taken_at(p), "the restitution covers what the claim took at {p}");
+        }
+        let burn = lock.l.burn(lock.value);
         if burn > 0 {
             assert_eq!(tx.outputs.last().unwrap().script_public_key, kpf_protocol::lock::burn_spk());
         }
@@ -1265,10 +1283,10 @@ impl Sim {
         self.st.lock_to_victims += pay as i128;
         self.st.lock_burned += burn as i128;
         self.st.lock_rewards += reward as i128;
-        // Nobody else's payoff moves: a dispute touches no position.
+        // Nobody else's payoff moves: a dispute touches no position (the disputer acted: it paid for the fill).
         let g = self.grid(&[&w.w.pair_view()]);
         for k in [w.w.long_key, w.w.short_key] {
-            if k != victim {
+            if k != victim && k != dk {
                 self.non_consenting(&before, &k, 0, &g);
             }
         }
@@ -1346,6 +1364,7 @@ fn walk_guarantee(seed: u64, st_total: &mut Stats) {
     st_total.guaranteed_liq += t.guaranteed_liq;
     st_total.offers += t.offers;
     st_total.disputed += t.disputed;
+    st_total.disputed_by_victim += t.disputed_by_victim;
     st_total.dispute_refused += t.dispute_refused;
     st_total.dispute_out_of_window += t.dispute_out_of_window;
     st_total.released += t.released;
@@ -1371,6 +1390,7 @@ fn x6_guarantee_random_walk() {
     println!("X6 guarantee: {st:?}");
     assert!(st.guaranteed_close > 0 && st.guaranteed_liq > 0 && st.offers > 0, "{st:?}");
     assert!(st.disputed > 0 && st.dispute_refused > 0 && st.dispute_out_of_window > 0 && st.released > 0, "{st:?}");
+    assert!(st.disputed_by_victim > 0 && st.disputed_by_victim < st.disputed, "disputes by the victim and by others: {st:?}");
     assert!(st.lock_burned > 0 && st.lock_rewards > 0 && st.lock_to_victims > 0, "{st:?}");
     assert_eq!(st.lock_value_in, st.lock_released + st.lock_to_victims + st.lock_burned + st.lock_rewards);
 }

@@ -143,7 +143,12 @@ contract KpfOpen(
     // DESIGN: 4.5a lists kBps, minRestDaa, mmrBps, liqFeeBps, keeperFeeMin with the pair's bounds; the pair also
     // needs minRestDaa below the lock-time threshold, since tx.daa >= exposed + minRestDaa is proven by CLTV, so
     // that bound is checked too. The token template facts (tplPrefixLen, tplSuffixLen, tokenTplHash) cannot be
-    // checked without a token input and stay consented market data.
+    // checked without a token input and stay consented market data (only their sign is checked).
+    // DESIGN: review 5 (DESIGN 4.5g) requires KpfPending.guarantee to check the same bounds; the function between the
+    // two markers below is the same text in both contracts (with the same constants), which
+    // `audit5_tests::holds_the_market_check_is_one_text_in_kpf_open_and_kpf_pending` enforces, so the two cannot drift.
+    // The order's own bounds are checkOrder's.
+    // BEGIN market bounds
     function checkMarket() {
         require(scale > 0);
         require(scale <= SCALE_MAX);
@@ -163,7 +168,7 @@ contract KpfOpen(
         require(minRestDaa >= 0);
         require(minRestDaa < LOCK_TIME_THRESHOLD);
         // The hand-over limit tx.daa >= S + 4 * minRestDaa (DESIGN 4.5c) is proven by CLTV too, so 4 * minRestDaa must
-        // stay below the lock-time threshold, or the pair this order creates could never be transferred or re-paired.
+        // stay below the lock-time threshold, or a pair of this market could never be transferred or re-paired.
         // DESIGN: 4.5c adds the rate limit but no bound; this one is required so no order creates a pair with a dead
         // path (the rule of 4.5a, review 1 F4).
         require(minRestDaa * 4 < LOCK_TIME_THRESHOLD);
@@ -204,6 +209,14 @@ contract KpfOpen(
         require(disputeDaa < CSV_LIMIT);
         require(graceDaa >= 0);
         require(graceDaa <= challengeDaa);
+        require(tplPrefixLen >= 0);
+        require(tplSuffixLen >= 0);
+    }
+    // END market bounds
+
+    // The market bounds and the order's own: a positive margin rate, a counter rate and a tip that are not negative.
+    function checkOrder() {
+        checkMarket();
         require(myRate > 0);
         require(minCounterRate >= 0);
         require(tip >= 0);
@@ -246,7 +259,7 @@ contract KpfOpen(
 
         // Nothing checks the state when the order is created, so a fill checks what it relies on, including every
         // bound the new pair checks on each of its own entries (DESIGN 5), so the pair it creates is never stuck.
-        checkMarket();
+        checkOrder();
 
         // Amount. n >= minFill unless it takes all that is left; every pair part is >= minSize (DESIGN 4.6), so
         // what is left is 0 or itself at least one part.
@@ -348,7 +361,7 @@ contract KpfOpen(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         require(tx.daa >= activeFrom);
-        checkMarket();
+        checkOrder();
 
         require(n > 0);
         require(n <= sizeLeft);

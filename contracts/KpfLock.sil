@@ -35,17 +35,17 @@ pragma silverscript ^0.1.0;
 // only pay their own victim or their own owner; KpfPending.guarantee counts only the lock output of its own
 // transaction.
 //
-// Restitution H (c the counter quote, c(x) = min(max(x, bl), bs)):
-//   close long at b0, counter ask a     victim the short   H = cover - q(n, c(a) - bl)
-//   close short at a0, counter bid b    victim the long    H = cover - q(n, bs - c(b))
-//   liquidate long, counter bid b       victim the long    H = q(n, c(b) - bl)
-//   liquidate short, counter ask a      victim the short   H = q(n, bs - c(a))
-// i.e. the victim ends with what its side was worth at the counter quote, to the sompi: for a close, the payout it
-// would have had at c(a) (the fast settlement paid it the rest), for a liquidation its side's payout at c(b). H <= cover,
-// so the lock always covers it. Reward R = floor(cover * (lockBps - 10^4) / 10^4), at most the lock less H.
-// DESIGN: a restitution below the plain dust bound (0.02 KAS) is paid as 0.02 KAS (more than owed; the burn carries
-// it), and a burn below 0.02 KAS is not created (it stays with the executor, at most 0.02 KAS); the note leaves both
-// open, and an output below dust could not be relayed.
+// Restitution H (DESIGN 4.5g, review 5 F1): the whole cover, whoever disputes and with whichever valid counter order.
+// The cover is the most the claim can have taken from the victim at any price (a close: the closer's payoff beyond its
+// refund, which the other party keeps in full when the true price is the closer's bankruptcy bound; a liquidation: the
+// part's range, the most the loser's side is worth at any price), so the victim never ends below what it held at the
+// true price, and the disputer's choice of counter order moves nothing (a quote-priced H let a party to the claim
+// dispute first with its own order at the refutation bound and leave the victim the bound's value, the rest burned).
+// lock >= ceil(cover * lockBps / 10^4) + offer >= cover + R, so the lock always covers it. Reward R = floor(cover *
+// (lockBps - 10^4) / 10^4); the burn is the rest, the offer and the rounding of the ratio (lock - cover - R).
+// DESIGN: a restitution below the plain dust bound (0.02 KAS) is paid as 0.02 KAS (more than owed; the lock floor of
+// 0.1 KAS carries it), and a burn below 0.02 KAS is not created (it stays with the executor, at most 0.02 KAS); the
+// note leaves both open, and an output below dust could not be relayed.
 // DESIGN: the note (DESIGN-ORACLE 1.5) makes the lock disputable until a release lands, with any counter-evidence
 // resting from P. Here the counter-evidence must have finished resting by F + disputeDaa - minRestDaa: the guarantor's
 // liability is the fixed window [P, F + disputeDaa - minRestDaa], whenever the release lands, and a disputer whose
@@ -145,13 +145,6 @@ contract KpfLock(
     int constant MAX_IDLE = 77760000;
     // P2SH hash of the redeem script OP_RETURN (0x6a): an output nobody can spend (DESIGN 4.5f, experiment Z7).
     byte[32] constant BURN = byte[32](0xd379e50f3e2203f9a92584916335bb7cd014b237ceaa8b36f1d3d80d0cc88b32);
-
-    // As KpfPair.quoteOf.
-    function quoteOf(int x, int r, int c) : int {
-        int m = x % scale;
-        int q = x / scale;
-        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
-    }
 
     function payTo(int j, pubkey k, int v) {
         if (v > 0) {
@@ -270,12 +263,12 @@ contract KpfLock(
     // Dispute (DESIGN 4.5f). Anyone, with counter-evidence at input ev (an ask's custody at tk); this input's first two
     // pushes are nb = n and the block start qb. The counter-evidence is exactly what would have refuted the claim by a
     // challenge of the pending part (KpfPending.challenge: clock P, opposite kind, the contradiction by g), and it
-    // finished resting minRestDaa before the window closes. The victim is paid H at output i, the burn output at
-    // M - 1 - i holds the lock less H less the reward, the executor keeps the reward.
+    // finished resting minRestDaa before the window closes. The victim is paid H = cover at output i, the burn output
+    // at M - 1 - i holds the lock less H less the reward, the executor keeps the reward.
     // Why the burn and the reward bound: a guarantor (or its proposer) expecting a dispute could otherwise dispute its
-    // own lock first and recover it; with the burn it recovers at most the reward R = cover * (lambda - 1), so a
-    // self-dispute of a claim that wronged its victim by H costs the coalition lock - R - H >= cover - H >= 0 more than
-    // H, and it never ends ahead of not making the claim (DESIGN 4.5f).
+    // own lock first and recover it; with the burn it recovers at most the reward R = cover * (lambda - 1), so the
+    // coalition of a false claim keeps at most the victim's side (worth at most the cover) and R, and loses the lock
+    // (at least cover + R): it never ends ahead of not making the claim (DESIGN 4.5f, 4.5g).
     entry dispute(byte[8] nb, byte[8] qb, int ev, int tk) {
         int self = this.activeInputIndex;
         require(OpTxInputScriptSigSubstr(self, 0, 1) == byte[](0x08));
@@ -296,26 +289,23 @@ contract KpfLock(
         // The window: the counter-evidence rested by F + D - R (no upper bound on the transaction's own time exists;
         // this one is on the evidence's, which its UTXO scores prove).
         require(restEnd + minRestDaa <= f + disputeDaa);
-        int cc = clampP(c);
-        int h = 0;
         if (kind == KIND_CLOSE) {
+            int cc = clampP(c);
             int cq = clampP(quote);
             if (side == SIDE_LONG) {
                 require(cc * BPS <= cq * (BPS - gBps));
-                h = cover - quoteOf(n, cc - bl, 0);
             } else {
                 require(cc * BPS >= cq * (BPS + gBps));
-                h = cover - quoteOf(n, bs - cc, 0);
             }
         } else {
             if (side == SIDE_LONG) {
                 require(c * (BPS - mmrBps) >= bl * (BPS + gBps));
-                h = quoteOf(n, cc - bl, 0);
             } else {
                 require(c * (BPS + mmrBps) <= bs * (BPS - gBps));
-                h = quoteOf(n, bs - cc, 0);
             }
         }
+        // The restitution does not depend on c (DESIGN 4.5g): the whole cover.
+        int h = cover;
         if (h < 0) { h = 0; }
         if (h > 0) {
             if (h < PLAIN_DUST) { h = PLAIN_DUST; }

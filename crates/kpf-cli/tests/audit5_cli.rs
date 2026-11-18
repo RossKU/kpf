@@ -1,13 +1,10 @@
 //! Review 5 (docs/audit/REVIEW-5.md), tooling half: the `kpf` binary driven offline against the in-memory chain
 //! (`kpf_protocol::sim::Chain`, every input run in the script engine), as `lifecycle.rs` does.
 //!
-//! - `exploit_guarantee_tells_the_guarantor_that_no_quote_disputes_a_look_alike_part` (F2): `kpf guarantee` accepts a
-//!   look-alike pending part whose market block no real market can have and tells the guarantor that no quote disputes
-//!   the claim; the engine half (`kpf-tests/tests/audit5_tests.rs`) shows the attacker then disputes the lock with any
-//!   ask above bs and the guarantor loses all of it.
-//! - `exploit_watch_promises_the_window_and_the_cure_while_a_guarantee_can_settle_now` (F3): `kpf watch` reports a
-//!   pending liquidation as curable and final only after W, without a word about the fast path; after the cure grace G
-//!   a guarantor settles it and the cure the tool offered is gone.
+//! - `holds_guarantee_refuses_a_look_alike_part_before_it_says_anything_about_disputes` (F2, fixed; was
+//!   `exploit_guarantee_tells_the_guarantor_that_no_quote_disputes_a_look_alike_part`).
+//! - `holds_watch_shows_the_fast_path_first_and_the_cure_before_the_grace_ends` (F3, fixed; was
+//!   `exploit_watch_promises_the_window_and_the_cure_while_a_guarantee_can_settle_now`), with wording note 1.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -143,15 +140,14 @@ fn kob_file(h: &H, name: &str, live: &kpf_protocol::sim::KobLive, custody: Optio
     path
 }
 
-/// F2 (High). Who loses: an honest guarantor running `kpf guarantee` on a pending-part file someone hands it. The file
-/// is a look-alike KpfPending (a genesis UTXO of the pinned template, its restore, cure and forfeit hashes computed from
-/// its own state, its value at least q(n, bs - bl) + refund: everything `check_pending` checks) whose market block has
-/// mmrBps = -20,000 and gBps = 20,000, which `Market::validate` refuses but nothing on the guarantee path checks. The
-/// command prints "no quote in 0..=priceMax disputes this claim", offers the largest offer as bait, builds and verifies
-/// the guarantee, and the chain accepts it: the guarantor's 3,300 KAS lock is then disputable by any ask >= bs
-/// (`audit5_tests::exploit_a_look_alike_part_with_an_out_of_range_market_takes_the_guarantors_lock`).
+/// F2 (High), fixed (DESIGN 4.5g). An honest guarantor runs `kpf guarantee` on a pending-part file someone hands it: a
+/// look-alike KpfPending (a genesis UTXO of the pinned template, its restore, cure and forfeit hashes computed from its
+/// own state, its value at least q(n, bs - bl) + refund) whose market block has mmrBps = -20,000 and gBps = 20,000. Before
+/// the fix the command printed "no quote in 0..=priceMax disputes this claim" and built the guarantee, and any ask above
+/// bs then took the guarantor's lock. Now the command refuses the part before it says anything about disputes (its
+/// market fails the bounds every order checks), builds nothing, and `inspect` warns that the part is a look-alike.
 #[test]
-fn exploit_guarantee_tells_the_guarantor_that_no_quote_disputes_a_look_alike_part() {
+fn holds_guarantee_refuses_a_look_alike_part_before_it_says_anything_about_disputes() {
     let mut h = H::new("lookalike");
     let (gk, g) = h.key("guarantor");
     h.chain.mint(&g, 100_000 * KAS);
@@ -184,23 +180,26 @@ fn exploit_guarantee_tells_the_guarantor_that_no_quote_disputes_a_look_alike_par
     std::fs::write(&file, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
     h.chain.advance(w.m.grace_daa as u64);
     let fund = h.funding("g", &g);
-    let (out, created) = h.step(&["guarantee", "--pending", &file, "--funder", &gk, "--funding", &fund]);
-    assert!(out.contains("no quote in 0..=priceMax disputes this claim"), "{out}");
-    assert!(!out.contains("RISK"), "the risk line is not printed: {out}");
-    let lock = created.iter().find(|f| object_kind(f) == "lock").cloned().expect("the lock");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
-    assert!(v["amount"].as_u64().unwrap() >= 300 * KAS, "the guarantor's lock is on the chain: {v}");
-    assert!(h.chain.entry(&outpoint_of(&lock)).is_some());
+    let outdir = h.p("out-lookalike");
+    let (ok, out, err) = h.run(&["guarantee", "--pending", &file, "--funder", &gk, "--funding", &fund, "--out-dir", &outdir]);
+    assert!(!ok, "the guarantee is refused: {out}");
+    assert!(err.contains("market block fails the bounds"), "{err}");
+    assert!(!out.contains("disputes this claim") && !out.contains("no quote"), "nothing is said about disputes: {out}");
+    let built = std::fs::read_dir(&outdir).map(|mut d| d.next().is_some()).unwrap_or(false);
+    assert!(!built, "nothing is built");
+    let shown = h.ok(&["inspect", &file]);
+    assert!(shown.contains("WARNING: the market block fails the bounds"), "{shown}");
 }
 
-/// F3 (Medium). Who loses: the loser of a pending liquidation who relies on `kpf watch`. At P + G (G = the cure grace,
-/// 2R on testnet) `watch` still says "finalize from DAA P + W: ... from now" and offers `kpf cure` and `kpf challenge`,
-/// without saying that a guarantor can settle the claim now (DESIGN 4.5f), after which no cure exists and a refutation
-/// pays cash at the counter quote. A guarantor settles it in the next block; the pending part the cure would spend is
-/// gone. The accepted limit (`exploit_a_band_loser_offline_for_the_grace_forfeits_its_residual`) is a loser offline
-/// for G; here an online loser told it has W loses the same residual.
+/// F3 (Medium), fixed (DESIGN 4.5g). The loser of a pending liquidation that relies on `kpf watch`. Before the fix, at
+/// P + G `watch` said "finalize from DAA P + W" and offered the cure without a word about the fast path, while a
+/// guarantor could settle the claim at once and remove the cure. Now `watch` states, first, that a guarantor can settle
+/// the claim once the cure grace has passed and when (DAA P + G), then the cure with that deadline, then the slow path;
+/// at P + G it says the fast settlement is possible now; the JSON carries `guaranteeFrom`; the proposal itself says it
+/// can be fast-settled. Wording note 1: once the claim is fast-settled, the lock's headline gives the last DAA a new
+/// counter order can be placed (the rest deadline less R), not the rest deadline as the deadline to act.
 #[test]
-fn exploit_watch_promises_the_window_and_the_cure_while_a_guarantee_can_settle_now() {
+fn holds_watch_shows_the_fast_path_first_and_the_cure_before_the_grace_ends() {
     use kpf_protocol::fixtures::{ask_of, kob_market};
     use kpf_protocol::kob::*;
 
@@ -239,22 +238,35 @@ fn exploit_watch_promises_the_window_and_the_cure_while_a_guarantee_can_settle_n
     let ask_file = kob_file(&h, "ask.json", &ask, Some(&custody_file));
     h.chain.advance(650);
     let fund = h.funding("f", &f);
-    let (_, claimed) = h.step(&["propose-liquidate", "--pair", &pair, "--evidence", &ask_file, "--funder", &fk, "--funding", &fund]);
+    let (proposed, claimed) = h.step(&["propose-liquidate", "--pair", &pair, "--evidence", &ask_file, "--funder", &fk, "--funding", &fund]);
+    assert!(proposed.contains("it can also be fast-settled") && proposed.contains("no cure"), "{proposed}");
     let pending = claimed.iter().find(|p| object_kind(p) == "pending").cloned().expect("pending");
     let p_daa = h.chain.daa;
-    // At P + G: the loser's watcher.
+    let from = p_daa + m.grace_daa as u64;
+    // Right after the proposal: the fast-path deadline first, then the cure with that deadline, then the slow path.
+    let now = p_daa + 10;
+    let out = h.ok(&["watch", "--pair", &pair, "--pending", &pending, "--daa", &now.to_string()]);
+    let fast = out.find(&format!("FAST SETTLEMENT: a guarantor may settle this liquidation once the cure grace has passed: from DAA {from}, {} DAA", from - now));
+    let cure = out.find(&format!("CURE before DAA {from}"));
+    let slow = out.find("slow path: finalize from DAA");
+    let (fast, cure, slow) = (fast.expect(&out), cure.expect(&out), slow.expect(&out));
+    assert!(fast < cure && cure < slow, "fast path, then the cure, then the slow path: {out}");
+    assert!(out.contains("no cure and no challenge"), "{out}");
+    let v: Value = serde_json::from_str(&h.ok(&["watch", "--pair", &pair, "--pending", &pending, "--daa", &now.to_string(), "--json"])).unwrap();
+    assert_eq!(v["pairs"][0]["pending"][0]["guaranteeFrom"], from);
+    assert_eq!(v["pairs"][0]["pending"][0]["guaranteeInDaa"], from - now);
+    // At P + G: possible now.
     h.chain.advance(m.grace_daa as u64);
     let now = h.chain.daa;
     let out = h.ok(&["watch", "--pair", &pair, "--pending", &pending, "--daa", &now.to_string()]);
-    assert!(out.contains("PENDING") && out.contains("threatens the long"), "{out}");
-    let left = p_daa + m.challenge_daa as u64 - now;
-    assert!(out.contains(&format!("finalize from DAA {}: {left} DAA", p_daa + m.challenge_daa as u64)), "{out}");
-    assert!(out.contains("kpf cure --pending"), "the cure is offered: {out}");
-    assert!(!out.to_lowercase().contains("guarante") && !out.contains("grace") && !out.contains("fast"), "nothing about the fast path: {out}");
-    // The same DAA: a guarantor settles it; the pending part (the UTXO the offered cure spends) is gone.
+    assert!(out.contains("possible NOW"), "{out}");
+    // A guarantor settles it; the lock's headline gives the last DAA to place a new counter order.
     let fund = h.funding("g", &g);
     let (_, settled) = h.step(&["guarantee", "--pending", &pending, "--funder", &gk, "--funding", &fund]);
-    assert!(settled.iter().any(|p| object_kind(p) == "lock"));
+    let lock = settled.iter().find(|p| object_kind(p) == "lock").cloned().expect("the lock");
     assert!(h.chain.entry(&outpoint_of(&pending)).is_none(), "the cure now has nothing to spend");
-    assert!(left >= 400, "the tool told the loser it had {left} DAA more");
+    let f_daa = h.chain.daa;
+    let place_by = f_daa as i64 + m.dispute_daa - 2 * m.min_rest_daa;
+    let out = h.ok(&["watch", "--pair", &pair, "--lock", &lock, "--daa", &f_daa.to_string()]);
+    assert!(out.contains(&format!("a new counter order must be placed by DAA {place_by}")), "{out}");
 }

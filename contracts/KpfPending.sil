@@ -183,6 +183,13 @@ contract KpfPending(
     int constant LOCK_FLOOR = 10000000;
     int constant CSV_LIMIT = 4294967296;
     int constant STATUS_LOCK = 1;
+    // The market bounds of KpfOpen.checkMarket (DESIGN 4.5g, review 5 F2), with KpfOpen's values.
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant K_MAX = 100000;
+    int constant MMR_CAP = 5000;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant BOND_MIN_MAX = 1000000000000;
 
     // As KpfPair.quoteOf.
     function quoteOf(int x, int r, int c) : int {
@@ -470,6 +477,76 @@ contract KpfPending(
         return byte[](0x08) + byte[](c as byte[8]);
     }
 
+    // The market bounds KpfOpen.checkMarket enforces on every order that creates a pair (DESIGN 4.5g, review 5 F2):
+    // the same text, kept identical by `audit5_tests::holds_the_market_check_is_one_text_in_kpf_open_and_kpf_pending`.
+    // A genuine pending part always passes (its market block is its pair's, byte for byte, which an order checked);
+    // a look-alike whose parameters no order accepts cannot be guaranteed.
+    // BEGIN market bounds
+    function checkMarket() {
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(kBps > 0);
+        require(kBps <= K_MAX);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(minRestDaa >= 0);
+        require(minRestDaa < LOCK_TIME_THRESHOLD);
+        // The hand-over limit tx.daa >= S + 4 * minRestDaa (DESIGN 4.5c) is proven by CLTV too, so 4 * minRestDaa must
+        // stay below the lock-time threshold, or a pair of this market could never be transferred or re-paired.
+        // DESIGN: 4.5c adds the rate limit but no bound; this one is required so no order creates a pair with a dead
+        // path (the rule of 4.5a, review 1 F4).
+        require(minRestDaa * 4 < LOCK_TIME_THRESHOLD);
+        // The two-step evidence parameters (DESIGN 4.5d), with the bounds KpfPair.propose checks, so every pending
+        // part of the pair has a live challenge, cure and finalize.
+        // DESIGN: 4.5d asks W >= R + detection and L <= 77,760,000 - R without making them rules. Both are required
+        // here (W >= 2R since 4.5e): with W < R a stale claim could be finalized before any counter-evidence can have
+        // rested, with W = R the defender had no slack at all, and with
+        // L + R above the 90-day limit no evidence could ever qualify, so the pair could never be liquidated.
+        require(bondBps >= 0);
+        require(bondBps <= BPS);
+        // DESIGN: 4.5e bounds bondMin "like the other market parameters" without a number; BOND_MIN_MAX (10,000 KAS,
+        // 2,000 times the testnet floor) is far below what one keeper can hold, so no market makes every proposal
+        // unfundable (P5 and P6 dead); the proportional part of the bond is bounded by the part's own range.
+        require(bondMin >= 0);
+        require(bondMin <= BOND_MIN_MAX);
+        require(kcBps > 0);
+        require(kcBps <= K_MAX);
+        require(gBps > 0);
+        require(gBps < BPS);
+        // The window leaves the defender slack (DESIGN 4.5e, review 4 F5): counter-evidence placed at P first counts at
+        // P + R, and finalize opens at P + W >= P + 2R.
+        require(challengeDaa >= 2 * minRestDaa);
+        require(challengeDaa < CSV_LIMIT);
+        require(minEvidenceLife >= 0);
+        require(minEvidenceLife + minRestDaa <= MAX_IDLE);
+        // Guaranteed fast settlement (DESIGN 4.5f).
+        // DESIGN: the note (DESIGN-ORACLE 1.8) makes lambda (and the disputer share) deployment constants; here lambda, the
+        // window D and the cure grace G are market parameters, and the disputer's reward is (lambda - 1) x cover.
+        // lambda in [1, 3] (the product cover * lockBps stays in 63 bits in its split form for every cover up to the KAS
+        // supply); the window D leaves the disputer slack as W does:
+        // counter-evidence counts from P at P + R, a lock is liable for evidence resting by F + D - R with F >= P, so
+        // D >= 2R; the cure grace G of a fast liquidation is at most the window W (with G = W the fast path gives a
+        // liquidation no time over finalize, with G = 0 a pending liquidation can be fast-settled at once).
+        require(lockBps >= BPS);
+        require(lockBps <= LOCK_BPS_MAX);
+        require(disputeDaa >= 2 * minRestDaa);
+        require(disputeDaa < CSV_LIMIT);
+        require(graceDaa >= 0);
+        require(graceDaa <= challengeDaa);
+        require(tplPrefixLen >= 0);
+        require(tplSuffixLen >= 0);
+    }
+    // END market bounds
+
     // Guarantee: guaranteed fast settlement (DESIGN 4.5f). Anyone, in a transaction that creates at output j a KpfLock
     // (template lPre || state || lSuf, whose template hash is the build constant LOCK_TPL) owned by the guarantor key gk,
     // naming this claim, with at least ceil(cover * lockBps / 10^4) + offer (and 0.1 KAS). The claim settles at once
@@ -483,10 +560,13 @@ contract KpfPending(
     //     proposal's evidence was still fillable by conforming matchers when the proposal filled it, so a dead order
     //     (review 3 F1) never settles on the path that has no challenge window;
     //   - a liquidation is at least graceDaa old (CSV): the loser keeps a cure right for graceDaa (DESIGN 4.5f);
-    //   - lockBps in [10^4, 3 * 10^4] and disputeDaa in the CSV range are checked again here, so not even a look-alike
-    //     part creates a lock whose reward overflows or whose release is dead.
+    //   - the whole market block passes KpfOpen's bounds (checkMarket above; DESIGN 4.5g, review 5 F2), so not even a
+    //     look-alike part creates a lock whose reward overflows, whose release is dead or whose dispute rule is
+    //     inverted (a negative mmrBps or a gBps above 10^4 turned "contradicts by g" into "agrees").
     // The lock state: gk, status 1, this market block, this id, the claim kind, side, n, bl, bs, quote (one slice of
     // this script), P, the cover and the victim's key (the loser of a liquidation, the other party of a close).
+    // gk is any 32 bytes: no script can check that it is a valid x-only key. A lock whose owner key is not one can never
+    // be released, and only its own funder loses (review 5, note 2); the library refuses such a key.
     // DESIGN: the note (DESIGN-ORACLE 1.5) gives the loser of a fast-settled liquidation no cure; here a liquidation
     // can be guaranteed only once it is graceDaa old, so an online loser within g of its trigger can still cure (the
     // trade-off of DESIGN 4.5f), at the cost of delaying a fast liquidation by graceDaa.
@@ -497,10 +577,7 @@ contract KpfPending(
         int p = OpTxInputDaaScore(self);
         require(p >= 0);
         require(p <= visibleUntil);
-        require(lockBps >= BPS);
-        require(lockBps <= LOCK_BPS_MAX);
-        require(disputeDaa >= 0);
-        require(disputeDaa < CSV_LIMIT);
+        checkMarket();
         require(offer >= 0);
         byte[32] victim = byte[32](longKey);
         if (kind == KIND_CLOSE) {

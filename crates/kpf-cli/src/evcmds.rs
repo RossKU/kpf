@@ -292,16 +292,40 @@ fn finalize_words(w: &LivePending, now: Option<u64>) -> String {
     }
 }
 
+/// When a guarantor can fast-settle a pending part (DESIGN 4.5f; review 5 F3), in words: from then on there is no cure
+/// and no challenge, and a refutation is a dispute of the guarantor's lock that pays the wronged party the cover in cash.
+fn guarantee_words(w: &LivePending, now: Option<u64>) -> String {
+    let Some(from) = w.guarantee_from() else {
+        return format!(
+            "no guarantor can fast-settle it (accepted at DAA {} after its evidence stopped being fillable at DAA {}): only the slow path",
+            w.daa, w.w.visible_until
+        );
+    };
+    let after = "after that there is no cure and no challenge, and a refutation is a dispute of the guarantor's lock, paid in cash (the cover), not a restored part";
+    let what = if w.w.kind == KIND_CLOSE { "a guarantor may settle this close at once" } else { "a guarantor may settle this liquidation once the cure grace has passed" };
+    match now {
+        Some(n) if n >= from => format!("FAST SETTLEMENT: {what}: possible NOW (from DAA {from}); {after}"),
+        Some(n) => format!("FAST SETTLEMENT: {what}: from DAA {from}, {} from now (DAA {n}); {after}", daa_secs(from - n)),
+        None => format!("FAST SETTLEMENT: {what}: from DAA {from} (give --daa or --node for the time left); {after}"),
+    }
+}
+
 /// The proposal's bond and the outputs a proposal writes, before signing.
 fn print_proposal(l: &LivePair, n: i64, kind: i64, side: i64, quote: i64, proposer: &[u8; 32]) {
     let po = kpf_protocol::pending::propose_out(&l.clocked(), l.value, n, kind, side, quote, *proposer, 0, 0);
     let w = &po.pending;
     println!(
-        "propose (DESIGN 4.5d): nothing settles now. {} tokens move into a pending part with a bond of {} KAS (refund {} KAS, funded by the executor); after {} DAA anyone may finalize it, and until then anyone may challenge it",
+        "propose (DESIGN 4.5d): nothing settles in this transaction. {} tokens move into a pending part with a bond of {} KAS (refund {} KAS, funded by the executor); after {} DAA anyone may finalize it, and until then anyone may challenge it",
         fmt_units(n as i128, l.p.m.scale as i128),
         kas(w.bond),
         kas(w.refund),
         l.p.m.challenge_daa
+    );
+    // Review 5 F3: the proposal can also be fast-settled (DESIGN 4.5f).
+    println!(
+        "  it can also be fast-settled: a guarantor may settle it {} by locking lambda x the cover (and the offer), as finalize would; from then on there is no challenge{}, and a refutation within the dispute window pays the wronged party the cover from the lock",
+        if kind == KIND_CLOSE { "as soon as the pending part is accepted".to_string() } else { format!("once the pending part is {} DAA old (the cure grace)", l.p.m.grace_daa) },
+        if kind == KIND_CLOSE { "" } else { " and no cure" }
     );
     if let Some(b) = w.contradiction_bound() {
         println!(
@@ -411,6 +435,7 @@ pub fn challenge_cmd(a: &Args) -> R<()> {
         println!("pending part {i}: {}; its proposal's clock P is DAA {}: counter-evidence counts only for its rest from then on", describe_claim(w), w.daa);
         print_report_k(&check_counter_evidence_on(&eu.order, &m, Some(w.daa as i64), now), &m, now, m.kc_bps);
         println!("  {}", finalize_words(w, now));
+        println!("  {}", guarantee_words(w, now));
     }
     let fk = funder_and_keys(a, true)?.expect("funder");
     let bonds: i64 = ws.iter().map(|w| w.w.bond).sum();
@@ -445,6 +470,7 @@ pub fn cure_cmd(a: &Args) -> R<()> {
     let now = now_daa(a, &mut node)?;
     let loser = if w.w.side == LONG { w.w.long_key } else { w.w.short_key };
     println!("pending part: {}; {}", describe_claim(&w), finalize_words(&w, now));
+    println!("  {}", guarantee_words(&w, now));
     if w.w.kind == KIND_LIQ && w.w.can_cure() {
         println!(
             "cure: the {} (key {}, --key) moves its bound to {} KAS (no quote within the margin g of the claim reopens it); the funder pays {} KAS in all besides the network fee ({} KAS of margin, and any part of the cured pair's floor the pending part does not hold, such as its carrier when the part is smaller than the pair); the proposer is repaid its refund {} KAS",
@@ -632,6 +658,9 @@ pub fn watch_cmd(a: &Args) -> R<()> {
             if a.has("json") {
                 entry["pending"].as_array_mut().expect("array").push(json!({
                     "file": wf, "claim": describe_claim(&lw), "threatenedSide": side_word(threatened), "proposalDaa": lw.daa,
+                    "guaranteeFrom": lw.guarantee_from(),
+                    "guaranteeInDaa": lw.guarantee_from().and_then(|g| now.map(|n| g.saturating_sub(n))),
+                    "cureUntilGuaranteeable": lw.w.can_cure().then(|| lw.guarantee_from()).flatten(),
                     "finalizeFrom": lw.finalize_from(),
                     "finalizeInDaa": now.map(|n| lw.finalize_from().saturating_sub(n)),
                     "finalizeInSeconds": now.map(|n| lw.finalize_from().saturating_sub(n) as f64 / DAA_PER_SEC as f64),
@@ -643,7 +672,24 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 continue;
             }
             println!("  PENDING {wf}: {}; it threatens the {}", describe_claim(&lw), side_word(threatened));
-            println!("    {}", finalize_words(&lw, now));
+            // Review 5 F3 (DESIGN 4.5g): the fast-path deadline first, then the cure (the threatened side's own move,
+            // which needs no counter order), then the slow path.
+            println!("    {}", guarantee_words(&lw, now));
+            if lw.w.can_cure() {
+                let lk = if lw.w.side == LONG { "LONG-KEY.json" } else { "SHORT-KEY.json" };
+                let by = match lw.guarantee_from() {
+                    Some(g) => format!(" before DAA {g} (after it a guarantor can settle the claim and the cure is gone)"),
+                    None => " before a finalize lands".to_string(),
+                };
+                println!(
+                    "    CURE{by}: the {} cures it, its funder paying {} KAS in all ({} KAS of margin; bound to {} KAS): kpf cure --pending {wf} --pair {pf} --key {lk} --funder {funder}{node_flag} --submit",
+                    side_word(lw.w.side),
+                    kas(lw.w.cure_total(lw.value)),
+                    kas(lw.w.cure_add()),
+                    kas(lw.w.cure_bound)
+                );
+            }
+            println!("    slow path: {}", finalize_words(&lw, now));
             match bound {
                 Some(b) => println!(
                     "    refuted by a {} {} {} KAS resting {} from DAA {} (the proposal's clock) and fillable {} after; the challenger receives the bond {} KAS",
@@ -686,16 +732,6 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                     };
                     println!("    {of}: does not refute it: {why}");
                 }
-            }
-            if lw.w.can_cure() {
-                let lk = if lw.w.side == LONG { "LONG-KEY.json" } else { "SHORT-KEY.json" };
-                println!(
-                    "    or the {} cures it, its funder paying {} KAS in all ({} KAS of margin; bound to {} KAS): kpf cure --pending {wf} --pair {pf} --key {lk} --funder {funder}{node_flag} --submit",
-                    side_word(lw.w.side),
-                    kas(lw.w.cure_total(lw.value)),
-                    kas(lw.w.cure_add()),
-                    kas(lw.w.cure_bound)
-                );
             }
             println!("    after the window anyone may end it: kpf finalize --pending {wf} --funder {funder}{node_flag} --submit");
         }
@@ -887,15 +923,27 @@ fn load_locks(a: &Args, node: &mut Option<Node<WsTransport>>, net: Network) -> R
 
 /// The time left in a lock's window, in words.
 fn lock_words(l: &LiveLock, now: Option<u64>) -> String {
+    // Review 5, wording note 1: the deadline to act is the last DAA a new counter order can be placed (it must still rest
+    // R), not the rest end itself; an order already resting counts if its own rest ends by the rest deadline.
     let deadline = l.rest_deadline();
+    let place = l.order_deadline();
     let release = l.release_from();
+    let r = l.l.m.min_rest_daa;
     match now {
         Some(n) if n >= release => format!(
             "the window is over: a release is valid now (from DAA {release}); a dispute with counter-evidence that had rested by DAA {deadline} is still valid until a release lands"
         ),
         Some(n) if (n as i64) > deadline => format!("counter-evidence must have rested by DAA {deadline} (passed); release from DAA {release}, {} from now", daa_secs(release - n)),
-        Some(n) => format!("disputable with counter-evidence resting by DAA {deadline} ({} from now); release from DAA {release}", daa_secs((deadline - n as i64).max(0) as u64)),
-        None => format!("disputable with counter-evidence resting by DAA {deadline}; release from DAA {release} (give --daa or --node for the time left)"),
+        Some(n) if (n as i64) > place => format!(
+            "too late to place a new counter order (it must rest {r} DAA and be done by DAA {deadline}); only an order already resting that is done by DAA {deadline} disputes it; release from DAA {release}"
+        ),
+        Some(n) => format!(
+            "disputable: a new counter order must be placed by DAA {place} ({} from now) to finish its {r} DAA rest by DAA {deadline}; an order already resting counts if its rest ends by then; release from DAA {release}",
+            daa_secs((place - n as i64).max(0) as u64)
+        ),
+        None => format!(
+            "disputable: a new counter order must be placed by DAA {place} (its {r} DAA rest done by DAA {deadline}); release from DAA {release} (give --daa or --node for the time left)"
+        ),
     }
 }
 
@@ -934,7 +982,7 @@ pub fn guarantee_cmd(a: &Args) -> R<()> {
     }
     match w.w.contradiction_bound() {
         Some(b) => println!(
-            "  RISK: if a {} {} {} KAS rests {} DAA from P and finishes resting within the window, anyone disputes the lock: the wronged party is paid up to the cover from it, the disputer keeps (lambda - 1) x cover, the rest is burned. Do not guarantee on a book with nobody to arbitrage an order at that bound within the rest: there the deserving loser can place it itself.",
+            "  RISK: if a {} {} {} KAS rests {} DAA from P and finishes resting within the window, anyone disputes the lock: the wronged party is paid the whole cover from it, the disputer keeps (lambda - 1) x cover, the rest is burned; you lose the whole lock. Do not guarantee on a book with nobody to arbitrage an order at that bound within the rest: there the party the claim settles against can place and fill that order itself and take the cover and the reward, the whole lock less the offer.",
             if w.w.counter_is_ask() { "ask" } else { "bid" },
             if w.w.counter_is_ask() { "<=" } else { ">=" },
             kas(b),
@@ -979,12 +1027,12 @@ pub fn dispute_cmd(a: &Args) -> R<()> {
         println!("lock {f}: {} KAS of the guarantor {}; {}", kas(l.value as i64), to_hex(&l.l.owner), lock_words(l, now));
         print_report_k(&check_counter_evidence_on(&eu.order, &m, Some(l.l.clock), now), &m, now, m.kc_bps);
         println!(
-            "  at the counter quote {} KAS the wronged party {} is paid {} KAS; the executor keeps the reward {} KAS; {} KAS are burned",
-            kas(quote),
+            "  the wronged party {} is paid the whole cover {} KAS (whatever the counter quote; this one is {} KAS); the executor keeps the reward {} KAS; {} KAS are burned",
             to_hex(&l.l.victim),
-            kas(l.l.victim_pay(quote)),
+            kas(l.l.victim_pay()),
+            kas(quote),
             kas(l.l.reward()),
-            kas(l.l.burn(l.value, quote))
+            kas(l.l.burn(l.value))
         );
     }
     let fk = funder_and_keys(a, true)?.expect("funder");
@@ -1095,7 +1143,9 @@ fn watch_locks(
                 "disputableForDaa": now.map(|n| (ll.rest_deadline() - n as i64).max(0)),
                 "disputeBound": ll.l.contradiction_bound(), "counterKind": if ll.l.counter_is_ask() { "ask" } else { "bid" },
                 "counterFillNeeded": need,
-                "disputingOrders": hits.iter().filter(|h| h.1).map(|h| json!({"order": h.0, "restitution": ll.l.victim_pay(h.3), "restEnd": h.4})).collect::<Vec<_>>(),
+                "restitution": ll.l.victim_pay(),
+                "orderDeadline": ll.order_deadline(),
+                "disputingOrders": hits.iter().filter(|h| h.1).map(|h| json!({"order": h.0, "restitution": ll.l.victim_pay(), "restEnd": h.4})).collect::<Vec<_>>(),
             }));
             continue;
         }
@@ -1107,7 +1157,7 @@ fn watch_locks(
         );
         if let Some(b) = ll.l.contradiction_bound() {
             println!(
-                "    disputed by a {} {} {} KAS resting {} from DAA {} (the claim's clock), fillable {} after, done resting by DAA {}; the {victim_side} is then paid what its side was worth at that quote",
+                "    disputed by a {} {} {} KAS resting {} from DAA {} (the claim's clock), fillable {} after, done resting by DAA {}; the {victim_side} is then paid the whole cover, whichever such order is used and whoever disputes",
                 if ll.l.counter_is_ask() { "ask" } else { "bid" },
                 if ll.l.counter_is_ask() { "<=" } else { ">=" },
                 kas(b),
@@ -1123,7 +1173,7 @@ fn watch_locks(
         for (of, ok, why, q, _) in &hits {
             if *ok {
                 let seller = if ll.l.counter_is_ask() { String::new() } else { format!(" --seller {}", a.get("seller").unwrap_or("YOUR-TOKENS.json")) };
-                println!("    DISPUTES IT: {of} (the {victim_side} would receive {} KAS). Run:", kas(ll.l.victim_pay(*q)));
+                println!("    DISPUTES IT: {of} at {} KAS (the {victim_side} would receive the cover, {} KAS). Run:", kas(*q), kas(ll.l.victim_pay()));
                 println!("      kpf dispute --lock {lf} --evidence {of}{seller} --funder {funder}{node_flag} --submit");
             } else {
                 println!("    {of}: does not dispute it: {why}");

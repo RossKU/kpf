@@ -160,3 +160,82 @@ proposal can be fast-settled.
 `KpfOpen` beyond the `checkMarket` diff; the compiled `KpfLock` artifact against its source beyond the pinned-artifact
 and layout tests; the X6 random walk's new guarantee branch; relay and mempool policy; the `release` command beyond a
 read of its code.
+
+## Status after fixes
+
+The decisions are DESIGN 4.5g. The workspace passes (`CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2`). The pinned
+artifacts were regenerated (`cargo run -p kpf-artifacts -- write`: `KpfLock`, `KpfOpen`, `KpfPending` and so `KpfPair`
+changed), and so were the golden vectors of `kpf-protocol/tests/golden.rs` and `evidence.rs` (`KPF_GOLDEN=print`).
+
+| # | Status | Test |
+|---|---|---|
+| R5-F1 | Fixed | `audit5_tests::holds_the_restitution_is_the_cover_whoever_disputes_with_whichever_order`, `holds_the_restitution_never_falls_below_what_the_claim_took_at_any_price`, X6 `x6_guarantee_random_walk` |
+| R5-F2 | Fixed | `audit5_tests::holds_a_look_alike_part_with_an_out_of_range_market_cannot_be_guaranteed`, `holds_the_market_check_is_one_text_in_kpf_open_and_kpf_pending`, `holds_kpf_open_kpf_pending_and_the_library_accept_the_same_market_blocks`, `audit5_cli::holds_guarantee_refuses_a_look_alike_part_before_it_says_anything_about_disputes` |
+| R5-F3 | Fixed | `audit5_cli::holds_watch_shows_the_fast_path_first_and_the_cure_before_the_grace_ends` |
+| Note 1 | Fixed | the same CLI test (the lock headline gives the last DAA to place a new counter order) |
+| Note 2 | Documented | `KpfPending.guarantee` comment, THREAT_MODEL K: no script can check an x-only key; the library refuses one |
+
+**R5-F1.** `KpfLock.dispute` pays `H = cover` (0.02 KAS when the cover is positive and below dust) on every
+successful dispute; the counter quote decides only whether the dispute is valid. What this means per claim:
+- *Close* (a whole or a partial part): the cover is what the closer is paid beyond its refund (the whole part less the
+  refund when the other party's payout falls below dust). The wronged party is the other party; its key is the
+  pending part's, written into the lock by `KpfPending.guarantee`, and the lock pays it at the lock's own output index.
+  It ends with what the settlement paid it plus the cover: its whole side of the part (3,000.2 KAS on the worked
+  example), at least its payout at any price.
+- *Liquidation* (whole or partial): the cover is the part's own range `q(n, bs - bl)` for the pending part's `n` (1,500
+  KAS for 500 tokens, not the pair's 3,000). The wronged party is the loser; it receives the whole range, at least its
+  side's value at any price.
+- The disputer's reward is unchanged, `floor((λ - 1) x cover)`. The burn is the lock less the cover and the reward: the
+  offer and the rounding of `λ` (none without an offer). Below 0.02 KAS no burn output is created (the executor keeps
+  it). The lock (at least `ceil(λ x cover) + offer` and 0.1 KAS) always covers the restitution and the reward
+  (`holds_the_lock_always_holds_the_cover_and_the_reward`); the network fee comes from the executor's input.
+- The X6 walk now picks the disputer among a third party, the victim, the guarantor, both sides and the proposer, and
+  checks that the restitution output is the cover whoever disputes and that the wronged party ends with at least its
+  side of the claimed part at every grid price. The unproven "griefing by the burn on a close with a dust victim" is
+  void: nothing of the victim's is burned. The relay copier of a dispute can take only the reward.
+
+**R5-F2.** `KpfOpen.checkMarket` is now the market bounds only (plus the sign of the token template cut, which
+`Market::validate` already checked), and `checkOrder` adds the order's own; `KpfPending.checkMarket` is the same text
+(between `BEGIN market bounds` and `END market bounds`, with the same constants) and `guarantee` calls it in place of
+its `λ` and `D` checks. `check_pending` calls `Market::validate`, so `guarantee`, `challenge`, `cure`, `finalize`,
+`watch` and `evidence --pending` refuse a look-alike part before anything is said about what refutes or disputes it;
+`inspect` and `quote` warn.
+
+**R5-F3.** `watch` prints, for every pending part, the first DAA a guarantor can settle it (at once for a close, after
+`G` for a liquidation, or that it never can) before the slow-path line, and for a liquidation the cure first, with that
+DAA as its deadline; the JSON has `guaranteeFrom`, `guaranteeInDaa` and `cureUntilGuaranteeable`. `propose-close`,
+`propose-liquidate`, `challenge` and `cure` say that the claim can be fast-settled.
+
+**Existing tests changed** (the rule changed, not the property): `kpf_guarantee_tests` (the victim is paid the cover;
+no burn without an offer; the self-disputing guarantor loses exactly the cover), `guarantee_attack_tests` (the thin-book
+exploit's numbers and comment; two burn-layout tests now use a lock with an offer, since without one nothing burns; the
+self-dispute bound at every market price), `kpf-protocol/tests/evidence.rs` and `kpf-cli/tests/lifecycle.rs` (3,000 KAS
+instead of 800 KAS at the bid of 9.80), the golden vectors.
+
+**Attacks on the fix** (`audit5_tests`, worked example; `λ` 1.1, no offer).
+- One attacker with two keys plays proposer, both sides and disputer against an honest guarantor, on a thin book:
+  `exploit_a_two_key_attacker_on_a_thin_book_takes_an_honest_guarantors_whole_lock`. The guarantor loses its lock,
+  3,300 KAS for a liquidation, 1,650 KAS for a close at 10.5, now all of it to the attacker (963.16 and 360 KAS before;
+  the guarantor's loss is unchanged). Same exposure as the thin-book exploit, whose gain also grows from 963.16 to 3,300
+  KAS. Accepted (DESIGN 4.5g "known cost").
+- A truthful claim on a book that is not thin: `holds_a_truthful_claim_on_a_book_that_refills_mispriced_orders_has_no_dispute`.
+  Orders at the market or one tick short of the bound are refused; an order at the bound is mispriced by `g`, and a
+  fill by anyone re-creates it and restarts its rest. The claim is at risk only if the market itself passes the bound
+  within `[P, F + D - R]`; the guarantor then loses its whole lock, as before the fix. What changed is who gets it: the
+  wronged party receives the cover (it gains up to the cover over its side's value: 1,500 KAS on the close) instead of
+  part of it being burned. A party that can hold the market past the bound for `R` now earns `λ x cover` for it instead
+  of its side's value at the bound plus `R`.
+- A cover larger than the lock: impossible (`holds_the_lock_always_holds_the_cover_and_the_reward`, covers from 1 sompi to
+  the KAS supply, `λ` 1 to 3, any offer; the smallest disputable close, 1 token at 9.19 KAS, in the engine).
+- A partial liquidation priced on the wrong size: refused (`holds_a_partial_liquidations_cover_is_its_own_parts_range`).
+- The victim as disputer: it collects the cover and the reward, exactly what a third party would have kept; the
+  guarantor's loss is the same (`holds_a_victim_that_disputes_its_own_lock_gains_only_the_reward_any_disputer_gets`).
+- A key changed between proposal and dispute: the pending part has no entry that rewrites a key, the lock copies it, and
+  a sale of the rest of the pair does not move the payment
+  (`holds_the_cover_goes_to_the_key_that_held_the_claimed_part_after_a_sale_of_the_rest`).
+
+**Sizes and costs** (`kpf_metrics_tests`): script bytes `KpfOpen` 3,231 → 3,255, `KpfPending` 4,338 → 4,612, `KpfLock`
+2,559 → 2,299; guarantee 52,389-52,558 → 52,040-52,209 units per input, dispute 24,564-24,628 → 23,737-23,855 (ask) and
+54,677-54,747 → 53,853-53,973 (bid), release 5,371 → 4,851; a propose liquidation transaction 21,599 → 21,873 bytes
+(fee 4,319,800 → 4,374,600 sompi), a guarantee 6,952 → 6,966 bytes, a dispute 8,000 → 7,687 bytes, 8 proposals on one
+print 197,116 compute mass and 138,206 bytes (DESIGN 4.5f table updated).

@@ -419,9 +419,9 @@ pub fn blk_draft_at(members: &[Member], ev_at: usize, e: &Evidence, f: &Keypair,
             }
             Member::L(l, q) => {
                 ins.push(lock_input(l, "dispute", challenge_args(l.l.n, *q, ev as i64, tk_arg)));
-                let pay = l.l.victim_pay(p);
+                let pay = l.l.victim_pay();
                 pos.push(if pay > 0 { out(pay as u64, p2pk_x(&l.l.victim), None) } else { out(1_000_000, p2pk_spk(f), None) });
-                let burn = l.l.burn(l.value, p);
+                let burn = l.l.burn(l.value);
                 if burn > 0 {
                     while tail.len() <= i {
                         tail.push(None);

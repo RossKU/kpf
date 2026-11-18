@@ -363,6 +363,9 @@ pub fn inspect(a: &Args) -> R<()> {
             let claim = if w.kind == KIND_CLOSE { format!("the {side} closes at {} KAS", fmt_kas(w.quote as i128)) } else { format!("the {side} is liquidatable (evidence quote {} KAS)", fmt_kas(w.quote as i128)) };
             println!("PENDING claim (DESIGN 4.5d): {claim} on {} tokens of the range {} .. {} KAS", fmt_units(w.n as i128, sc as i128), fmt_kas(w.bl as i128), fmt_kas(w.bs as i128));
             println!("bond {} KAS, refund {} KAS, fee {} KAS, proposer {}", fmt_kas(w.bond as i128), fmt_kas(w.refund as i128), fmt_kas(w.fee as i128), to_hex(&w.proposer_key));
+            if let Err(e) = w.m.validate() {
+                println!("WARNING: the market block fails the bounds every order checks ({e}): no real pair has it (a look-alike); nothing below about what refutes it can be trusted, and no guarantee of it is possible");
+            }
             match w.contradiction_bound() {
                 Some(b) => println!("refuted by a fresh {} {} {} KAS (margin g {} bps) resting {} DAA from this UTXO's DAA and fillable {} DAA more", if w.counter_is_ask() { "ask" } else { "bid" }, if w.counter_is_ask() { "<=" } else { ">=" }, fmt_kas(b as i128), w.m.g_bps, w.m.min_rest_daa, w.m.min_evidence_life),
                 None => println!("no quote in 0..=priceMax refutes it"),
@@ -384,6 +387,9 @@ pub fn inspect(a: &Args) -> R<()> {
             let claim = if l.kind == KIND_CLOSE { format!("the {side} closed at {} KAS", fmt_kas(l.quote as i128)) } else { format!("the {side} was liquidated (evidence quote {} KAS)", fmt_kas(l.quote as i128)) };
             println!("LOCK of a guaranteed fast settlement (DESIGN 4.5f): {claim} on {} tokens of the range {} .. {} KAS", fmt_units(l.n as i128, sc as i128), fmt_kas(l.bl as i128), fmt_kas(l.bs as i128));
             println!("guarantor {}   wronged party if refuted {}   cover {} KAS   claim id {}   clock P {}", to_hex(&l.owner), to_hex(&l.victim), fmt_kas(l.cover as i128), short_hash(&l.claim_id), l.clock);
+            if let Err(e) = l.m.validate() {
+                println!("WARNING: the market block fails the bounds every order checks ({e}): no guarantee wrote this lock (a look-alike)");
+            }
             match l.contradiction_bound() {
                 Some(b) => println!("disputed by a fresh {} {} {} KAS resting {} DAA from P and done resting by F + {} DAA", if l.counter_is_ask() { "ask" } else { "bid" }, if l.counter_is_ask() { "<=" } else { ">=" }, fmt_kas(b as i128), l.m.min_rest_daa, l.m.dispute_daa - l.m.min_rest_daa),
                 None => println!("no quote in 0..=priceMax disputes it"),
@@ -498,6 +504,9 @@ pub fn quote(a: &Args) -> R<()> {
     let t_short = trigger_of(&p, SHORT);
     let a_max = (p.bl as i128 * 10_000 - 1) / (10_000 - p.m.mmr_bps as i128);
     let b_min = (p.bs as i128 * 10_000) / (10_000 + p.m.mmr_bps as i128) + 1;
+    if let Err(e) = p.m.validate() {
+        eprintln!("WARNING: the market block fails the bounds every order checks ({e}): no real pair has it (a look-alike); its refutation and guarantee figures below cannot be trusted");
+    }
     let rows = quote_table(&part, &prices);
     let (liq_long, liq_short) = (liq_info(&p, &part, n, LONG), liq_info(&p, &part, n, SHORT));
     // Two-step evidence (DESIGN 4.5d): what a claim on this part costs and what refutes it.
@@ -620,7 +629,7 @@ pub fn quote(a: &Args) -> R<()> {
         fmt_kas(lock_for(close_short_cover) as i128)
     );
     println!(
-        "  the guarantor earns the proposer's offer (0 to {} KAS, set at the proposal, returned with the lock after the window) and risks the whole lock: if the book refutes the claim within the window, the wronged party is paid from it, a disputer keeps (lambda - 1) x cover ({} KAS for the liquidation) and the rest is burned",
+        "  the guarantor earns the proposer's offer (0 to {} KAS, set at the proposal, returned with the lock after the window) and risks the whole lock: if the book refutes the claim within the window, the wronged party is paid the whole cover from it, a disputer keeps (lambda - 1) x cover ({} KAS for the liquidation) and the rest (the offer and rounding) is burned",
         fmt_kas(max_offer as i128),
         fmt_kas(reward_for(liq_cover) as i128)
     );

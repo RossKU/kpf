@@ -364,8 +364,8 @@ it: `kpf guarantee` spends the pending part and creates a `KpfLock` output holdi
 market) times the **cover** (the value the settlement moves away from the party it could wrong: the part's range for a
 liquidation, the closer's payoff for a close) plus the proposer's **offer**. For `D` (`disputeDaa`, 650 DAA, 65 seconds)
 after the guarantee anyone may **dispute** the lock with exactly the counter order a challenge would have needed
-(resting `minRestDaa` from the claim's DAA `P`, done resting within the window); the wronged party is then paid what its
-side was worth at the counter quote from the lock, the disputer keeps `(λ - 1)` times the cover, and the rest is burned.
+(resting `minRestDaa` from the claim's DAA `P`, done resting within the window); the wronged party is then paid the whole
+cover from the lock (whoever disputes, on whichever valid order), the disputer keeps `(λ - 1)` times the cover, and the rest (the offer) is burned.
 After `D` anyone **releases** the lock to its owner. A liquidation can be guaranteed only once its pending part is
 `graceDaa` (100 DAA, 10 seconds) old, so the loser can still cure. Nothing of this has been run on a network.
 
@@ -377,8 +377,8 @@ What each party sees:
   disputes; loses all of it if the book refutes the claim. It should guarantee only where a mispriced order at the
   refutation bound would be arbitraged within `minRestDaa`: on a book without arbitrage the deserving loser can place
   that order itself and take the lock (DESIGN 4.5f, residual risk 1).
-- **Wronged party** (the loser of a liquidation, the other party of a close). Paid in cash, its side's value at the
-  refuting quote, from the lock; it does not get its position back. It must dispute (or a watcher must) within `D`.
+- **Wronged party** (the loser of a liquidation, the other party of a close). Paid in cash, the whole cover (at least
+  its side's value at any price), from the lock; it does not get its position back. It must dispute (or a watcher must) within `D`; `kpf watch` shows, for a pending claim, from which DAA a guarantor can settle it (after that there is no cure), before the slow-path deadline.
 - **Winner.** Holds the forfeited part at once and may close or sell it while the lock is disputable; a later dispute
   never touches the part.
 
@@ -392,8 +392,8 @@ On the market of 7.1 (with the parameters of 7.1, item 2) and the pair of sectio
 | 30 | a stale liquidation proposed with an offer: `kpf propose-liquidate --pair P.json --evidence ask.json --offer 1 $F $S --out-dir out/30` | the pending part as in 7.3 step 23, with `offer` 1 KAS in its state (`kpf inspect`) |
 | 31 | within 100 DAA: `kpf guarantee --pending out/30/*-pending.json $G --node $NODE --submit` | refused: `a liquidation can be guaranteed only once its pending part is 100 DAA old (the loser's cure grace)` |
 | 32 | after it: `kpf guarantee --pending out/30/*-pending.json --pair P.json $G $S --out-dir out/32` | the proposer receives 5.47 - 1 = 4.47 KAS at once; the short holds the forfeited part; a lock of 33 + 1 = 34 KAS (the 10-token pair's range 30 KAS times 1.1, plus the offer); `kpf inspect out/32/*-lock.json` prints the dispute bound (`>= 9.66315790` KAS) and the DAA from which it can be released |
-| 33 | `kpf watch --pair P.json --scan out/32 --order bid.json --node $NODE` | `FAST-SETTLED ... against the long`, the DAA by which counter-evidence must have rested and the release DAA with the time left, and for each given order `DISPUTES IT` with the exact `kpf dispute` command and the restitution, or why not |
-| 34a | refute it (a bid of 9.80 placed after the claim, rested): `kpf dispute --lock out/32/*-lock.json --evidence bid.json --seller seller.json $F $S --out-dir out/34` | the long is paid `q(10, 9.80 - 9)` = 8 KAS from the lock; the funder keeps 3 KAS; 23 KAS are burned (a P2SH of `OP_RETURN`) |
+| 33 | `kpf watch --pair P.json --scan out/32 --order bid.json --node $NODE` | `FAST-SETTLED ... against the long`, the last DAA a new counter order can be placed (and the DAA by which it must have rested) and the release DAA with the time left, and for each given order `DISPUTES IT` with the exact `kpf dispute` command and the restitution, or why not |
+| 34a | refute it (a bid of 9.80 placed after the claim, rested): `kpf dispute --lock out/32/*-lock.json --evidence bid.json --seller seller.json $F $S --out-dir out/34` | the long is paid the cover, 30 KAS, from the lock (its side at 9.80 was worth `q(10, 9.80 - 9)` = 8 KAS); the funder keeps 3 KAS; the offer, 1 KAS, is burned (a P2SH of `OP_RETURN`) |
 | 34b | or nobody disputes: after 650 DAA `kpf release --lock out/32/*-lock.json $G $S --out-dir out/34` | the guarantor receives the 34 KAS lock; before 650 DAA the command says `can be released only from DAA N` |
 | 35 | a close guaranteed at once: `kpf propose-close --pair P.json --side short --n 4 --evidence ask.json --key $B $F $S --out-dir out/35`, then `kpf guarantee --pending out/35/*-pending.json $G $S` | the short is paid at once what 7.3 step 21 pays after the window; the lock holds 1.1 times the short's payoff |
 

@@ -67,6 +67,18 @@ fn guaranteed_liq(tag: u8) -> (LivePend, Draft, Transaction, LiveLk) {
     (w, d, tx, lock)
 }
 
+/// As [`guaranteed_liq`], the proposer having set an offer of 10 KAS: since DESIGN 4.5g (the whole cover to the wronged
+/// party) the offer is what a dispute burns, so these locks have a burn output.
+fn guaranteed_liq_with_offer(tag: u8) -> (LivePend, Draft, Transaction, LiveLk) {
+    let mut w = pend(&liq(&lv(tag), FULL, LONG), LIQ_ASK);
+    w.w.offer = 1_000_000_000;
+    let d = guarantee_draft(&w, &gk(), &fk(), 5);
+    let tx = accept(&d);
+    let lock = live_locks(&tx, &d).remove(0).at(w.daa + grace());
+    assert_eq!(lock.l.burn(lock.value), 1_000_000_000, "the offer burns");
+    (w, d, tx, lock)
+}
+
 fn dispute(ls: &[LiveLk], e: &Evidence) -> Draft {
     let mut d = dp_draft(ls, e, &fk(), 6);
     d.lock = d.lock.max(ls.iter().map(|l| l.daa).max().unwrap_or(0));
@@ -109,7 +121,7 @@ fn holds_a_look_alike_lock_settles_nothing_and_pays_only_its_own() {
 /// block counts each lock's n, so one print of n refutes only one of them.
 #[test]
 fn holds_two_locks_never_share_a_payout_or_a_burn() {
-    let (_, _, _, a) = guaranteed_liq(0x53);
+    let (_, _, _, a) = guaranteed_liq_with_offer(0x53);
     let b = LiveLk { op: outpoint(0xa2), ..a.clone() };
     let c = bid(1_000_000_000, 2 * FULL);
     let d = dispute(&[a.clone(), b.clone()], &c);
@@ -150,7 +162,7 @@ fn holds_a_lock_under_any_covenant_id_is_only_a_lock() {
 /// script or at another slot, are refused.
 #[test]
 fn holds_a_dispute_pays_the_victim_and_the_burn_and_nobody_else() {
-    let (_, _, _, lock) = guaranteed_liq(0x55);
+    let (_, _, _, lock) = guaranteed_liq_with_offer(0x55);
     let d = dispute(&[lock.clone()], &bid(1_000_000_000, FULL));
     accept(&d);
     let mut x = d.clone();
@@ -168,7 +180,8 @@ fn holds_a_dispute_pays_the_victim_and_the_burn_and_nobody_else() {
 /// No value moves through the fee, the reward or the burn: the lock is exactly H + burn + reward, so the executor's
 /// change gains exactly the reward (it pays the network fee from its own input), and neither H nor the burn can be cut
 /// by one sompi. The proposer's offer cannot leave the lock either (a guarantee requires it inside, see
-/// `the_offer_is_paid_from_the_proposers_payout_into_the_lock`).
+/// `the_offer_is_paid_from_the_proposers_payout_into_the_lock`). Premise changed by review 5 (DESIGN 4.5g): H is the
+/// whole cover at every counter bid, so with no offer the lock is exactly H + R and nothing is burned.
 #[test]
 fn holds_no_value_moves_through_the_fee_the_reward_or_the_burn() {
     let (_, _, _, lock) = guaranteed_liq(0x56);
@@ -176,9 +189,10 @@ fn holds_no_value_moves_through_the_fee_the_reward_or_the_burn() {
         let d = dispute(&[lock.clone()], &bid(b, FULL));
         let (tx, e) = d.build();
         assert_accepted(&tx, &e);
-        let h = lock.l.restitution(b);
-        // At a counter bid of bs or more H is the whole cover and nothing is left to burn: no burn output.
-        let burn = lock.l.burn(lock.value, b);
+        let h = lock.l.restitution();
+        assert_eq!(h, lock.l.cover, "bid {b}: H is the whole cover");
+        // Without an offer the lock is exactly the cover and the reward: nothing is left to burn, no burn output.
+        let burn = lock.l.burn(lock.value);
         if burn > 0 {
             assert_eq!(tx.outputs.last().unwrap().value as i64, burn);
             assert_eq!(tx.outputs.last().unwrap().script_public_key, kpf_protocol::lock::burn_spk());
@@ -241,7 +255,8 @@ fn holds_the_victim_is_paid_in_full_after_the_forfeited_part_moved() {
     assert_eq!(live_pairs(&t3, &mc).len(), 1, "the forfeited part was split: 600 tokens remain");
     let dp = dispute(&[lock.clone()], &bid(1_000_000_000, FULL));
     let t4 = accept(&dp);
-    assert_eq!(t4.outputs[0].value as i64, q(FULL, 100_000_000, SCALE, 0), "the long is paid 1,000 KAS in full");
+    // DESIGN 4.5g: the whole cover (the part's range, 3,000 KAS), not its side's value at the counter bid of 10.
+    assert_eq!(t4.outputs[0].value as i64, q(FULL, 300_000_000, SCALE, 0), "the long is paid the cover, 3,000 KAS, in full");
     assert_eq!(t4.outputs[0].script_public_key, p2pk_x(&xonly(&lk())));
 }
 
@@ -250,10 +265,13 @@ fn holds_the_victim_is_paid_in_full_after_the_forfeited_part_moved() {
 /// The mirror of the accepted thin-book limit (DESIGN 4.5d residual risk 1, DESIGN-ORACLE attack 6). A liquidation is
 /// true (the market is at 9.30 KAS, below the long's trigger 9.4737) and guaranteed. On a book with nobody to sell into
 /// it, the deserving loser rests its own bid at the refutation bound 9.66315790 for k_c * n = 1,000 tokens, fills it
-/// with its own tokens (its KAS returns to itself) and disputes: it is paid H = 663.16 KAS as the victim and keeps the
-/// reward 300 KAS as the executor, 2,336.84 KAS burn, and the guarantor loses its whole lock of 3,300 KAS. On the slow
-/// path the same move wins only the bond (90 KAS). Exposure per guaranteed claim on a thin book: lambda x cover, i.e. the
-/// whole lock; a guarantor must not guarantee on a book without arbitrage within R of the refutation bound.
+/// with its own tokens (its KAS returns to itself) and disputes. Numbers changed by review 5 (DESIGN 4.5g, the whole
+/// cover to the wronged party): it is paid H = the cover, 3,000 KAS, as the victim and keeps the reward 300 KAS as the
+/// executor, nothing burns (no offer), and the guarantor loses its whole lock of 3,300 KAS (as before). The attacker's
+/// gain grew from 963.16 KAS (H at the bound + R) to 3,300 KAS, the whole lock less the offer, against a side worth
+/// 300 KAS at the true market; on the slow path the same move wins only the bond (90 KAS). Exposure per guaranteed claim
+/// on a thin book: lambda x cover, i.e. the whole lock; a guarantor must not guarantee on a book without arbitrage
+/// within R of the refutation bound.
 #[test]
 fn exploit_a_deserving_loser_on_a_thin_book_takes_the_guarantors_lock() {
     let w = pend(&liq(&lv(0x59), FULL, LONG), 930_000_000);
@@ -268,10 +286,13 @@ fn exploit_a_deserving_loser_on_a_thin_book_takes_the_guarantors_lock() {
     let dp = dispute(&[lock.clone()], &own);
     let t = accept(&dp);
     let h = t.outputs[0].value as i64;
-    assert_eq!(h, 66_315_790_000, "663.1579 KAS to the loser as the victim");
+    assert_eq!(h, 300_000_000_000, "the whole cover, 3,000 KAS, to the loser as the victim");
+    assert_eq!(t.outputs[0].script_public_key, p2pk_x(&xonly(&lk())));
     assert_eq!(lock.l.reward(), 30_000_000_000, "300 KAS reward to the loser as the executor");
-    assert_eq!(t.outputs.last().unwrap().value as i64, 330_000_000_000 - h - 30_000_000_000, "the rest burns");
+    assert!(t.outputs.iter().all(|o| o.script_public_key != kpf_protocol::lock::burn_spk()), "nothing is left to burn");
     assert_eq!(lock.value, 330_000_000_000, "the guarantor loses its whole 3,300 KAS lock");
+    assert_eq!(h + lock.l.reward(), lock.value as i64, "the attacker's gain is the whole lock (no offer)");
+    assert_eq!(q(FULL, 930_000_000 - 900_000_000, SCALE, 0), 30_000_000_000, "its side was worth 300 KAS at the true market");
 }
 
 // ================================================================ the one lock time
@@ -302,18 +323,21 @@ fn holds_one_lock_time_serves_every_lower_bound() {
 // ================================================================ self-disputes
 
 /// A liar that expects a dispute disputes itself first (DESIGN-ORACLE 1.7). With the burn, the coalition of proposer,
-/// winner and guarantor never ends ahead of not making the false claim: it keeps the loser's side (worth H at the
-/// counter quote) and the reward, and loses the lock. Net = H + R - lock <= H + R - (V + R) = H - V <= 0.
+/// winner and guarantor never ends ahead of not making the false claim: it keeps the loser's side (worth `taken_at(b)`
+/// at the true market b) and the reward, and loses the lock. Premise changed by review 5 (DESIGN 4.5g): the victim is
+/// paid the cover, not the side's value at the counter quote, so net = side + R - lock <= V + R - (V + R) = 0 at every
+/// market price, and the victim's payment does not depend on the coalition's choice of counter order.
 #[test]
 fn holds_a_self_dispute_never_profits_the_coalition() {
     for b in [REF_LIQ_LONG, 1_000_000_000, 1_100_000_000, 1_200_000_000, 1_500_000_000] {
         let (_, _, _, lock) = guaranteed_liq(0x5d);
         let d = dispute(&[lock.clone()], &bid(b, FULL));
         let tx = accept(&d);
-        let h = tx.outputs[0].value as i64;
-        let coalition = h + lock.l.reward() - lock.value as i64;
-        assert!(coalition <= 0, "bid {b}: coalition net {coalition}");
-        assert!(coalition <= h - lock.l.cover);
+        assert_eq!(tx.outputs[0].value as i64, lock.l.cover, "bid {b}: the victim is paid the cover");
+        for market in [0, 900_000_000, 940_000_000, 1_000_000_000, 1_200_000_000, 2_000_000_000] {
+            let coalition = lock.l.taken_at(market) + lock.l.reward() - lock.value as i64;
+            assert!(coalition <= 0, "bid {b}, market {market}: coalition net {coalition}");
+        }
     }
     let _ = Hash::default();
 }

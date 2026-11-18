@@ -391,9 +391,17 @@ pub fn check_claim(p: &Pair, n: i64, act: &Act, is_ask: bool, quote: i64, ev_nam
 /// restore, cure and forfeit hashes match the pair its own state describes, and it holds at least the part's range and
 /// the refund, `q(n, bs - bl) + refund`, which every genuine part holds (`KpfPair.propose`: `v + B` with `v >= q + C`
 /// when `n = s`, `q + C + B` with `refund = B + C` when `n < s`). A look-alike that fails either is refused: acting on it
-/// would make the user's funding pay what the part does not hold.
+/// would make the user's funding pay what the part does not hold. Its market block must also pass the bounds every order
+/// checks (`Market::validate` = `KpfOpen.checkMarket` = `KpfPending.checkMarket`; review 5 F2, DESIGN 4.5g): a genuine
+/// part's market is its pair's, which an order checked, and on a look-alike with impossible parameters (a negative
+/// mmrBps, a gBps above 10^4) every statement about what refutes or disputes the claim would be wrong.
 pub fn check_pending(lw: &LivePending) -> Result<()> {
     let w = &lw.w;
+    if let Err(e) = w.m.validate() {
+        return invalid(format!(
+            "the pending part's market block fails the bounds every order checks ({e}): no real pair has it, so it is a look-alike, and what refutes or disputes its claim cannot be judged"
+        ));
+    }
     if !w.hashes_match() {
         return invalid(
             "the pending part's restore, cure or forfeit hash does not match the pair its own state describes: it was not proposed by the pinned KpfPair",
@@ -658,13 +666,13 @@ fn evidence_tx_inner(members: &[Member], eu: &EvidenceUse, funding: &Funding, op
                 // DESIGN 4.5f: the victim at this member's own index, the burn at the reverse slot M - 1 - j, the reward
                 // (what no output must hold) in the executor's change.
                 member_ins.push((j, dispute_args(l.l.n, 0, ev_i, tk_arg), format!("lock {j} (dispute)")));
-                let pay = l.l.victim_pay(quote);
+                let pay = l.l.victim_pay();
                 pos_members.push(if pay > 0 {
                     plain(pay as u64, &l.l.victim, format!("lock {j}: restitution to the wronged party"))
                 } else {
                     filler(&exec, "a dispute with no restitution")
                 });
-                let burn = l.l.burn(l.value, quote);
+                let burn = l.l.burn(l.value);
                 if burn > 0 {
                     // A burn of a small lock is raised to the party floor (storage mass, KIP-9): the executor pays the difference.
                     set_tail(&mut tail, j, Pend { value: (burn as u64).max(PARTY_FLOOR), kind: Kind::Burn, label: format!("lock {j}: burned (the lock less the restitution and the reward)") });
@@ -981,8 +989,8 @@ pub fn guarantee(lw: &LivePending, owner: &[u8; 32], funding: &Funding, opts: &O
 }
 
 /// Dispute up to 8 locks (with pending parts to challenge and proposals in the same block, if wanted) on one
-/// counter-evidence fill (`KpfLock.dispute`, DESIGN 4.5f): each pays its wronged party the restitution at the counter
-/// quote, burns what is neither restitution nor reward, and leaves the reward to the executor (the disputer).
+/// counter-evidence fill (`KpfLock.dispute`, DESIGN 4.5f, 4.5g): each pays its wronged party the whole cover (whatever
+/// the counter quote), burns what is neither restitution nor reward, and leaves the reward to the executor (the disputer).
 pub fn dispute(locks: &[LiveLock], eu: &EvidenceUse, funding: &Funding, opts: &Opts) -> Result<Built> {
     let m: Vec<Member> = locks.iter().map(|l| Member::Dispute(l.clone())).collect();
     evidence_tx(&m, eu, funding, opts)

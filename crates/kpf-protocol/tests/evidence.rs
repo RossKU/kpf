@@ -712,21 +712,21 @@ fn what_the_evidence_lets_a_pair_do() {
 /// (name, txid, sha256 of the RPC JSON) of each shape: fixed TEST-ONLY keys and fixed inputs give fixed transactions
 /// (signing is deterministic). `KPF_GOLDEN=print` shows the values after an intended change.
 const GOLDEN: &[(&str, &str, &str)] = &[
-    ("propose: the long closes 1,000 at a 10 KAS bid", "0881f391bfbf12ffed438584e3f29151193031977c25792acd9686a494b82e00", "004605d4431842b29616ed700e6dde8adb02646a31a12b6e61991e3e7174a804"),
-    ("finalize: the long's close", "3003da59a1c0217c509a4cb0286172585d114e3d7ec81909096dcc3f1922738c", "06f42c24d3053034cb7391759d5802bf25c379c0d661b582d06796c97e15ea29"),
-    ("propose: the short closes 400 at a 10.5 KAS ask", "331fa9ea5ee20077eaa64ab4b2385cc941ff7696764d3761cd655800470773fd", "0511a59374058c7e38de926e7ea67d8a5def9140d3bc52ba2f44d812c19f5584"),
-    ("propose: a long's liquidation at a 9.4 KAS ask", "93afb8709880492694a05f24257c5d5d8970c68837efaaf7d193987d106218ff", "5793d63005d285e27ed73cb5734d3f746a1257a52d3110119aa6c7df173803d2"),
-    ("cure: the long moves bl to 8.7514", "22d3248d5c4671351acb2361594a2eb48ad2c82500cd8bb9c453ecb2cca4af85", "d83e96187f0fffd4d2d652f3178854328255e39e54a46ec99c1ce6eca51dc5a9"),
-    ("challenge: a 9.80 KAS bid refutes it", "adeb7e7a3e9beee24ca4819f5885e8f10aaf006cbf45c0115fb662dd7c7a87d6", "80f31840a5eda7fbe4754126411f24e5686138c4dbf75b4c80f9dd894f507339"),
-    ("finalize: forfeit and keep", "226add649ef3b1b0773f67df90952c0025c65e19a4a18a9e4831efdaa4fcc8c5", "12528b08b2426b90f84f367f4032f869aa9b9ea62039b1d1b0cef5191fb3ea89"),
-    ("propose: a short's liquidation at an 11.5 KAS bid", "4e9f37fd9126341ea930b938642ce561b27325acdef81c4cba12bdc5459717d0", "47a8e2b67d7c2bca235bdc6df8830a1105bc9bf84d2c4af0630a49506aec9a89"),
-    ("propose: a block of 3 longs on one 9.4 KAS ask", "5f59f22fa2b84b3e121bd9c1e00e9f3ed359bace909e9e50a6569a7152a03a2c", "b7a68142d8453e1bc78be1142e210e6e27243698ac157fad4db8a55cd3f2561b"),
-    ("propose: a long's liquidation at 9.4 KAS with a 10 KAS offer", "622b4085722ce4be218e51acda0c80d3791c87809ddfecef7ef3d18008ff29da", "b57b20aa1a6dce5e77d0ae35e2e301be514e03369284f5a4bbc40a7ef5ec55a4"),
-    ("guarantee: the liquidation settles at once, lock 3,310 KAS", "bfaa02cc022f2140f56cf3d553098ae639bbb3203fa3bd48ddd514ca7ab70aef", "6114a82871eb52b30c6de3742834e8b628bc01b54fd796bf367ce161e4a4f61d"),
-    ("dispute: a 9.80 KAS bid refutes it, the long is paid 800 KAS", "57636aac738bd179bc4f1855c051d1793ea1b3c2609a5a21c0aef11507a8fecc", "61ad95e6e6ea7424c3ed6d860a96d548846e06fa26d125b97d47d2197b36c7d7"),
-    ("propose: the long closes 1,000 at a 10 KAS bid (to guarantee)", "0881f391bfbf12ffed438584e3f29151193031977c25792acd9686a494b82e00", "004605d4431842b29616ed700e6dde8adb02646a31a12b6e61991e3e7174a804"),
-    ("guarantee: the close settles at once", "d0db5a438d6f25e6962359039d5c622d256db431d6ad9caf7e7ccedd45f392ea", "b9be05a959dc367f1985a83f4e512cf50bb5cf8fd0be472383313c19e20d12f9"),
-    ("release: the lock returns to the guarantor", "79332f711649dfcef35b6d8a763c6a4f7fee9f3c94fb44bf131ba79a00b58acc", "8cd47ed45d9e53633f55c3974ee576eaa68dab69af2c36413eacc0656ac015c6"),
+    ("propose: the long closes 1,000 at a 10 KAS bid", "b4241b438bcac6e1b4f7447a47aa030416bdb0d823287b22651d7151839560f5", "a30f5809809f0c420313e579fefc1e86b283647ae972fdf00852943dc534216c"),
+    ("finalize: the long's close", "1549f395dfb3351d79d9767afa72eba4664e1866f26be1f4f301b4364d175b06", "6933c72d37b4b89c7b1f608c9de16630b1fed3aef17252edac114c592d1683ed"),
+    ("propose: the short closes 400 at a 10.5 KAS ask", "9c43e84389b5adfc63fa199fd70d9ae45a4152f5e358b4b319a9c40ea34aa0a9", "71534eab846f598a6003045ea2649eee6299a2c1efb1025499a7d13dba96f864"),
+    ("propose: a long's liquidation at a 9.4 KAS ask", "c98b46ab577b2e0e2d31ae71a82beb73ba6b98935cdb8a0e1488907c89e5e0a2", "4ddcb3c68011ed1709fd3548ca60b8789acec596fb72397566c8fa950b1bc13c"),
+    ("cure: the long moves bl to 8.7514", "cecdfc0713151b7809e4bcea7f3bdb04e6fcc32a1e0408d3d9d705a33d6388af", "b37281e3db5d213eb0c7fa4812ece9e8cdd6bcb740c3dc070ce3da952c727f3e"),
+    ("challenge: a 9.80 KAS bid refutes it", "105db2cc19a3def6bc6c0bddb20c91dec9704ccdb6ef5805809a93c7bc7249cb", "7c04c6ce1c7e404ab9ddb5128529c9ea5410cc11044d7b9e48440ae756db3228"),
+    ("finalize: forfeit and keep", "3d169df8e42a5466941e428a09c80bed877d755f5b34ae2505f7409d873fdb4b", "ce73ec3d3c4a9cdee94f12cae27c8d91aeafc6fd3359b642660358070a90f3d6"),
+    ("propose: a short's liquidation at an 11.5 KAS bid", "82bd332aa8779b499de7bf74053390a233418590de90cb4312121daa4c60d6ca", "ab13c5f47217becc168b0f014732b0eddc6e399de63bb62f297cbbbabc9489c8"),
+    ("propose: a block of 3 longs on one 9.4 KAS ask", "ae6fcd71e548efcd082f99326133b87fccdd6cbc34bebc53f4222e570406d9c8", "7a2dab475d8f84ae885fb180b6e338b95a52caf19f7e026e8e122b84473f4f0b"),
+    ("propose: a long's liquidation at 9.4 KAS with a 10 KAS offer", "577b510e8dec28da052205276c516d4cdbe09e19ff2ee5dda2a8b241ab060614", "33699e8f1fb7c3318e765b50aad5b8111e825788a7c080e0fc6fe146e74b64ba"),
+    ("guarantee: the liquidation settles at once, lock 3,310 KAS", "f4f3c2067d1aa6ca98cfc3c7e8b3674ad6606558fd11ff71d76112dcd0176633", "b93b7107b5226a3e377e3d1654bee95cc412e2763fdd4d908794eb5c39042454"),
+    ("dispute: a 9.80 KAS bid refutes it, the long is paid 800 KAS", "58b298fb30ea51b342384d7ba67e579e77288ffb124d79e77fb463896ea27802", "12fa33cb00de3158767f7bc737ccaa14ceb0159dbb0681a15106f9c5275ab285"),
+    ("propose: the long closes 1,000 at a 10 KAS bid (to guarantee)", "b4241b438bcac6e1b4f7447a47aa030416bdb0d823287b22651d7151839560f5", "a30f5809809f0c420313e579fefc1e86b283647ae972fdf00852943dc534216c"),
+    ("guarantee: the close settles at once", "d5c271db175999c6e0d4f8be78c71676a35d1726748dfe115416a0cbf2105bf6", "68991e9b38ad4f3c989082d7181e89263e388f701d1b0791681481d987daae36"),
+    ("release: the lock returns to the guarantor", "e91c0141bb3bf035d176d34a4d20959c3a1383a8aba50f287ea1e4a357c94eb4", "34a7cee042567f08f6db0b18a0e50663034255ec8243ca0fac21b172ced8c180"),
 ];
 
 fn sha(v: &serde_json::Value) -> String {
@@ -906,7 +906,8 @@ fn locks_of(live: &[Live]) -> Vec<LiveLock> {
 
 /// A liquidation proposed with an offer, guaranteed after the cure grace, then disputed by a third-party bid placed
 /// after the claim: the proposer is paid bond + fee less the offer at once, the lock holds lambda x cover + offer, the
-/// long is paid its side at the bid from the lock, the burn output is P2SH(OP_RETURN), the executor keeps the reward.
+/// long is paid the cover from the lock (DESIGN 4.5g), the burn output (the offer) is P2SH(OP_RETURN), the executor keeps
+/// the reward.
 /// Everything passes the full verification (scripts with committed budgets, mass, fee floor) on the in-memory chain.
 #[test]
 fn a_guaranteed_liquidation_is_disputed_on_the_chain() {
@@ -943,11 +944,13 @@ fn a_guaranteed_liquidation_is_disputed_on_the_chain() {
     assert_outputs_are_least(&b);
     let before = w.chain.balance(&pubkey(L));
     let (s, _) = w.run(&b);
-    let h = q(N, 980_000_000 - 900_000_000, w.m.scale, 0);
-    assert_eq!(w.chain.balance(&pubkey(L)) - before, h as u64, "the long is paid its side at 9.80: 800 KAS");
+    // DESIGN 4.5g: the whole cover (the part's range), not its side at 9.80 (800 KAS); the offer burns.
+    let h = q(N, 300_000_000, w.m.scale, 0);
+    assert_eq!(w.chain.balance(&pubkey(L)) - before, h as u64, "the long is paid the cover: 3,000 KAS");
     let (_, burn) = out_of(&s, "burned");
     assert_eq!(burn.script_public_key, kpf_protocol::lock::burn_spk());
     assert_eq!(burn.value as i64, lock.value as i64 - h - lock.l.reward());
+    assert_eq!(burn.value as i64, offer, "what burns is the proposer's offer");
 }
 
 /// A close guaranteed at once (no grace), then released after the window; a release before it is refused by the chain,

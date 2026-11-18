@@ -744,11 +744,11 @@ fn fast_settlement_lifecycle_with_a_kob_book() {
     assert!(out.contains("FAST-SETTLED") && out.contains("DISPUTES IT") && out.contains("kpf dispute --lock"), "{out}");
     let json_out = h.ok(&["watch", "--pair", &pair, "--lock", &lock, "--order", &counter_file, "--daa", &h.chain.daa.to_string(), "--json"]);
     let v: Value = serde_json::from_str(&json_out).unwrap();
-    assert_eq!(v["pairs"][0]["locks"][0]["disputingOrders"][0]["restitution"], 80_000_000_000i64);
+    assert_eq!(v["pairs"][0]["locks"][0]["disputingOrders"][0]["restitution"], 300_000_000_000i64);
     let before = h.chain.balance(&l);
     let fund = h.funding("f", &f);
     h.step(&["dispute", "--lock", &lock, "--evidence", &counter_file, "--seller", &seller_file, "--funder", &fk, "--funding", &fund]);
-    assert_eq!(h.chain.balance(&l) - before, 800 * KAS, "the long is paid its side at 9.80 from the lock");
+    assert_eq!(h.chain.balance(&l) - before, 3_000 * KAS, "the long is paid the whole cover from the lock (DESIGN 4.5g; its side at 9.80 was worth 800 KAS)");
 
     // A truthful close by the short of a fresh pair at an ask of 11, guaranteed at once and released after the window.
     let fund = h.funding("f", &f);

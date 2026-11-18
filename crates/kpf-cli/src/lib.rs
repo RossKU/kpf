@@ -77,7 +77,7 @@ Guaranteed fast settlement (DESIGN 4.5f; optional, the slow path above stays the
             (owner: default the funder; a liquidation once its pending part is graceDaa old, the loser's cure grace)
   dispute   --lock L.json [--lock L.json]... --evidence ORDER.json [--seller TOKEN.json]
             refute a fast-settled claim with the counter-evidence a challenge would have needed (rested from the claim's
-            DAA, done resting within the window): the wronged party is paid from the lock, the funder keeps the reward
+            DAA, done resting within the window): the wronged party is paid the whole cover, the funder keeps the reward
             (lambda - 1) x cover, the rest is burned
   release   --lock L.json [--daa N]                      anyone, once the lock is disputeDaa old: the lock to its owner
 

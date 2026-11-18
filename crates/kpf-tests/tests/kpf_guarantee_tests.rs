@@ -211,9 +211,11 @@ fn worked_example_amounts() {
 // ================================================================ false claims disputed
 
 /// A false claim, fast-settled and then disputed inside the window with exactly the counter-evidence that would have
-/// refuted it by a challenge: the wronged party is paid the restitution H, to the sompi, so that it ends with what its
-/// side was worth at the counter quote; the reward R = cover * (lambda - 1) is the executor's; the rest is burned.
-/// Every kind and side, whole and partial, at the refutation bound and at a quote far beyond it.
+/// refuted it by a challenge: the wronged party is paid the restitution H = the whole cover (DESIGN 4.5g, review 5 F1;
+/// before, H was its side's value at the counter quote, which the first disputer chose), so it ends with at least what
+/// its side was worth at the counter quote and at every other price; the reward R = cover * (lambda - 1) is the
+/// executor's; the burn is the rest (here, without an offer, only the rounding of lambda: no burn output). Every kind
+/// and side, whole and partial, at the refutation bound and at a quote far beyond it: the same H.
 #[test]
 fn a_false_claim_disputed_in_the_window_makes_the_victim_whole() {
     let l = lv(0x33);
@@ -228,23 +230,22 @@ fn a_false_claim_disputed_in_the_window_makes_the_victim_whole() {
             for counter in [c.clone(), far] {
                 let d = dispute(&[lock.clone()], &counter);
                 let tx = accept(&d);
-                let h = lock.l.restitution(counter.price());
-                assert!(h > 0 && h <= lock.l.cover);
-                assert_eq!(tx.outputs[0].value as i64, h, "the victim is paid H");
+                let h = lock.l.restitution();
+                assert!(h > 0 && h == lock.l.cover);
+                assert_eq!(tx.outputs[0].value as i64, h, "the victim is paid the cover");
                 assert_eq!(tx.outputs[0].script_public_key, p2pk_x(&w.w.defender_key()));
-                assert_eq!(victim_settled(&w) + h, victim_fair(&w, counter.price()), "the victim ends whole at the counter quote, to the sompi");
-                // Burn accounting: the lock is H + burn + reward exactly.
-                let burn = tx.outputs.last().unwrap();
-                assert_eq!(burn.script_public_key, kpf_protocol::lock::burn_spk());
-                assert_eq!(burn.value as i64 + h + lock.l.reward(), lock.value as i64);
+                for p in [0, 900_000_000, 966_315_790, 1_000_000_000, 1_029_000_000, 1_100_000_000, 1_200_000_000, counter.price(), 5_000_000_000] {
+                    assert!(victim_settled(&w) + h >= victim_fair(&w, p), "the victim ends at least whole at {p}");
+                }
+                // Burn accounting: the lock is H + burn + reward exactly; without an offer the burn is the rounding of
+                // lambda (below dust: no burn output, it stays with the executor).
                 assert_eq!(lock.l.reward(), lock.l.cover / 10);
-                // One sompi less to the victim, or to the burn, is refused.
+                assert_eq!(lock.l.burn(lock.value), 0);
+                assert!(lock.value as i64 - h - lock.l.reward() <= 1);
+                assert!(tx.outputs.iter().all(|o| o.script_public_key != kpf_protocol::lock::burn_spk()));
+                // One sompi less to the victim is refused.
                 let mut x = d.clone();
                 x.outs[0].value -= 1;
-                refused(&x, 0);
-                let mut x = d.clone();
-                let last = x.outs.len() - 1;
-                x.outs[last].value -= 1;
                 refused(&x, 0);
             }
         }
@@ -574,7 +575,8 @@ fn one_lock_for_two_claims_is_refused_in_one_transaction_and_across_transactions
 
 /// The guarantor may be anyone: the proposer, a party of the pair (the winner or the loser), or the disputer. Each is
 /// accepted; the guarantee binds the lock, not the guarantor's identity. A guarantor that disputes its own lock gets
-/// the reward back at most: it loses lambda x cover - R - H more than the restitution it pays.
+/// the reward back at most: since DESIGN 4.5g it loses exactly the cover, all of it paid to the wronged party (before, it
+/// lost lambda x cover - R - H more than a quote-priced restitution, burned).
 #[test]
 fn the_guarantor_may_be_the_proposer_a_party_or_the_disputer() {
     let l = lv(0x43);
@@ -596,9 +598,11 @@ fn the_guarantor_may_be_the_proposer_a_party_or_the_disputer() {
     let (tx, e) = d.build();
     assert_accepted(&tx, &e);
     let ins: i64 = e.iter().map(|u| u.amount as i64).sum();
-    let paid_out_of_lock = tx.outputs[0].value as i64 + tx.outputs.last().unwrap().value as i64;
+    // DESIGN 4.5g: H is the cover; without an offer nothing is left to burn.
+    assert_eq!(tx.outputs[0].value as i64, lock.l.cover);
+    let paid_out_of_lock = tx.outputs[0].value as i64 + lock.l.burn(lock.value);
     assert_eq!(lock.value as i64 - paid_out_of_lock, lock.l.reward(), "the self-disputing guarantor recovers exactly the reward");
-    assert!(lock.l.reward() < lock.value as i64 - lock.l.restitution(c.price()), "it loses more than the restitution");
+    assert_eq!(lock.l.reward(), lock.value as i64 - lock.l.restitution(), "it loses exactly the restitution, which the victim gets");
     let _ = ins;
 }
 
@@ -678,13 +682,13 @@ fn the_winner_acts_on_the_forfeited_part_while_the_lock_is_disputable() {
     let c = bid(1_000_000_000, FULL);
     let dp = dispute(&[lock.clone()], &c);
     let txd = accept(&dp);
-    assert_eq!(txd.outputs[0].value as i64, q(FULL, 100_000_000, SCALE, 0), "the long is paid its side at 10 KAS: 1,000 KAS");
+    assert_eq!(txd.outputs[0].value as i64, q(FULL, 300_000_000, SCALE, 0), "the long is paid the cover (DESIGN 4.5g): 3,000 KAS");
     assert_eq!(txd.outputs[0].script_public_key, p2pk_x(&l.p.long_key));
 }
 
 // ================================================================ boundary values and overflow
 
-/// lambda at its bounds: 1 (no reward: everything but H burns) and 3; a look-alike pending part with lambda outside
+/// lambda at its bounds: 1 (no reward) and 3; a look-alike pending part with lambda outside
 /// [1, 3] or a dispute window outside the CSV range cannot be guaranteed (the lock it would create could overflow or
 /// never be released), while its slow path stays.
 #[test]
@@ -702,7 +706,10 @@ fn boundary_lambda_and_window() {
             let dp = dispute(&[lock.clone()], &bid(1_000_000_000, FULL));
             let txd = accept(&dp);
             assert_eq!(lock.l.reward(), 3 * 10i64.pow(11) / 10_000 * (lb - 10_000));
-            assert_eq!(txd.outputs.last().unwrap().value as i64, lock.value as i64 - lock.l.restitution(1_000_000_000) - lock.l.reward());
+            // DESIGN 4.5g: H is the cover, so at lambda 1 and 3 (no offer) nothing is left to burn.
+            assert_eq!(txd.outputs[0].value as i64, lock.l.cover);
+            assert_eq!(lock.value as i64 - lock.l.restitution() - lock.l.reward(), 0);
+            assert!(txd.outputs.iter().all(|o| o.script_public_key != kpf_protocol::lock::burn_spk()));
         } else {
             refused(&d, 0);
             accept(&finalize_draft(&w, &fk(), 6));

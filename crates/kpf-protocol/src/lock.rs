@@ -1,5 +1,6 @@
 //! Guaranteed fast settlement (DESIGN 4.5f) as pure functions: what `KpfPending.guarantee` requires of the lock and pays,
-//! the lock state it writes, and what `KpfLock.dispute` and `KpfLock.release` pay.
+//! the lock state it writes, and what `KpfLock.dispute` (the whole cover to the wronged party, DESIGN 4.5g) and
+//! `KpfLock.release` pay.
 //!
 //! Every function mirrors the contracts (named in each doc) and is held to them by the engine tests
 //! (`kpf_guarantee_tests`): a builder that pays each party exactly the least value its covenant accepts is accepted, one
@@ -171,10 +172,12 @@ impl Lock {
         }
     }
 
-    /// The restitution H at the counter quote `c` (`KpfLock.dispute`), before the dust rule: what the victim's side
-    /// was worth at `c` less what the fast settlement paid it. A close: the cover less the closer's payoff at `c(c)`; a
-    /// liquidation: the loser's payoff at `c(c)`. Never negative, never above the cover.
-    pub fn restitution(&self, c: i64) -> i64 {
+    /// What the fast settlement took from the wronged party if the true price is `c`: what its side would have been
+    /// worth at `c` less what the settlement paid it. A close: the closer's payoff at the claim's quote less its payoff
+    /// at `c(c)` (the cover less the latter); a liquidation: the loser's payoff at `c(c)`. Never above the cover; 0 when
+    /// the claim was right or in the wronged party's favour at `c`. (Before review 5 this was the restitution, priced at
+    /// the disputing order's quote; DESIGN 4.5g pays the cover instead, which is never less.)
+    pub fn taken_at(&self, c: i64) -> i64 {
         let cc = self.clamp(c);
         let sc = self.m.scale;
         let h = if self.kind == KIND_CLOSE {
@@ -187,10 +190,16 @@ impl Lock {
         h.max(0)
     }
 
-    /// What the victim is paid at the counter quote `c`: [`Self::restitution`], raised to the plain dust bound when it
-    /// is positive and below it.
-    pub fn victim_pay(&self, c: i64) -> i64 {
-        let h = self.restitution(c);
+    /// The restitution H of any successful dispute (`KpfLock.dispute`, DESIGN 4.5g), before the dust rule: the whole
+    /// cover, whatever the counter order and whoever disputes. It is never below [`Self::taken_at`] at any price.
+    pub fn restitution(&self) -> i64 {
+        self.cover.max(0)
+    }
+
+    /// What the victim is paid by a dispute: [`Self::restitution`], raised to the plain dust bound when it is positive
+    /// and below it.
+    pub fn victim_pay(&self) -> i64 {
+        let h = self.restitution();
         if h > 0 && h < PLAIN_DUST {
             PLAIN_DUST
         } else {
@@ -203,9 +212,10 @@ impl Lock {
         ratio_down(self.cover, self.m.lock_bps - BPS)
     }
 
-    /// The least burn of a dispute of a lock of `value` at the counter quote `c` (0: no burn output, it is below dust).
-    pub fn burn(&self, value: u64, c: i64) -> i64 {
-        let b = value as i64 - self.victim_pay(c) - self.reward();
+    /// The least burn of a dispute of a lock of `value` (0: no burn output, it is below dust): the lock less the
+    /// restitution and the reward, i.e. the offer and the rounding of the lock ratio for a lock of the least value.
+    pub fn burn(&self, value: u64) -> i64 {
+        let b = value as i64 - self.victim_pay() - self.reward();
         if b >= PLAIN_DUST {
             b
         } else {

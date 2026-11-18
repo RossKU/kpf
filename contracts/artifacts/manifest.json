@@ -18,43 +18,43 @@
   "kob_commit": "ed16148",
   "kpf_lock": {
     "artifact": "KpfLock.json",
-    "artifact_sha256": "60760ba74485b2b19ee363edcc8660388f948670a58ef3b9ae9c677b42932535",
+    "artifact_sha256": "2551abe820cda422a9cd241ac6cd3a0b1885d38f7749a60f250e2f07dc9c87b5",
     "prefix_len": 1,
     "source": "contracts/KpfLock.sil",
-    "source_sha256": "9c40b9d6524d4b4718168fdd99ca96dc66aa86888a781b33bc3c2ec60668f371",
+    "source_sha256": "42e4f20cae33289e8fd78f2e33265241c1dc78693da5de3b42e284c585bf8430",
     "state_len": 468,
-    "suffix_len": 2090,
-    "template_hash": "ffe7e970554f41016864b984eca14f2b9da6591c4e102a89a058343cd7793af7"
+    "suffix_len": 1830,
+    "template_hash": "837e7edb8bf40b5ab88da1f5e2a94d044971e4c6d9fbef6a68ce7e81d451b80f"
   },
   "kpf_open": {
     "artifact": "KpfOpen.json",
-    "artifact_sha256": "2db920a9629f05f0d70e5dc7e4e33221686aeb56c479eeabbeeb177c4c7a7fc4",
+    "artifact_sha256": "c271aa498b05358531811906bef5ff030869908376e456ba0c376d3dc052d312",
     "prefix_len": 1,
     "source": "contracts/KpfOpen.sil",
-    "source_sha256": "60a6890381a8df71cdcd60db8723837d12874dd2c440bd0b4898d29a7817bc3d",
+    "source_sha256": "44569091f0a94d062282e47e1275c8bf751da3bd2ceb876a465ee62d4936ed21",
     "state_len": 402,
-    "suffix_len": 2828,
-    "template_hash": "fd127bd2e0cc178f7018edd4da5c0f0c4896295c5630ceccfb6232cf34419bdc"
+    "suffix_len": 2852,
+    "template_hash": "90bb48cdb6dfc9784f2ab540c74ac2cf5c06ab872f14f4e21a07613d28ad3a03"
   },
   "kpf_pair": {
     "artifact": "KpfPair.json",
-    "artifact_sha256": "c9b8e57f20aedf3f0f764ecfc8035367876da35dcb4691ea4ca149f9baa47085",
+    "artifact_sha256": "7a43c98e518f18f10dcc3013c40f40068ef7b9ee92ca384071e1b1d413d8f974",
     "prefix_len": 1,
     "source": "contracts/KpfPair.sil",
     "source_sha256": "251ab1eea96a4e025a0e6b989ee207e91519d6e5e9f9392e7cb006d61dd8399e",
     "state_len": 519,
     "suffix_len": 11850,
-    "template_hash": "199ff5fa11af0d4bbbd0e3947904770df6e137d14136cfbb3225183b99e2708d"
+    "template_hash": "afbe2011ce6dba69dacc1ba49a7b5a74954c7fb850b917e6961a57149ef74481"
   },
   "kpf_pending": {
     "artifact": "KpfPending.json",
-    "artifact_sha256": "c92ce7aa5e518be715609fbf380bf63974f5ad96737dfa70004f7bfc4879dd63",
+    "artifact_sha256": "8fbb4257c2e29487d42a228c0754116d26fbb7a284713dd86260212119eebbdf",
     "prefix_len": 1,
     "source": "contracts/KpfPending.sil",
-    "source_sha256": "ae968b929281e98bfb439f7ea7d812e767eb1fc9cb4901a43c3ca9a346f377fd",
+    "source_sha256": "b2f611a86b80b1191ac7dfc6cb65b3aa087d1ce846204712b8bb0b0c9332ea2f",
     "state_len": 666,
-    "suffix_len": 3671,
-    "template_hash": "7cab0b00269a259656730f06809a9826ca9f11e17cad89ca0fa9e67633cc6796"
+    "suffix_len": 3945,
+    "template_hash": "6d950622067f1ce99a72b4c5102649a52c910cf6ef63fa2e1fce897b7380d8b8"
   },
   "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write"
 }

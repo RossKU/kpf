@@ -147,6 +147,11 @@ impl LivePending {
     pub fn finalize_from(&self) -> u64 {
         self.w.finalize_from(self.daa)
     }
+    /// The first DAA score at which a guarantor can fast-settle this part (DESIGN 4.5f): at once for a close, after the
+    /// cure grace for a liquidation; `None` when it can never be guaranteed (accepted after `visibleUntil`).
+    pub fn guarantee_from(&self) -> Option<u64> {
+        self.w.guaranteeable_at(self.daa).then(|| self.w.guarantee_from(self.daa))
+    }
 }
 
 /// A live `KpfLock` UTXO (DESIGN 4.5f). It carries no covenant id: a lock never continues itself.
@@ -170,6 +175,11 @@ impl LiveLock {
     /// The last rest end a dispute's counter-evidence may have.
     pub fn rest_deadline(&self) -> i64 {
         self.l.rest_deadline(self.daa)
+    }
+    /// The last DAA at which a counter order not yet placed can be placed (accepted, active at once, no interval) and
+    /// still count: it must rest `minRestDaa` and finish by [`Self::rest_deadline`] (review 5, wording note 1).
+    pub fn order_deadline(&self) -> i64 {
+        self.rest_deadline() - self.l.m.min_rest_daa
     }
 }
 

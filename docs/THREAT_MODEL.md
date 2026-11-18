@@ -357,7 +357,7 @@ V: a genesis authors a `KpfPending` with forged state (hashes of pair states of 
 posted, a dead window) and offers it as someone's pending claim. I: none on other parties' funds: a look-alike pending
 only pays out its own value, and every check uses its physical value and its own state. `KpfPair.propose` re-checks
 the CSV range of `W` so that not even a look-alike pair can create a pending part whose finalize is dead. Holds:
-`holds_look_alike_pending_only_gives`. R: a tool must rebuild the three pair states from the pending UTXO and check
+`holds_look_alike_pending_only_gives`. Since the fast path a guarantor's lock is at stake too (review 5 F2): a look-alike whose market block fails the bounds every order checks cannot be guaranteed (`KpfPending.checkMarket`), and the tooling refuses it (L12). R: a tool must rebuild the three pair states from the pending UTXO and check
 them against its hashes before trusting it (the state is self-describing for that purpose); an indexer must key
 pending parts by outpoint.
 
@@ -428,7 +428,7 @@ state), so discovery on a live network needs an indexer. T: the tests named.
 **K7 Locks (D§4.5f).** Every lock ends without anybody's cooperation: anyone releases it to its owner once it is `D`
 old (CSV; `KpfPending.guarantee` checks `D` in the CSV range, so no lock it counts has a dead release), and while it is
 disputable anyone disputes it with counter-evidence. A guaranteed part ends at once in plain outputs or an ordinary
-(forfeited) pair. A lost guarantor key loses only its own lock. T: `a_truthful_claim_settles_at_once_and_the_lock_is_released_after_the_window`,
+(forfeited) pair. A lost guarantor key loses only its own lock (and so does an owner key that is not a valid x-only key: `KpfPending.guarantee` cannot check it, the library refuses it; review 5, note 2). T: `a_truthful_claim_settles_at_once_and_the_lock_is_released_after_the_window`,
 `boundary_lambda_and_window`, X6 (every lock ends in exactly one of release or payout plus burn).
 
 ### L. Guaranteed fast settlement (D§4.5f)
@@ -440,13 +440,13 @@ disputable for `D` with the counter-evidence a challenge would have needed; rele
 **L1 A false claim fast-settled.** V: a stale or fake quote, proposed and guaranteed at once (the guarantor may be the
 proposer, the winner, or anyone). I: the loser forfeits (or the other party of a close is paid at the stale quote)
 before any challenge window. M: the lock is disputable with exactly the counter-evidence of a challenge (clock `P`,
-rest `R`, life `L`, `k_c` over the block, margin `g`) that finished resting by `F + D − R`; the victim is paid `H`, its
-side's value at the counter quote, to the sompi; `D = W + R` gives it at least the slow path's window from `P`. Holds:
-`a_false_claim_disputed_in_the_window_makes_the_victim_whole`, `a_dispute_needs_the_clock_life_and_coverage_of_a_challenge`.
+rest `R`, life `L`, `k_c` over the block, margin `g`) that finished resting by `F + D − R`; the victim is paid `H` =
+the whole cover (D§4.5g, review 5 F1), whoever disputes and on whichever valid order, at least what the claim took from it at any price; `D = W + R` gives it at least the slow path's window from `P`. Holds:
+`a_false_claim_disputed_in_the_window_makes_the_victim_whole`, `a_dispute_needs_the_clock_life_and_coverage_of_a_challenge`, `holds_the_restitution_is_the_cover_whoever_disputes_with_whichever_order`, `holds_the_restitution_never_falls_below_what_the_claim_took_at_any_price`.
 R: a funded watcher (or the victim's wallet) must act within `D`; the victim gets cash, not its position back.
 **L2 A lie as a free option (self-dispute).** V: a coalition that expects a dispute disputes its own lock first. M: the
-reward is `(λ − 1) × cover`, the rest of the lock less `H` is burned (P2SH of `OP_RETURN`, Z7): net `H + R − lock ≤
-H − cover ≤ 0`. Holds: `holds_a_self_dispute_never_profits_the_coalition`, `the_guarantor_may_be_the_proposer_a_party_or_the_disputer`.
+reward is `(λ − 1) × cover`, `H` is the cover, the rest of the lock (the offer) is burned (P2SH of `OP_RETURN`, Z7): the coalition keeps at most the victim's side (worth at most the cover) and `R`, net `≤ cover + R − lock ≤
+0`, and its choice of counter order moves nothing. Holds: `holds_a_self_dispute_never_profits_the_coalition`, `the_guarantor_may_be_the_proposer_a_party_or_the_disputer`.
 **L3 One lock for two claims.** V: one output named by two pending parts, in one transaction or across transactions.
 M: a lock names one claim (its covenant id, its state and `P`); a guarantee reads only its own transaction's outputs.
 Holds: `one_lock_for_two_claims_is_refused_in_one_transaction_and_across_transactions`.
@@ -468,9 +468,9 @@ path), guaranteed while the loser is offline. M: the cure grace `G` (a liquidati
 **L7 Dead evidence on the fast path.** V: a proposal accepted after its evidence order stopped being fillable by
 conforming matchers. M: `P ≤ visibleUntil` (exact `P`, Z2). Holds: `a_part_accepted_after_its_evidence_died_cannot_be_guaranteed`.
 **L8 Thin-book griefing of a guarantor.** V: the deserving loser of a true, guaranteed liquidation rests its own bid at
-the refutation bound and fills it itself. I: the guarantor loses `λ × cover`; the loser takes `H + R`. **Exploit,
-accepted:** `exploit_a_deserving_loser_on_a_thin_book_takes_the_guarantors_lock` (3,300 KAS lost, 963.16 KAS to the
-loser, against 90 KAS on the slow path). R: guarantors must not guarantee on a book without arbitrage within `R`.
+the refutation bound and fills it itself (or one attacker holds both sides with two keys). I: the guarantor loses `λ × cover + offer`; the loser takes the cover and `R`. **Exploit,
+accepted:** `exploit_a_deserving_loser_on_a_thin_book_takes_the_guarantors_lock`, `exploit_a_two_key_attacker_on_a_thin_book_takes_an_honest_guarantors_whole_lock` (3,300 KAS lost, all of it to the
+loser since D§4.5g, 963.16 KAS before; 90 KAS on the slow path). On a book that refills a mispriced order within `R` a truthful claim has no dispute (`holds_a_truthful_claim_on_a_book_that_refills_mispriced_orders_has_no_dispute`). R: guarantors must not guarantee on a book without arbitrage within `R`.
 **L9 Recovery after the forfeited part moved.** V: the winner closes, splits or sells the forfeited part while the lock
 is disputable. M: restitution comes from the lock, never from the part. Holds:
 `holds_the_victim_is_paid_in_full_after_the_forfeited_part_moved`, `the_winner_acts_on_the_forfeited_part_while_the_lock_is_disputable`.
@@ -479,8 +479,8 @@ comparison of UTXO scores (`P ≤ visibleUntil`, `restEnd + R ≤ F + D`); the l
 maximum and opens or closes no window. Holds: `holds_one_lock_time_serves_every_lower_bound`, the window test.
 **L11 Orderings.** Challenge, cure, finalize and guarantee spend one pending UTXO; dispute and release one lock. Holds:
 `every_ordering_of_challenge_cure_guarantee_finalize_dispute_release`.
-**L12 Overflow, boundaries.** M: `λ ≤ 3`, `cover ≤` the pending value, split products; a look-alike part with `λ` or `D`
-out of range cannot be guaranteed (its slow path stays). Holds: `boundary_lambda_and_window`,
+**L12 Overflow, boundaries, look-alike markets.** M: `λ ≤ 3`, `cover ≤` the pending value, split products; a look-alike part whose market block fails any bound of `KpfOpen.checkMarket` (the same text in `KpfPending.checkMarket`, D§4.5g, review 5 F2)
+cannot be guaranteed (its slow path stays), and the tooling refuses it before it says anything about disputes. Holds: `boundary_lambda_and_window`, `holds_a_look_alike_part_with_an_out_of_range_market_cannot_be_guaranteed`, `holds_kpf_open_kpf_pending_and_the_library_accept_the_same_market_blocks`,
 `boundary_large_cover_and_zero_cover` (a part worth the KAS supply at `λ` = 3).
 
 ## 5. Residual risks no design change removes
@@ -503,5 +503,5 @@ out of range cannot be guaranteed (its slow path stays). Holds: `boundary_lambda
    the winner (B3); stale claims against offline victims stand without a live watcher (A7).
 9. **Guaranteed fast settlement (D§4.5f).** On a thin book a guarantor loses its whole lock to a deserving loser's
    self-filled counter order (L8); a loser within `g` of its trigger offline for the cure grace `G` loses its residual
-   (L6); a wronged party is paid in cash at the refuting quote, not restored, and only if someone disputes within `D`
+   (L6); a wronged party is paid in cash (the whole cover), not restored, and only if someone disputes within `D`
    (L1).
