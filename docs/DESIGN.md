@@ -797,6 +797,25 @@ exactly one of proposer or challenger, the clock rules), and the converted tests
 Boundaries that depended on `restEnd` move by `L`; the `R = 124,999,999,999` edge market of `audit_tag_tests` moved to
 `R = 76,896,000`.
 
+### 4.5e Rules changed by review 4 (these refine 4.5d)
+
+- **A part whose two sides have one owner cannot be liquidated** (R4-F1: after forfeit and keep the winner holds
+  both sides and the old quote still triggered, so anyone could propose again and again and take a keeper fee from
+  the winner each round). `propose` refuses a liquidation when `longKey == shortKey`. A side the winner later sells
+  enters under the healthy-at-entry rule, so the sold part is not liquidatable at birth either.
+- **A cure must clear the claim by the contradiction margin** (R4-F3): the cured bound puts the trigger at least `g`
+  beyond the proposed quote, so a quote one tick away cannot reopen the claim against the margin just added.
+- **The window leaves slack for the defender** (R4-F5): a market requires `challengeDaa ≥ 2·minRestDaa`.
+- **A restored or cured part comes back unlisted**: both listing windows are zero in the precomputed return
+  states, so a listing the owner could not withdraw while the part was pending is not live again without its
+  signature.
+- **`bondMin` is bounded** like the other market parameters, so no market can make every proposal unfundable.
+- **Tooling** (R4-F2, R4-F4): `watch` and `evidence --pending` say a counter order refutes a claim only when it can
+  also fill the required coverage; `cure`, `challenge` and `finalize` refuse a pending part that is not the one the
+  pair's lineage and value imply, and the one-line summary states the total the funder pays.
+- Accepted, documented: anyone who relays a proposal or a challenge can copy it with their own payout key and their
+  own funds; these actions are permissionless by design.
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part
