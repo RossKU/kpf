@@ -1,0 +1,13 @@
+pragma silverscript ^0.1.0;
+
+// Probe X12-lite, template B: a different contract that, when spent, reports its covenant id and requires to be the
+// only input of it.
+contract X12B(byte[32] init_note) {
+    byte[32] note = init_note;
+
+    entry land(byte[32] expectId) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(selfId == expectId);
+        require(OpCovInputCount(selfId) == 1);
+    }
+}

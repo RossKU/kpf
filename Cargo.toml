@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/kpf-tests"]
+# vendor/kob is a separate workspace (a pinned clone of KOB); its crates are used as path dependencies only.
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "ISC"
+rust-version = "1.94"
+publish = false
+
+[workspace.dependencies]
+# Same rusty-kaspa release as KOB (vendor/kob/Cargo.toml): covenants, tx v1, compute budget.
+kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+# KOB's vendored SilverScript v1.0.0 compiler and ABI, by path into the pinned clone.
+silverscript-lang = { path = "vendor/kob/vendor/silverscript/silverscript-lang" }
+silverscript-abi = { path = "vendor/kob/vendor/silverscript/silverscript-abi" }
+secp256k1 = { version = "0.29.0", features = ["global-context", "rand-std", "serde"] }
+
+[profile.dev]
+# As KOB: engine tests are CPU heavy; keep them quick and the target dir small.
+opt-level = 1
+debug = 0

@@ -1,0 +1,30 @@
+pragma silverscript ^0.1.0;
+
+// Probe X1: a stand-in for a KpfOpen that funds a pair output created in the same transaction. It inspects the
+// covenant binding of that output; it never authorises it.
+contract X1Opener(int init_side) {
+    int side = init_side;
+
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+
+    // The check DESIGN 4.5 T1 asks for: the output carries a covenant id.
+    entry open(int out) {
+        require(OpOutputCovenantId(out) != ZERO32);
+    }
+
+    // As open, and no input of this transaction carries that id, so the output is a genesis created here and not
+    // the continuation of an existing lineage.
+    entry openFresh(int out) {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != ZERO32);
+        require(OpCovInputCount(id) == 0);
+    }
+
+    // Reports what the engine shows about the id of output `out`: inputs and outputs counted under it.
+    entry observe(int out, int nIn, int nOut) {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != ZERO32);
+        require(OpCovInputCount(id) == nIn);
+        require(OpCovOutputCount(id) == nOut);
+    }
+}

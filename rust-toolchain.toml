@@ -1,0 +1,4 @@
+[toolchain]
+# Same compiler as KOB at the pinned commit: SilverScript v1.0.0 needs rust-version 1.94 (edition-2024 let-chains).
+channel = "1.94.0"
+profile = "minimal"

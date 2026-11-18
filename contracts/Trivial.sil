@@ -1,0 +1,10 @@
+pragma silverscript ^0.1.0;
+
+// Toolchain smoke test: spendable only with the secret fixed at compile time.
+contract Trivial(int init_secret) {
+    int secret = init_secret;
+
+    entry unlock(int x) {
+        require(x == secret);
+    }
+}

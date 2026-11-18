@@ -213,9 +213,8 @@ covenant owner; several pool UTXOs so liquidations do not serialise.
 
 ### 3.7 D6 cross-margin: feasible only as a different representation
 
-One covenant id carrying several templates is very likely possible: a token id covers all its genesis outputs
-(`[K] docs/spec/matcher.md:135-136`) and the kUSDT genesis group holds two templates
-(`[K] contracts/third-party/kusdt/UPSTREAM.md:5`) *(inference; X12)*. Three holes remain:
+One covenant id can carry several templates: continuation compares ids only, never scripts (experiment X12,
+`crates/kpf-tests`). Three holes remain:
 1. A pair has two owners; one UTXO cannot sit in both owners' lineages. Cross-margin forces two side UTXOs bound across
    two lineages (counterparty account id + pair tag), i.e. a new contract set, not an extension of M1.
 2. `OpCovInputCount(account)` counts the inputs of this transaction only; withdrawal needs the account state to hold the
@@ -309,7 +308,8 @@ equals this state outside the windows the path may change; `value ≥ q(s, BS �
 
 Not in M1: margin withdrawal (needs the adverse bound: bid for a long, ask for a short), funding, maturity.
 
-`KpfOpen` paths: `fill` (anyone; the pair output it funds must carry `tagL`/`tagS == selfId`), `cancel` (owner sig),
+`KpfOpen` paths: `fill` (anyone; `OpCovInputCount(selfId) == 1`; the pair output it funds must carry
+`tagL`/`tagS == selfId`), `cancel` (owner sig),
 `refund` (anyone at `min(expiryDaa, age 90 days)`, as `[K] contracts/orders/KobCondAsk.sil:343-349`).
 
 ### 4.4 Cross-input rules (the class the legacy audit found)
@@ -321,7 +321,9 @@ Not in M1: margin withdrawal (needs the adverse bound: bid for a long, ask for a
   same reverse slots (`[K] docs/spec/matcher.md:334-340`). Requirements are `≥`; any excess is the executor's.
 - **Hand-over outputs are claimed once.** An input that puts its party into a pair output it does not continue (a
   `KpfOpen`, or the pair whose stayer moves into another pair's continuation) requires that output's `tagL`/`tagS` to
-  equal its own covenant id. Covenant ids are unique per input, so two inputs cannot both claim one output.
+  equal its own covenant id. Covenant ids are **not** unique per input: the parts of a same-id split, and the outputs
+  of one multi-output genesis group, share an id (experiments X2, X5). Every claimer therefore also requires
+  `OpCovInputCount(selfId) == 1`; with that guard two inputs of one transaction cannot both claim one output.
 - **Evidence block.** All pairs that act on evidence input `ev` sit at inputs `[q, ev)`; each carries `(n_i, q)` as the
   first pushes of its signature script (8-byte `n_i`, as KOB evidence carries `n`, `KobCondAsk.sil:220-221`). Each such
   pair reads the first push of every input in `[q, ev)` (≤ 8, unrolled as the stray scan, `KobCondAsk.sil:172-189`),
@@ -337,8 +339,10 @@ Indices are illustrative; covenants accept any order satisfying §4.4. `F` = exe
 **T1 Open (KpfOpen long × KpfOpen short), `n` units at `X`.**
 in: `0` KpfOpen L, `1` KpfOpen S, `2` F. out: `0` L continuation-or-refund, `1` S continuation-or-refund, `2` new
 `KpfPair (n, BL = X − rL, BS = X + rS, E = X, tagL = id(L), tagS = id(S))`, `3` Ch.
-The pair's covenant id comes from a genesis authored by `F`; neither order needs it fresh (a twin only gives), but each
-requires `OpOutputCovenantId(2) ≠ 0` so the pair can ever be spent *(experiment X1)*.
+The pair's covenant id comes from a genesis authored by `F` (a plain-key input can author it; the id is a hash of that
+input's outpoint and its output group, X1). Each order requires `OpOutputCovenantId(j) ≠ 0` for the pair output `j`,
+given as an argument (a new id cannot be looked up by id in its creating transaction), because an id-less pair output
+is unspendable forever (X1). Each also requires `OpCovInputCount(id(j)) == 0`, so the pair starts a fresh lineage.
 Each order checks: own `n` (minFill rule), `X` within its limit, its own key and rate in its side, the counterparty's
 rate ≥ `minCounterRate`, pair value ≥ `q(n, BS − BL) + C`, its tag, its escrow out ≥ left.
 

@@ -1,0 +1,34 @@
+pragma silverscript ^0.1.0;
+
+// Probe X5-lite: a hand-over claim. The claimer requires output j to be an instance of this template whose state
+// field `tag` equals the claimer's own covenant id (as a KpfOpen requires tagL / tagS == selfId, DESIGN 4.3, 4.4).
+contract X5Claim(byte[32] init_tag) {
+    byte[32] tag = init_tag;
+
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+
+    // The claim alone, relying on "covenant ids are unique per input".
+    entry claimUnguarded(int j) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(selfId != ZERO32);
+        validateOutputState(j, State { tag: selfId });
+    }
+
+    // An X2-style split into two continuations of this template that keep this input's id and state.
+    entry split2() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 2);
+        require(tx.outputs[OpCovOutputIdx(selfId, 0)].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(tx.outputs[OpCovOutputIdx(selfId, 1)].scriptPubKey == tx.inputs[self].scriptPubKey);
+    }
+
+    // The claim with the single-input guard of DESIGN 4.3.
+    entry claim(int j) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(selfId != ZERO32);
+        require(OpCovInputCount(selfId) == 1);
+        validateOutputState(j, State { tag: selfId });
+    }
+}

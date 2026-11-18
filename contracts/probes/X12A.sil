@@ -1,0 +1,15 @@
+pragma silverscript ^0.1.0;
+
+// Probe X12-lite, template A: continues its covenant id into exactly one output whose script is NOT its own.
+contract X12A(int init_size) {
+    int size = init_size;
+
+    entry migrate() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        int o = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[o].scriptPubKey != tx.inputs[self].scriptPubKey);
+    }
+}

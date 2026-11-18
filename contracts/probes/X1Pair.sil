@@ -1,0 +1,12 @@
+pragma silverscript ^0.1.0;
+
+// Probe X1: a stand-in for a KpfPair. Its only path requires, as every KpfPair path does (DESIGN 4.3), that it is
+// the single input of its own covenant id in the spending transaction.
+contract X1Pair(int init_size) {
+    int size = init_size;
+
+    entry spend() {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(selfId) == 1);
+    }
+}
