@@ -411,6 +411,29 @@ the long receives `max(0, q(n, X − BL) − fee)`, the short is untouched (its 
 - **`KpfOpen` checks the evidence parameters** the pair it creates will need (`kBps`, `minRestDaa`, `mmrBps`,
   `liqFeeBps`, `keeperFeeMin`) with the same bounds as `KpfPair` (F4).
 
+### 4.5b Rules changed by review 2 (these override 3.3, 3.6, T6, T7 and 4.5a's fee rule)
+
+- **Liquidation forfeits the loser's residual** (review 2, F1: the loser could rest its own order on the wrong side
+  of the market for free, liquidate itself at that quote and keep the maintenance buffer the winner was owed). The
+  evidence quote now decides only **whether** a pair is liquidatable, never what the loser receives. On P6 the
+  loser gets 0 and the winner gets the whole value of the part less the fee. On P7 the entrant still pays
+  `q(n, X − BL)` (long; mirrored for a short), and that payment goes to the winner, less the fee; the winner also
+  keeps its position. The maintenance buffer is thus the winner's compensation for the gap risk it carries
+  (its profit is capped at the loser's margin), and the loser's way out before the trigger is its own unilateral
+  close, a transfer, or more margin.
+- **Fee.** `fee = min(max(keeperFeeMin, q(n, ⌊quote·liqFeeBps/10⁴⌋)), q(n, T − BL))` for a long, where
+  `T = ⌊BL·10⁴/(10⁴ − mmrBps)⌋` is the trigger price (computed from the pair's own state, not from the quote), and
+  `q(n, BS − T)` with `T = ⌈BS·10⁴/(10⁴ + mmrBps)⌉` for a short. The winner therefore always receives at least its
+  payoff at the trigger price.
+- **Evidence must have been fillable by conforming matchers for the whole rest window** (F2: an order past its soft
+  expiry is hidden from every book but still fills, so it "rested" unseen). With `exposed` as in KOB's touch rule:
+  `expiryDaa ≥ exposed + minRestDaa`; the order is GTC, or its IOC/FOK kill time `max(UTXO DAA, activeFrom) + 600`
+  is `≥ exposed + minRestDaa`; and `exposed + minRestDaa ≤ UTXO DAA + 77,760,000` (90 days idle).
+- Accepted as documented behaviour: when a whole pair is liquidated by transfer the loser's carrier stays in the new
+  part (F3); a listing's minimum part does not bind a part made smaller by a split, by the "or `n = s`" rule (F4).
+- Not chosen: valuing the loser with two-sided evidence (an ask and a bid within a maximum spread in the same
+  transaction). It keeps a residual for the loser but needs both sides of a thin book for every liquidation.
+
 ### 4.6 Rounding
 
 `q` rounds down; on every split the side that did not act takes the remainder (`[L] docs/PERP_DESIGN.md:111`). Part
