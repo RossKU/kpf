@@ -1,7 +1,8 @@
-# KPF oracle-only markets: first slice, the underwriting capital (implementation note)
+# KPF oracle-only markets: the underwriting capital, the stake judge, the integration (implementation note)
 
 Sections 1-7 are the first slice (the underwriting slot `KpfBond`); sections 8-14 the second (the stake judge
-`KpfStake`).
+`KpfStake`); sections 15-23 the third (the oracle-market order, pair and pending part wired to both: `KpfOpenO`,
+`KpfPairO`, `KpfPendingO`, pinned, with builders and the command line).
 
 Status: implemented and tested offline; not pinned, not on testnet. Implements part of `DESIGN-ORACLE-2.md` (cited
 `O2§n`; `O§n` is `DESIGN-ORACLE.md`, `D§n` is `DESIGN.md`). This slice is the underwriting slot and its accounting only:
@@ -360,3 +361,271 @@ leader's verdict; the game ends.
   SINGLE\|ANYONECANPAY commitments and complete an answer in one chain.
 - **Not done here**: pinning `KpfStake` and the claim in `contracts/artifacts/`, builders and command line; the fold
   with `KpfBond` and `KpfLock`; the coordinated (triage) honest strategy of the drill; Z12.
+# Third slice: the integration (oracle-market pair, order and pending part)
+
+Status: implemented and tested offline; pinned (`contracts/artifacts/oracle/`), builders and command line; not on
+testnet. Implements the smallest first version of `DESIGN-ORACLE-2.md` (O2§7) end to end: form (a) only (KAS margin, the
+underlying priced in KAS); `ρ` a market parameter, 1 by default, refused above 5; one underwriter per pair, chosen at open
+by both orders; live disputes during the window, decided by the stake judge of the second slice; no retrospective
+dispute, no fast path, no request object (`KpfReq`), no lock path, no rebind; closed markets by the feed definition and
+a lateness bound; markets permissionless (the contracts enforce parameter bounds, never a list of markets). Sections
+15-24.
+
+## 15. What exists
+
+| Path | What |
+|---|---|
+| `contracts/KpfOpenO.sil` | the oracle-market order: `fill` (T1′: two orders, the slot's bind, the twin scan), `take` (T2 with a fresh bind), `cancel`, `refund` |
+| `contracts/KpfPairO.sil` | the oracle-market pair: `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose`, `coopClose`, `lapseSettle`, `renew`, `propose` |
+| `contracts/KpfPendingO.sil` | the oracle-market pending part: `contest`, `decide`, `cure`, `finalize`; statuses pending, contested, upheld, refuted |
+| `contracts/KpfBond.sil`, `KpfStake.sil` | unchanged from slices A and B1 (source, bytecode and tests untouched); pinned with the family |
+| `contracts/artifacts/oracle/` | the five pinned artifacts, `manifest.json` (template hashes, cuts, the bind, open and resolve dispatch tags), `SHA256SUMS`; the book market's files in `contracts/artifacts/` are byte for byte as before |
+| `crates/kpf-protocol/src/oracle.rs` | the oracle market block (codec, id, bounds, testnet defaults), the feed check, the states and codecs of the three templates, the math of every entry (trigger with g, close price, bond and its split, cure and forfeit bounds, validity, the settlement of every branch, renewal, lapse), the wallet's market warnings, the worst case |
+| `crates/kpf-protocol/src/oracle_artifacts.rs`, `oracle_build.rs` | the pinned kit; builders of every shape: slot (create, advance, split, unbond, withdraw), stake (create, unbond, withdraw), order, open, propose, contest, deposit, resolve and decide, finalize, cure, renew (up to 7 pairs), lapse settle, cooperative close, amend, transfer, mutual close, settle and close a pool |
+| `crates/kpf-cli/src/ocmds.rs` | `oracle-market`, `oracle-check`, `bond`, `unbond`, `withdraw-bond`, `stake`, `oracle-order`, `oracle-open`, `vouch`, `contest`, `deposit`, `resolve`, `oracle-cure`, `oracle-finalize`, `renew`, `lapse-settle`, `settle-pool`, `oracle-watch` |
+| `crates/kpf-tests/tests/oraclekit/` | fixtures and engine builders of every shape (the templates compiled from source, checked equal to the pinned ones) |
+| `crates/kpf-tests/tests/oracle_tests.rs` | the lifecycle and the negatives of every rule (24) |
+| `crates/kpf-tests/tests/oracle_attack_tests.rs` | the attacks of section 21, the one-text checks, pinned equals compiled (24) |
+| `crates/kpf-tests/tests/oracle_conservation_tests.rs` | the seeded conservation run across pairs, slots and stakes, and the model-against-engine replay (1) |
+| `crates/kpf-tests/tests/oracle_metrics_tests.rs` | the numbers of section 19 (1) |
+| `crates/kpf-protocol/tests/oracle_builders.rs` | the manifest and checksums, the codecs, every builder signed and verified, 46 golden vectors (3) |
+| `crates/kpf-cli/tests/oracle_cli.rs` | the command-line lifecycle and the wallet check's refusals (1) |
+
+Run: `CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2` (547 tests: the 493 before this slice and 54 new), or
+`-p kpf-tests --test oracle_tests` etc.; `--nocapture` prints the tables and the worked numbers. Regenerate the pinned
+artifacts with `CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`.
+
+## 16. The mechanism as built
+
+**The market block** (state `[0..309)` of every order, pair and pending part; the byte table is in `oracle.rs`). The
+market id is `blake3` of the body `[33..309)`: the bond parameters (`KpfBond`'s, so `[0..87)` is a slot's bond block byte
+for byte), the judge parameters (`KpfStake`'s: the judge block is `[0..33) + [87..141)`), the feed hash, and the pair
+parameters `scale, priceMax, mmrBps, gBps, liqFeeBps, keeperFeeMin, minSize, carrier, idleDaa, challengeDaa (W),
+lateDaa, quietDaa, sigmaBps (σ), betaBps (β), bondMin`. `checkMarket` is one text in the three templates; its lines on
+parameters both families carry are `KpfOpen.checkMarket`'s lines, and its bond and judge parts are `KpfBond.checkBond`
+and `KpfStake.checkJudge` (`holds_the_market_bond_judge_bounds_and_the_bind_proof_are_one_text`). It requires the id to
+be the body's hash and every parameter in the range that keeps every branch live: beyond the book bounds,
+`0 < W < term`, `0 <= lateDaa, quietDaa < 2^32`, `0 <= σ, β <= 10^4`. A block one byte off is another market (another id,
+bond block and judge block): orders, slots and stakes of two markets never meet.
+
+**The binding** (pair state `[411..504)`): `uwId` (the slot's covenant id), `uwKey` (its owner), `coverRate` (cover per
+whole unit, at least the range; the cover of a part of n is `q(n, coverRate)`), the expiry `X`, the `premium` (sompi per
+whole unit per term). Every price-free entry keeps the range within `coverRate`, so no claim moves more than the counted
+cover.
+
+| Entry | Who | Rule |
+|---|---|---|
+| order `fill` (T1′) | anyone | the book order's checks; the slot input is a `KpfBond` of this market spent by `bind` counting `q(n, coverRate)` at `X` for `OUT_REF + pairOut` (the bind proof); the slot accepted (`uwAccept`, zero for any), its owner neither this order's owner nor the counterparty; `premium <= premMax`; `coverRate >= bs - bl`; `X >= this order's DAA score + term`; the pair id fresh and carried by no other output (the scan, at most 8 outputs); the escrow spend `q(n, rate + tip + half the premium) + carrier` |
+| order `take` (T2) | anyone | as `KpfOpen.take`, and the slot binds the entered part afresh in the same transaction (claim `OUT_REF + partOut`, at the part's `X`) |
+| pair `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose` | as KpfPair | as KpfPair; the pair UTXO `quietDaa` old (CSV); the range within `coverRate`; no entrant and no key of P3 is `uwKey`; `closeDonor` requires P3 under its own underwriter with `x3 <= X`, `premium3 <= premium` and P3's range within both cover rates |
+| pair `coopClose` | both owners | any split |
+| pair `lapseSettle` | anyone | `tx.daa >= X + tail` (CLTV) and the UTXO `idleDaa` old (CSV): settle at the entry price, as KpfPair's idle settle |
+| pair `renew(u, k)` | the slot's bind (the underwriter signs) | the bind counts `q(s, coverRate)` at `X + term` for this input; the premium leaves the margins (the long's bound up by `premium - floor(premium / 2)`, the short's down by `floor(premium / 2)`); what may leave is `q(s, range) - q(s, new range)`; the range stays wider than both bands; possible only from `X - step` (the slot's window) |
+| pair `propose(n, kind, side, p, t0, j, ...)` | the underwriter's P2PK input `j`, SIGHASH_ALL (and the closer's signature for a close) | `tx.daa >= t0` (CLTV); a liquidation triggers with g inside: long `ceil(p(1 + g)) (1 - m) < bl`, short `bs < floor(p(1 - g)) (1 + m)`; the keys differ; the range rule; the fee, the cure bound (no cure beyond `coverRate`) and the forfeit bound as KpfPair; the part moves into `KpfPendingO` with a bond `B = max(bondMin, 0.02 KAS, q(n, coverRate · σ))` |
+| pending `contest(u, dOut)` | anyone with aged judge stake | the stand-in's contest: the opener is a canonical free `KpfStake` of this judge block spent by `open(self, self, dOut)`; three outputs of the id; records `P` and the opener's key |
+| pending `decide(d)` | anyone, in the dispute's `resolve` | the stand-in's decide: upheld if YES leads, refuted if NO leads; upheld whatever the verdict if the contest was accepted at `P + W` or later |
+| pending `cure(s)` | the loser, while pending | as `KpfPending.cure`, the refund to `uwKey` |
+| pending `finalize()` | anyone: pending at age `W`, decided at once | refuted: restore, `floor(B · β)` to the disputer at `M - 1 - i`, the rest to the defender at `i`. Otherwise valid (`P + W <= X <= P + term + step` and `P - t0 <= lateDaa`): settle (a close at the price moved by g against the closer, its refund back; a liquidation forfeit and keep, `B` + fee to `uwKey`); void: restore, `B` to the defender |
+
+**The vouched claim.** The evidence of a proposal is the underwriter's own P2PK input whose signature script is exactly
+one 65-byte push ending in SIGHASH_ALL (experiment Z1's reader with the type check). Consensus verifies the signature;
+the pair checks what it signed: every outpoint (so this pair's state), every output (the pending state with `p`, `t0`
+and the bond) and the lock time. It cannot be replayed (the input is spent), reused on another part or after the part
+changed (another outpoint: the copied signature fails, `a_claim_reused_on_another_part_or_after_the_part_changed_is_refused`),
+or delayed harmfully (a claim landing more than `lateDaa` after its `t0` is void; spending the input revokes an unused
+claim).
+
+**Contest and verdict.** The pending part's `contest` and `decide` are the stand-in claim's of the second slice with the
+oracle judge block; the dispute and its receipts take the part's id; the resolution spends the contested part and
+delivers the verdict in the same transaction (the dispute's recorded script hash and id:
+`a_verdict_delivered_to_the_wrong_part_is_refused`). The window is enforced after the fact: the contested part's own DAA
+score is the contest's acceptance, exact when `decide` reads it; a contest accepted at `P + W` or later is ignored, so a
+timely contest and a finalize can never both be valid (`contest_one_daa_after_the_window_does_not_stop_the_claim`).
+
+**What a false claim costs, and how the wronged party is paid.** A claim's bond `B` is posted with the claim by its
+proposer (the underwriter for a liquidation, the closer for a close) and sits in the pending part. Refuted: the part is
+restored exactly (keys, bounds, entry, binding; unlisted, tags 0), the disputer gets `floor(B · β)`, the defender the rest
+(120 + 480 KAS of a 600 KAS bond at β = 20 %). Void (landed late, or too close to the expiry): restored, `B` to the
+defender, so a void claim is never a free freeze. Upheld or uncontested and valid: `B` back to its proposer.
+
+**Renewal and lapse.** The underwriter renews in the last step before `X` (the slot's window `x <= t + term + step`) at
+the agreed premium, half from each margin; it cannot take more (one sompi more is refused) and nobody else can renew. A
+pair whose cover is not renewed has no valid claim landing after `X - W`; from `X + tail`, once `idleDaa` idle, anyone
+settles it at its entry price.
+
+**Closed markets.** The covenant cannot read a calendar: DAA is not wall time and time has only lower bounds. What it
+enforces: `t0 <= tx.daa` (no claim prices the future) and `P - t0 <= lateDaa` (a claim lands within `lateDaa` of the
+moment it prices, 10 minutes at the testnet defaults), so a claim priced before a closure cannot be landed hours into it.
+What it cannot enforce: that `t0` lies in an open session. That is the feed definition's `sessions:` line: a claim whose
+`t0` lies in a closed session is false by definition and the judge refutes it when contested. The wallet's check flags a
+feed definition without a `sessions:` line. A weekend maintenance rate (`mmr_w`) is not built.
+
+## 17. What a party can do when its underwriter goes silent
+
+It is never stuck: (1) a transfer to a signing taker (no underwriter needed; an entrant through an order needs the slot's
+bind, so the underwriter), (2) a mutual close (both list, anyone executes), (3) a cooperative close (both sign), (4)
+close-versus-close with another pair of the same underwriter, (5) once the cover has lapsed (`X + tail`) and the pair is
+`idleDaa` old, a settlement by anyone at the entry price (`lapseSettle`, what replaces the idle settle). The cost: no
+liquidation and no unilateral close while the underwriter is silent; a winner whose loser is past its trigger gets its
+entry-price payoff at the lapse settle instead of the loser's margin
+(`exploit_a_silent_underwriter_turns_a_due_liquidation_into_a_settlement_at_the_entry`). An underwriter that renews but
+never vouches keeps the pair alive only while the premium leaves the range wider than both bands (97 terms on the fixture
+pair); exits (1)-(4) stay open throughout. No rebind or request exists in this slice.
+
+## 18. Experiments of this slice
+
+| # | Question | Measured | Verdict |
+|---|---|---|---|
+| Z2′ | can the contest window be enforced although time has only lower bounds | the contested part's DAA score read at `decide` is the contest's exact acceptance; `C = P + W - 1` refutes, `C = P + W` is ignored | **holds**: the window is a deadline after the fact |
+| Z4 | the masses of T1′, propose with the underwriter's input, contest, decide, a renewal of 7 pairs | section 19 | **holds**: every shape within the limits |
+| Z5 | contested part, dispute, restore or settle; delivery to the right part only | lifecycle and attack tests | **holds** |
+| Z11 | the twin scan at a pair's genesis, any template as the twin | `holds_a_twin_of_any_template_at_a_pairs_genesis_is_refused` | **holds** (8 outputs at most) |
+| Z3′ | cover `<= ρK` on every reachable state of the integrated flow | the conservation run (section 21) | **holds** |
+
+## 19. Numbers
+
+Script bytes (prefix + state + suffix): `KpfOpenO` 5,845 (1 + 465 + 5,379), `KpfPairO` 13,337 (1 + 624 + 12,712; the note
+estimated about 10 kB), `KpfPendingO` 4,302 (1 + 780 + 3,521; about 5 kB), `KpfBond` 4,453 (1 + 236 + 4,216), `KpfStake`
+9,688 (1 + 270 + 9,417). The stack limit is 244: the stand-ins' bind proof (a local per argument) exceeds it with the
+oracle market's 41 state fields, so the oracle order and pair carry an equivalent lean text (the same push checks, three
+reads).
+
+Transactions (each input committing the smallest covering compute budget; relay fee at 100 sompi per gram; the fixture
+pair: 1,000 units, cover 6,000 KAS, a 10 KAS opening stake, a 0.5 KAS dispute base; `oracle_metrics_tests`):
+
+| Transaction | Inputs | Script units per input | Compute mass | Storage mass | Bytes | Fee (KAS) |
+|---|---|---|---|---|---|---|
+| open (2 orders, slot bind, funder) | 4 | 268,178 / 268,325 / 169,945 / 100,001 | 52,850 | 529 | 42,850 | 0.0857 |
+| propose a liquidation (pair, vouch, funder) | 3 | 583,177 / 100,001 / 100,001 | 26,016 | 0 | 17,486 | 0.0350 |
+| propose a close | 3 | 399,986 / 100,001 / 100,001 | 24,116 | 0 | 17,486 | 0.0350 |
+| finalize: forfeit, close, void, upheld, refuted | 2 | 9,386 to 9,601 / 100,001 | 6,814 to 7,271 | <= 109 | 4,734 to 4,821 | 0.0095 |
+| cure | 2 | 110,188 / 100,001 | 8,025 | 28 | 4,835 | 0.0097 |
+| contest (pending, opener's stake, funder) | 3 | 176,046 / 302,767 / 100,001 | 21,922 | 80,390 | 14,752 | 0.0295 |
+| deposit, 1 stake / 7 stakes | 3 / 9 | dispute 299,751 / 1,136,235, each stake 229,904 | 27,260 / 110,660 | 80,079 / 82,231 | 20,060 / 79,640 | 0.0401 / 0.1593 |
+| resolve and decide | 3 | 128,825 / 168,226 / 100,001 | 19,472 | 79,972 | 14,572 | 0.0291 |
+| settle 1 winning + 1 losing receipt | 4 | 350,457 / 99,335 / 99,335 / 100,001 | 37,092 | 3,483 | 29,692 | 0.0594 |
+| close the pool | 2 | 19,873 / 100,001 | 11,908 | 20,913 | 10,078 | 0.0202 |
+| renew 1 / 4 / 7 pairs (one bind) | 3 / 6 / 9 | each pair 278,371 to 278,405, slot 170,049 to 170,363 | 25,487 / 75,161 / 124,835 | <= 524 | 18,627 / 59,091 / 99,555 | 0.0373 / 0.1182 / 0.1991 |
+| lapse settle / mutual close | 2 | 27,638 / 28,266 | 16,049 / 16,059 | 4 | 13,769 / 13,779 | 0.0275 / 0.0276 |
+| amend / transfer to a signing taker / cooperative close | 2 | 304,745 / 236,924 / 227,767 | 18,556 / 18,277 / 18,181 | <= 24 | 13,826 / 13,887 / 13,901 | 0.0277 / 0.0278 / 0.0278 |
+| take by an order with the slot's bind | 4 | 236,924 / 268,118 / 169,945 / 100,001 | 46,820 | 30 | 37,490 | 0.0750 |
+| unbond the slot | 2 | 167,792 / 100,001 | 8,273 | 12 | 4,943 | 0.0099 |
+
+The storage masses near 80,000 come from the 0.5 KAS dispute base and the 10 KAS receipts (KIP-9); a larger base lowers
+them. **The largest multi-pair shapes:** proposals vouched by one input are limited by no scan: 4 / 8 / 12 pairs use
+95,826 / 188,906 / 281,986 compute mass and 68,786 / 137,186 / 205,586 bytes (0.41 KAS for 12); the byte limit stops at
+14 (17,150 bytes a pair). A renewal of 7 pairs (the bind's 7 claims) uses 124,835 compute mass and 99,555 bytes. An open
+carries one pair (the twin scan admits 8 outputs; two order rests, the pair, the slot, the premium and change are six).
+
+**One pair-month** (one term `Λ` = 28 days on testnet): open 0.0857 + one renewal 0.0373 + one claim (propose 0.0350 +
+finalize 0.0095) = **0.1674 KAS of network fees**, plus the premium the orders agreed. At 10 % of the cover a year the
+premium is 46.03 KAS a term for the fixture pair (0.767 % of its 6,000 KAS cover); the note's cost, `y/(Lρ)` a year per
+side, is in the premium, not in the fees. A contested claim adds about 0.12 KAS (contest, a defence, decide, settle,
+close).
+
+## 20. Where the notes are wrong or ambiguous (each a `// DESIGN:` comment)
+
+1. **The slash by reservation** (O2§1.7; `KpfPendingO`). A reservation of `σ·c` from the slot at the opening of a dispute
+   needs the slot to authenticate the contested claim, which it cannot: a genesis can create a look-alike pending part
+   naming any slot (pinning the pending template in `KpfBond` would not help: the look-alike passes the template check),
+   so any reservation entry lets anyone slash honest slots. The slash is posted with the claim instead, by its
+   proposer, as the book market's bond. The slot only caps the cover (`ρ`) and is never slashed in this slice; slashing
+   a slot belongs with the retrospective dispute and needs that authentication first.
+2. **The live dispute's window** (O2§1.7) has no deadline a covenant can check. Enforced after the fact: the contest's
+   exact DAA score is read at `decide`.
+3. **Late claims** (O2§1.5, "τ = P beyond Δmax"): void instead, so an honest underwriter is never judged at a price it
+   did not sign; a void claim pays its bond to the defender.
+4. **"A claim accepted after X is void"** (O2§1.5): a claim accepted at `X - 1` would be pending past the cover. A claim
+   is valid only if `P + W <= X`.
+5. **Idle settle must go** (O2§1.4, §7 decision 8): kept only after the cover has lapsed (`lapseSettle`). While an
+   underwriter renews, every renewal and every restore is a new UTXO, so no blocker can reach it; without it a pair whose
+   counterparty is gone and whose underwriter is silent had no exit needing nobody.
+6. **The hand-over rate limit** has no evidence to protect here. What needs protecting is the underwriter's signed claim,
+   which commits to the pair's outpoint: any respend voids it. Every party entry needs the pair `quietDaa` old.
+7. **The term an order gets** cannot be proven (no upper bound on the present): `X >= the order's DAA score + term`; the
+   first premium is due whatever the remaining term.
+8. **Look-alike pairs** (O2§5.2, left to the entrant's wallet): an entrant through an order requires the slot to bind
+   the entered part in the same transaction (a second count of the part's cover until its expiry); only a signing taker
+   relies on its wallet.
+9. **Margin and cure beyond the cover** (O2§1.4, "otherwise the transaction must renew"): the range never exceeds
+   `coverRate`; a cure that would is not offered (the orders choose the headroom at open).
+10. **Who posts the bond of a close:** the closer (it signs the claim; the underwriter co-signs the price). The note's "no
+    proposer bond" would make a false close free for a colluding closer and underwriter.
+11. **The tolerance g** "never liquidates a healthy pair" (O2§1.5, §5.8) holds only to second order and only when g
+    exceeds the feed's own disagreement tolerance (section 21).
+12. **The premium** (O2§1.4, `⌈π·c·Λ/yr⌉`): a premium per whole unit per term, agreed by both orders (`premMax`), half
+    from each side at open (from the escrow) and at each renewal (bounds inward). A back-dated renewal is possible
+    (section 21).
+13. **Close-versus-close "only between pairs with the same uwId"** is not enough when the host is a look-alike: the donor
+    also requires P3's expiry no later, its premium no higher and its range within the donor's own cover rate.
+14. **The bind proof's text** of the stand-ins exceeds the stack limit with the oracle market's state; an equivalent lean
+    text is the one text of the oracle order and pair.
+
+## 21. Attacks (`oracle_attack_tests`, `oracle_tests`)
+
+Worked on the fixture pair (1,000 units at 10 KAS, long margin 1,000 KAS, short margin 2,000 KAS, cover 6,000 KAS, bond
+600 KAS) with a slot of 6,000 KAS.
+
+| Attack | Verdict |
+|---|---|
+| a false claim nobody contests within W | **exploit, bounded by ρ**: forfeit and keep takes the loser's side (1,000 KAS from the long; the underwriter's fee 46 KAS); a slot of K counts at most ρK of cover: **at ρ = 1 one such pair (1,000 KAS), at ρ = 5 five (5,000 KAS)**, a sixth open is refused. The underwriter's own 6,000 KAS bond is never at risk in this slice |
+| the same claim contested in time, judge honest | **holds**: the part restored exactly; the underwriter pays its 600 KAS bond (480 to the long, 120 to the disputer); at ρ = 5 the five cost it 3,000 KAS. The parties lose nothing, at any ρ |
+| claims slightly wrong, below the judge's tolerance | **holds when g exceeds the feed's tolerance** (g 2 %, tolerance 1 %: a long healthy 0.06 % above its trigger survives a claim 1 % low; a close 1 % high is paid 9.898 for 10). **Exploit when g is at or below it**: a pair within `g^2` of its trigger can be liquidated, losing its residual (at most 473.68 KAS here). Only a wallet can compare g with the feed text |
+| letting the cover lapse at a chosen moment; refusing a due liquidation | **exploit, bounded**: the pair settles at its entry after the lapse; at a true 8.50 the winner gets 2,000.2 KAS instead of 3,000.2, losing the loser's entry margin (1,000 KAS) per pair, at ρ = 1 and 5 alike, summed over the colluding underwriter's pairs (at most ρK of cover) |
+| a back-dated renewal | **exploit, bounded**: a lapsed pair renewed later pays the premium for a term in which no claim was valid; at most one premium per term of calendar time (20 KAS a term here) |
+| extortion for renewal | **holds on chain** (the premium is fixed at open, one sompi more is refused, no other slot can renew); the leverage is off chain: not renewing (the parties exit or lapse) or renewing without vouching (97 terms at most here) |
+| a freeze by void or false claims | **holds, with cost**: each void claim pays the defender 600 KAS, each refuted one the same plus the dispute's delay |
+| cover released while relied on; the underwriter unbonding with a claim pending | **holds**: the slot counts the cover until `X + tail`, a valid claim has `P + W <= X`, and the bond is in the part, so a refuted claim pays after the slot has left |
+| a bind beyond ρK by twins, parallel transactions, split bonds | **holds** (the slot's capacity to the sompi; one UTXO; each child within its own value) |
+| a frivolous contest of a true claim | **holds, with cost**: the opener loses its stake less the burn to the defence (9 of 10 KAS); the settlement waits for the rounds |
+| a party respending its pair to void a signed claim | **holds**: `quietDaa` after every party entry; the claim on the new outpoint lands meanwhile |
+| a party voiding a valid claim or taking the bond | **holds**: validity is `P`, `t0`, `X` only; a late contest is ignored |
+| the underwriter contesting its own claim to own the only dispute | **holds**: honest stakers deposit into it on the trailing side and refute |
+| a Sybil key of the underwriter as a party | **exploit**: the contracts compare keys only |
+| a stuck pair, slot, stake or dispute | **holds**: every state has an exit needing nobody (or only its owner): finalize, decide with the resolution, lapse settle, advance and unbond, settle and close |
+| a genesis pair naming a real slot | **exploit, bounded** (as slice A): uncounted cover for at most one period; no order enters it without the slot counting the part; a signing taker relies on its wallet |
+| look-alike pending parts and disputes | **holds**: a look-alike's bond is its own and it reaches no slot; no output can carry an existing part's id without that part as an input |
+| a twin of any template at a pair's genesis | **holds** (the scan) |
+| a hostile market within the bounds (W 1 DAA, no quiet time, a 0.02 KAS bond, ρ 5, the whole bond to the disputer, settlement right after a lapse) | **exploit, only a wallet can flag it**: the contracts open a pair on it and a false claim finalizes one DAA after it lands; `market_warnings` names each. A feed definition whose hash matches can still render misleadingly (bidirectional overrides, homoglyphs, invisible characters, carriage returns): `check_feed` flags them, and only a wallet can |
+
+**The conservation run** (`seeded_conservation_and_replay_across_pairs_bonds_and_stakes`): 10 seeds of 150 steps (107
+opens and 97 refused for capacity, 135 claims, 41 contests, 41 resolutions, 129 finalizes, 6 cures, 10 renewals and 101
+refused for capacity, 6 lapse settles), every step built from the model and accepted by the engine, 387 hostile variants
+(one sompi less, one DAA early, another key) refused. After every step: the slot counts at most ρK and counts every live
+pair's cover; no branch requires more than its inputs hold; every bond ends with its proposer (48,600 KAS of 81,000),
+its defender (29,280) or a disputer (3,120), to the sompi; every committed stake ends as a winner's payout (6,760 of
+6,900 KAS) or burned (140), the rounding below one sompi a receipt; a false claim contested in time never settles (26
+restored); a false claim not contested in time settles (24). A party that did not act loses value only through such a
+claim, an upheld one, the agreed premium at a renewal, or the lapse settle at its entry price.
+
+## 22. Public wording (oracle-only markets, as built; O2§6 corrected)
+
+**True.** "No admin keys, no operator, no upgrade path." "Anyone creates markets; nobody approves them; read the feed
+definition and the parameters before you trade." "A covenant holds your margin, but whoever sets the price can move it to
+your counterparty: price control is custody control." "Each pair has one underwriter, chosen when the pair opens; only it
+can price your pair; it can underwrite at most `ρ` times the KAS it has bonded." "A false price contested within the
+window is reversed: your position comes back as it was, and the claim's bond is paid to you and to whoever contested."
+"Disputes are won by the side committing more aged bonded KAS, by a factor `μ`; if colluders control that, false prices
+stand." "A false price nobody contests within the window stands: you can lose your whole margin in that pair." "If your
+underwriter stops, you can still leave without any price (transfer, mutual or cooperative close), and once its cover has
+lapsed anyone can settle your pair at its entry price." "The winner bears gaps beyond the loser's margin." "Prices are in
+KAS."
+
+**False.** "Trustless", "no trusted oracle", "decentralized oracle" as a security claim. "Insured", "covered by the
+underwriter's bond", "repaid from the bond": in this version the underwriter's bond only limits how much it underwrites
+and is never paid to anyone. "The total loss is capped" (only per underwriter, `ρ` times its bond in cover). "Liars are
+always slashed" (only when contested in time and outvoted). "Gold price" or any index name; "in dollars". "Listed",
+"verified", "official" for any market. "A price can be disputed after the window" (no retrospective dispute yet).
+
+## 23. What remains for later stages
+
+- **The retrospective dispute and records** (`KpfRecord`, `T_retro`): repayment of an offline victim from the slot. It
+  needs the slot to authenticate a claim (20.1) before any slot can be slashed.
+- **The fast path** for oracle claims (a guarantor's lock) and the **request** (`KpfReq`) answering a silent underwriter.
+- **Rebind** to another slot (both parties, or `altSet` after the expiry) and the **lock path** of stranded pairs.
+- **A wider closed-market margin** (`mmr_w` for claims flagged pre-close) and a session-aware wallet.
+- **Dollar-token margin** (form b): token custody in the pair, the 3-slot limit, a KAS/USD floor for the cover, pauses.
+- **`ρ` above 1 in practice:** the contracts admit up to 5; section 21 shows what it buys an attacker; the note's
+  recommendation (`ρ <= 2` until the judge has a history) stands.
+- Not done here: discovery from a node (object files only, as for pending parts and locks); a live testnet exercise; the
+  `KpfLock` fold (section 6).

@@ -425,3 +425,127 @@ units, 2,939 bytes; 8 disputes on one bid 449,376 script units, compute mass 38,
   not needed (experiment Z1, DESIGN 4.5f).
 - **Discovery of locks** from the node: object files only (as for pending parts).
 - **Stake, a registry, unbonding, markets without an order book**: not in this stage.
+
+## 9. An oracle-only market with a slow underlying
+
+An oracle-only market (`docs/DESIGN-ORACLE-IMPL.md`, sections 15-23) has no order book behind it: the price of every
+claim on a pair is vouched by that pair's underwriter, and a false price stands unless someone contests it within the
+window with aged judge stake. This exercise runs one market on an underlying that changes slowly (published once an
+hour), so that a person at a terminal can play every role: the underwriter (bonds a slot, vouches prices, renews), two
+parties (long and short), a staker (contests), and the executor (pays fees). It was exercised only offline
+(`crates/kpf-cli/tests/oracle_cli.rs`); nothing here has been run against a network.
+
+### 9.1 What must exist before
+
+Everything of sections 1 and 2, and: keys `uw` (underwriter), `alice` (long), `bob` (short), `sam` (staker), `exec`
+(executor, the funder of fees); about 700 KAS for the underwriter (a 600 KAS slot at the small test size below, its
+vouching UTXO, a defence stake), 200 KAS each for alice and bob, 120 KAS for sam, 10 KAS for exec. The judge counts a
+stake only if it was bonded `M_age` (7 days at the defaults) before the claim it judges: **create the stakes first and
+wait**, or create the market with a short age (`--stake-age-daa`, `--round-daa`) for a quick drill.
+
+### 9.2 The market
+
+Write the feed definition as a plain ASCII text file, one `key: value` line per item: what is priced, its unit, the
+sources and how they combine, the time a price refers to, the sessions (when the underlying is closed), and the
+disagreement rule the judge applies. The market's id is `blake3` of its parameters and of this file's bytes exactly: one
+byte changed is another market.
+
+```sh
+cat > feed.txt <<'EOF'
+kpf feed definition v1
+quantity: example slow underlying, published once per hour
+unit: KAS per whole unit
+sources: median of three named public sources
+time: the price at the DAA score t0, mapped to the accepting block's timestamp
+sessions: always open
+disagreement: a claim is true if within 0.25 % of the median
+EOF
+kpf oracle-market --feed feed.txt --out market.json            # testnet defaults; prints the id and the worst cases
+# a quick drill: a 1-hour window, 10-minute judge rounds, stake counted after 20 minutes
+kpf oracle-market --feed feed.txt --out drill.json --window-daa 36000 --round-daa 6000 --stake-age-daa 12000 --stake-unbond-daa 6000
+kpf oracle-check --market market.json --feed feed.txt --size 10 --x 10 --long-rate 1 --short-rate 2 --cover-rate 6 --premium 0.02
+```
+
+`oracle-check` is what every party runs before trading: it refuses a market whose feed text does not hash to the
+market's feed hash or whose parameters fail the contracts' bounds, warns on characters that render misleadingly and on
+missing lines, and states the parameters and the worst cases in words (an undisputed false claim takes up to a side's
+whole margin; a refuted one costs its proposer the claim's bond). Parameters that pass the bounds can still be hostile
+(a window of seconds, no quiet time, a tiny bond): the warnings name them; nothing else does.
+
+### 9.3 The underwriter bonds a slot, the staker bonds a stake
+
+```sh
+kpf bond  --market market.json --value 600 --funder $UW  --node $NODE --out-dir out/bond   # cover up to 600 KAS at rho 1
+kpf stake --market market.json --value 100 --funder $SAM --node $NODE --out-dir out/stake
+kpf stake --market market.json --value 130 --funder $UW  --node $NODE --out-dir out/uwstake  # the underwriter's defence
+```
+
+### 9.4 Two orders and the open
+
+```sh
+kpf oracle-order --market market.json --side long  --size 10 --limit 10.5 --rate 1 --min-counter-rate 1.5 \
+    --expiry $EXPIRY --prem-max 0.1 --funder $A --node $NODE --out-dir out/lo
+kpf oracle-order --market market.json --side short --size 10 --limit 9.5  --rate 2 --min-counter-rate 0.5 \
+    --expiry $EXPIRY --prem-max 0.1 --funder $B --node $NODE --out-dir out/so
+kpf oracle-open --long out/lo/*-oracle-order.json --short out/so/*-oracle-order.json --slot out/bond/*-underwriting-slot.json \
+    --n 10 --x 10 --cover-rate 6 --premium 0.02 --key $UW --funder $EX --node $NODE --out-dir out/open
+```
+
+Each order names the slots it accepts (`--underwriter SLOT_ID`, any by default) and the highest premium it pays; the open
+requires the slot to count the pair's cover (`q(n, coverRate)`) at its expiry, refuses an underwriter that is a party,
+and refuses a second output of the new pair's id. The expiry defaults to the first ring boundary one term after the
+orders. The underwriter receives the first term's premium, half from each order's escrow.
+
+### 9.5 A claim, a contest, the verdict
+
+The underwriter vouches by spending one of its own plain UTXOs in the claim (write it to a file with `kpf utxos --key $UW
+--node $NODE --out vouch.json` and keep one entry):
+
+```sh
+kpf vouch --pair out/open/*-oracle-pair.json --kind liquidate --side long --price 9.2 --vouch vouch.json \
+    --key $UW --funder $EX --node $NODE --out-dir out/claim
+kpf oracle-watch --me $A --scan out/claim --node $NODE       # A CLAIM AGAINST YOU ... contest until DAA ...
+kpf contest --pending out/claim/*-oracle-pending-part.json --stake out/stake/*-judge-stake.json --key $SAM \
+    --funder $EX --node $NODE --out-dir out/contest
+kpf deposit --dispute <the dispute file of out/contest> --side yes --stake out/uwstake/*-judge-stake.json --key $UW \
+    --funder $EX --node $NODE --out-dir out/defence       # only if the claim is true: the underwriter defends it
+kpf resolve --dispute <the latest dispute file> --pending out/contest/*-oracle-pending-part.json --funder $EX --node $NODE \
+    --out-dir out/verdict                                  # once the round's window has closed
+kpf oracle-finalize --pending out/verdict/*-oracle-pending-part.json --funder $EX --node $NODE --out-dir out/final
+kpf settle-pool --pool <the pool file of out/verdict> --receipt <each receipt file> --funder $EX --node $NODE
+kpf settle-pool --pool <the settled pool file> --funder $EX --node $NODE    # close: the base back, the rest burned
+```
+
+What to check: a contest landing at `P + W` or later is ignored (the claim settles); a refuted claim restores the part
+exactly and pays its bond to the long and to sam; an upheld one finalizes at once; an uncontested one finalizes after
+`W`. A claim that lands more than `lateDaa` after its `t0`, or less than `W` before the expiry, is void: finalize
+restores the part and pays the bond to the defender. The loser of a pending liquidation can cure instead
+(`kpf oracle-cure --pending ... --key $A`).
+
+### 9.6 Renewal, lapse, leaving
+
+```sh
+kpf oracle-watch --me $A --scan out --node $NODE            # your underwriter's cover runs until DAA X; renewal from X - step
+kpf renew --pair <pair file> --slot <slot file> --key $UW --funder $EX --node $NODE     # from one step before X
+kpf lapse-settle --pair <pair file> --funder $EX --node $NODE   # cover lapsed (X + tail) and the pair idle: at the entry
+kpf unbond --slot <slot file> --key $UW --funder $UW --node $NODE   # once every cover's liability has ended
+kpf withdraw-bond --slot <unbonding slot file> --key $UW --node $NODE
+```
+
+If the underwriter goes silent, the parties leave without any price: `amend` and `transfer` to a taker who signs, a
+mutual close, a cooperative close, or the lapse settle once the cover has lapsed. Book-market commands that touch a pair
+(`amend`, `transfer`, `mutual-close`, `coop-close`) do not read oracle pairs; the library builders do
+(`kpf_protocol::oracle_build`), and their commands are the next step of the tooling.
+
+### 9.7 Measured cost (offline, 100 sompi per gram)
+
+Open 0.0857 KAS, a claim 0.0350 + finalize 0.0095, a renewal 0.0373 (seven pairs in one bind 0.1991), a contest 0.0295,
+a defence 0.0401, the resolution 0.0291, settling and closing the pool 0.0796: a pair-month without a dispute is about
+0.17 KAS of network fees, plus the premium the orders agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` section 19.
+
+### 9.8 Not possible yet
+
+- **Discovery**: pending parts, disputes and receipts are found only from object files (as pending parts and locks).
+- **A request to a silent underwriter, rebind, the lock path, a retrospective dispute**: not in this slice.
+- **The price-free pair commands for oracle pairs** on the command line (amend, transfer, mutual and cooperative close):
+  built in the library and tested in the engine, not yet commands.

@@ -1,0 +1,968 @@
+pragma silverscript ^0.1.0;
+
+// KpfPairO: one perpetual position of an oracle-only market (docs/DESIGN-ORACLE-2.md 1.4, 1.5; what is built and every
+// deviation: docs/DESIGN-ORACLE-IMPL.md, third slice). It is KpfPair (docs/DESIGN.md 3.1, 3.4, 4.2-4.6, 4.5a-4.5g) with
+// the KOB evidence reader replaced by the pair's underwriter: the pair is the price range [bl, bs] of size s, the long
+// is owed q(s, c(p) - bl) and the short q(s, bs - c(p)), every pair output holds at least q(s, bs - bl) + carrier.
+//
+// The market (state [0..309)) is an oracle market block: its id (blake3 of the rest), the bond parameters of its slots
+// (KpfBond, byte for byte at [0..87)), the judge parameters of its stakes (KpfStake), the hash of its human-readable
+// feed definition, and the pair parameters. Anyone writes a market by writing an order (KpfOpenO); the contracts enforce
+// only the parameter bounds (checkMarket), never a list of markets.
+//
+// The binding (DESIGN-ORACLE-2.md 1.4): uwId (the covenant id of the underwriter's KpfBond slot), uwKey (its owner: the
+// only key that can vouch a price for this pair), coverRate (sompi per whole unit: the cover of a part of n units is
+// q(n, coverRate), at least its range, counted by the slot until expiry + tailDaa), expiry X, premium (sompi per whole
+// unit per term, half from each side's margin at every renewal; agreed at open by both orders).
+// DESIGN: the note's premium is a yearly rate of the cover, prepaid for each term; here it is a price per whole unit per
+// term, each order bounding it (premMax), half from each side; a renewal can only move the bounds by exactly it.
+//
+// Entries without a price (the book market's, in spirit):
+//   amend, addMargin, transfer, closeHost, closeDonor, mutualClose   as KpfPair P1-P4; the range stays within coverRate,
+//                     the underwriter is never a party (an entrant's key, P3's keys); every one requires the pair UTXO
+//                     to be quietDaa old (CSV), the oracle form of the hand-over rate limit
+//   coopClose         both owners, any split (P9)
+//   lapseSettle       anyone, once the cover has lapsed (tx.daa >= expiry + tailDaa, CLTV) and the pair is idleDaa old
+//                     (CSV): settle all at the entry price (P8, restricted to a lapsed pair)
+// Entries of the underwriter:
+//   renew(u, k)       the slot at input u binds this pair's cover at expiry + termDaa (claim k names this input); the
+//                     premium leaves the margins, half from each side, bounds moved inward; nobody else signs
+//   propose(n, kind, side, p, t0, j, s, fb, k, pPre, pSuf)
+//                     a price claim vouched by uwKey's own P2PK input j (signed SIGHASH_ALL: every outpoint, so this
+//                     pair's state; every output, so the claim; the lock time): the part n moves into a KpfPendingO with
+//                     a bond, exactly as KpfPair.propose moves it into KpfPending (kind 1 close, signed by the closer;
+//                     kind 2 liquidation; restore, cure and forfeit states precomputed as P2SH hashes)
+// DESIGN: the note removes idle settle at E in oracle markets (1.4, 5.13: a blocker could run the clock out to it). It is
+// kept only for a pair whose cover has lapsed (tx.daa >= X + tailDaa) and that is idleDaa old: while an underwriter
+// renews, every renewal and every restored claim is a new UTXO, so no blocker can reach it; once the underwriter is
+// silent it is the one exit of a pair whose counterparty is gone that needs nobody (the price-free exits below need a
+// taker or both parties), and it pays each side at a price both consented to.
+// DESIGN: the book market's hand-over limit (tx.daa >= S + 4R, an evidence clock) has no evidence to protect here. What
+// needs protecting is the underwriter's signed claim, which commits to this pair's outpoint: a party that respent its
+// side every block (amend, transfer) would void every claim before it landed. So every party entry needs the pair
+// UTXO to be quietDaa old, and the underwriter has quietDaa after every change to land a claim.
+contract KpfPairO(
+    byte[32] PENDING_TPL,
+    byte[32] BOND_TPL,
+    int BOND_PRE,
+    int BOND_SUF,
+    byte[4] BIND_TAG,
+    byte[32] init_market,
+    int init_rhoBps,
+    int init_stepDaa,
+    int init_termDaa,
+    int init_tailDaa,
+    int init_rateDaa,
+    int init_slotUnbondDaa,
+    int init_muBps,
+    int init_ageDaa,
+    int init_unbondDaa,
+    int init_roundDaa,
+    int init_burnBps,
+    int init_minStake,
+    byte[32] init_feedHash,
+    int init_scale,
+    int init_priceMax,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_challengeDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    int init_sigmaBps,
+    int init_betaBps,
+    int init_bondMin,
+    int init_size,
+    int init_bl,
+    int init_bs,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    byte[32] init_uwId,
+    pubkey init_uwKey,
+    int init_coverRate,
+    int init_expiry,
+    int init_premium,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    byte[32] init_tagL,
+    byte[32] init_tagS
+) {
+    // The oracle market block (state [0..309)).
+    byte[32] market = init_market;       // blake3 of state [33..309): every parameter below and the feed hash
+    int rhoBps = init_rhoBps;            // bond block (KpfBond's, byte for byte with the id): cover <= rho x K
+    int stepDaa = init_stepDaa;          // the slot ring's step
+    int termDaa = init_termDaa;          // Lambda: the cover's term; a renewal moves X by it
+    int tailDaa = init_tailDaa;          // how long a slot counts cover after its expiry
+    int rateDaa = init_rateDaa;          // the slot's owner rate limit
+    int slotUnbondDaa = init_slotUnbondDaa;
+    int muBps = init_muBps;              // judge block (KpfStake's, with the id)
+    int ageDaa = init_ageDaa;
+    int unbondDaa = init_unbondDaa;
+    int roundDaa = init_roundDaa;
+    int burnBps = init_burnBps;
+    int minStake = init_minStake;
+    byte[32] feedHash = init_feedHash;   // blake3 of the human-readable feed definition; not interpreted on chain
+    int scale = init_scale;              // base units per whole unit of the underlying
+    int priceMax = init_priceMax;        // prices are sompi per whole unit (the underlying priced in KAS)
+    int mmrBps = init_mmrBps;            // maintenance margin
+    int gBps = init_gBps;                // tolerance g inside the trigger and the close price
+    int liqFeeBps = init_liqFeeBps;      // keeper fee rate (to the underwriter)
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;          // C
+    int idleDaa = init_idleDaa;          // the age of a lapsed pair before lapseSettle (CSV)
+    int challengeDaa = init_challengeDaa; // W: the contest window from P; earliest finalize (CSV)
+    int lateDaa = init_lateDaa;          // a claim landed more than lateDaa after its t0 is void
+    int quietDaa = init_quietDaa;        // the age every party entry needs (CSV)
+    int sigmaBps = init_sigmaBps;        // the bond of a claim, of its cover
+    int betaBps = init_betaBps;          // the disputer's share of a refuted claim's bond
+    int bondMin = init_bondMin;          // the bond's floor
+    // Position (state [309..624)). Mutable fields are marked *.
+    int size = init_size;                // * s
+    int bl = init_bl;                    // * long bankruptcy price
+    int bs = init_bs;                    // * short bankruptcy price
+    int entryPrice = init_entryPrice;    // * E, last consented price
+    pubkey longKey = init_longKey;       // * long owner
+    pubkey shortKey = init_shortKey;     // * short owner
+    byte[32] uwId = init_uwId;           // the underwriter's slot (covenant id)
+    pubkey uwKey = init_uwKey;           // the underwriter (the slot's owner)
+    int coverRate = init_coverRate;      // cover per whole unit, >= bs - bl
+    int expiry = init_expiry;            // * X
+    int premium = init_premium;          // premium per whole unit per term
+    int longAsk = init_longAsk;          // * long listing (0 = unlisted)
+    int longMin = init_longMin;          // *
+    int longTip = init_longTip;          // *
+    int shortBid = init_shortBid;        // * short listing (0 = unlisted)
+    int shortMin = init_shortMin;        // *
+    int shortTip = init_shortTip;        // *
+    byte[32] tagL = init_tagL;           // * tags live for one transaction (DESIGN 4.4)
+    byte[32] tagS = init_tagS;           // *
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant KIND_LIQ = 2;
+    int constant PENDING = 1;
+    int constant STATUS_SLOT = 2;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant INT_MAX = 9223372036854775807;
+    int constant RING = 12;
+    int constant CSV_LIMIT = 4294967296;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant RHO_MAX_BPS = 50000;
+    int constant MU_MIN_BPS = 11000;
+    int constant MU_MAX_BPS = 15000;
+    int constant BURN_MAX_BPS = 5000;
+    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant UNIT = 1000000000;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant MMR_CAP = 5000;
+    int constant BOND_MIN_MAX = 1000000000000;
+    int constant OUT_REF = 65536;
+    // KpfBond's state length and the offsets of its status and bond block within it.
+    int constant BOND_STATE_LEN = 236;
+    int constant BOND_STATUS_AT = 33;
+    int constant BOND_MARKET_AT = 42;
+    int constant BOND_MARKET_END = 129;
+    // The bind entry's signature script: 17 pushes of 8 bytes, the 65-byte signature, the 4-byte dispatch tag, then
+    // the redeem script (OP_PUSHDATA2, 3 bytes of header).
+    int constant BIND_SIG_AT = 153;
+    int constant BIND_TAG_AT = 219;
+    int constant BIND_HEAD = 227;
+    // Redeem offsets (the state starts at byte 1). MARKET_END is the end of the bond block [1..88) (the name the bind
+    // proof uses); the market body hashed into the id is [34..310).
+    int constant MARKET_END = 88;
+    int constant BODY_AT = 34;
+    int constant BLOCK_END = 310;
+    // Position: size payload [311..319), bl [320..328), bs [329..337); the entry push 337; the binding [412..505) with
+    // the expiry push at 487; the listings [505..559); the tags [559..625); the state ends at 625.
+    int constant SIZE_AT = 311;
+    int constant BL_AT = 320;
+    int constant BS_AT = 329;
+    int constant ENTRY_AT = 337;
+    int constant BIND_AT = 412;
+    int constant COVER_AT = 478;
+    int constant EXPIRY_AT = 487;
+    int constant LISTS_AT = 505;
+    int constant LISTS_END = 559;
+    int constant LIST_LEN = 27;
+    int constant STATE_END = 625;
+    byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
+
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // As KpfPair.checkPair, and the range within the cover rate.
+    function checkPair() {
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(size > 0);
+        require(size / scale <= (INT_MAX - carrier) / priceMax - 1);
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+        require(coverRate <= priceMax);
+    }
+
+    function floorOf(int b0, int b1) : int {
+        return quoteOf(size, b1 - b0, 0) + carrier;
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    function noTags() : byte[] {
+        byte[] z = byte[](zero32());
+        return byte[](0x20) + z + byte[](0x20) + z;
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // The oracle rate limit: every party entry needs this UTXO to be quietDaa old (CSV).
+    function quiet() {
+        require(this.ageDaa >= quietDaa);
+    }
+
+    // P2SH of this script with bl, bs and the two listing windows replaced and both tags zero.
+    function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noTags() + rs.slice(STATE_END, this.bytecodeSize)
+        ));
+    }
+
+    // The redeem script of a KpfPairO with this script's template and market and the given position: size, range,
+    // entry, keys, the binding (93 bytes with their push opcodes), the listings (54) and tags.
+    function pairRs(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[32] tl, byte[32] ts) : byte[] {
+        return rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + byte[](0x08) + byte[](b0 as byte[8]) + byte[](0x08)
+            + byte[](b1 as byte[8]) + byte[](0x08) + byte[](e as byte[8]) + byte[](0x20) + byte[](lk) + byte[](0x20)
+            + byte[](sk) + bnd + lists + byte[](0x20) + byte[](tl) + byte[](0x20) + byte[](ts)
+            + rs.slice(STATE_END, this.bytecodeSize);
+    }
+
+    function pairSpk(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] bnd, byte[] lists, byte[32] tl, byte[32] ts) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(pairRs(rs, sz, b0, b1, e, lk, sk, bnd, lists, tl, ts)));
+    }
+
+    // The P2SH hash of a pair state propose fixes for KpfPendingO: this binding, the entry kept, tags 0.
+    function pairHash(byte[] rs, int sz, int b0, int b1, byte[32] lk, byte[32] sk, byte[] lists) : byte[32] {
+        byte[32] z = zero32();
+        return blake2b(pairRs(rs, sz, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lists, z, z));
+    }
+
+    // P2SH of the remainder: this script with the size replaced and both tags zero.
+    function restSpk(byte[] rs, int sz) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noTags()
+                + rs.slice(STATE_END, this.bytecodeSize)
+        ));
+    }
+
+    function win(int a, int m, int t) : byte[] {
+        return byte[](0x08) + byte[](a as byte[8]) + byte[](0x08) + byte[](m as byte[8]) + byte[](0x08) + byte[](t as byte[8]);
+    }
+
+    function checkPart(int n) {
+        require(n > 0);
+        require(n <= size);
+        require(n >= minSize);
+        int rest = size - n;
+        require(rest == 0 || rest >= minSize);
+    }
+
+    function owed(int n, int r, int t) : int {
+        int rr = r;
+        if (rr < 0) { rr = 0; }
+        int tt = t;
+        if (tt > rr) { tt = rr; }
+        if (tt < 0) { tt = 0; }
+        return quoteOf(n, rr, 0) - quoteOf(n, tt, 0);
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    // As KpfPair.partAndRest (the remainder keeps the old carrier, the excess and the rounding slack).
+    function partAndRest(byte[32] selfId, byte[] rs, int n, int k, byte[] partSpk, int partRange, int keep) {
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 1);
+            int c = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[c].scriptPubKey == partSpk);
+            require(tx.outputs[c].value >= partRange + carrier);
+            require(tx.outputs[c].value >= partRange + keep);
+        } else {
+            require(OpCovOutputCount(selfId) == 2);
+            require(k == 0 || k == 1);
+            int c0 = OpCovOutputIdx(selfId, k);
+            require(tx.outputs[c0].scriptPubKey == partSpk);
+            require(tx.outputs[c0].value >= partRange + carrier);
+            int c1 = OpCovOutputIdx(selfId, 1 - k);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+    }
+
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // BEGIN oracle bind proof
+    // The slot input u proves that it counts cover >= c with expiry x for the claimant `ref`: u is a KpfBond, its
+    // state has status slot and this contract's bond block, and it is spent by its bind entry whose second argument is
+    // x and whose claim k is (ref, >= c). The signature script is checked push by push from its first byte (a
+    // signature script is push-only and its last push is the redeem script whose hash the input's P2SH fixes): the 17
+    // arguments are plain 8-byte pushes at their fixed offsets, then the 65-byte signature, the bind dispatch tag and
+    // the redeem script, so the values read are the arguments the bind entry ran with. Returns (the slot's covenant
+    // id, its owner key). KpfBond.bind adds every claim's cover to the bucket of x and refuses two claims with one ref,
+    // so two claimants never count one claim, whatever else the transaction holds.
+    // DESIGN: the same checks as the stand-ins' bind proof (contracts/stubs), written without a local per argument: the oracle
+    // templates carry 41 state fields and the stack limit is 244.
+    function boundBy(int u, int k, int x, int ref, int c) : (byte[32], byte[32]) {
+        byte[] st = tplState(u, BOND_PRE, BOND_STATE_LEN, BOND_SUF, BOND_TPL);
+        require(st.slice(BOND_STATUS_AT, BOND_STATUS_AT + 9) == i9(STATUS_SLOT));
+        require(st.slice(BOND_MARKET_AT, BOND_MARKET_END) == ownRs().slice(1, MARKET_END));
+        require(OpTxInputScriptSigLen(u) == BIND_HEAD + BOND_PRE + BOND_STATE_LEN + BOND_SUF);
+        require(OpTxInputScriptSigSubstr(u, BIND_TAG_AT, BIND_HEAD - 3) == byte[](0x04) + byte[](BIND_TAG));
+        require(OpTxInputScriptSigSubstr(u, BIND_SIG_AT, BIND_SIG_AT + 1) == byte[](0x41));
+        byte[] p8 = byte[](0x08);
+        require(OpTxInputScriptSigSubstr(u, 0, 1) == p8);
+        require(OpTxInputScriptSigSubstr(u, 9, 10) == p8);
+        require(OpTxInputScriptSigSubstr(u, 18, 19) == p8);
+        require(OpTxInputScriptSigSubstr(u, 27, 28) == p8);
+        require(OpTxInputScriptSigSubstr(u, 36, 37) == p8);
+        require(OpTxInputScriptSigSubstr(u, 45, 46) == p8);
+        require(OpTxInputScriptSigSubstr(u, 54, 55) == p8);
+        require(OpTxInputScriptSigSubstr(u, 63, 64) == p8);
+        require(OpTxInputScriptSigSubstr(u, 72, 73) == p8);
+        require(OpTxInputScriptSigSubstr(u, 81, 82) == p8);
+        require(OpTxInputScriptSigSubstr(u, 90, 91) == p8);
+        require(OpTxInputScriptSigSubstr(u, 99, 100) == p8);
+        require(OpTxInputScriptSigSubstr(u, 108, 109) == p8);
+        require(OpTxInputScriptSigSubstr(u, 117, 118) == p8);
+        require(OpTxInputScriptSigSubstr(u, 126, 127) == p8);
+        require(OpTxInputScriptSigSubstr(u, 135, 136) == p8);
+        require(OpTxInputScriptSigSubstr(u, 144, 145) == p8);
+        require(int(byte[8](OpTxInputScriptSigSubstr(u, 10, 18))) == x);
+        require(k >= 0);
+        require(k < 7);
+        require(int(byte[8](OpTxInputScriptSigSubstr(u, 28 + 18 * k, 36 + 18 * k))) == ref);
+        require(int(byte[8](OpTxInputScriptSigSubstr(u, 37 + 18 * k, 45 + 18 * k))) >= c);
+        return (OpInputCovenantId(u), byte[32](st.slice(1, 33)));
+    }
+    // END oracle bind proof
+
+    // BEGIN oracle bond bounds
+    function checkBond() {
+        require(rhoBps >= BPS);
+        require(rhoBps <= RHO_MAX_BPS);
+        require(stepDaa > 0);
+        require(termDaa >= stepDaa);
+        require(termDaa % stepDaa == 0);
+        require(termDaa < CSV_LIMIT);
+        require(tailDaa >= 0);
+        require(tailDaa < CSV_LIMIT);
+        require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
+        require(rateDaa >= 0);
+        require(rateDaa < CSV_LIMIT);
+        require(slotUnbondDaa >= 0);
+        require(slotUnbondDaa < CSV_LIMIT);
+    }
+    // END oracle bond bounds
+
+    // BEGIN judge bounds
+    function checkJudge() {
+        require(muBps >= MU_MIN_BPS);
+        require(muBps <= MU_MAX_BPS);
+        require(roundDaa > 0);
+        require(roundDaa < CSV_LIMIT);
+        require(ageDaa >= roundDaa);
+        require(ageDaa < CSV_LIMIT);
+        require(unbondDaa >= roundDaa);
+        require(unbondDaa < CSV_LIMIT);
+        require(burnBps >= 0);
+        require(burnBps <= BURN_MAX_BPS);
+        require(minStake >= UNIT);
+        require(minStake <= MIN_STAKE_MAX);
+    }
+    // END judge bounds
+
+    // BEGIN oracle market bounds
+    function checkMarket() {
+        require(blake3(ownRs().slice(BODY_AT, BLOCK_END)) == market);
+        checkBond();
+        checkJudge();
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(bondMin >= 0);
+        require(bondMin <= BOND_MIN_MAX);
+        require(gBps > 0);
+        require(gBps < BPS);
+        // A claim is valid only if P + challengeDaa <= X <= P + termDaa + stepDaa, so a window shorter than the term
+        // leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
+        require(challengeDaa > 0);
+        require(challengeDaa < termDaa);
+        require(lateDaa >= 0);
+        require(lateDaa < CSV_LIMIT);
+        require(quietDaa >= 0);
+        require(quietDaa < CSV_LIMIT);
+        require(sigmaBps >= 0);
+        require(sigmaBps <= BPS);
+        require(betaBps >= 0);
+        require(betaBps <= BPS);
+    }
+    // END oracle market bounds
+
+    // P1 amend (as KpfPair), after quietDaa.
+    entry amend(sig s, int side, int ask, int minPart, int tipRate) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        quiet();
+        require(ask >= 0);
+        require(ask <= priceMax);
+        require(minPart >= 0);
+        require(tipRate >= 0);
+        byte[] rs = ownRs();
+        byte[] w = win(ask, minPart, tipRate);
+        byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + w;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            lists = w + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+        }
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, bl, bs, lists));
+        require(tx.outputs[c].value >= tx.inputs[self].value);
+        require(tx.outputs[c].value >= floorOf(bl, bs));
+    }
+
+    // P2 add margin (as KpfPair), after quietDaa; the new range stays within the cover rate.
+    // DESIGN: the note allows margin beyond the cover only with a bind of the difference; here the range never exceeds
+    // coverRate (a pair is opened with the headroom it wants), so every claim moves at most the counted cover.
+    entry addMargin(sig s, int side, int delta) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        quiet();
+        require(delta > 0);
+        int nbl = bl;
+        int nbs = bs;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            nbl = bl - delta;
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+            nbs = bs + delta;
+        }
+        require(nbl >= 0);
+        require(nbl < nbs);
+        require(nbs <= priceMax);
+        require(nbs - nbl <= coverRate);
+        byte[] rs = ownRs();
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, nbl, nbs, rs.slice(LISTS_AT, LISTS_END)));
+        require(tx.outputs[c].value - tx.inputs[self].value >= quoteOf(size, delta, scale - 1));
+        require(tx.outputs[c].value >= floorOf(nbl, nbs));
+    }
+
+    // P3 transfer (as KpfPair), after quietDaa; the entrant is never the underwriter and the part's range stays within
+    // the cover rate. The binding is copied.
+    entry transfer(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int k) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(x >= 0);
+        require(x <= priceMax);
+        require(ek != byte[32](uwKey));
+        int pay = 0;
+        if (side == SIDE_LONG) {
+            require(longAsk > 0);
+            require(x >= longAsk);
+            require(n >= longMin || n == size);
+            pay = owed(n, x - bl, longTip);
+        } else {
+            require(side == SIDE_SHORT);
+            require(shortBid > 0);
+            require(x <= shortBid);
+            require(n >= shortMin || n == size);
+            pay = owed(n, bs - x, shortTip);
+        }
+        handOver(side, n, nb, ek, et, k, pay, x);
+    }
+
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay, int hp) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        byte[] rs = ownRs();
+        byte[32] lk = byte[32](longKey);
+        byte[32] sk = byte[32](shortKey);
+        byte[] lw = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN);
+        byte[] sw = rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        byte[32] tl = zero32();
+        byte[32] ts = tl;
+        int b0 = bl;
+        int b1 = bs;
+        pubkey payKey = longKey;
+        if (side == SIDE_LONG) {
+            require(nb >= 0);
+            require(nb <= bl);
+            require(hp * (BPS - mmrBps) >= nb * BPS);
+            b0 = nb;
+            lk = ek;
+            lw = byte[](NO_LIST);
+            tl = et;
+        } else {
+            require(nb >= bs);
+            require(nb <= priceMax);
+            require(nb * BPS >= hp * (BPS + mmrBps));
+            b1 = nb;
+            sk = ek;
+            sw = byte[](NO_LIST);
+            ts = et;
+            payKey = shortKey;
+        }
+        require(b1 - b0 <= coverRate);
+        int p = pay;
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (p < PLAIN_DUST) {
+            keep = keep + p;
+            p = 0;
+        }
+        payTo(self, payKey, p);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, rs.slice(BIND_AT, LISTS_AT), lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
+    }
+
+    // P4 close-versus-close, host side (as KpfPair), after quietDaa. P3 keeps this pair's binding; its long (the donor's)
+    // is not the underwriter and its range stays within this pair's cover rate.
+    entry closeHost(int n, int x, int e3, int k, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(x >= 0);
+        require(x <= priceMax);
+        require(longAsk > 0);
+        require(x >= longAsk);
+        require(n >= longMin || n == size);
+        require(bl3 >= 0);
+        require(bl3 <= bl);
+        require(e3 <= entryPrice);
+        require(lk3 != byte[32](uwKey));
+        require(bs - bl3 <= coverRate);
+        byte[] rs = ownRs();
+        int pay = owed(n, x - bl, longTip);
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (pay < PLAIN_DUST) {
+            keep = keep + pay;
+            pay = 0;
+        }
+        payTo(self, longKey, pay);
+        byte[] lists = win(la3, lm3, lt3) + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
+    }
+
+    // P4 close-versus-close, donor side (as KpfPair), after quietDaa. The long moves into the host's P3 at output c,
+    // which carries this pair's underwriter (uwId, uwKey) with the host's cover rate cr3, expiry x3 and premium pr3: P3's
+    // range is within both cover rates, x3 <= this expiry and pr3 <= this premium, so the moving long is never covered
+    // less, for longer or at a higher premium than this pair's own counted cover, even if the host is a look-alike; the
+    // host's short is not the underwriter.
+    // DESIGN: the note requires only the same uwId; a look-alike host would then move the donor's long into uncounted
+    // cover for longer or at a higher premium.
+    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, int cr3, int x3, int pr3) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(x >= 0);
+        require(x <= priceMax);
+        require(shortBid > 0);
+        require(x <= shortBid);
+        require(n >= shortMin || n == size);
+        require(bs3 >= bs);
+        require(bs3 <= priceMax);
+        require(e3 >= entryPrice);
+        require(sk3 != byte[32](uwKey));
+        require(bs3 - bl <= coverRate);
+        require(bs3 - bl <= cr3);
+        require(x3 <= expiry);
+        require(pr3 <= premium);
+        byte[] rs = ownRs();
+        byte[32] pid = OpOutputCovenantId(c);
+        require(pid != zero32());
+        require(pid != selfId);
+        byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win(sa3, sm3, st3);
+        byte[] bnd = rs.slice(BIND_AT, COVER_AT) + i9(cr3) + i9(x3) + i9(pr3);
+        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, bnd, lists, selfId, zero32()));
+        require(tx.outputs[c].value >= quoteOf(n, bs3 - bl, 0) + carrier);
+        int pay = owed(n, bs - x, shortTip);
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            pay = pay + keep;
+            if (pay < PLAIN_DUST) { pay = 0; }
+        } else {
+            if (pay < PLAIN_DUST) {
+                keep = keep + pay;
+                pay = 0;
+            }
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+        payTo(self, shortKey, pay);
+    }
+
+    // P4 mutual close (as KpfPair), after quietDaa.
+    entry mutualClose(int n, int x) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(longAsk > 0);
+        require(shortBid > 0);
+        require(x >= longAsk);
+        require(x <= shortBid);
+        require(x <= priceMax);
+        require(n >= longMin || n == size);
+        require(n >= shortMin || n == size);
+        int lp = owed(n, x - bl, longTip);
+        int sp = owed(n, bs - x, shortTip);
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            sp = sp + keep;
+            if (lp < PLAIN_DUST) {
+                sp = sp + lp;
+                lp = 0;
+            }
+            if (sp < PLAIN_DUST) {
+                lp = lp + sp;
+                sp = 0;
+            }
+            if (lp < PLAIN_DUST) { lp = 0; }
+        } else {
+            if (lp < PLAIN_DUST) {
+                keep = keep + lp;
+                lp = 0;
+            }
+            if (sp < PLAIN_DUST) {
+                keep = keep + sp;
+                sp = 0;
+            }
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            byte[] rs = ownRs();
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+        payTo(self, longKey, lp);
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, shortKey, sp);
+        }
+    }
+
+    // Lapse settle (P8 of a lapsed pair). Anyone, once the cover's liability has ended (tx.daa >= expiry + tailDaa, CLTV)
+    // and this UTXO is idleDaa old (CSV): the pair ends at the entry price clamped to [bl, bs], the long at output i, the
+    // short the rest of this UTXO's value at M - 1 - i (as KpfPair.idleSettle).
+    entry lapseSettle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        require(this.ageDaa >= idleDaa);
+        int end = expiry + tailDaa;
+        require(end >= 0);
+        require(end < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= end);
+        require(OpCovOutputCount(selfId) == 0);
+        int e = entryPrice;
+        if (e < bl) { e = bl; }
+        if (e > bs) { e = bs; }
+        int v = tx.inputs[self].value;
+        int lp = quoteOf(size, e - bl, 0);
+        int sp = v - lp;
+        if (lp < PLAIN_DUST) {
+            lp = 0;
+            sp = v;
+        } else {
+            if (sp < PLAIN_DUST) {
+                lp = v;
+                sp = 0;
+            }
+        }
+        payTo(self, longKey, lp);
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, shortKey, sp);
+        }
+    }
+
+    // P9 cooperative close (as KpfPair): both owners sign every output; the pair ends.
+    entry coopClose(sig sl, sig ss) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        signedBy(sl, longKey);
+        signedBy(ss, shortKey);
+        require(OpCovOutputCount(selfId) == 0);
+    }
+
+    // Renew (docs/DESIGN-ORACLE-2.md 1.4 "Renewal"): the slot uwId at input u (owned by uwKey) binds this pair's cover
+    // q(s, coverRate) at expiry + termDaa, claim k naming this input (the bind proof). The premium for the term leaves the
+    // margins: the long's bound rises by premium - floor(premium / 2), the short's falls by floor(premium / 2); the pair's
+    // value may fall by exactly what its range floor falls, which the underwriter's signed bind sends where it chooses.
+    // The range must stay wider than both maintenance bands; otherwise the pair cannot be renewed and its cover lapses.
+    // No party signs: the premium was agreed at open. The slot's window (x <= t + termDaa + stepDaa) allows a renewal
+    // only from one step before the expiry, so the premium is paid at most once per term of calendar time.
+    entry renew(int u, int k) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        checkPair();
+        checkMarket();
+        int x2 = expiry + termDaa;
+        (byte[32] id, byte[32] key) = boundBy(u, k, x2, self, quoteOf(size, coverRate, 0));
+        require(id == uwId);
+        require(key == byte[32](uwKey));
+        require(premium >= 0);
+        int nbl = bl + premium - premium / 2;
+        int nbs = bs - premium / 2;
+        require(nbl < nbs);
+        require(nbl * (BPS + mmrBps) < nbs * (BPS - mmrBps));
+        int pay = quoteOf(size, bs - bl, 0) - quoteOf(size, nbs - nbl, 0);
+        byte[] rs = ownRs();
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, BL_AT) + byte[](nbl as byte[8])
+            + rs.slice(BL_AT + 8, BS_AT) + byte[](nbs as byte[8]) + rs.slice(BS_AT + 8, EXPIRY_AT) + i9(x2)
+            + rs.slice(EXPIRY_AT + 9, LISTS_END) + noTags() + rs.slice(STATE_END, this.bytecodeSize))));
+        require(tx.outputs[c].value >= tx.inputs[self].value - pay);
+    }
+
+    // The vouch (docs/DESIGN-ORACLE-2.md 1.5, experiment Z1): input j is a plain P2PK input of uwKey whose signature
+    // script is exactly one 65-byte signature with SIGHASH_ALL, so the underwriter signed every outpoint (this pair, so
+    // its state), every output (the claim and its bond) and the lock time (t0). The signature itself is checked by
+    // consensus when input j runs; this input checks what it signed. Spending j revokes an unused claim.
+    function vouched(int j) {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(uwKey)));
+        require(OpTxInputScriptSigLen(j) == 66);
+        require(OpTxInputScriptSigSubstr(j, 0, 1) == byte[](0x41));
+        require(OpTxInputScriptSigSubstr(j, 65, 66) == byte[](0x01));
+    }
+
+    function feeAt(int n, int p) : int {
+        int f = quoteOf(n, p * liqFeeBps / BPS, 0);
+        if (f < keeperFeeMin) { f = keeperFeeMin; }
+        return f;
+    }
+
+    // Propose (DESIGN 4.5d with the underwriter as the price source, docs/DESIGN-ORACLE-2.md 1.5). The part n moves into
+    // a KpfPendingO with the claim (kind, side, the vouched price p, the DAA t0 it refers to, tx.daa >= t0 by CLTV) and
+    // a bond B = max(bondMin, 0.02 KAS, q(n, floor(coverRate * sigmaBps / 10^4))), the remainder continues this pair as
+    // on every split. Nothing settles here.
+    //   kind 1 close: the owner of `side` signs (and posts the bond); the underwriter vouches p; at settlement the closer
+    //          is paid at p moved by g against it.
+    //   kind 2 liquidation: anyone builds it, the underwriter vouches p and posts the bond; the loser `side` is
+    //          liquidatable at p only with the tolerance g inside the trigger: a long iff
+    //          ceil(p * (10^4 + g) / 10^4) * (10^4 - mmrBps) < bl * 10^4, a short iff
+    //          bs * 10^4 < floor(p * (10^4 - g) / 10^4) * (10^4 + mmrBps); and bl * (10^4 + m) < bs * (10^4 - m); the
+    //          two keys differ; the fee as KpfPair; the cure bound as KpfPair (no claim within g of p reopens a cured
+    //          part), and no cure when the cured range would exceed coverRate or the short's bound priceMax; the
+    //          forfeit bound fb as KpfPair.
+    // Every pair state the part may become (restore, cure, forfeit) is fixed here with this binding, the entry kept,
+    // both sides unlisted and both tags 0.
+    entry propose(int n, int kind, int side, int p, int t0, int j, byte[] s, int fb, int k, byte[] pPre, byte[] pSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkMarket();
+        checkPart(n);
+        vouched(j);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= t0);
+        require(p >= 0);
+        require(p <= priceMax);
+        byte[32] lk = byte[32](longKey);
+        byte[32] sk = byte[32](shortKey);
+        byte[] rs = ownRs();
+        byte[] unlisted = byte[](NO_LIST) + byte[](NO_LIST);
+        int part = quoteOf(n, bs - bl, 0);
+        byte[32] ch = zero32();
+        byte[32] fh = ch;
+        int cb = 0;
+        int fee = 0;
+        if (kind == KIND_CLOSE) {
+            if (side == SIDE_LONG) {
+                signedBy(sig(byte[65](s)), longKey);
+            } else {
+                require(side == SIDE_SHORT);
+                signedBy(sig(byte[65](s)), shortKey);
+            }
+        } else {
+            require(kind == KIND_LIQ);
+            require(lk != sk);
+            require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
+            int t = 0;
+            int u0 = bl;
+            int u1 = bs;
+            int f0 = bl;
+            int f1 = bs;
+            byte[32] wk = sk;
+            int pg = 0;
+            if (side == SIDE_LONG) {
+                require(((p * (BPS + gBps) + BPS - 1) / BPS) * (BPS - mmrBps) < bl * BPS);
+                t = bl * BPS / (BPS - mmrBps) - bl;
+                pg = (p * (BPS - gBps) + BPS - 1) / BPS;
+                cb = pg * (BPS - mmrBps) / BPS;
+                u0 = cb;
+                f0 = fb;
+            } else {
+                require(side == SIDE_SHORT);
+                require(bs * BPS < (p * (BPS - gBps) / BPS) * (BPS + mmrBps));
+                t = bs - (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
+                pg = p * (BPS + gBps) / BPS;
+                cb = (pg * (BPS + mmrBps) + BPS - 1) / BPS;
+                u1 = cb;
+                f1 = fb;
+                wk = lk;
+            }
+            fee = feeAt(n, p);
+            int slice = quoteOf(n, t, 0);
+            if (fee > slice) { fee = slice; }
+            require(f0 >= bl);
+            require(f1 <= bs);
+            require(f0 < f1);
+            require(quoteOf(n, f1 - f0, 0) + fee <= part);
+            require(f1 - f0 == bs - bl || quoteOf(n, f1 - f0 + 1, 0) + fee > part);
+            fh = pairHash(rs, n, f0, f1, wk, wk, unlisted);
+            // DESIGN: a cure that would widen the range beyond the cover rate is not offered (the cover counted for the
+            // pair would no longer bound what a claim can move).
+            if (u1 <= priceMax && u1 - u0 <= coverRate) {
+                ch = pairHash(rs, n, u0, u1, lk, sk, unlisted);
+            } else {
+                cb = 0;
+            }
+        }
+        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, unlisted);
+        int bond = quoteOf(n, coverRate * sigmaBps / BPS, 0);
+        if (bond < bondMin) { bond = bondMin; }
+        if (bond < PLAIN_DUST) { bond = PLAIN_DUST; }
+        int refund = bond;
+        if (n < size) { refund = bond + carrier; }
+        byte[] z8 = byte[](0 as byte[8]);
+        byte[] st = rs.slice(1, BLOCK_END) + i9(kind) + i9(side) + i9(n) + i9(bl) + i9(bs) + i9(p) + i9(t0) + i9(cb) + i9(fee)
+            + i9(bond) + i9(refund) + i9(PENDING) + i9(0) + byte[](0x20) + z8 + z8 + z8 + z8 + rs.slice(ENTRY_AT, LISTS_END)
+            + byte[](0x20) + byte[](rh) + byte[](0x20) + byte[](ch) + byte[](0x20) + byte[](fh);
+        require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDING_TPL);
+        byte[] pend = byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf));
+        int v = tx.inputs[self].value;
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 1);
+            int c = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[c].scriptPubKey == pend);
+            require(tx.outputs[c].value >= v + bond);
+        } else {
+            require(OpCovOutputCount(selfId) == 2);
+            require(k == 0 || k == 1);
+            int c0 = OpCovOutputIdx(selfId, k);
+            require(tx.outputs[c0].scriptPubKey == pend);
+            require(tx.outputs[c0].value >= part + refund);
+            int c1 = OpCovOutputIdx(selfId, 1 - k);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= v - part);
+        }
+    }
+}

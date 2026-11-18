@@ -1,0 +1,626 @@
+pragma silverscript ^0.1.0;
+
+// KpfPendingO: a part of an oracle-market pair (KpfPairO) against which a price claim vouched by the pair's underwriter
+// is pending (docs/DESIGN-ORACLE-2.md 1.5, 1.7; what is built and every deviation: docs/DESIGN-ORACLE-IMPL.md, third
+// slice). KpfPairO.propose writes it under the pair's covenant id (one id, two templates, as KpfPending); only the
+// status window (status, P, disputer) ever changes.
+//
+// Statuses: 1 pending, 2 contested, 3 upheld, 4 refuted.
+//   pending    contest(u, dOut)  anyone with aged judge stake (KpfStake.open on NO in the same transaction): the part
+//                                becomes contested, recording P (this UTXO's DAA score, exact) and the opener's key
+//              cure(s)           kind 2 only, the loser's signature: the loser's bound moves to cureBound, the proposer
+//                                (the underwriter) is repaid its refund
+//              finalize()        anyone, once challengeDaa old (CSV): settle, or restore when the claim is void
+//   contested  decide(d)         anyone, in the transaction that resolves the dispute (KpfStake.resolve naming this
+//                                input): upheld if YES leads, refuted if NO leads, upheld whatever the verdict when the
+//                                contest was accepted after the window (P + challengeDaa or later)
+//   upheld     finalize()        anyone, at once: settle, or restore when the claim is void
+//   refuted    finalize()        anyone, at once: restore; the bond goes to the defender, the disputer's share to it
+//
+// The claim is valid (it may settle) only if P + challengeDaa <= expiry (its whole window lies inside the cover),
+// expiry <= P + termDaa + stepDaa (the bound of slice A: a pair a genesis made can rely on a slot it never bound for at
+// most one period), and P - t0 <= lateDaa (a vouched claim landed later than the market allows is void). P is this
+// UTXO's own DAA score while pending, the recorded one once contested.
+// DESIGN: the note (1.5) judges a late claim at tau = P instead of voiding it, and lets a claim be accepted up to the
+// expiry X; here a late claim is void and a claim must land at least challengeDaa before X, so no claim is ever pending
+// beyond its cover and an honest underwriter is never judged at a price it did not sign.
+// DESIGN: the note's live dispute has no deadline the covenant can enforce (time has only lower bounds); here the
+// deadline is enforced after the fact: the contested part's own DAA score (the contest's acceptance, exact when decide
+// reads it) must be below P + challengeDaa, or the verdict is ignored and the claim settles as if uncontested. A timely
+// contest and a finalize (age >= challengeDaa) can therefore never both be valid.
+//
+// Bond, refund and fee (DESIGN 4.5d, the slash of DESIGN-ORACLE-2.md 1.7):
+//   - the bond B (max(bondMin, 0.02 KAS, q(n, coverRate * sigmaBps / 10^4))) is in this part, posted by the claim's
+//     proposer: the underwriter for a liquidation (kind 2), the closer for a close (kind 1, which the closer signs and
+//     the underwriter co-signs); refund = B, plus the carrier the proposer funded when n < s;
+//   - uncontested or upheld and valid: the proposer gets its refund (a liquidation: B + fee to the underwriter);
+//   - refuted: the part is restored (value >= v - B), the disputer (the opening staker) gets floor(B * betaBps / 10^4) at
+//     output M - 1 - i, the defender (the party the claim would have wronged) the rest at output i;
+//   - void (and not refuted): the part is restored, the defender gets B: a claim that cannot settle costs its proposer
+//     its bond, so a proposer cannot freeze a pair with void claims for free.
+// DESIGN: the note has no proposer bond ("the slot is liable") and no rule for a void claim; here every claim carries a
+// bond, a close's is posted by the closer (who signs the claim; the underwriter co-signs the price), and a void claim's
+// bond goes to the defender.
+// DESIGN: closed markets (the note's 4): the covenant cannot read a calendar (DAA is not wall time, time has only lower
+// bounds). It enforces t0 <= tx.daa at the proposal and P - t0 <= lateDaa here, so no claim prices the future and none
+// lands long after the moment it prices; whether t0 lies in a closed session is the feed definition's, and a claim
+// about a closed session is false by definition: the judge refutes it when contested.
+// DESIGN: the note slashes sigma x c from the underwriter's slot by a reservation at the opening of the dispute (1.7).
+// A reservation needs the slot to authenticate the contested claim, which it cannot: a genesis can create a look-alike
+// pending part naming any slot, so a reservation entry that accepts it lets anyone slash honest slots, and pinning this
+// template in KpfBond would not help (a look-alike passes the template check). So the slash is posted with the claim
+// itself, by the proposer's own funds, exactly as the book market's proposer bond; the slot only caps the cover (rho)
+// and is never slashed in this slice.
+//
+// Every branch ends in a KpfPairO state precomputed by propose (restore, cure, forfeit; P2SH hashes, tags 0, unlisted) or
+// in plain outputs; contest hands the part to the judge, whose resolution (anyone, after its round) delivers the
+// verdict here; finalize needs no key and no evidence. So no part is locked: a pending part is finalized by anyone after
+// challengeDaa, a contested one is decided when its dispute resolves (KpfStake.resolve, anyone), a decided one at once.
+contract KpfPendingO(
+    byte[32] JUDGE_TPL,
+    int JUDGE_PRE,
+    int JUDGE_SUF,
+    byte[4] OPEN_TAG,
+    byte[4] RESOLVE_TAG,
+    byte[32] init_market,
+    int init_rhoBps,
+    int init_stepDaa,
+    int init_termDaa,
+    int init_tailDaa,
+    int init_rateDaa,
+    int init_slotUnbondDaa,
+    int init_muBps,
+    int init_ageDaa,
+    int init_unbondDaa,
+    int init_roundDaa,
+    int init_burnBps,
+    int init_minStake,
+    byte[32] init_feedHash,
+    int init_scale,
+    int init_priceMax,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_challengeDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    int init_sigmaBps,
+    int init_betaBps,
+    int init_bondMin,
+    int init_kind,
+    int init_side,
+    int init_n,
+    int init_bl,
+    int init_bs,
+    int init_quote,
+    int init_t0,
+    int init_cureBound,
+    int init_fee,
+    int init_bond,
+    int init_refund,
+    int init_status,
+    int init_clock,
+    pubkey init_disputerKey,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    byte[32] init_uwId,
+    pubkey init_uwKey,
+    int init_coverRate,
+    int init_expiry,
+    int init_premium,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    byte[32] init_restoreHash,
+    byte[32] init_cureHash,
+    byte[32] init_forfeitHash
+) {
+    // The oracle market block (state [0..309)), byte for byte the pair's (KpfPairO describes every field).
+    byte[32] market = init_market;
+    int rhoBps = init_rhoBps;
+    int stepDaa = init_stepDaa;
+    int termDaa = init_termDaa;
+    int tailDaa = init_tailDaa;
+    int rateDaa = init_rateDaa;
+    int slotUnbondDaa = init_slotUnbondDaa;
+    int muBps = init_muBps;
+    int ageDaa = init_ageDaa;
+    int unbondDaa = init_unbondDaa;
+    int roundDaa = init_roundDaa;
+    int burnBps = init_burnBps;
+    int minStake = init_minStake;
+    byte[32] feedHash = init_feedHash;
+    int scale = init_scale;
+    int priceMax = init_priceMax;
+    int mmrBps = init_mmrBps;
+    int gBps = init_gBps;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int challengeDaa = init_challengeDaa;
+    int lateDaa = init_lateDaa;
+    int quietDaa = init_quietDaa;
+    int sigmaBps = init_sigmaBps;
+    int betaBps = init_betaBps;
+    int bondMin = init_bondMin;
+    // The claim (state [309..408)).
+    int kind = init_kind;                // 1 close, 2 liquidation
+    int side = init_side;                // kind 1: the closer; kind 2: the loser
+    int n = init_n;
+    int bl = init_bl;
+    int bs = init_bs;
+    int quote = init_quote;              // p, the price the underwriter vouched (sompi per whole unit)
+    int t0 = init_t0;                    // the DAA the price refers to (the proposal's lock time proved tx.daa >= t0)
+    int cureBound = init_cureBound;      // kind 2: the loser's bound after a cure (0: no cure)
+    int fee = init_fee;                  // kind 2: keeper fee, to the underwriter at settlement
+    int bond = init_bond;                // B
+    int refund = init_refund;            // B, plus the carrier the proposer funded when n < s
+    // The status window (state [408..459)): the only bytes contest and decide change.
+    int status = init_status;            // 1 pending, 2 contested, 3 upheld, 4 refuted
+    int clock = init_clock;              // P once contested (0 while pending)
+    pubkey disputerKey = init_disputerKey; // the opening staker once contested (zero while pending)
+    // The pair's entry, keys, binding and listings when the claim was proposed (state [459..681)), then the pair states
+    // this part may become (state [681..780)).
+    int entryPrice = init_entryPrice;
+    pubkey longKey = init_longKey;
+    pubkey shortKey = init_shortKey;
+    byte[32] uwId = init_uwId;
+    pubkey uwKey = init_uwKey;
+    int coverRate = init_coverRate;
+    int expiry = init_expiry;
+    int premium = init_premium;
+    int longAsk = init_longAsk;
+    int longMin = init_longMin;
+    int longTip = init_longTip;
+    int shortBid = init_shortBid;
+    int shortMin = init_shortMin;
+    int shortTip = init_shortTip;
+    byte[32] restoreHash = init_restoreHash;
+    byte[32] cureHash = init_cureHash;
+    byte[32] forfeitHash = init_forfeitHash;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant PENDING = 1;
+    int constant CONTESTED = 2;
+    int constant UPHELD = 3;
+    int constant REFUTED = 4;
+    int constant YES = 1;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant RING = 12;
+    int constant CSV_LIMIT = 4294967296;
+    int constant RHO_MAX_BPS = 50000;
+    int constant MU_MIN_BPS = 11000;
+    int constant MU_MAX_BPS = 15000;
+    int constant BURN_MAX_BPS = 5000;
+    int constant MIN_STAKE_MAX = 100000000000000;
+    int constant UNIT = 1000000000;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant MMR_CAP = 5000;
+    int constant BOND_MIN_MAX = 1000000000000;
+    // Redeem offsets (the state starts at byte 1): the market body hashed into the id [34..310); the status window
+    // [409..460); the end of the state 781.
+    int constant BODY_AT = 34;
+    int constant BLOCK_END = 310;
+    int constant STATUS_AT = 409;
+    int constant DISPUTER_END = 460;
+    // The judge block of the market: the id push [1..34) and the six judge parameters [88..142).
+    int constant JUDGE_AT = 88;
+    int constant JUDGE_END = 142;
+    // KpfStake: its state length, the statuses read here, and the offsets within its state (redeem offset - 1).
+    int constant STAKE_STATE_LEN = 270;
+    int constant STAKE_FREE = 4;
+    int constant STAKE_DISPUTE = 7;
+    int constant STAKE_STATUS_AT = 33;
+    int constant STAKE_MARKET_AT = 42;
+    int constant STAKE_MARKET_END = 129;
+    int constant STAKE_SIDE_AT = 162;
+    // KpfStake.open's signature script: three 8-byte pushes, the 65-byte signature, the 4-byte dispatch tag, then the
+    // redeem script (OP_PUSHDATA2, 3 bytes of header). KpfStake.resolve's: one 8-byte push, the tag, the redeem script.
+    int constant OPEN_SIG_AT = 27;
+    int constant OPEN_TAG_AT = 93;
+    int constant OPEN_HEAD = 101;
+    int constant RESOLVE_TAG_AT = 9;
+    int constant RESOLVE_HEAD = 17;
+
+    // As KpfPair.quoteOf.
+    function quoteOf(int x, int r, int c) : int {
+        int m = x % scale;
+        int q = x / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    function clampP(int p) : int {
+        int c = p;
+        if (c < bl) { c = bl; }
+        if (c > bs) { c = bs; }
+        return c;
+    }
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // The single output of this id: the P2SH of the hash h, holding at least v.
+    function only(byte[32] h, int v) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovOutputCount(selfId) == 1);
+        int o = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SH(h)));
+        require(tx.outputs[o].value >= v);
+    }
+
+    // This part's continuation at output `self` with the status window w (51 bytes), and the guards of an entry that
+    // continues it (contest, decide).
+    function cont(byte[] w) {
+        int self = this.activeInputIndex;
+        byte[] rs = ownRs();
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATUS_AT) + w
+            + rs.slice(DISPUTER_END, this.bytecodeSize))));
+        require(OpOutputCovenantId(self) == OpInputCovenantId(self));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    // As KpfPair.tplState.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // The 8-byte push at offset `at` of input u's signature script.
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // As KpfClaimStub.canon: a KpfStake state whose every field is a canonical push.
+    function canon(byte[] st) {
+        require(st.length == STAKE_STATE_LEN);
+        require(st.slice(0, 1) == byte[](0x20));
+        require(st.slice(33, 34) == byte[](0x08));
+        require(st.slice(42, 43) == byte[](0x20));
+        require(st.slice(75, 76) == byte[](0x08));
+        require(st.slice(84, 85) == byte[](0x08));
+        require(st.slice(93, 94) == byte[](0x08));
+        require(st.slice(102, 103) == byte[](0x08));
+        require(st.slice(111, 112) == byte[](0x08));
+        require(st.slice(120, 121) == byte[](0x08));
+        require(st.slice(129, 130) == byte[](0x20));
+        require(st.slice(162, 163) == byte[](0x08));
+        require(st.slice(171, 172) == byte[](0x08));
+        require(st.slice(180, 181) == byte[](0x08));
+        require(st.slice(189, 190) == byte[](0x08));
+        require(st.slice(198, 199) == byte[](0x08));
+        require(st.slice(207, 208) == byte[](0x08));
+        require(st.slice(216, 217) == byte[](0x08));
+        require(st.slice(225, 226) == byte[](0x08));
+        require(st.slice(234, 235) == byte[](0x08));
+        require(st.slice(243, 244) == byte[](0x08));
+        require(st.slice(252, 253) == byte[](0x08));
+        require(st.slice(261, 262) == byte[](0x08));
+    }
+
+    // The judge block of this market (87 bytes): what a KpfStake of this market carries at its state [42..129).
+    function judgeBlock(byte[] rs) : byte[] {
+        return rs.slice(1, BODY_AT) + rs.slice(JUDGE_AT, JUDGE_END);
+    }
+
+    // The bond bounds of KpfBond.checkBond, the same text with the slot's unbonding delay named slotUnbondDaa
+    // (`oracle_attack_tests` enforces it).
+    // BEGIN oracle bond bounds
+    function checkBond() {
+        require(rhoBps >= BPS);
+        require(rhoBps <= RHO_MAX_BPS);
+        require(stepDaa > 0);
+        require(termDaa >= stepDaa);
+        require(termDaa % stepDaa == 0);
+        require(termDaa < CSV_LIMIT);
+        require(tailDaa >= 0);
+        require(tailDaa < CSV_LIMIT);
+        require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
+        require(rateDaa >= 0);
+        require(rateDaa < CSV_LIMIT);
+        require(slotUnbondDaa >= 0);
+        require(slotUnbondDaa < CSV_LIMIT);
+    }
+    // END oracle bond bounds
+
+    // BEGIN judge bounds
+    function checkJudge() {
+        require(muBps >= MU_MIN_BPS);
+        require(muBps <= MU_MAX_BPS);
+        require(roundDaa > 0);
+        require(roundDaa < CSV_LIMIT);
+        require(ageDaa >= roundDaa);
+        require(ageDaa < CSV_LIMIT);
+        require(unbondDaa >= roundDaa);
+        require(unbondDaa < CSV_LIMIT);
+        require(burnBps >= 0);
+        require(burnBps <= BURN_MAX_BPS);
+        require(minStake >= UNIT);
+        require(minStake <= MIN_STAKE_MAX);
+    }
+    // END judge bounds
+
+    // The oracle market bounds: the same text in KpfOpenO, KpfPairO and KpfPendingO (`oracle_attack_tests`), its
+    // pair-parameter lines the same as KpfOpen.checkMarket's where the two families share a parameter. The market id is
+    // blake3 of the market body (every parameter and the feed hash), so a block that differs by one byte is another
+    // market; every parameter lies in the range that keeps every branch of a pair, a pending part, a slot and a dispute
+    // of this market live.
+    // BEGIN oracle market bounds
+    function checkMarket() {
+        require(blake3(ownRs().slice(BODY_AT, BLOCK_END)) == market);
+        checkBond();
+        checkJudge();
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(bondMin >= 0);
+        require(bondMin <= BOND_MIN_MAX);
+        require(gBps > 0);
+        require(gBps < BPS);
+        // A claim is valid only if P + challengeDaa <= X <= P + termDaa + stepDaa, so a window shorter than the term
+        // leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
+        require(challengeDaa > 0);
+        require(challengeDaa < termDaa);
+        require(lateDaa >= 0);
+        require(lateDaa < CSV_LIMIT);
+        require(quietDaa >= 0);
+        require(quietDaa < CSV_LIMIT);
+        require(sigmaBps >= 0);
+        require(sigmaBps <= BPS);
+        require(betaBps >= 0);
+        require(betaBps <= BPS);
+    }
+    // END oracle market bounds
+
+    // Contest (docs/DESIGN-ORACLE-2.md 1.7 "Live dispute"): hand the claim to the judge with the opener's stake on NO, as
+    // KpfClaimStub.contest. The opener input u is a KpfStake (template JUDGE_TPL, P2SH, canonical state) free stake of
+    // this market's judge block, spent by its open entry naming this input as the claim and as the claim's continuation
+    // and the dispute at output dOut; the continuation, the dispute and the opener's receipt are exactly the three
+    // outputs of this id. KpfStake.open checks the rest (the stake's age before P, the receipt, the dispute's state).
+    // The continuation records P (this UTXO's DAA score, refused while unknown) and the opener's key, who receives the
+    // disputer's share of the bond if the claim is refuted.
+    entry contest(byte[8] ub, byte[8] db) {
+        int self = this.activeInputIndex;
+        checkMarket();
+        require(status == PENDING);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 3);
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        int u = int(ub);
+        int d = int(db);
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != self);
+        byte[] st = tplState(u, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        canon(st);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_FREE));
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == judgeBlock(ownRs()));
+        require(OpTxInputScriptSigLen(u) == OPEN_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(u, OPEN_TAG_AT, OPEN_HEAD - 3) == byte[](0x04) + byte[](OPEN_TAG));
+        require(OpTxInputScriptSigSubstr(u, OPEN_SIG_AT, OPEN_SIG_AT + 1) == byte[](0x41));
+        require(push8(u, 0) == self);
+        require(push8(u, 9) == self);
+        require(push8(u, 18) == d);
+        require(d >= 0);
+        require(OpOutputCovenantId(d) == id);
+        cont(i9(CONTESTED) + i9(p) + st.slice(0, 33));
+    }
+
+    // Decide: the verdict of this part's dispute (input d, resolving onto this input), as KpfClaimStub.decide. Upheld if
+    // YES leads, refuted if NO leads; upheld whatever the verdict when the contest was late: this UTXO's own DAA score is
+    // the contest's acceptance, and a contest accepted at P + challengeDaa or later came after the window.
+    entry decide(byte[8] db) {
+        int self = this.activeInputIndex;
+        require(status == CONTESTED);
+        byte[32] id = OpInputCovenantId(self);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int d = int(db);
+        require(d >= 0);
+        require(d < tx.inputs.length);
+        require(d != self);
+        require(OpInputCovenantId(d) == id);
+        byte[] st = tplState(d, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_DISPUTE));
+        byte[] rs = ownRs();
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == judgeBlock(rs));
+        require(OpTxInputScriptSigLen(d) == RESOLVE_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(d, RESOLVE_TAG_AT, RESOLVE_HEAD - 3) == byte[](0x04) + byte[](RESOLVE_TAG));
+        require(push8(d, 0) == self);
+        int v = REFUTED;
+        if (int(byte[8](st.slice(STAKE_SIDE_AT + 1, STAKE_SIDE_AT + 9))) == YES) {
+            v = UPHELD;
+        }
+        int c = OpTxInputDaaScore(self);
+        require(c >= 0);
+        if (c >= clock + challengeDaa) {
+            v = UPHELD;
+        }
+        cont(i9(v) + rs.slice(STATUS_AT + 9, DISPUTER_END));
+    }
+
+    // Cure (DESIGN 4.5d), kind 2 only, while pending. The loser's owner moves its bound exactly to cureBound and repays
+    // the proposer (the underwriter) its refund at output i; the cured part holds its range floor and this UTXO's value
+    // less the refund plus ceil(q(n, moved distance)), as KpfPending.cure.
+    entry cure(sig s) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        require(status == PENDING);
+        require(kind != KIND_CLOSE);
+        byte[] z8 = byte[](0 as byte[8]);
+        require(cureHash != byte[32](z8 + z8 + z8 + z8));
+        int b0 = bl;
+        int b1 = bs;
+        int add = 0;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            b0 = cureBound;
+            add = quoteOf(n, bl - cureBound, scale - 1);
+        } else {
+            signedBy(s, shortKey);
+            b1 = cureBound;
+            add = quoteOf(n, cureBound - bs, scale - 1);
+        }
+        only(cureHash, quoteOf(n, b1 - b0, 0) + carrier);
+        int o = OpCovOutputIdx(OpInputCovenantId(self), 0);
+        require(tx.outputs[o].value - tx.inputs[self].value + refund >= add);
+        payTo(self, uwKey, refund);
+    }
+
+    // The party the claim could wrong: the other party of a close, the loser of a liquidation.
+    function defender() : pubkey {
+        pubkey k = longKey;
+        if (kind == KIND_CLOSE) {
+            if (side == SIDE_LONG) { k = shortKey; }
+        } else {
+            if (side == SIDE_SHORT) { k = shortKey; }
+        }
+        return k;
+    }
+
+    // A claim that does not settle: the part returns to the restore state with this UTXO's value less the bond; the bond
+    // goes to the defender at output i, less the disputer's share floor(B * betaBps / 10^4) at output M - 1 - i (at
+    // least the input count) when refuted. A share below dust is not created (the defender gets it); a defender's
+    // remainder below dust goes to the disputer.
+    function restorePaying(int refuted) {
+        int self = this.activeInputIndex;
+        only(restoreHash, tx.inputs[self].value - bond);
+        int share = 0;
+        if (refuted == 1) {
+            share = (bond / BPS) * betaBps + ((bond % BPS) * betaBps) / BPS;
+        }
+        if (share < PLAIN_DUST) { share = 0; }
+        int rest = bond - share;
+        if (rest < PLAIN_DUST) {
+            share = bond;
+            rest = 0;
+        }
+        payTo(self, defender(), rest);
+        if (share > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, disputerKey, share);
+        }
+    }
+
+    // The settlement of a valid claim (DESIGN 4.5d's finalize with the tolerance g inside the payout). kind 1: the
+    // closer is paid at the vouched price moved by g against it (a long at floor(p * (10^4 - g) / 10^4), a short at
+    // ceil(p * (10^4 + g) / 10^4), clamped to [bl, bs]) plus its refund at output i (long) or M - 1 - i (short), the other
+    // party the rest; no output of the id; a payout of the other party below dust goes to the closer. kind 2 (forfeit and
+    // keep): the forfeited part (forfeitHash) with this UTXO's value less B and the fee, the underwriter B + fee at i.
+    function settle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        int v = tx.inputs[self].value;
+        if (kind == KIND_CLOSE) {
+            require(OpCovOutputCount(selfId) == 0);
+            int pc = quote * (BPS - gBps) / BPS;
+            if (side == SIDE_SHORT) { pc = (quote * (BPS + gBps) + BPS - 1) / BPS; }
+            int c = clampP(pc);
+            int owe = quoteOf(n, c - bl, 0);
+            if (side == SIDE_SHORT) { owe = quoteOf(n, bs - c, 0); }
+            int me = owe + refund;
+            int other = v - me;
+            if (other < PLAIN_DUST) {
+                me = v;
+                other = 0;
+            }
+            int lp = me;
+            int sp = other;
+            if (side == SIDE_SHORT) {
+                lp = other;
+                sp = me;
+            }
+            payTo(self, longKey, lp);
+            if (sp > 0) {
+                int j = tx.outputs.length - 1 - self;
+                require(j >= tx.inputs.length);
+                payTo(j, shortKey, sp);
+            }
+        } else {
+            only(forfeitHash, v - bond - fee);
+            payTo(self, uwKey, bond + fee);
+        }
+    }
+
+    // Finalize: anyone. A pending part once challengeDaa old (CSV; its P is its own DAA score), an upheld or refuted
+    // part at once (its P is the recorded one). Refuted: restore, the bond to the defender and the disputer. Otherwise
+    // the claim settles if it is valid and is restored with the bond to the defender if it is void.
+    entry finalize() {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        int p = clock;
+        if (status == PENDING) {
+            require(this.ageDaa >= challengeDaa);
+            p = OpTxInputDaaScore(self);
+            require(p >= 0);
+        } else {
+            require(status == UPHELD || status == REFUTED);
+        }
+        if (status == REFUTED) {
+            restorePaying(1);
+        } else {
+            int valid = 1;
+            if (p + challengeDaa > expiry) { valid = 0; }
+            if (expiry > p + termDaa + stepDaa) { valid = 0; }
+            if (p - t0 > lateDaa) { valid = 0; }
+            if (valid == 1) {
+                settle();
+            } else {
+                restorePaying(0);
+            }
+        }
+    }
+}

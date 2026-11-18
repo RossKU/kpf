@@ -6,6 +6,7 @@ pub mod evcmds;
 pub mod files;
 pub mod keys;
 pub mod node;
+pub mod ocmds;
 pub mod report;
 
 use args::Args;
@@ -81,6 +82,36 @@ Guaranteed fast settlement (DESIGN 4.5f; optional, the slow path above stays the
             (lambda - 1) x cover, the rest is burned
   release   --lock L.json [--daa N]                      anyone, once the lock is disputeDaa old: the lock to its owner
 
+Oracle-only markets (docs/DESIGN-ORACLE-IMPL.md, third slice; runbook docs/TESTNET.md. Prices come only from each pair's
+underwriter; a false price stands unless contested within the window. common flags as the builders; --daa N or --node
+gives the present the lock time proves)
+  oracle-market --feed FEED.txt [--out M.json] [--rho-bps N] [--window-daa N] [--quiet-daa N] [--late-daa N]
+                [--sigma-bps N] [--beta-bps N] [--bond-min KAS] [--mmr-bps N] [--g-bps N] [--idle-daa N] ...
+            a market block from a feed definition (testnet defaults, each overridable): its id and the worst cases
+  oracle-check  --market M.json --feed FEED.txt [--size T --x P --long-rate P --short-rate P --cover-rate P [--premium P]]
+            the wallet's check: the feed text's hash and the id are the block's, the bounds hold, the text renders
+            plainly; the parameters and the worst-case loss in words. Refuses a market that fails
+  bond          --market M.json --value KAS [--owner KEY|HEX|ADDR]   a new underwriting slot (rho x value of cover)
+  unbond        --slot S.json --key OWNER                            once every cover's liability has ended
+  withdraw-bond --slot S.json --key OWNER [--to ADDR]                an unbonding slot, U old
+  stake         --market M.json --value KAS [--owner KEY|HEX|ADDR]   a judge stake (counts on claims made M_age later)
+  oracle-order  --market M.json --side long|short --size T --limit P --rate P --expiry DAA [--prem-max P]
+                [--underwriter SLOT_ID] [--min-counter-rate P] [--min-fill T] [--tip P] [--active-from DAA] [--escrow KAS]
+  oracle-open   --long O.json --short O.json --slot S.json --n T --x P --cover-rate P [--premium P] [--expiry DAA] --key UW
+  vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
+                [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too)
+  contest       --pending W.json --stake ST.json --key STAKER [--base KAS]   within the window, with aged stake on NO
+  deposit       --dispute D.json --side yes|no --stake ST.json... --key OWNER...   join the trailing side
+  resolve       --dispute D.json --pending W.json                    after the round: the verdict reaches the part
+  oracle-cure   --pending W.json --key LOSER                         the loser clears a pending liquidation
+  oracle-finalize --pending W.json                                   settle, or restore a refuted or void claim
+  renew         --pair P.json... --slot S.json --key UW              up to 7 pairs, from one step before expiry
+  lapse-settle  --pair P.json                                        a lapsed, idle pair at its entry price
+  settle-pool   --pool D.json [--receipt R.json]...                  pay the winners (no receipt: close the pool)
+  oracle-watch  --me KEY|HEX|ADDR (--object FILE | --scan DIR)... [--daa N | --node URL] [--json]
+            claims against you and the time left to contest, your underwriter's cover expiry, the disputes you have
+            stake in
+
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)
   status  --object FILE... [--update]                is the object live; fill in its DAA
@@ -127,6 +158,24 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "dispute" => evcmds::dispute_cmd(&a),
         "release" => evcmds::release_cmd(&a),
 
+        "oracle-market" => ocmds::market_cmd(&a),
+        "oracle-check" => ocmds::check_cmd(&a),
+        "bond" => ocmds::bond_cmd(&a),
+        "unbond" => ocmds::unbond_cmd(&a),
+        "withdraw-bond" => ocmds::withdraw_bond_cmd(&a),
+        "stake" => ocmds::stake_cmd(&a),
+        "oracle-order" => ocmds::order_cmd(&a),
+        "oracle-open" => ocmds::open_cmd(&a),
+        "vouch" => ocmds::vouch_cmd(&a),
+        "contest" => ocmds::contest_cmd(&a),
+        "deposit" => ocmds::deposit_cmd(&a),
+        "resolve" => ocmds::resolve_cmd(&a),
+        "oracle-cure" => ocmds::cure_cmd(&a),
+        "oracle-finalize" => ocmds::finalize_cmd(&a),
+        "renew" => ocmds::renew_cmd(&a),
+        "lapse-settle" => ocmds::lapse_cmd(&a),
+        "settle-pool" => ocmds::settle_pool_cmd(&a),
+        "oracle-watch" => ocmds::watch_cmd(&a),
         "evidence" => evcmds::evidence_cmd(&a),
         "kob-file" => evcmds::kob_file_cmd(&a),
         "verify" => cmds::verify_cmd(&a),

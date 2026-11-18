@@ -19,6 +19,8 @@
 //!   `KpfBond` and of its stand-in pair and order: the ring, the bounds, the acceptance rule of every entry.
 //! - [`judge`]: the stake judge (`docs/DESIGN-ORACLE-IMPL.md`, second slice) as a pure model of `KpfStake` and of its
 //!   stand-in claim: whole transactions, the acceptance rule of every input, the transaction shapes, a UTXO world.
+//! - [`oracle`]: oracle-only markets, the integration slice (`docs/DESIGN-ORACLE-IMPL.md`, third slice): the oracle market
+//!   block, the states and math of `KpfOpenO`, `KpfPairO` and `KpfPendingO`, the feed-definition check.
 //!
 //! # The evidence paths
 //!
@@ -45,6 +47,9 @@ pub mod judge;
 pub mod kob;
 pub mod lock;
 pub mod network;
+pub mod oracle;
+pub mod oracle_artifacts;
+pub mod oracle_build;
 pub mod payoff;
 pub mod pending;
 pub mod sim;

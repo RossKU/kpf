@@ -260,14 +260,94 @@ pub fn generate() -> Vec<(String, String)> {
     .iter()
     .map(|(p, t)| format!("{}  {p}\n", sha256_hex(t.as_bytes())))
     .collect::<String>();
-    vec![
+    let mut files = vec![
         ("artifacts/KpfPair.json".into(), pair_json),
         ("artifacts/KpfOpen.json".into(), open_json),
         ("artifacts/KpfPending.json".into(), pending_json),
         ("artifacts/KpfLock.json".into(), lock_json),
         ("artifacts/manifest.json".into(), manifest_text),
         ("artifacts/SHA256SUMS".into(), sums),
-    ]
+    ];
+    files.extend(generate_oracle(&r));
+    files
+}
+
+fn tag_of(a: &SilAbiArtifact, entry: &str) -> [u8; 4] {
+    *a.contracts.values().next().expect("one contract").entries[entry].dispatch_tag.as_bytes()
+}
+
+/// The oracle-market family (docs/DESIGN-ORACLE-IMPL.md, third slice), pinned under `contracts/artifacts/oracle/` with
+/// its own manifest and `SHA256SUMS`: the slot `KpfBond`, the judge `KpfStake`, and `KpfPendingO`, `KpfPairO`,
+/// `KpfOpenO`, each compiled with the build constants of the ones it pins (KpfOpenO -> KpfPairO -> KpfPendingO ->
+/// KpfStake; KpfPairO, KpfOpenO -> KpfBond).
+fn generate_oracle(r: &Path) -> Vec<(String, String)> {
+    use kpf_protocol::bond::Bond;
+    use kpf_protocol::judge::Js;
+    use kpf_protocol::oracle::{samples, OConsts};
+    let names = ["KpfBond", "KpfStake", "KpfPendingO", "KpfPairO", "KpfOpenO"];
+    let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/{n}.sil")))).collect();
+    let om = samples::market();
+    let k3 = pubkey_of(&[3; 32]).unwrap();
+    let k1 = pubkey_of(&[1; 32]).unwrap();
+    let bond = compile("KpfBond", &srcs[0], &Bond::new(k3, om.bond_market(), 0).ctor());
+    let stake = compile("KpfStake", &srcs[1], &Js::free(k3, om.judge_market()).ctor());
+    let (bt, bp, bsf) = facts(&bond);
+    let (st, sp, ssf) = facts(&stake);
+    let mut consts = OConsts {
+        bond_tpl: bt,
+        bond_pre: bp,
+        bond_suf: bsf,
+        bind_tag: tag_of(&bond, "bind"),
+        judge_tpl: st,
+        judge_pre: sp,
+        judge_suf: ssf,
+        open_tag: tag_of(&stake, "open"),
+        resolve_tag: tag_of(&stake, "resolve"),
+        pending_tpl: [0; 32],
+        pair_tpl: [0; 32],
+    };
+    let sp_pair = samples::pair(&om);
+    let pending = compile("KpfPendingO", &srcs[2], &samples::pending(&sp_pair).ctor_with(&consts));
+    consts.pending_tpl = facts(&pending).0;
+    let pair = compile("KpfPairO", &srcs[3], &sp_pair.ctor_with(&consts));
+    consts.pair_tpl = facts(&pair).0;
+    let open = compile("KpfOpenO", &srcs[4], &samples::order(&om, LONG, k1).ctor_with(&consts));
+    let arts = [&bond, &stake, &pending, &pair, &open];
+    let json = |a: &SilAbiArtifact| format!("{}\n", serde_json::to_string(a).expect("artifact json"));
+    let jsons: Vec<String> = arts.iter().map(|a| json(a)).collect();
+    let mut contracts = serde_json::Map::new();
+    for (i, n) in names.iter().enumerate() {
+        let c = &arts[i].contracts.values().next().expect("one contract").compiled;
+        let (hash, pre, suf) = facts(arts[i]);
+        contracts.insert(
+            n.to_string(),
+            json!({
+                "source": format!("contracts/{n}.sil"), "source_sha256": sha256_hex(srcs[i].as_bytes()),
+                "artifact": format!("{n}.json"), "artifact_sha256": sha256_hex(jsons[i].as_bytes()),
+                "template_hash": hex(&hash), "prefix_len": pre, "suffix_len": suf, "state_len": c.state_span.len,
+            }),
+        );
+    }
+    let manifest = json!({
+        "format": "kpf-artifacts/oracle-1",
+        "compiler": format!("silverscript-lang (vendor/kob @ {KOB_COMMIT}, SilverScript v1.0.0), CompileOptions::default(); {}", pair.compiler_version),
+        "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
+        "contracts": contracts,
+        "tags": { "bind": hex(&consts.bind_tag), "open": hex(&consts.open_tag), "resolve": hex(&consts.resolve_tag) },
+    });
+    let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
+    let mut sums = String::new();
+    for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  {n}.sil\n", sha256_hex(srcs[i].as_bytes())));
+    }
+    for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  artifacts/oracle/{n}.json\n", sha256_hex(jsons[i].as_bytes())));
+    }
+    sums.push_str(&format!("{}  artifacts/oracle/manifest.json\n", sha256_hex(manifest_text.as_bytes())));
+    let mut files: Vec<(String, String)> = names.iter().zip(jsons).map(|(n, j)| (format!("artifacts/oracle/{n}.json"), j)).collect();
+    files.push(("artifacts/oracle/manifest.json".into(), manifest_text));
+    files.push(("artifacts/oracle/SHA256SUMS".into(), sums));
+    files
 }
 
 fn hex(b: &[u8]) -> String {
@@ -280,7 +360,11 @@ pub fn write() -> Vec<String> {
     generate()
         .into_iter()
         .map(|(rel, text)| {
-            std::fs::write(r.join(&rel), text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let p = r.join(&rel);
+            if let Some(d) = p.parent() {
+                std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+            }
+            std::fs::write(p, text).unwrap_or_else(|e| panic!("{rel}: {e}"));
             rel
         })
         .collect()

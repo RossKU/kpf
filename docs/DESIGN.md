@@ -1100,7 +1100,7 @@ any book" (not on books without arbitrage, residual risk 1).
 - **`watch` shows the fast path** (R5-F3): for a pending liquidation it states that a guarantor can settle it once
   the cure grace has passed, shows that deadline before the slow-path one, and puts the cure command first.
 
-Oracle-only markets, first slice (the underwriting slot `KpfBond` and its accounting) and second slice (the stake judge `KpfStake`): `DESIGN-ORACLE-IMPL.md`.
+Oracle-only markets, first slice (the underwriting slot `KpfBond` and its accounting), second slice (the stake judge `KpfStake`) and third slice (the oracle-market order, pair and pending part `KpfOpenO`, `KpfPairO`, `KpfPendingO`, wired to both; the book-market contracts above are unchanged): `DESIGN-ORACLE-IMPL.md`.
 
 ### 4.6 Rounding
 
