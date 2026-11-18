@@ -133,3 +133,54 @@ relative to `minSize · mmr · price`.
 ## Not covered
 
 GhostDAG races (X7), script-budget limits (X4), the KCC-20 program itself, and KobPair/router interplay.
+
+## Status after fixes
+
+The rules of `docs/DESIGN.md` 4.4 ("Tags live for one transaction") and 4.5a are implemented in
+`contracts/KpfPair.sil` and `contracts/KpfOpen.sil`. Every `exploit_*` test of `audit_tag_tests.rs` is now a `holds_*`
+test that keeps the scenario and asserts the refusal (or that the harmful step no longer harms), naming the rule.
+
+| # | Status | Fix | Tests |
+|---|---|---|---|
+| F1 | Fixed | The live-tag guard is removed from every entry. No entry copies a tag: `contSpk` and `restSpk` write both tags 0, `handOver` writes 0 on the stayer's side, `closeHost` writes 0 for the host's short, `closeDonor` rebuilds P3 with the short's tag 0 (its `ts3` argument is gone), `KpfOpen.take` rebuilds the stayer's tag 0 (its `counterTag` argument is gone). A tag of any value blocks nothing. | `holds_self_tag_freeze_then_idle_theft`, `holds_short_self_tag_freeze_then_idle_theft`, `holds_third_party_freeze`, `holds_no_entry_copies_a_tag` |
+| F2 | Fixed | As F1: no entry reads its own tags. | `holds_token_id_tag_blocks_evidence`, `kpf_evidence_tests::tags_never_block_an_evidence_entry` |
+| F3 | Fixed | P3 and P7 keep `E` in the part and the remainder; every remainder and continuation keeps it; P4 writes `e3` (new argument of `closeHost` and `closeDonor`), the host requiring `e3 ≤ E(host)` and the donor `e3 ≥ E(donor)`. | `holds_entry_price_self_transfer`, `holds_entry_kept_by_every_entry_but_t1_and_p4`, `holds_e3_bounds`, `holds_e3_refused_when_donor_entry_above_host_entry` |
+| F4 | Fixed | `KpfOpen.checkMarket` (used by `fill` and `take`) adds `0 < kBps ≤ 10⁵`, `0 ≤ mmrBps < 5000`, `0 ≤ liqFeeBps ≤ 10⁴`, `keeperFeeMin ≥ 0`, `0 ≤ minRestDaa < LOCK_TIME_THRESHOLD`. | `holds_fill_refuses_malformed_evidence_parameters`, `holds_take_refuses_malformed_evidence_parameters` |
+| F5 | Fixed | P6 caps the fee at the loser's residual (`closeAt`); P7 already capped it at the loser's payout. | `holds_fee_capped_at_the_loser_residual`, `holds_fee_floor_never_reaches_the_winner_in_pieces`, `kpf_evidence_tests::p6_bankrupt_loser_pays_no_fee_and_the_winner_none` |
+
+**Stale-tag double claim (slice 1b), re-derived.** A claimer (KpfOpen `take`, the P4 donor) accepts an output only if the
+tag on its side equals its own covenant id, which no other input of the transaction carries
+(`OpCovInputCount(selfId) == 1`). A pair output carries a non-zero tag only on a side handed over in the transaction that
+creates it, so it names the entrant of a hand-over made in that same transaction; the continuation of an older pair that
+hands over nothing (or the stayer's side of one that does) carries 0 and satisfies no claimer. `KpfOpen.fill` claims only
+an output of a fresh covenant id. Tests: `holds_stale_tag_never_satisfies_a_live_claimer` (every entry of an older pair
+whose old tag names a live `KpfOpen`, every pair output of that transaction: the claimer refuses the honest output, the
+pair refuses the stale-tag one), `holds_stale_tag_claimer_first_in_the_inputs`,
+`kpf_transfer_tests::p3_stale_tag_cannot_alias_a_hand_over`, `kpf_close_tests::p4_third_party_pair_cannot_be_the_re_pair_target`.
+The seeded X6 walks assert after every transaction that each pair output's non-zero tags are exactly the hand-over tags of
+that transaction (direct takers write 0, the pair's own id, the token id or a random id), and that every party that did
+not act keeps its idle payout at `E`.
+
+**Unproven attacks, retried.**
+- Twin-id tag on an honest `KpfOpen.take` part: holds (`holds_take_part_with_attacker_twin_tag`). The part cannot carry a
+  stayer tag, and no tag is read as a live id any more, so the twin UTXO is irrelevant.
+- `closeDonor` P3 with `ts3 = pid`: holds (`holds_close_donor_p3_with_inherited_id_tag`); both pairs write tag 0 there.
+- KOB router intents paying at `j` and `j + 1`: not built. Every router entry (`vendor/kob/contracts/argent/router/sil`)
+  pays its only P2PK output at its own input index `me` and pins `me + 1` to a token covenant output
+  (`OpCovOutputIdx(token, k) == me + 1`); the sell and buy entries require `tx.inputs.length == me + 1`, and
+  expire/cancel require input `me + 1` to be the token. A pair's positional output is its own input index (never `me`)
+  and its reverse slot is at least the input count (never `me`), and a P2PK requirement cannot alias a token output, so
+  no collision exists. A test would need the argent-generated router artifacts with their linked templates in the KPF
+  harness.
+
+**Deviations recorded in the code (`// DESIGN:`).**
+- `KpfOpen.take` accepts the kept `E` only on its own side of the fill price (long `E ≥ x`, short `E ≤ x`). 4.5a says the
+  entrant "sees `E` and accepts it by entering", but a resting order cannot see it: a pair whose two sides one attacker
+  holds (any `E` it chose at T1) would otherwise idle-settle an absent maker below its own entry. Cost: a `KpfOpen`
+  cannot take a long listing above `E` or a short listing below it; direct takers can.
+- `KpfOpen.checkMarket` also bounds `minRestDaa` by the lock-time threshold; the token template facts stay unchecked.
+
+**Size.** Clearing tags writes a 66-byte zero window into every continuation that hands over no side, so the scripts did
+not shrink: `KpfPair` 10,999 → 11,246 B, `KpfOpen` 2,493 → 2,634 B (the zero values are built with `OP_NUM2BIN` to
+limit the growth). Script units per input rise by 0.2 % (P9) to 12 % (mutual close), most paths 2–9 % (`kpf_metrics_tests`); the 8-liquidation transaction
+is 122,892 compute (limit 500,000) and 97,982 B.

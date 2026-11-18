@@ -202,6 +202,8 @@ pub struct PairLeg {
     pub act: Act,
 }
 
+/// The keeper fee before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))). P6 caps it at the loser's
+/// residual and P7 at the loser's payout (DESIGN 4.5a), so the winner never pays it.
 pub fn fee_of(m: &Market, n: i64, p: i64) -> i64 {
     q(n, p * m.liq_fee_bps / 10_000, m.scale, 0).max(m.keeper_fee_min)
 }
@@ -213,12 +215,8 @@ pub fn close_at(l: &Live, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Opt
     let part = p.range_of(n);
     let (mut keep, avail) = if n == p.size { (0, v) } else { (v - part, part) };
     let mut owe = if side == LONG { q(n, c - p.bl, p.m.scale, 0) } else { q(n, p.bs - c, p.m.scale, 0) };
-    let mut other = avail - owe - fee;
-    if other < 0 {
-        owe += other;
-        other = 0;
-        owe = owe.max(0);
-    }
+    // The fee is capped at the other party's rest: the owed party (the winner of P6) never pays it.
+    let mut other = (avail - owe - fee).max(0);
     let rest = if n == p.size {
         if owe < DUST {
             other += owe;
@@ -241,7 +239,7 @@ pub fn close_at(l: &Live, n: i64, c: i64, side: i64, fee: i64) -> (i64, i64, Opt
             keep += other;
             other = 0;
         }
-        let r = p.with_size(p.size - n);
+        let r = p.rest_of(p.size - n);
         let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
         Some((r, rv))
     };
@@ -318,7 +316,6 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
     let mut open_pos: Vec<TransactionOutput> = vec![];
     let mut pairs = vec![];
     let mut opens = vec![];
-    let (pre, suf) = parts(pair_base());
     let mut oi = b + 2;
     for (j, g) in legs.iter().enumerate() {
         let i = at(j);
@@ -379,25 +376,7 @@ pub fn ev_draft_at(legs: &[PairLeg], ev_at: usize, e: &Evidence, f: &Keypair, fn
                     }
                 }
                 pairs.push((part_at, to.part.clone()));
-                let part = &to.part;
-                let (bound, ck, ct, w) = if *side == LONG {
-                    (part.bs, part.short_key, part.tag_s, part.short_window())
-                } else {
-                    (part.bl, part.long_key, part.tag_l, part.long_window())
-                };
-                let oa = vec![
-                    iv(part_at as i64),
-                    iv(g.n),
-                    iv(*x),
-                    iv(bound),
-                    bv(&ck),
-                    bv(&ct.as_bytes()),
-                    iv(w.0),
-                    iv(w.1),
-                    iv(w.2),
-                    bv(&pre),
-                    bv(&suf),
-                ];
+                let oa = take_args(&to.part, *side, part_at as i64, g.n, *x);
                 open_ins.push(open_input(open, "take", oa));
                 let (oo, oc) = order_out(open, g.n, oi as u16);
                 open_pos.push(oo);

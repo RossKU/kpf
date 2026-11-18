@@ -189,7 +189,8 @@ fn p7_winner_is_untouched_and_loser_paid_at_x_less_fee() {
     let fee = fee_of(&l.p.m, N, LIQ_ASK);
     assert_eq!(d.outs[0].value as i64, q(N, x - l.p.bl, SCALE, 0) - fee);
     let part = &d.pairs[0].1;
-    assert_eq!((part.bs, part.short_key, part.tag_s), (l.p.bs, l.p.short_key, l.p.tag_s));
+    // The winner keeps its key and bound; its tag is cleared (DESIGN 4.4) and the entry is kept (DESIGN 4.5a).
+    assert_eq!((part.bs, part.short_key, part.tag_s, part.entry), (l.p.bs, l.p.short_key, ZERO, l.p.entry));
     assert!(part.bl <= l.p.bl);
 }
 
@@ -681,17 +682,22 @@ fn p6_fee_charged_to_the_winner_while_the_loser_could_pay_is_refused() {
     bad(&x, 0);
 }
 
+/// Premise changed by review 1 (F5, DESIGN 4.5a): the winner used to pay what a bankrupt loser's residual
+/// lacked of the fee. Now the fee is capped at the loser's residual: a bankrupt piece pays no fee and the winner
+/// receives its whole distance q(n, bs - bl).
 #[test]
-fn p6_winner_pays_only_what_the_bankrupt_loser_lacks() {
-    // A long far below its bankruptcy price: its part is worth nothing, so the whole fee comes from the short.
+fn p6_bankrupt_loser_pays_no_fee_and_the_winner_none() {
     let l = live(&base(), 0x4f);
     let a = 500_000_000;
     let d = d1(liq(&l, HALF, LONG), &ask(a, HALF));
     ok(&d);
     let m = outs_len(&d);
-    let fee = fee_of(&l.p.m, HALF, a);
     assert_eq!(d.outs[0].value, 0);
-    assert_eq!(d.outs[m - 1].value as i64, l.p.range_of(HALF) - fee);
+    assert_eq!(d.outs[m - 1].value as i64, l.p.range_of(HALF));
+    // The old shape (the winner short of the fee) is refused.
+    let mut x = d.clone();
+    x.outs[m - 1].value -= fee_of(&l.p.m, HALF, a) as u64;
+    bad(&x, 0);
     let mut x = d.clone();
     x.outs[m - 1].value -= 1;
     bad(&x, 0);
@@ -790,23 +796,40 @@ fn tagged(tag_l: Hash) -> Live {
     live(&p, 0x2f)
 }
 
+/// Premise changed by review 1 (F1, F2, DESIGN 4.4): the live-tag guard is gone, so a tag that names an input
+/// of the transaction (the evidence order, the token, the entrant, the pair itself) no longer blocks any evidence
+/// path; instead every continuation clears the tags (asserted by the builders' expected outputs), and one that
+/// copies the old tag is refused.
 #[test]
-fn live_tag_guard_on_every_evidence_entry() {
-    // The pair's long tag names an input of the transaction (the evidence order's covenant id).
+fn tags_never_block_an_evidence_entry() {
     let e_a = ask(A, N);
-    let l = tagged(e_a.id);
-    bad(&d1(close(&l, N, SHORT), &e_a), 0);
+    ok(&d1(close(&tagged(e_a.id), N, SHORT), &e_a));
     let e_b = bid(B, N);
-    let l = tagged(e_b.id);
-    bad(&d1(close(&l, N, LONG), &e_b), 0);
+    ok(&d1(close(&tagged(e_b.id), N, LONG), &e_b));
     let e = ask(LIQ_ASK, N);
+    ok(&d1(liq(&tagged(e.id), N, LONG), &e));
+    ok(&d1(liq(&tagged(market().token_cov_id), N, LONG), &ask(LIQ_ASK, N)));
+    let own = tagged(ZERO);
+    ok(&d1(liq(&tagged(own.id), N, LONG), &ask(LIQ_ASK, N)));
+    // P7 with the tag naming the entrant itself.
+    ok(&d1(liq_t(&tagged(Hash::from_bytes([0x71; 32])), N, LONG, 950_000_000, 0), &ask(LIQ_ASK, N)));
+    // A remainder (P5, P6) or the winner's side of a P7 part that copies the old tag is refused.
     let l = tagged(e.id);
-    bad(&d1(liq(&l, N, LONG), &e), 0);
-    // P7: the tag names the entrant itself (a live claimer).
-    let l = tagged(Hash::from_bytes([0x71; 32]));
-    bad(&d1(liq_t(&l, N, LONG, 950_000_000, 0), &ask(LIQ_ASK, N)), 0);
-    // Control: a tag that names no input.
-    ok(&d1(liq(&tagged(Hash::from_bytes([0x99; 32])), N, LONG), &ask(LIQ_ASK, N)));
+    for g in [close(&l, HALF, SHORT), liq(&l, HALF, LONG), liq_t(&l, HALF, LONG, 950_000_000, 0)] {
+        let d = d1(g, &ask(LIQ_ASK, HALF));
+        ok(&d);
+        for (pi, p) in d.pairs.clone() {
+            let mut y = d.clone();
+            let mut c = p.clone();
+            if c.long_key == l.p.long_key {
+                c.tag_l = l.p.tag_l;
+            } else {
+                c.tag_s = l.p.tag_s;
+            }
+            y.set_pair(pi, &c);
+            bad(&y, 0);
+        }
+    }
 }
 
 #[test]

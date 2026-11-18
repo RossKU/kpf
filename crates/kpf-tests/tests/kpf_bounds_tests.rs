@@ -62,7 +62,7 @@ fn big_pair(size: i64, bl: i64, bs: i64, m: Market) -> Pair {
 }
 
 fn add_margin(p: &Pair, delta: i64, in_value: u64, out_value: u64) -> (Transaction, Vec<UtxoEntry>) {
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl -= delta;
     let ins = [
         In {

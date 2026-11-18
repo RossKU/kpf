@@ -34,8 +34,10 @@ fn keys() -> K {
 
 /// The DESIGN 5 pair (1,000 tokens, bl 9, bs 12 KAS) with both sides listed: the long sells at >= 10.5 KAS in
 /// parts >= 100 tokens, tip 0.01 KAS per token; the short buys back at <= 9.5 KAS, parts >= 100, tip 0.02.
+/// Its entry price is 10.5 KAS, so a long KpfOpen may take the long listing at 10.5 (KpfOpen.take: e >= x).
 fn listed(k: &K) -> Pair {
     let mut p = pair(&k.long, &k.short);
+    p.entry = 1_050_000_000;
     (p.long_ask, p.long_min, p.long_tip) = (1_050_000_000, 100_000_000, 1_000_000);
     (p.short_bid, p.short_min, p.short_tip) = (950_000_000, 100_000_000, 2_000_000);
     p
@@ -50,6 +52,13 @@ fn long_entrant(k: &K) -> LiveOpen {
     let mut o = long_order(&k.entrant);
     (o.limit, o.my_rate) = (1_100_000_000, 200_000_000);
     LiveOpen { value: o.escrow() as u64, o, id: L_ID, op: outpoint(1) }
+}
+
+/// The listed pair with entry 9.5 KAS, so a short KpfOpen may take the short listing at 9.5 (e <= x).
+fn listed_low(k: &K) -> Pair {
+    let mut p = listed(k);
+    p.entry = 950_000_000;
+    p
 }
 
 /// A short KpfOpen with rate 3 KAS (bs' = x + 3 >= 12 at x >= 9), limit 9, accepting a long rate >= 0.5.
@@ -117,12 +126,12 @@ fn p3_long_full_by_a_kpfopen() {
     // The leaver gets q(n, 10.5 - 9) - q(n, 0.01) = 1,500 - 10 KAS.
     assert_eq!(tx.outputs[0].value, 149_000_000_000);
     assert_eq!(tx.outputs[0].script_public_key, p2pk_spk(&k.long));
-    // The part is the only continuation: (1,000, bl' = 8.5, bs = 12, E = 10.5), the entrant's key and tag, its side
-    // unlisted, the short (stayer) untouched including its listing; it inherits the old carrier.
+    // The part is the only continuation: (1,000, bl' = 8.5, bs = 12, E kept), the entrant's key and tag, its side
+    // unlisted, the short (stayer) untouched including its listing but its tag cleared; it inherits the old carrier.
     let part = &d.pairs[0].1;
-    assert_eq!((part.size, part.bl, part.bs, part.entry), (1_000_000_000, 850_000_000, 1_200_000_000, 1_050_000_000));
+    assert_eq!((part.size, part.bl, part.bs, part.entry), (1_000_000_000, 850_000_000, 1_200_000_000, l.p.entry));
     assert_eq!((part.long_key, part.tag_l, part.long_ask), (xonly(&k.entrant), L_ID, 0));
-    assert_eq!((part.short_key, part.tag_s, part.short_bid), (l.p.short_key, l.p.tag_s, l.p.short_bid));
+    assert_eq!((part.short_key, part.tag_s, part.short_bid), (l.p.short_key, ZERO, l.p.short_bid));
     assert_eq!(tx.outputs[2].value, part.floor() as u64);
     // The executor keeps both tips and the order's spare carrier.
     assert_eq!(tx.outputs[3].value + FEE - F_FUNDS, 2 * 1_000_000_000 + C as u64);
@@ -135,9 +144,10 @@ fn p3_long_partial_by_a_kpfopen_either_ordinal() {
     let mut t = long_spec(&k, 400_000_000, 1_050_000_000);
     let d = tx_d(&l, &t, &Entrant::Open(long_entrant(&k)), &k);
     let tx = accept_d(&d);
-    // The remainder (600 tokens) keeps the leaver, its listing and the old entry, and the old carrier.
+    // The remainder (600 tokens) keeps the leaver, its listing, the entry and the old carrier; its tags are cleared.
     let rest = &d.pairs[1].1;
     assert_eq!((rest.size, rest.bl, rest.entry, rest.long_key, rest.long_ask), (600_000_000, l.p.bl, l.p.entry, l.p.long_key, l.p.long_ask));
+    assert_eq!((rest.tag_l, rest.tag_s), (ZERO, ZERO));
     assert_eq!(tx.outputs[3].value as i64, l.value as i64 - l.p.range_of(400_000_000));
     // The new part's carrier comes from the order's escrow, not from the pair.
     assert_eq!(tx.outputs[2].value as i64, d.pairs[0].1.floor());
@@ -157,7 +167,7 @@ fn p3_long_partial_by_a_kpfopen_either_ordinal() {
 #[test]
 fn p3_short_full_and_partial_by_a_kpfopen() {
     let k = keys();
-    let l = live(&listed(&k));
+    let l = live(&listed_low(&k));
     for n in [1_000_000_000, 250_000_000] {
         let t = short_spec(&k, n, 950_000_000);
         let d = tx_d(&l, &t, &Entrant::Open(short_entrant(&k)), &k);
@@ -167,7 +177,7 @@ fn p3_short_full_and_partial_by_a_kpfopen() {
         assert_eq!(tx.outputs[0].script_public_key, p2pk_spk(&k.short));
         let part = &d.pairs[0].1;
         assert_eq!((part.bl, part.bs, part.short_key, part.tag_s, part.short_bid), (l.p.bl, 1_250_000_000, xonly(&k.entrant), S_ID, 0));
-        assert_eq!((part.long_key, part.tag_l, part.long_ask), (l.p.long_key, l.p.tag_l, l.p.long_ask));
+        assert_eq!((part.long_key, part.tag_l, part.long_ask, part.entry), (l.p.long_key, ZERO, l.p.long_ask, l.p.entry));
     }
 }
 
@@ -320,6 +330,7 @@ fn p3_downgrade_by_one_is_refused() {
     t.nb = 1_050_000_000 - lo.o.my_rate;
     refused_only(&tx_d(&l, &t, &Entrant::Open(lo), &k), 0, &[1]);
     // Short side by a KpfOpen: bs' = bs - 1.
+    let l = live(&listed_low(&k));
     let mut so = short_entrant(&k);
     so.o.my_rate = l.p.bs - 950_000_000 - 1;
     so.value = so.o.escrow() as u64;
@@ -362,9 +373,9 @@ fn p3_stayer_remainder_and_market_are_untouched() {
     let rest_mut: Vec<(&str, Box<dyn Fn(&mut Pair)>)> = vec![
         ("leaver key", Box::new(|p: &mut Pair| p.long_key = xonly(&keypair(13)))),
         ("leaver listing", Box::new(|p: &mut Pair| p.long_ask = 0)),
-        ("entry", Box::new(|p: &mut Pair| p.entry = 1_050_000_000)),
+        ("entry", Box::new(|p: &mut Pair| p.entry += 1)),
         ("bound", Box::new(|p: &mut Pair| p.bl -= 1)),
-        ("tag", Box::new(|p: &mut Pair| p.tag_l = ZERO)),
+        ("old tag copied", Box::new(|p: &mut Pair| p.tag_l = Hash::from_bytes([0x1a; 32]))),
         ("size", Box::new(|p: &mut Pair| p.size += 1)),
     ];
     for (name, f) in rest_mut {
@@ -427,7 +438,7 @@ fn p3_kpfopen_checks_its_own_terms() {
     refused_only(&tx_d(&l, &t2, &ent, &k), 1, &[0]);
     // Price above its limit (11 KAS).
     let mut p = listed(&k);
-    p.bs = 1_400_000_000;
+    (p.bs, p.entry) = (1_400_000_000, 1_200_000_000);
     let l2 = live(&p);
     let mut lo = long_entrant(&k);
     lo.o.my_rate = 250_000_000;
@@ -598,10 +609,12 @@ fn p3_two_orders_cannot_claim_one_part() {
     assert_input_refused(&tx, &e, 2);
 }
 
-/// The stale-tag alias the live-tag guard closes. Pair Q was opened earlier by the long order L' (Q.tagL = id(L'));
-/// L' is still alive. Q's short owner amends its own listing, and the executor points L''s `take` at Q's
-/// continuation, which already holds L''s owner at L''s rate: L' would pay a second margin for a position it
-/// already has. Q's amend refuses because a tag of Q names an input of the transaction; the order alone accepts.
+/// The stale-tag alias of slice 1b. Pair Q was opened earlier by the long order L' (Q.tagL = id(L')); L' is still
+/// alive. Q's short owner amends its own listing, and the executor points L''s `take` at Q's continuation, which
+/// already holds L''s owner at L''s rate: if the continuation kept tagL = id(L'), L' would pay a second margin for
+/// a position it already has. Rule that refuses it (DESIGN 4.4, no entry copies a tag): Q's amend writes both tags
+/// 0, so L' finds no hand-over to it; and a continuation with the stale tag copied is refused by Q. There is no
+/// live-tag guard any more: the amend is accepted with L' in the transaction.
 #[test]
 fn p3_stale_tag_cannot_alias_a_hand_over() {
     let k = keys();
@@ -612,13 +625,20 @@ fn p3_stale_tag_cannot_alias_a_hand_over() {
     let ql = Live { p: qp.clone(), value: qp.floor() as u64, id: Hash::from_bytes([0x77; 32]), op: outpoint(30) };
     let w = (950_000_000, 100_000_000, 0);
     let mut d = amend_draft(&ql, &k.short, SHORT, w, &k.f, 4);
-    let (pre, suf) = parts(pair_base());
-    let ta = vec![iv(0), iv(qp.size), iv(x0), iv(qp.bs), bv(&qp.short_key), bv(&qp.tag_s.as_bytes()), iv(w.0), iv(w.1), iv(w.2), bv(&pre), bv(&suf)];
+    let cont = d.pairs[0].1.clone();
+    assert_eq!((cont.tag_l, cont.tag_s), (ZERO, ZERO));
+    // L' takes "the part" at output 0: what it rebuilds is its own long with tag id(L') and the stayer's tag 0.
+    let mut stale = cont.clone();
+    stale.tag_l = L_ID;
+    let ta = take_args(&stale, LONG, 0, qp.size, x0);
     d.ins.insert(1, open_input(&lo, "take", ta));
     let (oo, _) = order_out(&lo, qp.size, 1);
     d.outs.insert(1, oo);
     d.change = Some(2);
-    refused_only(&d, 0, &[1]);
-    // The same amend without L' in the transaction is fine.
-    accept_d(&amend_draft(&ql, &k.short, SHORT, w, &k.f, 4));
+    // Q's honest continuation (tags 0): Q accepts, L' refuses.
+    refused_only(&d, 1, &[0]);
+    // The stale tag copied into the continuation: L' alone would accept; Q refuses.
+    let mut d2 = d.clone();
+    d2.set_pair(0, &stale);
+    refused_only(&d2, 0, &[1]);
 }

@@ -101,8 +101,9 @@ T: X7.
 **B2 Keeper incentive failure.**
 V: nobody liquidates. P: fee below the transaction cost (an evidence transaction costs about 0.025 KAS,
 `[K] docs/spec/matcher.md:1146`, `:1148`) or below the capital cost of producing `k·n` evidence; the loser's residual is
-zero after a gap. I: bad debt grows; the winner absorbs it. M: `fee = max(keeperFeeMin, q(n, a·liqFeeBps/10⁴))`, taken
-from the winner when the loser's residual is short (D§4.5 T6); the winner is the natural keeper; KOB executors can add
+zero after a gap. I: bad debt grows; the winner absorbs it. M: `fee = min(loser's residual, max(keeperFeeMin,
+q(n, a·liqFeeBps/10⁴)))` (D§4.5a): the winner never pays, and a bankrupt piece pays no fee; the winner is the natural
+keeper; KOB executors can add
 liquidations to batches that already fill qualifying evidence (arming precedent, `matcher.md:770-812`). R: no operator
 runs keepers (Q6). T: X4 fee table vs `keeperFeeMin`; liveness drill with only the winner as keeper.
 
@@ -198,7 +199,8 @@ cross-input read authenticated (D§4.4); counterparty margin is inside the same 
 **F2 Output aliasing.**
 V: one payout output satisfies the requirements of two inputs (two pairs pay one key; two `KpfOpen` of one key fund one
 pair). I: one party's funds go to the executor. M: positional `i` and reverse `M − 1 − i ≥` input count (D§4.4,
-`[K] docs/spec/matcher.md:334-340`); hand-over outputs claimed by `tagL`/`tagS` = the claimer's covenant id. R: keeper
+`[K] docs/spec/matcher.md:334-340`); hand-over outputs claimed by `tagL`/`tagS` = the claimer's covenant id, and no entry copies a tag, so only an output
+whose side is handed over in that very transaction can carry one (D§4.4). R: keeper
 outputs may alias (only the keeper loses). T: X5.
 
 **F3 Two inputs of one covenant id.**
@@ -270,8 +272,10 @@ exits remain: transfer (T2), close-versus-close and mutual close (T3), cooperati
 R: liquidations stop for the duration; bad debt accrues to winners. T: X13.
 **K2 Idle settle as a free option.** V: a losing party waits out `idleDaa` hoping nobody touches the pair, then settles
 at `E`. M: `idleDaa` long (90 days, as KOB, `[K] contracts/orders/KobCondAsk.sil:109-110`); the winner can close with
-evidence or amend (which resets the age) at any time. R: a winner absent for `idleDaa` with no evidence available loses
-its unrealised profit. T: X8.
+evidence or amend (which resets the age) at any time; `E` changes only with both parties' consent (T1 sets it, P3/P7
+keep it, P4 writes `E(donor) ≤ E3 ≤ E(host)`, D§4.5a), so no party can move it alone (review 1, F3), and a `KpfOpen`
+entrant accepts the kept `E` only on its own side of its fill price. R: a winner absent for `idleDaa` with no evidence
+available loses its unrealised profit since `E`, never more. T: X8, X6 (idle payout of every party that did not act).
 **K3 Lost key.** The counterparty of a lost-key owner can still close (evidence), transfer its own side, or wait for idle
 settle; the lost key's own funds are lost as with any key. **K4 Open orders.** `KpfOpen` refundable by anyone after
 `min(expiryDaa, 90 days idle)`. **K5 Censorship.** All executors refusing a pair's transactions: accepted residual (T4).

@@ -98,7 +98,7 @@ fn metrics_every_path() {
     measure(&mut rows, "KpfPair P1 amend", &tx, &e, 0, pair_len());
 
     let delta = 100_000_000;
-    let mut m = l.p.clone();
+    let mut m = l.p.cleared();
     m.bl -= delta;
     let need = q(l.p.size, delta, SCALE, SCALE - 1) as u64;
     let ins = [
@@ -121,7 +121,7 @@ fn metrics_every_path() {
     let mut dp = listed(&base());
     (dp.bl, dp.bs) = (850_000_000, 1_150_000_000);
     let donor = live(&dp, 0x34);
-    let d = close_draft(&host, &donor, &CloseSpec { n: 400_000_000, x: 1_050_000_000 }, &fk, 4);
+    let d = close_draft(&host, &donor, &CloseSpec { n: 400_000_000, x: 1_050_000_000, e3: 1_000_000_000 }, &fk, 4);
     let (tx, e) = d.build();
     measure(&mut rows, "KpfPair P4 closeHost (part)", &tx, &e, 0, pair_len());
     measure(&mut rows, "KpfPair P4 closeDonor (part)", &tx, &e, 1, pair_len());

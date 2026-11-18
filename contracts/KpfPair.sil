@@ -12,12 +12,14 @@ pragma silverscript ^0.1.0;
 //   addMargin(s, side, delta)               P2  long lowers bl, short raises bs, by delta > 0
 //   transfer(side, n, x, nb, ek, et, k)     P3  anyone fills the listing of `side` for n at x: an entrant (key ek,
 //                                               tag et, new bound nb) replaces the leaver in a part of size n
-//   closeHost(n, x, k, bl3, lk3, la3, lm3, lt3, tl3)
+//   closeHost(n, x, e3, k, bl3, lk3, la3, lm3, lt3, tl3)
 //                                           P4  close-versus-close, the pair whose long listing is filled: its long
-//                                               leaves, its short stays in P3 = (n, bl3, bs) with the donor's long
-//   closeDonor(n, x, c, bs3, sk3, sa3, sm3, st3, ts3)
+//                                               leaves, its short stays in P3 = (n, bl3, bs, entry e3) with the
+//                                               donor's long
+//   closeDonor(n, x, e3, c, bs3, sk3, sa3, sm3, st3)
 //                                           P4  close-versus-close, the pair whose short listing is filled: its short
-//                                               leaves, its long moves into the host's P3 = (n, bl, bs3) at output c
+//                                               leaves, its long moves into the host's P3 = (n, bl, bs3, entry e3) at
+//                                               output c
 //   mutualClose(n, x)                       P4  both listings of this pair cross at x: n closes for both
 //   idleSettle()                            P8  anyone, age >= idleDaa: settle all at entryPrice clamped to [bl, bs]
 //   coopClose(sl, ss)                       P9  both owners sign; any split, the pair ends
@@ -66,13 +68,18 @@ pragma silverscript ^0.1.0;
 // value - q(n, BS - BL). A payout below dust (4.6) "stays in the remainder"; with no remainder (n = s) it stays
 // in the moved part.
 //
-// Live-tag guard. Every entry that copies a tag into a continuation requires that no input of this transaction
-// carries that tag as its covenant id. A tag names the input that handed its party over in the creating
-// transaction; a claimer (a KpfOpen, or the donor of P4) accepts an output whose tag is its own id. Without the
-// guard, the continuation of an older pair whose stale tag names a claimer that is still alive (a partly filled
-// KpfOpen, the remainder of a donor) would also satisfy that claimer's hand-over check, and the claimer would pay
-// for a position its party already holds.
-// DESIGN: 4.4 guards claims only by OpCovInputCount(selfId) == 1, which does not exclude this stale-tag aliasing.
+// Tags live for one transaction (DESIGN 4.4). A tag names the input that handed its party over in the
+// transaction that created the output; a claimer (a KpfOpen, or the donor of P4) accepts an output whose tag on
+// its side is its own covenant id. No entry copies a tag: every pair output an entry creates carries tag 0 on both
+// sides, except the side handed over in this transaction, which carries the tag the hand-over writes (the
+// entrant's et in P3 and P7, the donor's id tl3 in the host's P3 of P4). So an output created by an entry that
+// hands over no side, or the stayer's side of one that does, can never satisfy a claimer's check, and a tag that
+// names an id still alive in a later transaction (the stale-tag alias of slice 1b) cannot exist. No entry reads
+// its own tags, so a tag of any value (this pair's id, the token's id) blocks nothing (review 1, F1, F2).
+//
+// Entry price (DESIGN 4.5a). E changes only with the consent of both parties: P3 and P7 keep it in the part and
+// in the remainder, P4 writes e3 with E(donor) <= e3 <= E(host) into P3 (each pair checks its own half), and
+// every other continuation keeps it. P8 therefore settles an absent party at a price it consented to, or better.
 contract KpfPair(
     byte[32] ASK_TPL,
     int ASK_PRE,
@@ -139,7 +146,8 @@ contract KpfPair(
     int shortBid = init_shortBid;        // * short listing: buy back at <= shortBid (0 = unlisted)
     int shortMin = init_shortMin;        // *
     int shortTip = init_shortTip;        // *
-    byte[32] tagL = init_tagL;           // * covenant id of the input that put the current long here (0 if none)
+    byte[32] tagL = init_tagL;           // * covenant id of the input that handed the long over in the transaction
+                                         //   that created this UTXO (0 if none); read only by that claimer
     byte[32] tagS = init_tagS;           // * as tagL for the short
 
     byte constant SIGHASH_ALL = 0x01;
@@ -163,7 +171,6 @@ contract KpfPair(
     // size payload [209..217); the whole position state ends at 430.
     int constant SIZE_AT = 209;
     int constant STATE_END = 430;
-    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     // An empty listing window (ask, minPart, tip all zero) with its push opcodes.
     byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
     // Evidence (KobCondAsk.touch): state lengths of KobAsk and KobBid, the largest evidence block, basis points.
@@ -222,12 +229,25 @@ contract KpfPair(
         return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
     }
 
-    // P2SH of this script with bl, bs and the two listing windows (54 bytes with their push opcodes) replaced.
-    // Every other byte, the market block, size, entryPrice, both keys and both tags included, is copied.
+    // Both tags zero with their push opcodes: the tag window [364..430) of a continuation that hands over no side.
+    // Built from an 8-byte zero (OP_NUM2BIN) rather than a 66-byte constant, which would be inlined at every use.
+    function noTags() : byte[] {
+        byte[] z = byte[](zero32());
+        return byte[](0x20) + z + byte[](0x20) + z;
+    }
+
+    // A 32-byte zero (a cleared tag), built the same way.
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    // P2SH of this script with bl, bs and the two listing windows (54 bytes with their push opcodes) replaced and
+    // both tags zero. Every other byte, the market block, size, entryPrice and both keys included, is copied.
     function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
             rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
-                + rs.slice(BS_AT + 8, LISTS_AT) + lists + rs.slice(LISTS_END, this.bytecodeSize)
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noTags() + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
 
@@ -242,23 +262,18 @@ contract KpfPair(
         ));
     }
 
-    // P2SH of the remainder: this script with only the size replaced.
+    // P2SH of the remainder: this script with the size replaced and both tags zero (the entry price, keys and
+    // listings are kept).
     function restSpk(byte[] rs, int sz) : byte[] {
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
-            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, this.bytecodeSize)
+            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noTags()
+                + rs.slice(STATE_END, this.bytecodeSize)
         ));
     }
 
     // A listing window (ask, minPart, tip) with its push opcodes.
     function win(int a, int m, int t) : byte[] {
         return byte[](0x08) + byte[](a as byte[8]) + byte[](0x08) + byte[](m as byte[8]) + byte[](0x08) + byte[](t as byte[8]);
-    }
-
-    // Live-tag guard (header): neither tag of this pair is the covenant id of an input of this transaction.
-    // OpCovInputCount of the zero id is 0, so an untagged side always passes.
-    function tagsNotLive() {
-        require(OpCovInputCount(tagL) == 0);
-        require(OpCovInputCount(tagS) == 0);
     }
 
     // A part n of this pair (DESIGN 4.6): 0 < n <= s, n >= minSize, and s - n is 0 or at least minSize.
@@ -317,7 +332,7 @@ contract KpfPair(
     }
 
     // P1 amend. The owner of `side` sets its own listing window (ask or bid, smallest part, tip). The other
-    // window and every other field stay. The continuation keeps at least this UTXO's value (an amend moves no
+    // window and every other field stay, except that both tags are cleared. The continuation keeps at least this UTXO's value (an amend moves no
     // value) and its range floor. A new UTXO resets the age that P8 measures.
     // DESIGN: "value >= old value" is not in 4.3; without it one owner's amend could move any value above the
     // range floor (which P8 would give to the short) to the signer's own outputs.
@@ -326,7 +341,6 @@ contract KpfPair(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         require(ask >= 0);
         require(ask <= priceMax);
         require(minPart >= 0);
@@ -356,7 +370,6 @@ contract KpfPair(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         require(delta > 0);
         int nbl = bl;
         int nbs = bs;
@@ -382,18 +395,19 @@ contract KpfPair(
     // P3 transfer (DESIGN 3.4 b, 4.5 T2). Anyone fills the listing of `side` for n base units at price x. The long
     // leaver is paid q(n, x - bl) - q(n, longTip) at output i (the short: q(n, bs - x) - q(n, shortTip)); a payout
     // below dust is not created and stays in the pair. An entrant with key ek, tag et and new bound nb takes the
-    // leaver's place in a part of size n with entry x and its side unlisted, so the leaver's listing is never
-    // replayed on the entrant. The stayer's key, tag, bound and listing are copied, and no-downgrade holds: nb <= bl
-    // for a staying short, nb >= bs for a staying long, so the stayer's payoff does not fall at any price.
+    // leaver's place in a part of size n with the pair's entry price kept and its side unlisted, so the leaver's
+    // listing is never replayed on the entrant. The stayer's key, bound and listing are copied, its tag cleared,
+    // and no-downgrade holds: nb <= bl for a staying short, nb >= bs for a staying long, so the stayer's payoff does
+    // not fall at any price.
     // The entrant is a KpfOpen of the same side (et = its covenant id; it checks its own rate, limit and claim) or a
-    // direct taker (et = 0) who funds the part from its own signed input. This pair checks neither: only the
-    // entrant's own funds depend on them. The remainder keeps the leaver, its listing and the old entry.
+    // direct taker (any et; 0 by convention) who funds the part from its own signed input. This pair checks
+    // neither: only the entrant's own funds depend on them. The remainder keeps the leaver, its listing and the
+    // entry, with both tags cleared.
     entry transfer(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int k) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         checkPart(n);
         require(x >= 0);
         require(x <= priceMax);
@@ -410,13 +424,14 @@ contract KpfPair(
             require(n >= shortMin || n == size);
             pay = owed(n, bs - x, shortTip);
         }
-        handOver(side, n, x, nb, ek, et, k, pay);
+        handOver(side, n, nb, ek, et, k, pay);
     }
 
     // The hand-over of P3 and P7: the leaver of `side` is paid `pay` at output i (a payout below dust stays in the
-    // pair), and an entrant with key ek, tag et and new bound nb takes its place in a part of size n with entry x
-    // and its side unlisted. No-downgrade: nb <= bl for a staying short, nb >= bs for a staying long.
-    function handOver(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int k, int pay) {
+    // pair), and an entrant with key ek, tag et and new bound nb takes its place in a part of size n with the entry
+    // price kept and its side unlisted; the stayer's tag is cleared. No-downgrade: nb <= bl for a staying short,
+    // nb >= bs for a staying long.
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int k, int pay) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         byte[] rs = ownRs();
@@ -424,8 +439,8 @@ contract KpfPair(
         byte[32] sk = byte[32](shortKey);
         byte[] lw = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN);
         byte[] sw = rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        byte[32] tl = tagL;
-        byte[32] ts = tagS;
+        byte[32] tl = zero32();
+        byte[32] ts = tl;
         int b0 = bl;
         int b1 = bs;
         pubkey leaver = longKey;
@@ -453,20 +468,21 @@ contract KpfPair(
             p = 0;
         }
         payTo(self, leaver, p);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, x, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, lw + sw, tl, ts), quoteOf(n, b1 - b0, 0), keep);
     }
 
     // P4 close-versus-close, host side (DESIGN 3.4 c, 4.5 T3). This pair's long listing is filled for n at x: the
     // long leaves with q(n, x - bl) - q(n, longTip) at output i, and the short stays in P3, a continuation of this
-    // id with (n, bl3, bs, entry x) whose long is the donor pair's staying long: key lk3, listing (la3, lm3, lt3)
-    // and tag tl3 (the donor's covenant id). No-downgrade for the staying short: bl3 <= bl. The donor checks its
-    // own long's side of P3 (bl3, lk3, its listing, the tag, bs >= its bs); this pair reads none of its state.
-    entry closeHost(int n, int x, int k, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
+    // id with (n, bl3, bs, entry e3) whose long is the donor pair's staying long: key lk3, listing (la3, lm3, lt3)
+    // and tag tl3 (the donor's covenant id); the short's tag is cleared. For the staying short: no-downgrade
+    // bl3 <= bl, and e3 <= this pair's entry, so its idle payoff does not fall (DESIGN 4.5a). The donor checks its
+    // own long's side of P3 (bl3, lk3, its listing, the tag, bs >= its bs, e3 >= its entry); this pair reads none
+    // of its state. With E(donor) > E(host) no e3 satisfies both, and the two pairs cannot be re-paired.
+    entry closeHost(int n, int x, int e3, int k, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] tl3) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         checkPart(n);
         require(x >= 0);
         require(x <= priceMax);
@@ -475,6 +491,7 @@ contract KpfPair(
         require(n >= longMin || n == size);
         require(bl3 >= 0);
         require(bl3 <= bl);
+        require(e3 <= entryPrice);
         byte[] rs = ownRs();
         int pay = owed(n, x - bl, longTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -484,23 +501,24 @@ contract KpfPair(
         }
         payTo(self, longKey, pay);
         byte[] lists = win(la3, lm3, lt3) + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
-        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, x, lk3, byte[32](shortKey), lists, tl3, tagS), quoteOf(n, bs - bl3, 0), keep);
+        partAndRest(selfId, rs, n, k, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), lists, tl3, zero32()), quoteOf(n, bs - bl3, 0), keep);
     }
 
     // P4 close-versus-close, donor side. This pair's short listing is filled for n at x: the short leaves with
     // q(n, bs - x) - q(n, shortTip) at output i, and the long moves into the host's P3 at output c: a KpfPair of
-    // this market under another, non-zero covenant id with (n, bl, bs3, entry x), this long's key and listing, and
+    // this market under another, non-zero covenant id with (n, bl, bs3, entry e3), this long's key and listing, and
     // tagL = this pair's id, which claims P3 once (OpCovInputCount(selfId) == 1). Its short (key sk3, listing
-    // (sa3, sm3, st3), tag ts3) is the host's. No-downgrade for the moving long: bs3 >= bs. A remainder continues
-    // this id; when n = s the pair ends and its carrier and excess go to the leaving short.
+    // (sa3, sm3, st3)) is the host's, with tag 0 (the host's short is not handed over). For the moving long:
+    // no-downgrade bs3 >= bs, and e3 >= this pair's entry, so its idle payoff does not fall (DESIGN 4.5a). A
+    // remainder continues this id with both tags cleared; when n = s the pair ends and its carrier and excess go
+    // to the leaving short.
     // DESIGN: 4.5 T3 does not say where the donor's carrier goes when its whole size moves; P3 already has the
     // host's carrier, so the freed one is paid to the leaver rather than left to the executor.
-    entry closeDonor(int n, int x, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, byte[32] ts3) {
+    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         checkPart(n);
         require(x >= 0);
         require(x <= priceMax);
@@ -509,12 +527,13 @@ contract KpfPair(
         require(n >= shortMin || n == size);
         require(bs3 >= bs);
         require(bs3 <= priceMax);
+        require(e3 >= entryPrice);
         byte[] rs = ownRs();
         byte[32] pid = OpOutputCovenantId(c);
-        require(pid != ZERO32);
+        require(pid != zero32());
         require(pid != selfId);
         byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win(sa3, sm3, st3);
-        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, x, byte[32](longKey), sk3, lists, selfId, ts3));
+        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, lists, selfId, zero32()));
         require(tx.outputs[c].value >= quoteOf(n, bs3 - bl, 0) + carrier);
         int pay = owed(n, bs - x, shortTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -548,7 +567,6 @@ contract KpfPair(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         checkPart(n);
         require(longAsk > 0);
         require(shortBid > 0);
@@ -754,15 +772,14 @@ contract KpfPair(
         return int(byte[8](qs.slice(18, 26)));
     }
 
-    // Header of every evidence entry: the single-input guard, the pair bounds, the live-tag guard (a remainder or
-    // part continues the tags), n = int(nb) a part of this pair, and this input's own first two pushes are nb and
+    // Header of every evidence entry: the single-input guard, the pair bounds, n = int(nb) a part of this pair,
+    // and this input's own first two pushes are nb and
     // an 8-byte q (so the n settled here is the n its block counts). Returns n.
     function evEntry(byte[8] nb) : int {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         checkPair();
-        tagsNotLive();
         int n = int(nb);
         checkPart(n);
         require(OpTxInputScriptSigSubstr(self, 0, 1) == byte[](0x08));
@@ -779,8 +796,8 @@ contract KpfPair(
 
     // Closes n of this pair at the clamped price c (P5, P6). The party `side` is owed exactly q(n, its distance to
     // c) (rounded down); the other party takes the rest of what leaves the pair less `fee`: q(n, bs - bl) - owed
-    // with a remainder, or this UTXO's whole value - owed when n = s (carrier and excess included). When that rest
-    // does not cover the fee, the owed party pays what it lacks. The long is paid at output i, the short at
+    // with a remainder, or this UTXO's whole value - owed when n = s (carrier and excess included). The fee is
+    // capped at that rest, so the owed party never pays it (DESIGN 4.5a). The long is paid at output i, the short at
     // M - 1 - i (at least the input count). A payout below dust is not created: with a remainder its value stays
     // there, with n = s it goes to the other party. Whatever no output is required to hold (the fee) is the
     // executor's.
@@ -798,11 +815,7 @@ contract KpfPair(
         int owe = quoteOf(n, c - bl, 0);
         if (side == SIDE_SHORT) { owe = quoteOf(n, bs - c, 0); }
         int other = avail - owe - fee;
-        if (other < 0) {
-            owe = owe + other;
-            other = 0;
-            if (owe < 0) { owe = 0; }
-        }
+        if (other < 0) { other = 0; }
         if (n == size) {
             require(OpCovOutputCount(selfId) == 0);
             if (owe < PLAIN_DUST) {
@@ -844,7 +857,8 @@ contract KpfPair(
         }
     }
 
-    // Keeper fee of a liquidation of n at quote p: max(keeperFeeMin, q(n, floor(p * liqFeeBps / 10^4))).
+    // Keeper fee of a liquidation of n at quote p before its cap: max(keeperFeeMin, q(n, floor(p * liqFeeBps /
+    // 10^4))). P6 caps it at the loser's residual (closeAt), P7 at the loser's payout, so the winner never pays.
     function feeAt(int n, int p) : int {
         int f = quoteOf(n, p * liqFeeBps / BPS, 0);
         if (f < keeperFeeMin) { f = keeperFeeMin; }
@@ -864,13 +878,14 @@ contract KpfPair(
     // P6 liquidation, close both (DESIGN 3.6, 4.5 T6), path 6. Anyone. The loser `side` is liquidatable at the
     // quote: a long at an ask a with a * (10^4 - mmrBps) < bl * 10^4, a short at a bid b with
     // bs * 10^4 < b * (10^4 + mmrBps). n closes for both at c = the quote clamped to [bl, bs]. The winner is owed
-    // exactly q(n, its distance to c); the loser takes the rest less the keeper fee, and the winner pays only what
-    // that rest lacks. Partial liquidation in pieces: the remainder keeps every field and the same margin ratio.
+    // exactly q(n, its distance to c); the loser takes the rest less the keeper fee, capped at that rest, so a
+    // bankrupt piece pays no fee and the winner never pays one, in any number of pieces (DESIGN 4.5a). Partial
+    // liquidation in pieces: the remainder keeps every field but the tags, and the same margin ratio.
     //
     // P7 liquidation by transfer (DESIGN 3.6, 4.5 T7), path 7. Anyone. As P6, but the loser's n is sold at x to an
-    // entrant of its side exactly as P3 (key ek, tag et, new bound nbd, no-downgrade for the winner), without a
-    // listing: a long at x >= a, a short at x <= b. The loser receives q(n, x - bl) (long) or q(n, bs - x) (short)
-    // less the keeper fee, never below 0; the winner keeps its key, bound, tag and listing.
+    // entrant of its side exactly as P3 (key ek, tag et, new bound nbd, no-downgrade for the winner, entry kept),
+    // without a listing: a long at x >= a, a short at x <= b. The loser receives q(n, x - bl) (long) or
+    // q(n, bs - x) (short) less the keeper fee, never below 0; the winner keeps its key, bound and listing.
     //
     // DESIGN: 5 bounds the trigger products for a, b <= priceMax only; a liquidation quote outside [0, priceMax] is
     // refused (P5 only clamps, it forms no product with the quote).
@@ -939,7 +954,7 @@ contract KpfPair(
             }
             int pay = o - fee;
             if (pay < 0) { pay = 0; }
-            handOver(side, n, x, nbd, ek, et, k, pay);
+            handOver(side, n, nbd, ek, et, k, pay);
         } else {
             closeAt(n, clampP(p), owedSide, fee);
         }

@@ -68,13 +68,13 @@ fn amend_tx(k: &K, p: &Pair, signer: &Keypair, side: i64, w: (i64, i64, i64), ne
 }
 
 fn listed_long(p: &Pair) -> Pair {
-    let mut n = p.clone();
+    let mut n = p.cleared();
     (n.long_ask, n.long_min, n.long_tip) = (1_100_000_000, 100_000_000, 1_000_000);
     n
 }
 
 fn listed_short(p: &Pair) -> Pair {
-    let mut n = p.clone();
+    let mut n = p.cleared();
     (n.short_bid, n.short_min, n.short_tip) = (950_000_000, 50_000_000, 2_000_000);
     n
 }
@@ -90,7 +90,7 @@ fn p1_owner_sets_its_own_listing() {
     accept(&tx, &e);
     // Unlisting (all zero) on an already listed side.
     let l = listed_long(&p);
-    let (tx, e) = amend_tx(&k, &l, &k.long, LONG, (0, 0, 0), &p, v);
+    let (tx, e) = amend_tx(&k, &l, &k.long, LONG, (0, 0, 0), &p.cleared(), v);
     accept(&tx, &e);
 }
 
@@ -129,7 +129,7 @@ fn p1_cannot_touch_the_other_window_or_any_other_field() {
         ("entry", Box::new(|n: &mut Pair| n.entry += 1)),
         ("long key", Box::new(|n: &mut Pair| n.long_key = xonly(&keypair(13)))),
         ("short key", Box::new(|n: &mut Pair| n.short_key = xonly(&keypair(13)))),
-        ("tag L", Box::new(|n: &mut Pair| n.tag_l = ZERO)),
+        ("old tag L copied", Box::new(|n: &mut Pair| n.tag_l = Hash::from_bytes([0x1a; 32]))),
         ("tag S", Box::new(|n: &mut Pair| n.tag_s = Hash::from_bytes([9; 32]))),
         ("carrier", Box::new(|n: &mut Pair| n.m.carrier += 1)),
         ("idleDaa", Box::new(|n: &mut Pair| n.m.idle_daa = 0)),
@@ -193,18 +193,18 @@ fn p2_long_lowers_bl_and_short_raises_bs() {
     let p = base(&k);
     let v = p.floor() as u64;
     let d = 100_000_000; // 0.1 KAS per token on 1,000 tokens = 100 KAS
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl -= d;
     let need = q(p.size, d, SCALE, SCALE - 1) as u64;
     assert_eq!(need, 100_000_000_000);
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, d, &n, v + need);
     accept(&tx, &e);
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bs += d;
     let (tx, e) = add_tx(&k, &p, &k.short, SHORT, d, &n, v + need);
     accept(&tx, &e);
     // The long may go down to bl = 0.
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl = 0;
     let need0 = q(p.size, p.bl, SCALE, SCALE - 1) as u64;
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, p.bl, &n, v + need0);
@@ -221,7 +221,7 @@ fn p2_rounds_the_increment_up() {
     let up = q(p.size, d, SCALE, SCALE - 1);
     let down = q(p.size, d, SCALE, 0);
     assert_eq!((down, up), (4, 5));
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl -= d;
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, d, &n, v + up as u64);
     accept(&tx, &e);
@@ -236,13 +236,13 @@ fn p2_wrong_signer_is_refused() {
     let v = p.floor() as u64;
     let d = 100_000_000;
     let need = q(p.size, d, SCALE, SCALE - 1) as u64;
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl -= d;
     for signer in [&k.short, &k.other] {
         let (tx, e) = add_tx(&k, &p, signer, LONG, d, &n, v + need);
         assert_input_refused(&tx, &e, 0);
     }
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bs += d;
     for signer in [&k.long, &k.other] {
         let (tx, e) = add_tx(&k, &p, signer, SHORT, d, &n, v + need);
@@ -257,7 +257,7 @@ fn p2_too_little_value_is_refused() {
     let v = p.floor() as u64;
     let d = 100_000_000;
     let need = q(p.size, d, SCALE, SCALE - 1) as u64;
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl -= d;
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, d, &n, v + need - 1);
     assert_input_refused(&tx, &e, 0);
@@ -274,19 +274,19 @@ fn p2_range_violations_are_refused() {
     let v = p.floor() as u64;
     // bl < 0.
     let d = p.bl + 1;
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bl = -1;
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, d, &n, v + q(p.size, d, SCALE, SCALE - 1) as u64);
     assert_input_refused(&tx, &e, 0);
     // bs > priceMax.
     let d = PRICE_MAX - p.bs + 1;
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bs = PRICE_MAX + 1;
     let (tx, e) = add_tx(&k, &p, &k.short, SHORT, d, &n, v);
     assert_input_refused(&tx, &e, 0);
     // A negative delta would move bl to or above bs (and reduce margin).
     for d in [-(p.bs - p.bl), -1, 0] {
-        let mut n = p.clone();
+        let mut n = p.cleared();
         n.bl -= d;
         let (tx, e) = add_tx(&k, &p, &k.long, LONG, d, &n, v);
         assert_input_refused(&tx, &e, 0);
@@ -294,12 +294,12 @@ fn p2_range_violations_are_refused() {
     // A forged pair whose own state has bl >= bs is refused on entry.
     let mut f = p.clone();
     f.bl = f.bs;
-    let mut n = f.clone();
+    let mut n = f.cleared();
     n.bl -= 1;
     let (tx, e) = add_tx(&k, &f, &k.long, LONG, 1, &n, v + 1_000_000);
     assert_input_refused(&tx, &e, 0);
     // Margin added on the long but written into bs.
-    let mut n = p.clone();
+    let mut n = p.cleared();
     n.bs += 100_000_000;
     let (tx, e) = add_tx(&k, &p, &k.long, LONG, 100_000_000, &n, v + 100_000_000_000);
     assert_input_refused(&tx, &e, 0);
@@ -525,7 +525,7 @@ fn twins_with_one_id_are_refused_on_every_path() {
     );
     assert_input_refused(&tx, &e, 0);
     assert_input_refused(&tx, &e, 1);
-    let mut m = p.clone();
+    let mut m = p.cleared();
     m.bl -= 1_000_000;
     let need = q(p.size, 1_000_000, SCALE, SCALE - 1) as u64;
     let a = || vec![Arg::Sig(k.long), i(LONG), i(1_000_000)];
@@ -572,7 +572,7 @@ fn metrics_pair_paths() {
     let v = p.floor() as u64;
     let lp = q(p.size, p.entry - p.bl, SCALE, 0) as u64;
     let d = 100_000_000;
-    let mut m = p.clone();
+    let mut m = p.cleared();
     m.bl -= d;
     let need = q(p.size, d, SCALE, SCALE - 1) as u64;
     let shapes = vec![

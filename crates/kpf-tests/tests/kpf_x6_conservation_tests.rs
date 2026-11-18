@@ -8,7 +8,11 @@
 //!     unchanged or better at every price of a grid, up to the rounding slack;
 //!   - that slack is at most 1 sompi per part the party's pair was cut into;
 //!   - every leaver is paid at least what its listing promises, and its remaining position loses at most the
-//!     part it sold (plus at most 1 sompi of rounding).
+//!     part it sold (plus at most 1 sompi of rounding);
+//!   - every party that did not act keeps its idle-settle payout (cash plus the payout of each of its pairs at
+//!     that pair's E), up to 1 sompi per split (review 1, F3);
+//!   - no pair output carries a non-zero tag other than one written by a hand-over of that transaction (each
+//!     exactly once), so no tag outlives its transaction (review 1, F1/F2; DESIGN 4.4).
 
 mod common;
 mod kpf;
@@ -98,6 +102,20 @@ impl World {
     fn cash(&self, key: &[u8; 32]) -> i128 {
         *self.cash.get(key).unwrap_or(&0)
     }
+    /// What P8 would give the party if every pair idled now: cash plus the DESIGN 3.1 payout of each of its pairs
+    /// at that pair's own entry price E (review 1, F3).
+    fn idle_payoff(&self, key: &[u8; 32]) -> i128 {
+        let mut v = self.cash(key);
+        for l in &self.pairs {
+            if &l.p.long_key == key {
+                v += l.p.long_at(l.p.entry) as i128;
+            }
+            if &l.p.short_key == key {
+                v += l.p.short_at(l.p.entry) as i128;
+            }
+        }
+        v
+    }
 }
 
 impl Sim {
@@ -132,7 +150,20 @@ impl Sim {
 
     /// Builds, runs and applies a draft: every input passes, no sompi is created, the spent pairs leave the world
     /// and the created ones join it, and plain outputs to parties (less plain inputs of parties) are their cash.
-    fn apply(&mut self, d: &Draft) -> Transaction {
+    /// `handed` lists the (side, tag) of every hand-over of this transaction: each pair output carries exactly
+    /// these non-zero tags, each once, and tag 0 everywhere else (DESIGN 4.4, tags live for one transaction).
+    fn apply(&mut self, d: &Draft, handed: &[(i64, Hash)]) -> Transaction {
+        let mut want: Vec<(i64, Hash)> = handed.iter().copied().filter(|(_, t)| *t != ZERO).collect();
+        for (idx, p) in &d.pairs {
+            for (side, t) in [(LONG, p.tag_l), (SHORT, p.tag_s)] {
+                if t != ZERO {
+                    let at = want.iter().position(|w| *w == (side, t));
+                    assert!(at.is_some(), "output {idx}: tag {t} on side {side} not written by a hand-over of this transaction");
+                    want.remove(at.unwrap());
+                }
+            }
+        }
+        assert!(want.is_empty(), "hand-over tags not written: {want:?}");
         let (tx, e) = d.build();
         assert_accepted(&tx, &e);
         let ins: u128 = e.iter().map(|u| u.amount as u128).sum();
@@ -192,6 +223,13 @@ impl Sim {
         }
     }
 
+    /// A party that did not act: its idle-settle payout (payoff at each pair's E) did not fall by more than `slack`
+    /// (1 sompi of rounding per part its pair was cut into).
+    fn idle_kept(&mut self, before: &World, key: &[u8; 32], slack: i128) {
+        let (b, a) = (before.idle_payoff(key), self.w.idle_payoff(key));
+        assert!(b - a <= slack, "idle payout of a party that did not act fell by {} sompi (slack {slack})", b - a);
+    }
+
     /// A leaver of n from pair `src`: paid at least `owed` (unless below dust), and its remaining position falls by
     /// at most the part it sold, plus 1 sompi of rounding.
     fn leaver(&mut self, before: &World, key: &[u8; 32], src: &Pair, n: i64, owed: i64, long: bool, grid: &[i64]) {
@@ -211,9 +249,14 @@ impl Sim {
 
     /// T1 between two fresh orders, with the given range if any.
     fn open(&mut self, range: Option<(i64, i64)>) -> Live {
+        self.open_capped(range, i64::MAX)
+    }
+
+    /// T1 as `open`, with the fill price (the new pair's E) at most `x_max` when a range is given.
+    fn open_capped(&mut self, range: Option<(i64, i64)>, x_max: i64) -> Live {
         let (x, rl, rs) = match range {
             Some((bl, bs)) => {
-                let x = self.rng.range(bl + 1, bs - 1);
+                let x = self.rng.range(bl + 1, (bs - 1).min(x_max).max(bl + 1));
                 (x, x - bl, bs - x)
             }
             None => {
@@ -231,7 +274,7 @@ impl Sim {
         let so = LiveOpen { value: so.escrow() as u64, o: so, id: self.fresh_hash(0xa2), op: self.fresh_op() };
         let fnn = self.fn_();
         let d = open_draft(&lo, &so, n, x, &self.f.clone(), fnn);
-        let tx = self.apply(&d);
+        let tx = self.apply(&d, &[(LONG, lo.id), (SHORT, so.id)]);
         self.st.open += 1;
         live_pairs(&tx, &d).remove(0)
     }
@@ -248,10 +291,11 @@ impl Sim {
         let before = self.w.clone();
         let fnn = self.fn_();
         let d = amend_draft(l, &signer, side, w, &self.f.clone(), fnn);
-        let tx = self.apply(&d);
+        let tx = self.apply(&d, &[]);
         let g = self.grid(&[&l.p]);
         self.non_consenting(&before, &other, 0, &g);
         self.non_consenting(&before, &key, 0, &g);
+        self.idle_kept(&before, &other, 0);
         self.st.amend += 1;
         live_pairs(&tx, &d).remove(0)
     }
@@ -278,13 +322,19 @@ impl Sim {
         let l = self.pick();
         let side = if self.rng.coin() { LONG } else { SHORT };
         let n = self.random_n(l.p.size, partial);
-        let (bl, bs) = (l.p.bl, l.p.bs);
+        let (bl, bs, e) = (l.p.bl, l.p.bs, l.p.entry);
+        // A KpfOpen takes only at a price on its own side of the kept E (long x <= E, short x >= E); when the
+        // listing leaves no such price, a direct taker fills it instead.
+        let lo_a = (bl - 100_000_000).max(1);
+        let by_open = by_open && if side == LONG { lo_a <= bs.min(e) } else { bl.max(1).max(e) <= bs + 100_000_000 };
         let (ask, x) = if side == LONG {
-            let a = self.rng.range((bl - 100_000_000).max(1), bs);
-            (a, self.rng.range(a, bs))
+            let top = if by_open { bs.min(e) } else { bs };
+            let a = self.rng.range(lo_a, top);
+            (a, self.rng.range(a, top))
         } else {
-            let b = self.rng.range(bl.max(1), bs + 100_000_000);
-            (b, self.rng.range(bl, b))
+            let low = if by_open { bl.max(e) } else { bl };
+            let b = self.rng.range(bl.max(1).max(low), bs + 100_000_000);
+            (b, self.rng.range(low, b))
         };
         let w = (ask, self.rng.range(0, n), self.rng.range(0, 500_000));
         let l = self.amend(&l, side, w);
@@ -313,10 +363,18 @@ impl Sim {
             (TransferSpec { side, n, x, nb, ek: xonly(&entrant), et: id, k: self.rng.range(0, 1) }, Entrant::Open(lo))
         } else {
             let nb = if side == LONG { bl - self.rng.range(0, bl.min(200_000_000)) } else { bs + self.rng.range(0, 200_000_000) };
-            (TransferSpec { side, n, x, nb, ek: xonly(&entrant), et: ZERO, k: self.rng.range(0, 1) }, Entrant::Direct(entrant))
+            // A direct taker writes any tag it likes (review 1, F1/F2): 0, the pair's own id, the token's id, or
+            // a random id. None may freeze the pair.
+            let et = match self.rng.range(0, 3) {
+                0 => ZERO,
+                1 => l.id,
+                2 => l.p.m.token_cov_id,
+                _ => self.fresh_hash(0xd7),
+            };
+            (TransferSpec { side, n, x, nb, ek: xonly(&entrant), et, k: self.rng.range(0, 1) }, Entrant::Direct(entrant))
         };
         let d = transfer_draft(&l, &spec, &ent, &self.f.clone(), fnn);
-        self.apply(&d);
+        self.apply(&d, &[(side, spec.et)]);
         let mut ps: Vec<&Pair> = d.pairs.iter().map(|(_, p)| p).collect();
         ps.push(&p);
         let ps: Vec<Pair> = ps.into_iter().cloned().collect();
@@ -324,6 +382,7 @@ impl Sim {
         let split = (n < p.size) as i128;
         let (stayer, leaver) = if side == LONG { (p.short_key, p.long_key) } else { (p.long_key, p.short_key) };
         self.non_consenting(&before, &stayer, split, &g);
+        self.idle_kept(&before, &stayer, split);
         let owed = if side == LONG { owed(n, x - bl, p.long_tip, SCALE) } else { owed(n, bs - x, p.short_tip, SCALE) };
         self.leaver(&before, &leaver, &p, n, owed, side == LONG, &g);
         if split == 1 {
@@ -340,18 +399,27 @@ impl Sim {
     /// opening a suitable donor when the world has none.
     fn close(&mut self) {
         let h = self.pick();
+        // No-downgrade both ways, and E(donor) <= E(host) so that some e3 exists (DESIGN 4.5a). Tags play no part.
+        // The four parties are distinct keys (a long that left the host and moves from the donor in one
+        // transaction acted as a leaver, and the stayer checks below would not apply to it).
         let ok = |h: &Live, d: &Live| {
+            let hk = [h.p.long_key, h.p.short_key];
             h.id != d.id
                 && d.p.bl <= h.p.bl
                 && d.p.bs <= h.p.bs
-                && ![h.p.tag_l, h.p.tag_s].contains(&d.id)
-                && ![d.p.tag_l, d.p.tag_s].contains(&h.id)
+                && d.p.entry <= h.p.entry
+                && !hk.contains(&d.p.long_key)
+                && !hk.contains(&d.p.short_key)
         };
         let cands: Vec<Live> = self.w.pairs.iter().filter(|d| ok(&h, d)).cloned().collect();
         let d = if cands.is_empty() || self.rng.coin() {
             let bl = h.p.bl - self.rng.range(0, h.p.bl.min(200_000_000));
             let bs = h.p.bs - self.rng.range(0, (h.p.bs - bl - 2).min(200_000_000));
-            self.open(Some((bl, bs)))
+            let d = self.open_capped(Some((bl, bs)), h.p.entry);
+            if d.p.entry > h.p.entry {
+                return;
+            }
+            d
         } else {
             let i = self.rng.range(0, cands.len() as i64 - 1) as usize;
             cands[i].clone()
@@ -378,8 +446,11 @@ impl Sim {
         let d = self.amend(&d, SHORT, dw);
         let before = self.w.clone();
         let fnn = self.fn_();
-        let dr = close_draft(&h, &d, &CloseSpec { n, x }, &self.f.clone(), fnn);
-        self.apply(&dr);
+        let e3 = self.rng.range(d.p.entry, h.p.entry);
+        let dr = close_draft(&h, &d, &CloseSpec { n, x, e3 }, &self.f.clone(), fnn);
+        self.apply(&dr, &[(LONG, d.id)]);
+        self.idle_kept(&before, &h.p.short_key, (n < h.p.size) as i128);
+        self.idle_kept(&before, &d.p.long_key, (n < d.p.size) as i128);
         let mut ps: Vec<Pair> = dr.pairs.iter().map(|(_, p)| p.clone()).collect();
         ps.push(h.p.clone());
         ps.push(d.p.clone());
@@ -409,7 +480,7 @@ impl Sim {
         let before = self.w.clone();
         let fnn = self.fn_();
         let d = mutual_draft(&l, n, x, &self.f.clone(), fnn);
-        self.apply(&d);
+        self.apply(&d, &[]);
         let g = self.grid(&[&l.p]);
         let p = &l.p;
         self.leaver(&before, &p.long_key, p, n, owed(n, x - p.bl, p.long_tip, SCALE), true, &g);
@@ -425,7 +496,10 @@ impl Sim {
     ///   - the party that did not act (P5: the other side; P6: the winner) has, at the evidence quote, at least
     ///     its payoff before at that quote; the loser of P6 / P7 at least that less the keeper fee; the stayer of
     ///     P7 at every grid price (no-downgrade); each up to 1 sompi per split, or DUST when a payout of it fell
-    ///     below dust and stayed in the remainder.
+    ///     below dust and stayed in the remainder;
+    ///   - the winner of P6 and the stayer of P7 keep their idle-settle payout (payoff at E). The other side of a
+    ///     P5 is settled at the adverse quote, which DESIGN compares at the quote, not at E, so it is not checked
+    ///     at E; nor is the loser of a liquidation.
     fn evidence(&mut self) {
         use kpf::evidence::*;
         let l = self.pick();
@@ -452,8 +526,12 @@ impl Sim {
                 if what == 2 {
                     (Act::Liq { side: LONG }, Evidence::ask(a, fill), a)
                 } else {
-                    // The entrant accepts any counter rate >= 0, so x stays at most bs.
-                    let x = self.rng.range(a, (a + 100_000_000).min(p.bs).max(a));
+                    // The entrant accepts any counter rate >= 0, so x stays at most bs; a long KpfOpen takes
+                    // only at x <= E (the entry is kept, KpfOpen.take).
+                    if p.entry < a {
+                        return;
+                    }
+                    let x = self.rng.range(a, (a + 100_000_000).min(p.bs).min(p.entry).max(a));
                     let who = self.fresh_key();
                     let mut o = long_order(&who);
                     (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
@@ -467,7 +545,11 @@ impl Sim {
                 if what == 3 {
                     (Act::Liq { side: SHORT }, Evidence::bid(b, fill), b)
                 } else {
-                    let x = self.rng.range((b - 100_000_000).max(p.bl).min(b), b);
+                    // A short KpfOpen takes only at x >= E.
+                    if p.entry > b {
+                        return;
+                    }
+                    let x = self.rng.range((b - 100_000_000).max(p.bl).max(p.entry).min(b), b);
                     let who = self.fresh_key();
                     let mut o = short_order(&who);
                     (o.size_left, o.limit, o.min_counter_rate, o.min_fill, o.tip) = (n, x, 0, MIN, 0);
@@ -481,7 +563,11 @@ impl Sim {
         let before = self.w.clone();
         let fnn = self.fn_();
         let d = ev_draft(&[PairLeg { l: l.clone(), n, q: 0, act: act.clone() }], &e, &self.f.clone(), fnn);
-        self.apply(&d);
+        let handed = match &act {
+            Act::LiqTransfer { side, open, .. } => vec![(*side, open.id)],
+            _ => vec![],
+        };
+        self.apply(&d, &handed);
         let split = (n < p.size) as i128;
         let c = quote.clamp(p.bl, p.bs);
         let fee = fee_of(&m, n, quote) as i128;
@@ -500,10 +586,9 @@ impl Sim {
             Act::Liq { side } => {
                 let (winner, loser) = if side == LONG { (short, long) } else { (long, short) };
                 let wo = if side == LONG { q(n, p.bs - c, SCALE, 0) } else { q(n, c - p.bl, SCALE, 0) };
-                // The winner pays only what the loser's residual lacks of the fee.
-                let lr = (if n == p.size { l.value as i64 } else { p.range_of(n) }) - wo;
-                let wfee = (fee - lr as i128).max(0);
-                self.at_quote(&before, &winner, quote, split + wfee + dust(wo));
+                // The winner never pays the fee (DESIGN 4.5a): no fee term in its slack, at the quote or at E.
+                self.at_quote(&before, &winner, quote, split + dust(wo));
+                self.idle_kept(&before, &winner, split + dust(wo));
                 self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
                 self.st.ev_liq += 1;
             }
@@ -511,6 +596,7 @@ impl Sim {
                 let (stayer, loser) = if side == LONG { (short, long) } else { (long, short) };
                 let g = self.grid(&[&p]);
                 self.non_consenting(&before, &stayer, split, &g);
+                self.idle_kept(&before, &stayer, split);
                 self.at_quote(&before, &loser, quote, split + fee + DUST as i128);
                 self.st.ev_transfer += 1;
             }
@@ -532,7 +618,7 @@ impl Sim {
         let before = self.w.clone();
         let fnn = self.fn_();
         let d = idle_draft(&l, &self.f.clone(), fnn);
-        self.apply(&d);
+        self.apply(&d, &[]);
         let p = &l.p;
         let gl = self.w.cash(&p.long_key) - before.cash(&p.long_key);
         let gs = self.w.cash(&p.short_key) - before.cash(&p.short_key);

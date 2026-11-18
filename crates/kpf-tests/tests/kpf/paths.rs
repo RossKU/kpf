@@ -72,6 +72,17 @@ impl Pair {
         p.size = s;
         p
     }
+    /// This state with both tags cleared: what every continuation that hands over no side carries (DESIGN 4.4).
+    pub fn cleared(&self) -> Pair {
+        let mut p = self.clone();
+        p.tag_l = Hash::default();
+        p.tag_s = Hash::default();
+        p
+    }
+    /// The remainder of a split: size s, tags cleared, every other field kept.
+    pub fn rest_of(&self, s: i64) -> Pair {
+        self.with_size(s).cleared()
+    }
     /// q(n, bs - bl), rounded down.
     pub fn range_of(&self, n: i64) -> i64 {
         q(n, self.bs - self.bl, self.m.scale, 0)
@@ -217,7 +228,7 @@ pub fn open_draft(lo: &LiveOpen, so: &LiveOpen, n: i64, x: i64, f: &Keypair, fn_
 
 /// P1: in 0 pair (signed by `signer`), 1 F. out 0 continuation (value kept), 1 change.
 pub fn amend_draft(l: &Live, signer: &Keypair, side: i64, w: (i64, i64, i64), f: &Keypair, fn_: u32) -> Draft {
-    let mut n = l.p.clone();
+    let mut n = l.p.cleared();
     if side == LONG {
         (n.long_ask, n.long_min, n.long_tip) = w;
     } else {
@@ -272,8 +283,8 @@ pub fn transfer_out(l: &Live, t: &TransferSpec) -> TransferOut {
 /// The hand-over of P3 and P7 (KpfPair.handOver) for a leaver owed `pay`.
 pub fn hand_over_out(l: &Live, t: &TransferSpec, pay: i64) -> TransferOut {
     let p = &l.p;
-    let mut part = p.with_size(t.n);
-    part.entry = t.x;
+    // The entry price is kept (DESIGN 4.5a); the stayer's tag is cleared, the entrant's is et.
+    let mut part = p.rest_of(t.n);
     let mut pay = pay;
     let leaver = if t.side == LONG {
         part.bl = t.nb;
@@ -297,7 +308,7 @@ pub fn hand_over_out(l: &Live, t: &TransferSpec, pay: i64) -> TransferOut {
     if t.n == p.size {
         TransferOut { pay, leaver, part_value: (pr + p.m.carrier).max(pr + keep), part, rest: None }
     } else {
-        let r = p.with_size(p.size - t.n);
+        let r = p.rest_of(p.size - t.n);
         let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
         TransferOut { pay, leaver, part_value: pr + p.m.carrier, part, rest: Some((r, rv)) }
     }
@@ -315,15 +326,8 @@ pub fn transfer_draft(l: &Live, t: &TransferSpec, ent: &Entrant, f: &Keypair, fn
     let change;
     match ent {
         Entrant::Open(lo) => {
-            let part = &to.part;
-            let (bound, ck, ct, w) = if t.side == LONG {
-                (part.bs, part.short_key, part.tag_s, part.short_window())
-            } else {
-                (part.bl, part.long_key, part.tag_l, part.long_window())
-            };
-            let (pre, suf) = parts(pair_base());
             let part_out = if to.rest.is_some() && t.k == 1 { 3 } else { 2 };
-            let oa = vec![iv(part_out), iv(t.n), iv(t.x), iv(bound), bv(&ck), bv(&ct.as_bytes()), iv(w.0), iv(w.1), iv(w.2), bv(&pre), bv(&suf)];
+            let oa = take_args(&to.part, t.side, part_out as i64, t.n, t.x);
             ins.push(open_input(lo, "take", oa));
             ins.push(funder(f, fn_, F_FUNDS));
             let (oo, oc) = order_out(lo, t.n, 1);
@@ -372,12 +376,23 @@ pub fn transfer_draft(l: &Live, t: &TransferSpec, ent: &Entrant, f: &Keypair, fn
     d
 }
 
+/// Arguments of KpfOpen.take for the part `part`, taken by an order of `side` for n at x:
+/// (partOut, n, x, e, bound, counterKey, ca, cm, ct, cPre, cSuf), with e the part's entry and the stayer's bound,
+/// key and listing read from the part.
+pub fn take_args(part: &Pair, side: i64, part_out: i64, n: i64, x: i64) -> Vec<Arg> {
+    let (bound, ck, w) = if side == LONG { (part.bs, part.short_key, part.short_window()) } else { (part.bl, part.long_key, part.long_window()) };
+    let (pre, suf) = parts(pair_base());
+    vec![iv(part_out), iv(n), iv(x), iv(part.entry), iv(bound), bv(&ck), iv(w.0), iv(w.1), iv(w.2), bv(&pre), bv(&suf)]
+}
+
 // ---------------------------------------------------------------- P4 close-versus-close
 
 #[derive(Clone, Debug)]
 pub struct CloseSpec {
     pub n: i64,
     pub x: i64,
+    /// The entry price written into P3: E(donor) <= e3 <= E(host) (DESIGN 4.5a).
+    pub e3: i64,
 }
 
 pub struct CloseOut {
@@ -392,9 +407,9 @@ pub struct CloseOut {
 pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
     let (hp, dp) = (&h.p, &d.p);
     let sc = hp.m.scale;
-    let mut p3 = hp.with_size(c.n);
+    let mut p3 = hp.rest_of(c.n);
     p3.bl = dp.bl;
-    p3.entry = c.x;
+    p3.entry = c.e3;
     p3.long_key = dp.long_key;
     (p3.long_ask, p3.long_min, p3.long_tip) = dp.long_window();
     p3.tag_l = d.id;
@@ -408,7 +423,7 @@ pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
     let (p3_value, host_rest) = if c.n == hp.size {
         ((r3 + hp.m.carrier).max(r3 + hkeep), None)
     } else {
-        let r = hp.with_size(hp.size - c.n);
+        let r = hp.rest_of(hp.size - c.n);
         let rv = (r.range_of(r.size) + hp.m.carrier).max(hkeep);
         (r3 + hp.m.carrier, Some((r, rv)))
     };
@@ -425,7 +440,7 @@ pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
             dkeep += dpay;
             dpay = 0;
         }
-        let r = dp.with_size(dp.size - c.n);
+        let r = dp.rest_of(dp.size - c.n);
         let rv = (r.range_of(r.size) + dp.m.carrier).max(dkeep);
         Some((r, rv))
     };
@@ -434,12 +449,12 @@ pub fn close_out(h: &Live, d: &Live, c: &CloseSpec) -> CloseOut {
 
 pub fn host_args(d: &Live, c: &CloseSpec, k: i64) -> Vec<Arg> {
     let w = d.p.long_window();
-    vec![iv(c.n), iv(c.x), iv(k), iv(d.p.bl), bv(&d.p.long_key), iv(w.0), iv(w.1), iv(w.2), bv(&d.id.as_bytes())]
+    vec![iv(c.n), iv(c.x), iv(c.e3), iv(k), iv(d.p.bl), bv(&d.p.long_key), iv(w.0), iv(w.1), iv(w.2), bv(&d.id.as_bytes())]
 }
 
 pub fn donor_args(h: &Live, c: &CloseSpec, p3_out: i64) -> Vec<Arg> {
     let w = h.p.short_window();
-    vec![iv(c.n), iv(c.x), iv(p3_out), iv(h.p.bs), bv(&h.p.short_key), iv(w.0), iv(w.1), iv(w.2), bv(&h.p.tag_s.as_bytes())]
+    vec![iv(c.n), iv(c.x), iv(c.e3), iv(p3_out), iv(h.p.bs), bv(&h.p.short_key), iv(w.0), iv(w.1), iv(w.2)]
 }
 
 /// P4: in 0 host (its long leaves), 1 donor (its short leaves), 2 F. out 0 host's long, 1 donor's short, 2 P3
@@ -505,7 +520,7 @@ pub fn mutual_out(l: &Live, n: i64, x: i64) -> MutualOut {
             keep += sp;
             sp = 0;
         }
-        let r = p.with_size(p.size - n);
+        let r = p.rest_of(p.size - n);
         let rv = (r.range_of(r.size) + p.m.carrier).max(keep);
         MutualOut { lp, sp, rest: Some((r, rv)) }
     }

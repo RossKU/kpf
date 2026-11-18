@@ -9,9 +9,9 @@ pragma silverscript ^0.1.0;
 // Entries of this slice:
 //   fill(pairOut, n, x, bl, bs, counterKey, counterTag, cPre, cSuf)
 //          T1 open: n base units at x into the fresh KpfPair at output pairOut. Anyone, once tx.daa >= activeFrom.
-//   take(partOut, n, x, bound, counterKey, counterTag, ca, cm, ct, cPre, cSuf)
-//          T2 transfer: n base units at x take a same-side listing of an existing KpfPair; the part at output
-//          partOut continues that pair's covenant id. Anyone, once tx.daa >= activeFrom.
+//   take(partOut, n, x, e, bound, counterKey, ca, cm, ct, cPre, cSuf)
+//          T2 transfer: n base units at x take a same-side listing of an existing KpfPair whose entry price is e;
+//          the part at output partOut continues that pair's covenant id. Anyone, once tx.daa >= activeFrom.
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
 // Liquidation by transfer (T7) uses take unchanged: the pair's liqTransfer entry replaces the listing by price
@@ -21,7 +21,9 @@ pragma silverscript ^0.1.0;
 // whole pair output script from its own market block, its own key, rate and covenant id, and the arguments, and
 // requires the output to be exactly that script under a covenant id created in this transaction. Two orders on
 // the two sides of one pair therefore accept the same output if and only if both rebuild the same bytes, and the
-// tag on its side (its own covenant id) means no second order of its side can claim the same output.
+// tag on its side (its own covenant id) means no second order of its side can claim the same output. A part taken
+// by `take` carries tag 0 on the stayer's side (no pair entry copies a tag, DESIGN 4.4), so no claimer of the
+// other side can claim it either.
 contract KpfOpen(
     byte[32] PAIR_TPL,
     byte[32] init_tokenCovId,
@@ -85,9 +87,13 @@ contract KpfOpen(
     int constant PRICE_CAP = 100000000000000;
     int constant INT_MAX = 9223372036854775807;
     int constant CSV_LIMIT = 4294967296;
+    // The pair's evidence bounds (KpfPair: K_MAX, MMR_CAP, BPS) and the CLTV range of tx.daa.
+    int constant K_MAX = 100000;
+    int constant MMR_CAP = 5000;
+    int constant BPS = 10000;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
     // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
-    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     // The six listing fields of a new pair, all zero (unlisted), with their 0x08 push opcodes.
     byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
     // One empty listing window.
@@ -103,6 +109,43 @@ contract KpfOpen(
         int m = n % scale;
         int q = n / scale;
         return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // The market and order bounds a fill or take relies on: every bound the pair it creates checks on its entries
+    // (DESIGN 5), including the evidence parameters its P5, P6 and P7 need (DESIGN 4.5a, review 1 F4), so no order
+    // creates a pair with a dead path.
+    // DESIGN: 4.5a lists kBps, minRestDaa, mmrBps, liqFeeBps, keeperFeeMin with the pair's bounds; the pair also
+    // needs minRestDaa below the lock-time threshold, since tx.daa >= exposed + minRestDaa is proven by CLTV, so
+    // that bound is checked too. The token template facts (tplPrefixLen, tplSuffixLen, tokenTplHash) cannot be
+    // checked without a token input and stay consented market data.
+    function checkMarket() {
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(minSize > 0);
+        require(idleDaa >= 0);
+        require(idleDaa < CSV_LIMIT);
+        require(kBps > 0);
+        require(kBps <= K_MAX);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(minRestDaa >= 0);
+        require(minRestDaa < LOCK_TIME_THRESHOLD);
+        require(myRate > 0);
+        require(minCounterRate >= 0);
+        require(tip >= 0);
+    }
+
+    // A 32-byte zero (no covenant id, a cleared tag), built from an 8-byte zero (OP_NUM2BIN) instead of a 33-byte
+    // push at every use.
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
     }
 
     // This input's redeem script.
@@ -125,17 +168,7 @@ contract KpfOpen(
 
         // Nothing checks the state when the order is created, so a fill checks what it relies on, including every
         // bound the new pair checks on each of its own entries (DESIGN 5), so the pair it creates is never stuck.
-        require(scale > 0);
-        require(scale <= SCALE_MAX);
-        require(priceMax > 0);
-        require(priceMax <= PRICE_CAP);
-        require(carrier >= 0);
-        require(minSize > 0);
-        require(idleDaa >= 0);
-        require(idleDaa < CSV_LIMIT);
-        require(myRate > 0);
-        require(minCounterRate >= 0);
-        require(tip >= 0);
+        checkMarket();
 
         // Amount. n >= minFill unless it takes all that is left; every pair part is >= minSize (DESIGN 4.6), so
         // what is left is 0 or itself at least one part.
@@ -185,7 +218,7 @@ contract KpfOpen(
             + byte[](0x20) + byte[](ts);
         require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
         byte[32] pairId = OpOutputCovenantId(pairOut);
-        require(pairId != ZERO32);
+        require(pairId != zero32());
         require(OpCovInputCount(pairId) == 0);
         require(tx.outputs[pairOut].value >= quoteOf(n, bs - bl, 0) + carrier);
 
@@ -212,31 +245,25 @@ contract KpfOpen(
 
     // T2 transfer: take a same-side listing. The pair's own transfer entry pays the leaver and enforces the
     // stayer's guarantees; this order checks only its own, exactly as fill does, on the part at output partOut:
-    // the KpfPair template, this order's market block, size n, entry x, its owner as its side's key, its side's
-    // bound from its own rate (long bl = x - myRate, short bs = x + myRate), its side unlisted, its tag = this
-    // order's covenant id, the counterparty's margin rate >= minCounterRate, and the part's value. `bound` is the
-    // stayer's bound (bs for a long order, bl for a short), counterKey, counterTag and (ca, cm, ct) the stayer's
-    // key, tag and listing, which the pair copies and this order does not judge.
+    // the KpfPair template, this order's market block, size n, the pair's entry price e (kept by the pair, DESIGN
+    // 4.5a), its owner as its side's key, its side's bound from its own rate (long bl = x - myRate, short
+    // bs = x + myRate), its side unlisted, its tag = this order's covenant id, the stayer's tag 0, the
+    // counterparty's margin rate >= minCounterRate, and the part's value. `bound` is the stayer's bound (bs for a
+    // long order, bl for a short), counterKey and (ca, cm, ct) the stayer's key and listing, which the pair copies
+    // and this order does not judge.
+    // DESIGN: 4.5a says the entrant "sees E and accepts it by entering"; a resting order cannot see it, and an
+    // unchecked e would let a pair whose two sides one attacker holds (any E it chose at T1) settle an absent
+    // maker at P8 below the price it entered at. The order therefore accepts e only at or beyond its own fill price
+    // in its favour (long e >= x, short e <= x), so its idle payoff is at least its own margin.
     // DESIGN: T2 says "as in T1", but the part continues the pair's existing covenant id, so T1's fresh-lineage
     // check (no input carries the id) cannot hold; only a non-zero id is required. A part whose id is fresh, or
     // whose author is not a real pair, is still a fully funded pair holding this order's terms, so it only gives.
-    entry take(int partOut, int n, int x, int bound, byte[32] counterKey, byte[32] counterTag, int ca, int cm, int ct, byte[] cPre, byte[] cSuf) {
+    entry take(int partOut, int n, int x, int e, int bound, byte[32] counterKey, int ca, int cm, int ct, byte[] cPre, byte[] cSuf) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         require(tx.daa >= activeFrom);
-
-        require(scale > 0);
-        require(scale <= SCALE_MAX);
-        require(priceMax > 0);
-        require(priceMax <= PRICE_CAP);
-        require(carrier >= 0);
-        require(minSize > 0);
-        require(idleDaa >= 0);
-        require(idleDaa < CSV_LIMIT);
-        require(myRate > 0);
-        require(minCounterRate >= 0);
-        require(tip >= 0);
+        checkMarket();
 
         require(n > 0);
         require(n <= sizeLeft);
@@ -251,21 +278,23 @@ contract KpfOpen(
         byte[32] lk = counterKey;
         byte[32] sk = byte[32](ownerKey);
         byte[] lists = byte[](0x08) + byte[](ca as byte[8]) + byte[](0x08) + byte[](cm as byte[8]) + byte[](0x08) + byte[](ct as byte[8]) + byte[](NO_LIST);
-        byte[32] tl = counterTag;
+        byte[32] tl = zero32();
         byte[32] ts = selfId;
         if (side == SIDE_LONG) {
             require(x <= limit);
+            require(e >= x);
             bl = x - myRate;
             bs = bound;
             require(bs - x >= minCounterRate);
             lk = byte[32](ownerKey);
             sk = counterKey;
             lists = byte[](NO_LIST) + byte[](0x08) + byte[](ca as byte[8]) + byte[](0x08) + byte[](cm as byte[8]) + byte[](0x08) + byte[](ct as byte[8]);
+            ts = tl;
             tl = selfId;
-            ts = counterTag;
         } else {
             require(side == SIDE_SHORT);
             require(x >= limit);
+            require(e <= x);
             require(x - bl >= minCounterRate);
         }
         require(bl >= 0);
@@ -275,11 +304,11 @@ contract KpfOpen(
         require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
         byte[] rs = ownRs();
         byte[] st = rs.slice(MARKET_AT, MARKET_AT + MARKET_LEN) + byte[](0x08) + byte[](n as byte[8]) + byte[](0x08)
-            + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](x as byte[8])
+            + byte[](bl as byte[8]) + byte[](0x08) + byte[](bs as byte[8]) + byte[](0x08) + byte[](e as byte[8])
             + byte[](0x20) + byte[](lk) + byte[](0x20) + byte[](sk) + lists + byte[](0x20) + byte[](tl)
             + byte[](0x20) + byte[](ts);
         require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + st + cSuf)));
-        require(OpOutputCovenantId(partOut) != ZERO32);
+        require(OpOutputCovenantId(partOut) != zero32());
         require(tx.outputs[partOut].value >= quoteOf(n, bs - bl, 0) + carrier);
 
         int spend = quoteOf(n, myRate + tip, 0) + carrier;

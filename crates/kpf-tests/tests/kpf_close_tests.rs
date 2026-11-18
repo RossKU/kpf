@@ -64,9 +64,11 @@ fn donor(k: &K, s: i64) -> Live {
 }
 
 const X: i64 = 1_020_000_000;
+/// The entry price of both test pairs, and so the only P3 entry both accept (E(donor) <= e3 <= E(host)).
+const E0: i64 = 1_000_000_000;
 
 fn cs(n: i64) -> CloseSpec {
-    CloseSpec { n, x: X }
+    CloseSpec { n, x: X, e3: E0 }
 }
 
 fn accept(tx: &Transaction, e: &[UtxoEntry]) {
@@ -115,9 +117,10 @@ fn p4_full_against_full_is_the_worked_example() {
     assert_eq!(tx.outputs[1].value, 130_000_000_000 - 2_000_000_000 + C as u64);
     assert_eq!(tx.outputs[2].value, 350_000_000_000 + C as u64);
     let p3 = &dr.pairs[0].1;
-    assert_eq!((p3.size, p3.bl, p3.bs, p3.entry), (1_000_000_000, 850_000_000, 1_200_000_000, X));
-    // Stayers: S1 keeps key, tag, bound and listing; L2 keeps key, bound and listing, tagged by P2's id.
-    assert_eq!((p3.short_key, p3.tag_s, p3.short_window()), (h.p.short_key, h.p.tag_s, h.p.short_window()));
+    // The entry is e3 (DESIGN 4.5a), not the fill price x.
+    assert_eq!((p3.size, p3.bl, p3.bs, p3.entry), (1_000_000_000, 850_000_000, 1_200_000_000, E0));
+    // Stayers: S1 keeps key, bound and listing, its tag cleared; L2 keeps key, bound and listing, tagged by P2's id.
+    assert_eq!((p3.short_key, p3.tag_s, p3.short_window()), (h.p.short_key, ZERO, h.p.short_window()));
     assert_eq!((p3.long_key, p3.tag_l, p3.long_window()), (d.p.long_key, D_ID, d.p.long_window()));
     // The executor keeps the two tips: 3,000 + 3,000 = 1,190 + 1,280 + 3,500 + 30.
     assert_eq!(tx.outputs[3].value + FEE - F_FUNDS, 3_000_000_000);
@@ -135,10 +138,10 @@ fn p4_partial_fills_on_either_or_both_sides() {
         let (h, d) = (host(&k, s1), donor(&k, s2));
         let dr = cd(&h, &d, &cs(n), &k);
         let tx = accept_d(&dr);
-        // Remainders keep everything but the size; each keeps its pair's old carrier.
+        // Remainders keep everything but the size and the tags (cleared); each keeps its pair's old carrier.
         for (idx, p) in dr.pairs.iter().skip(1) {
             let src = if p.long_key == h.p.long_key { &h } else { &d };
-            assert_eq!(p, &src.p.with_size(src.p.size - n), "remainder {idx}");
+            assert_eq!(p, &src.p.rest_of(src.p.size - n), "remainder {idx}");
             assert_eq!(tx.outputs[*idx].value as i64, src.value as i64 - src.p.range_of(n));
         }
         // P3 holds its floor: a new carrier (the executor's) when the host splits, the host's own when it does not.
@@ -169,10 +172,10 @@ fn p4_donor_before_host_in_the_inputs() {
 fn p4_price_outside_either_listing_is_refused() {
     let k = keys();
     let (h, d) = (host(&k, 1_000_000_000), donor(&k, 1_000_000_000));
-    refused_only(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 999_999_999 }, &k), 0, &[1]);
-    refused_only(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_030_000_001 }, &k), 1, &[0]);
-    accept_d(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_000_000_000 }, &k));
-    accept_d(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_030_000_000 }, &k));
+    refused_only(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 999_999_999, e3: E0 }, &k), 0, &[1]);
+    refused_only(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_030_000_001, e3: E0 }, &k), 1, &[0]);
+    accept_d(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_000_000_000, e3: E0 }, &k));
+    accept_d(&cd(&h, &d, &CloseSpec { n: 400_000_000, x: 1_030_000_000, e3: E0 }, &k));
 }
 
 #[test]
@@ -266,7 +269,6 @@ fn p4_stayers_and_market_are_untouched() {
     type M = Box<dyn Fn(&mut Pair)>;
     let cases: Vec<(&str, M, usize)> = vec![
         ("S1 key", Box::new(|p: &mut Pair| p.short_key = xonly(&keypair(13))), 0),
-        ("S1 tag", Box::new(|p: &mut Pair| p.tag_s = Hash::from_bytes([9; 32])), 0),
         ("S1 bound", Box::new(|p: &mut Pair| p.bs += 1), 0),
         ("S1 listing", Box::new(|p: &mut Pair| p.short_tip += 1), 0),
         ("L2 key", Box::new(|p: &mut Pair| p.long_key = xonly(&keypair(13))), 1),
@@ -282,17 +284,20 @@ fn p4_stayers_and_market_are_untouched() {
         dr.set_pair(2, &p);
         // Tell both pairs the changed P3 fields through their arguments.
         let w = p.long_window();
-        dr.set_args(0, vec![iv(c.n), iv(c.x), iv(0), iv(p.bl), bv(&p.long_key), iv(w.0), iv(w.1), iv(w.2), bv(&p.tag_l.as_bytes())]);
+        dr.set_args(0, vec![iv(c.n), iv(c.x), iv(c.e3), iv(0), iv(p.bl), bv(&p.long_key), iv(w.0), iv(w.1), iv(w.2), bv(&p.tag_l.as_bytes())]);
         let w = p.short_window();
-        dr.set_args(1, vec![iv(c.n), iv(c.x), iv(2), iv(p.bs), bv(&p.short_key), iv(w.0), iv(w.1), iv(w.2), bv(&p.tag_s.as_bytes())]);
+        dr.set_args(1, vec![iv(c.n), iv(c.x), iv(c.e3), iv(2), iv(p.bs), bv(&p.short_key), iv(w.0), iv(w.1), iv(w.2)]);
         let (tx, e) = dr.build();
         let r = run(&tx, &e).unwrap();
         assert!(r[idx].is_err(), "{name}: input {idx} accepted");
         assert!(r[1 - idx].is_ok(), "{name}: input {} refused: {:?}", 1 - idx, r[1 - idx]);
     }
-    // Entry, size and market block: both refuse.
+    // Entry, size, market block, and a tag on S1's side (neither pair writes one there: S1 is not handed over):
+    // both refuse.
     let cases: Vec<(&str, M)> = vec![
         ("entry", Box::new(|p: &mut Pair| p.entry += 1)),
+        ("S1 tag", Box::new(|p: &mut Pair| p.tag_s = Hash::from_bytes([9; 32]))),
+        ("S1 tag = P2's id", Box::new(|p: &mut Pair| p.tag_s = D_ID)),
         ("size", Box::new(|p: &mut Pair| p.size += 1)),
         ("carrier", Box::new(|p: &mut Pair| p.m.carrier = 0)),
         ("ext", Box::new(|p: &mut Pair| p.m.ext = Hash::from_bytes([9; 32]))),
@@ -346,7 +351,7 @@ fn p4_hand_over_must_be_a_fresh_p3_of_another_id() {
     // The donor pointed at the host's remainder (a third pair's state, P1's own tags) instead of P3.
     let mut dr = base.clone();
     let mut a = dr.args(1);
-    a[2] = iv(3);
+    a[3] = iv(3);
     dr.set_args(1, a);
     refused_only(&dr, 1, &[0]);
     // P3 without a covenant id (unspendable): the donor refuses (and the host finds no continuation).
@@ -363,9 +368,10 @@ fn p4_hand_over_must_be_a_fresh_p3_of_another_id() {
 
 /// The stale-tag alias, P4 form. Q is the P3 of an earlier partial close of P2 (Q.tagL = id(P2), Q's long is
 /// L2 at BL2 with L2's listing). P2's remainder is now a donor again, and the executor points it at the part of a
-/// transfer of Q's short: that part holds L2's old position with tagL = id(P2) and would satisfy the donor, so
-/// P2's L2 would be paid for twice and the executor keep one. Q refuses (a tag of Q names an input); the donor
-/// alone would have accepted.
+/// transfer of Q's short: if that part kept tagL = id(P2) it would satisfy the donor, so P2's L2 would be paid for
+/// twice and the executor keep one. Rule that refuses it (DESIGN 4.4, no entry copies a tag): Q's transfer hands
+/// over only its short, so the part carries tagL = 0. With the honest part the donor refuses (no tag of its id);
+/// with the stale tag copied into the part Q refuses (it writes 0), the donor alone accepting.
 #[test]
 fn p4_third_party_pair_cannot_be_the_re_pair_target() {
     let k = keys();
@@ -380,8 +386,9 @@ fn p4_third_party_pair_cannot_be_the_re_pair_target() {
     let nb = 1_250_000_000;
     let t = TransferSpec { side: SHORT, n, x: X, nb, ek: xonly(&taker), et: ZERO, k: 0 };
     let to = transfer_out(&ql, &t);
-    let pd = CloseSpec { n, x: X };
-    let dargs = vec![iv(n), iv(X), iv(2), iv(nb), bv(&xonly(&taker)), iv(0), iv(0), iv(0), bv(&ZERO.as_bytes())];
+    let pd = CloseSpec { n, x: X, e3: E0 };
+    assert_eq!(to.part.tag_l, ZERO, "Q's part does not copy its stale tag");
+    let dargs = vec![iv(n), iv(X), iv(qp.entry), iv(2), iv(nb), bv(&xonly(&taker)), iv(0), iv(0), iv(0)];
     let dco = close_out(&live_as(&qp, Q_ID, 30), &d, &pd);
     let (dr_rest, dr_rest_v) = dco.donor_rest.clone().unwrap();
     let ins = vec![
@@ -397,7 +404,14 @@ fn p4_third_party_pair_cannot_be_the_re_pair_target() {
         out(0, p2pk_spk(&taker), None),
     ];
     let dr = Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], opens: vec![] };
-    refused_only(&dr, 0, &[1]);
+    // The honest part (tagL = 0): Q accepts its own transfer, the donor finds no hand-over to it.
+    refused_only(&dr, 1, &[0]);
+    // The stale tag copied into the part: the donor alone would accept; Q refuses.
+    let mut stale = to.part.clone();
+    stale.tag_l = D_ID;
+    let mut dr2 = dr.clone();
+    dr2.outs[2].script_public_key = p2sh(&stale.art());
+    refused_only(&dr2, 0, &[1]);
 }
 
 #[test]
@@ -417,7 +431,7 @@ fn p4_one_p3_cannot_be_claimed_twice() {
         outs.insert(2, out(base.outs[1].value, p2pk_x(&d2.p.short_key), None));
         let mut dr = Draft { ins, outs, lock: 0, seqs: vec![], genesis: vec![], change: Some(4), pairs: vec![], opens: vec![] };
         let mut a = dr.args(1);
-        a[2] = iv(3);
+        a[3] = iv(3);
         dr.set_args(1, a);
         dr
     };
@@ -470,7 +484,7 @@ fn p4_mutual_close_full_and_partial() {
     // Partial: 400 tokens close, the remainder keeps both listings and the carrier.
     let d = md(&l, 400_000_000, X, &k);
     let tx = accept_d(&d);
-    assert_eq!(d.pairs[0].1, l.p.with_size(600_000_000));
+    assert_eq!(d.pairs[0].1, l.p.rest_of(600_000_000));
     assert_eq!(tx.outputs[1].value as i64, l.value as i64 - l.p.range_of(400_000_000));
     // At both listing limits.
     accept_d(&md(&l, 400_000_000, 1_000_000_000, &k));
@@ -540,6 +554,8 @@ fn metrics_listing_paths() {
     // P3: a long listing taken by a KpfOpen (partial), a short listing by a direct taker (full).
     let mut tp = crossing(&k);
     (tp.short_bid, tp.short_min) = (950_000_000, 0);
+    // A long KpfOpen takes only at x <= E (KpfOpen.take); the pair's entry sits above the fill price.
+    tp.entry = 1_100_000_000;
     let tl = live_as(&tp, H_ID, 10);
     let mut lo = long_order(&k.l2);
     (lo.limit, lo.my_rate) = (1_100_000_000, 200_000_000);

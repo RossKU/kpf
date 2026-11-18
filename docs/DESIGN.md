@@ -264,11 +264,11 @@ No other UTXO type. No registry, pool, or oracle in M1.
 | minSize, carrier, idleDaa, priceMax | 8 ×4 | smallest part, `C`, idle timeout, upper price bound |
 | size* | 8 | `s`, base units |
 | BL*, BS* | 8 ×2 | bankruptcy prices, sompi per whole token, `0 ≤ BL < BS ≤ priceMax` |
-| entry* | 8 | `E`, last consented price |
+| entry* | 8 | `E`, last price both parties consented to (§4.5a) |
 | longKey*, shortKey* | 32 ×2 | owners (x-only pubkeys) |
 | longAsk*, longMin*, longTip* | 8 ×3 | long listing: sell ≥ `longAsk`, parts ≥ `longMin`, tip per whole token (`longAsk = 0`: unlisted) |
 | shortBid*, shortMin*, shortTip* | 8 ×3 | short listing: buy back ≤ `shortBid` (`0`: unlisted) |
-| tagL*, tagS* | 32 ×2 | covenant id of the input that put the current long / short into this UTXO in its creating transaction (0 if none) |
+| tagL*, tagS* | 32 ×2 | covenant id of the input that handed the long / short over in the transaction that created this UTXO (0 if none; no entry copies it, §4.4) |
 
 About 390 B of state *(estimate)*. The market block is identical in every pair and open order of a market; a reader
 compares it byte for byte.
@@ -357,18 +357,20 @@ rate ≥ `minCounterRate`, pair value ≥ `q(n, BS − BL) + C`, its tag, its es
 
 **T2 Transfer (listing of the long side × KpfOpen long), `n ≤ s` at `X ≥ longAsk`.**
 in: `0` KpfPair P, `1` KpfOpen L′, `2` F. out: `0` leaver payout ≥ `q(n, X − BL) − q(n, longTip)` to `longKey`, `1`
-L′ continuation-or-refund, `c1` P remainder `(s − n)` (if any), `c2` P part `(n, BL′ = X − rL′, BS, E = X, longKey = L′,
-tagL = id(L′), shortKey, tagS)`, `3` Ch.
+L′ continuation-or-refund, `c1` P remainder `(s − n)` (if any, tags 0), `c2` P part `(n, BL′ = X − rL′, BS, E kept,
+longKey = L′, tagL = id(L′), shortKey, tagS = 0)`, `3` Ch.
 P checks: listing (`X ≥ longAsk`, `n ≥ longMin` or `n = s`), leaver payout, `BL′ ≤ BL` (no-downgrade), both
-continuations, value of each ≥ its range. L′ checks its own guarantees as in T1.
-A direct taker (P2PK signer) may replace L′ (`tagL = 0`).
+continuations, value of each ≥ its range. L′ checks its own guarantees as in T1, and accepts the kept `E` only if `E ≥ X` (a short order: `E ≤ X`), so its
+own idle payout is at least its margin (`KpfOpen.take`).
+A direct taker (P2PK signer) may replace L′ (any `tagL` it writes; 0 by convention).
 
 **T3 Close-versus-close (long listing of P1 × short listing of P2), `n` at `X`, `longAsk1 ≤ X ≤ shortBid2`.**
 in: `0` P1, `1` P2, `2` F. out: `0` L1 payout ≥ `q(n, X − BL1)` less tip, `1` S2 payout ≥ `q(n, BS2 − X)` less tip,
-`c` P3 = P1 continuation `(n, BL2, BS1, E = X, longKey = key(L2), tagL = id(P2), shortKey = key(S1))`, remainders of P1
-and P2 (if any), `3` Ch.
-P1 checks: L1 payout; P3 found by its own id with `BS = BS1`, `shortKey = S1`, `BL ≤ BL1`, value. P2 checks: S2 payout;
-P3 found by `tagL == id(P2)` with `BL = BL2`, `longKey = L2`, `BS ≥ BS2`, value. Neither reads the other's state.
+`c` P3 = P1 continuation `(n, BL2, BS1, E3, longKey = key(L2), tagL = id(P2), shortKey = key(S1), tagS = 0)`,
+remainders of P1 and P2 (if any, tags 0), `3` Ch.
+P1 checks: L1 payout; P3 found by its own id with `BS = BS1`, `shortKey = S1`, `BL ≤ BL1`, `E3 ≤ E(P1)`, value. P2 checks:
+S2 payout; P3 found by `tagL == id(P2)` with `BL = BL2`, `longKey = L2`, `BS ≥ BS2`, `E3 ≥ E(P2)`, value. Neither reads
+the other's state.
 **T3′ Mutual close** (both listings of one pair cross): in `0` P; out `0` long ≥ `q(n, X − BL)`, `M−1` short ≥
 `q(n, BS − X)`.
 
@@ -385,12 +387,12 @@ T5: continuation with `BL − δ` or `BS + δ`, value ≥ old + `⌈q(s, δ)⌉`
 **T6 Liquidate a long (close both), `n` at ask `a`.**
 in: block `[q, ev)` of liquidated pairs, `ev` evidence `KobAsk`, `tk` its custody, buyer side, `F`. out per pair `i`:
 `i` long residual ≥ `q(n, c(a) − BL) − fee`, `M−1−i` short ≥ `q(n, BS − c(a))`, keeper output (argument index) ≥ `fee`,
-remainder continuation. `fee = max(keeperFeeMin, q(n, ⌊a·liqFeeBps/10⁴⌋))`, taken from the long's residual first and
-from the short's payout only for the part the residual lacks (the winner wants the liquidation done).
+remainder continuation (tags 0, `E` kept). `fee = min(long's residual, max(keeperFeeMin, q(n, ⌊a·liqFeeBps/10⁴⌋)))`
+(§4.5a): the short's payout is never reduced.
 Check: `a·(10⁴ − mmrBps) < BL·10⁴`. Short mirrored with a bid.
 
 **T7 Liquidate by transfer.** As T6, but the long's `n` goes to a `KpfOpen` long at `X ≥ a` exactly as T2 (`BL′ ≤ BL`),
-the long receives `q(n, X − BL) − fee`, the short is untouched.
+the long receives `max(0, q(n, X − BL) − fee)`, the short is untouched (its tag cleared, `E` kept).
 
 **T8 Idle timeout.** in: `0` P (age ≥ `idleDaa`), `F`. out: `0` long ≥ `q(s, c(E) − BL)`, `M−1` short ≥ the rest, Ch.
 
@@ -456,6 +458,7 @@ No product `size × price` is ever formed. Every entry point checks `0 ≤ BL < 
 | Q7 | Token issuer actions (pause, migration) | Freeze liquidations market-wide (§3.2). |
 | Q8 | KOB template obsolescence | KPF pins KOB v3 evidence templates and has no upgrade path; if makers move to a new KOB template, evidence dries up. |
 | Q9 | D6, D7 feasibility | §3.7, §3.8. |
+| Q10 | Should a resting order tolerate an entry price `E` on the wrong side of its fill price? | `KpfOpen.take` accepts a listing only when `E` is not worse than the fill price for the entrant (long `E ≥ x`, short `E ≤ x`), so a maker is never idle-settled below its entry. Once the market has moved away from `E`, resting orders can take only one side's listings; the other side needs a signing taker, close-versus-close or evidence. A per-order tolerance (maximum idle loss per token) would lift this. |
 
 ## 7. Milestones
 
