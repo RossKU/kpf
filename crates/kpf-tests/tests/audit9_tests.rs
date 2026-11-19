@@ -216,9 +216,10 @@ fn r9_holds_an_underwriter_alone_cannot_renew_a_fill_into_a_past_expiry() {
 }
 
 /// The residual of a fill into the past: each aged order loses what it paid beyond its margin, its tip and its half of
-/// the first premium (and the long, whose order paid the pair's carrier, that carrier; the short gets it at the lapse
-/// settle). Bounded by the order's own terms: `q(n, tip + premMax / 2) + carrier`. On the fixture (1,000 units, premium
-/// 0.10 KAS, no tip): the long 50.2 KAS, the short 50 KAS, 100 KAS to the underwriter for a cover that had already
+/// the first premium (and the carrier, only with a fill that empties the order: review 10; here each order keeps 1,000
+/// units, so the executor funds the pair's carrier and the short gets it at the lapse settle). Bounded by the order's own
+/// terms for the whole order: `q(size, tip + premMax / 2) + carrier`. On the fixture (1,000 units, premium 0.10 KAS, no
+/// tip): the long 50 KAS, the short 50 KAS less the carrier, 100 KAS to the underwriter for a cover that had already
 /// lapsed. An order that rests less than one term is never exposed: `fill` requires `xe >= its DAA + term`.
 #[test]
 fn r9_bounded_a_fill_of_aged_orders_into_the_past_costs_each_its_tip_and_half_the_first_premium() {
@@ -234,9 +235,9 @@ fn r9_bounded_a_fill_of_aged_orders_into_the_past_costs_each_its_tip_and_half_th
     let sc = p.m.p.scale;
     let long_loss = lo.s.fill_spend(n, prem) - l;
     let short_loss = so.s.fill_spend(n, prem) - s;
-    assert_eq!(long_loss, q(n, lo.s.tip + prem - prem / 2, sc) + p.m.p.carrier);
-    assert_eq!(short_loss, q(n, so.s.tip + prem / 2, sc));
-    assert_eq!((long_loss, short_loss), (5_020_000_000, 5_000_000_000));
+    assert_eq!(long_loss, q(n, lo.s.tip + prem - prem / 2, sc));
+    assert_eq!(short_loss, q(n, so.s.tip + prem / 2, sc) - p.m.p.carrier);
+    assert_eq!((long_loss, short_loss), (5_000_000_000, 4_980_000_000));
 }
 
 /// R9-F2 (the same transactions as at `7d9024e`): the fixture pair (opened at 300, X = 1,200, lapse settle due at 2,400)

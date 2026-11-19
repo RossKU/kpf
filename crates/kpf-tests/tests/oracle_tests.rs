@@ -105,7 +105,8 @@ fn layout_state_at_byte_one_and_lengths() {
 // ---------------------------------------------------------------- the lifecycle
 
 /// Two orders, a bound pair: the slot counts the pair's cover at X, the underwriter is paid the first premium, each
-/// order pays its margin, its half of the premium and one carrier.
+/// order pays its margin and its half of the premium; a fill that leaves a continuation pays no carrier (review 10:
+/// only the part that empties an order takes one), so the executor funds the pair's.
 #[test]
 fn lifecycle_open_binds_the_pair_to_the_slot() {
     let (lp, sl, t) = opened();
@@ -113,9 +114,9 @@ fn lifecycle_open_binds_the_pair_to_the_slot() {
     assert_eq!((p.b.uw_id, p.b.uw_key, p.b.expiry), (SLOT_ID.as_bytes(), x(&uw_kp()), 1_200));
     assert_eq!(sl.s.counted_at(1_200), p.cover_of(p.size), "the slot counts q(n, coverRate) at X");
     assert_eq!(p.cover_of(p.size), 600_000_000_000);
-    // The orders paid exactly their spend: long 1,000 x (1 + 0.01) + 0.2, short 1,000 x (2 + 0.01) + 0.2 KAS.
-    assert_eq!(2_000_000_000_000 - t.0.outputs[0].value, 101_020_000_000);
-    assert_eq!(2_000_000_000_000 - t.0.outputs[1].value, 201_020_000_000);
+    // The orders paid exactly their spend: long 1,000 x (1 + 0.01), short 1,000 x (2 + 0.01) KAS (each has 1,000 left).
+    assert_eq!(2_000_000_000_000 - t.0.outputs[0].value, 101_000_000_000);
+    assert_eq!(2_000_000_000_000 - t.0.outputs[1].value, 201_000_000_000);
     assert_eq!(t.0.outputs[4].value, 2_000_000_000, "the first term's premium, 1,000 x 0.02 KAS, to the underwriter");
 }
 
@@ -315,14 +316,14 @@ fn a_claim_reused_on_another_part_or_after_the_part_changed_is_refused() {
 
 // ---------------------------------------------------------------- the cover's expiry and lateness
 
-/// A claim whose window does not fit inside the cover (P + W > X), or that lands too late after its t0, or whose expiry
-/// lies beyond P + term + step, is void: finalize restores the part and pays the bond to the defender. The boundaries
-/// are exact.
+/// A claim whose window and one step do not fit inside the cover (P + W + step > X, review 10), or that lands too late
+/// after its t0, or whose expiry lies beyond P + term + step, is void: finalize restores the part and pays the bond to the
+/// defender. The boundaries are exact.
 #[test]
 fn cover_expired_or_expiring_inside_the_window_voids_the_claim() {
     let (lp, _, _) = opened();
-    // P = 1,000: P + W = X, valid. P = 1,001: void.
-    for (pp, valid) in [(1_000u64, true), (1_001, false), (1_300, false)] {
+    // P = 900: P + W + step = X, valid. P = 901: void; P = 1,000 (P + W = X, valid before review 10): void.
+    for (pp, valid) in [(900u64, true), (901, false), (1_000, false), (1_300, false)] {
         let lw = proposed(&lp, &liq_long(FALSE_P, pp as i64 - 50), pp);
         let (t, s) = finalize_tx(&lw, pp as i64, 200);
         must("finalize", &t);

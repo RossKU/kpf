@@ -428,7 +428,7 @@ cover.
 | pending `contest(u, dOut)` | anyone with aged judge stake | the stand-in's contest: the opener is a canonical free `KpfStake` of this judge block spent by `open(self, self, dOut)`; three outputs of the id; records `P` and the opener's key |
 | pending `decide(d)` | anyone, in the dispute's `resolve` | the stand-in's decide: upheld if YES leads, refuted if NO leads; upheld whatever the verdict if the contest was accepted at `P + W` or later |
 | pending `cure(s)` | the loser, while pending | as `KpfPending.cure`, the refund to `uwKey` |
-| pending `finalize()` | anyone: pending at age `W`, decided at once | refuted: restore, `floor(B · β)` to the disputer at `M - 1 - i`, the rest to the defender at `i`. Otherwise valid (`P + W <= X <= P + term + step` and `P - t0 <= lateDaa`): settle (a close at the price moved by g against the closer, its refund back; a liquidation forfeit and keep, `B` + fee to `uwKey`); void: restore, `B` to the defender |
+| pending `finalize()` | anyone: pending at age `W`, decided at once | refuted: restore, `floor(B · β)` to the disputer at `M - 1 - i`, the rest to the defender at `i`. Otherwise valid (`P + W + step <= X <= P + term + step` since review 10, `P - t0 <= lateDaa`): settle (a close at the price moved by g against the closer, its refund back; a liquidation forfeit and keep, `B` + fee to `uwKey`); void: restore, `B` to the defender |
 
 **The vouched claim.** The evidence of a proposal is the underwriter's own P2PK input whose signature script is exactly
 one 65-byte push ending in SIGHASH_ALL (experiment Z1's reader with the type check). Consensus verifies the signature;
@@ -539,7 +539,7 @@ close).
 3. **Late claims** (O2§1.5, "τ = P beyond Δmax"): void instead, so an honest underwriter is never judged at a price it
    did not sign; a void claim pays its bond to the defender.
 4. **"A claim accepted after X is void"** (O2§1.5): a claim accepted at `X - 1` would be pending past the cover. A claim
-   is valid only if `P + W <= X`.
+   is valid only if `P + W <= X` (`P + W + step <= X` since review 10, section 28).
 5. **Idle settle must go** (O2§1.4, §7 decision 8): kept only after the cover has lapsed (`lapseSettle`). While an
    underwriter renews, `X` moves on and the settle is never due; without it a pair whose counterparty is gone and whose
    underwriter is silent had no exit needing nobody. (Review 6, R6-F3: the idle time was the UTXO's age, which a party
@@ -1186,7 +1186,7 @@ an upper bound.
 | 6 | `KpfPendingO.contest` | `OpTxInputDaaScore(self)` = `P` | the claim's acceptance, exact | safe |
 | 7 | `KpfPendingO.decide` | `OpTxInputDaaScore(self)` against `P + W` | the contest's acceptance, exact: a deadline after the fact | safe |
 | 8 | `KpfPendingO.finalize` | CSV `W` (pending), `OpTxInputDaaScore(self)` | the window has passed; `P` exact for validity | safe |
-| 9 | `KpfPendingO.cure` | nothing | a cure may land any time while pending | safe (since row 3 a cure accepted after `X` is never renewed) |
+| 9 | `KpfPendingO.cure` | nothing | a cure may land any time while pending | **unsafe** for a claim pending at `X` (R10-F2: the cured pair, accepted after `X`, is never renewed); **bounded** since review 10 (a valid claim is finalizable a step before `X`, 28.3) |
 | 10 | `KpfOpenO.fill` | CLTV `activeFrom` | the order is active | safe |
 | 11 | `KpfOpenO.fill` | `xe >= OpTxInputDaaScore(self) + term` | a term after the order's acceptance, not after the present | relied on as "the order gets a term of cover": **unsafe** for an order older than a term; with row 3 the pair is never renewed and the order loses only its tip, carrier and premium half (27.4) |
 | 12 | `KpfOpenO.take` | nothing on `xe` (the slot's window bounds it from above only) | nothing about the present | **unsafe** together with row 3 (the drain of R9-F1): **fixed** by row 3; residual tip and carrier (27.4) |
@@ -1225,7 +1225,8 @@ idle 1,000.
   valid again until `X + term - W`) and the pair stays renewable, so an underwriter siding with one party can race the
   due settle once per term, at the agreed premium each time. The parties' defence is any entry after the expiry (it
   fixes the date); an underwriter that renews on time cannot be stopped, by design.
-- **A take into the past** (no pair) costs the order its tip and the part's carrier: 20.2 KAS for 2,000 units at a tip
+- **A take into the past** (no pair) costs the order its tip and the part's carrier (per part, which review 10 showed
+  is not a bound per order: R10-F1, the whole-order bound in 28.4): 20.2 KAS for 2,000 units at a tip
   of 0.01 KAS (`r9_bounded_a_take_into_the_past_costs_the_order_only_its_tip_and_the_carrier`); a take pays no premium.
   Before: 2,000.2 KAS, the whole margin.
 - **A fill of aged orders into the past** costs each order its tip and its half of the first premium, and the long's
@@ -1331,3 +1332,209 @@ vouch and 7 renewals under one bind included. Fees (100 sompi per gram): open 0.
 the pair's template travels in an open's arguments and a pair input's signature script. The pinned artifacts and 41 of
 the 46 golden vectors were regenerated (`CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`,
 `KPF_GOLDEN=print`); the book market's artifacts are byte for byte as before.
+
+## 28. Changes after review 10
+
+Review 10 (`docs/audit/REVIEW-10.md`) found one Critical, one Medium and two notes. R10-F1: every take (and fill) of a
+long order took another carrier from it, which the pair pays to its short at the end, and a part whose margin lay below
+the 0.02 KAS payout floor was lost whole at the lapse settle; an outsider with a slot of its own took a resting order in
+minimum parts and kept almost its whole escrow. R10-F2: a valid liquidation could still be pending at the expiry, where
+no renewal reads it; the loser's cure landing after the expiry wrote a pair no renewal accepts (review 9), so the
+liquidation turned into a lapse at the entry. This family had a critical in five reviews in a row, the last two in
+residuals a fix had declared bounded or safe without re-deriving them per part, per repetition and per state. So this
+round first states what each role can lose without signing again, as whole-order and whole-lineage quantities, makes a
+seeded walk check exactly that after every step with hostile steps on, runs it on the unfixed templates, and accepts a
+rule only when the walk holds.
+
+### 28.1 The invariants
+
+Notation: `q(n, r)` is `KpfOpenO.quoteOf` (rounded down), `C` the market's carrier, `D` the payout floor (`PLAIN_DUST`,
+0.02 KAS), `F` the part floor (`PART_FLOOR`, 0.2 KAS = 10 D), `W` the contest window, `X` a pair's expiry. A side's
+**claimable value** in a pair is what the lapse settle would pay it before the payout floor: the long
+`q(s, clamp(E, bl, bs) - bl)`, the short the rest of the UTXO's value; a party's claimable value is that, summed over
+its sides of live pairs, plus its resting orders' escrow, plus what it received in plain outputs less what it paid in.
+The judge's verdict is taken as the truth of a claim (a claim upheld by the judge is valid; contesting a false claim
+within `W` is the defender's part).
+
+- **I-order.** An order of owner `o`, side `σ`, rate `myRate`, tip `t`, `premMax`, filled or taken in any number of
+  parts `n_1 .. n_k` of total `N`, by anyone, with any slot its terms accept, at any time: `escrow_0 - (refund + Σ
+  payouts to o from those parts) <= q(N, t) + q(N, h) + C + P + floor(P / 9) + k`, where `h` is the order's half of
+  `premMax` (the long `premMax - floor(premMax / 2)`, the short the floor; charged by fills only, whether or not the
+  first term is still ahead: an order cannot prove the present), `C` is charged at most once (with the part that
+  empties the order), `P` is the order's side's share of the premiums of the renewals of its parts (cover actually
+  bound by the slot, at most the agreed premium per term), `floor(P / 9)` bounds what the payout floor takes from a
+  part those renewals brought below it, and `k` sompi is rounding, `k <= q(N, myRate) / F + 1`. Nothing else depends on
+  the number of parts.
+- **I-party.** In a step a party does not sign, its claimable value falls only by: a valid liquidation of its side (its
+  value in the part), a close by the other party at the vouched price moved by `g` against the closer (the party gets
+  at least its payoff at that price), the premium of a renewal of its pair (its half of `q(s, premium)` plus one sompi;
+  the whole premium when the entry lies outside the renewed range, where the other side's lapse value is already zero
+  or the whole range), the payout floor `D` at the lapse settle (once per lineage end), and one sompi of rounding per
+  split (the long's two parts are each rounded down) or hand-over (the entrant's range is rounded down). A hand-over
+  keeps the stayer's bound and share; a refuted or void claim pays its bond to the defender. A lapse settles at the
+  entry; no lineage pays premiums ahead of the on-time schedule (27.4).
+- **I-winner.** A valid liquidation (`P + W + step <= X`, 28.3) is settled, cured by margin that leaves a pair the
+  underwriter can still renew (accepted no later than `X`), or refuted. It is turned into a lapse at the entry only if
+  nobody, the winner and the underwriter (paid `B` + fee by it) included, finalizes it during the whole step `[P + W,
+  X]` and the loser's cure lands after `X`. A pair that becomes liquidatable is claimable at once, or, in the last
+  `W + step` of an unrenewed term, after its on-time underwriter's renewal (from `X - step`): a wait of at most `W`.
+- **I-exit.** From every reachable state anyone can lapse-settle a pair at `X + tail + idleDaa` (not before), a pending
+  part is finalized at `P + W` (or decided when its dispute resolves), and an order is cancelled by its owner at any
+  time or refunded by anyone at `min(expiryDaa, DAA + 90 days)`; no party can postpone the lapse date (a party entry
+  after `X` fixes it). While the underwriter keeps renewing on time the date moves by one term per renewal, at the
+  agreed premium; the party's own exits then need a counterparty (a taker, a mutual or cooperative close) or the
+  underwriter's vouch (a close claim): see 28.6, item 1.
+- **I-uw / I-staker.** A slot's value and id change only by its owner's signed entries (`bind` keeps the value; `split`,
+  `unbond`, `withdraw`), an underwriter's bond is repaid as 26.4 states; a stake becomes a receipt only by its owner's
+  `open` or `commit`, and a pool pays the winners from the losers and burns as ruled.
+
+The walk (`crates/kpf-tests/tests/invariant_walk_tests.rs`) keeps the claimable-value ledger of every party (every
+applied transaction is booked: plain outputs received, plain inputs spent, sides of live pairs valued as above) and
+checks I-party around every action and every renewal, and I-uw after each. Its hostile steps are on by default: a
+resting order (either side, any slot or a named slot, the fixture market or the testnet defaults, tip 0 / 0.01 / 0.05
+KAS, `premMax` 0 / 0.02 / 0.10 KAS) taken without a pair or filled alone, in up to 9 parts of every size from the
+market's minimum (0.01 unit on testnet) to the rest, by an outsider with a genesis slot of its own or by the colluding
+owner of the slot it names, into the past or with a live cover the attacker renews up to twice at `premMax`, every part
+lapse-settled at its date; R9-F1's take into the past and its renewal; and the winner's cases: the latest claim the rule
+calls valid, then the loser's cure after `X` with no finalize, a cure before `X` (must renew), or the finalize; and a
+pair that becomes liquidatable in the last `W + 2 steps`. Every order's whole loss is compared with I-order, every late
+cure with I-winner; at the end every live pair must lapse-settle at its date and not one DAA before. 20 seeds x 400
+steps. On the fixed templates it holds: 8,000 steps (1,611 renewals and 905 refused as touched after their expiry, 278
+opens, 1,112 amends, 184 transfers, 13 takes with a pair, 99 `closeDonor` and 103 `closeHost` alone, 76 close-versus-
+close, 647 claims of which 178 on half a pair, 193 lapse settles; 727 attacked orders, 209 takes into the past, 379
+winner cases), 3,754 refusals as the rules say, 6,456 hostile variants of 13 kinds refused (among them 695 parts below
+the part floor, 1,935 parts asking the order one sompi more, 316 named-slot orders through another slot), and 64,381 invariant
+checks (I-party 54,841, I-uw 8,154, I-order 727, I-winner 401, I-staker 159, I-exit 99), no violation.
+
+### 28.2 What the walk found on the unfixed templates
+
+Run on the templates of `c20e406` (the same walk, the same seeds):
+
+| Invariant | Violations | Where |
+|---|---|---|
+| I-order | 280 of 700 attacked orders (2,222 parts), 147.33 KAS beyond the bound in all | every long-order route: taken and filled, any slot and named slot (the colluding underwriter), into the past and with a live cover, the fixture market and the testnet defaults (9 to 29 orders per route); one carrier per part, and on the testnet defaults the margin of every part below 0.02 KAS. No short order (its carrier comes back with its side). **R10-F1, and its `fill` route, which review 10 had only by reading** |
+| I-winner | 108 of 108 late cures | the latest valid claim (`P` = 1,000 on the fixture: `P + W = X`) was finalizable 0 DAA before `X`; the cure at `X + 1 .. X + 50` wrote an unrenewable pair. **R10-F2** |
+| I-party | 4 | a claim on half a pair: the long lost one sompi of lapse value (each part's share is rounded down). With the fixed templates (other paths) the same once in `closeHost`: the passive short lost one sompi (the entrant's range is rounded down). **New, Note:** at most one sompi per split or hand-over, moved to the other side; now an allowance of I-party |
+| I-exit, I-uw, I-staker | 0 | |
+
+Besides: 5,847 hostile variants refused, 3,590 refusals as the rules say; the longest wait for a valid claim of an
+on-time underwriter 99 DAA (claims valid until `X - W`, renewal from `X - step`, `W` > step on the fixture).
+
+Found while stating the invariants or building the walk, outside the contracts:
+
+- **`--any-slot` was not a switch** (`args.rs`): it took the next argument as its value, so `--any-slot --escrow 3000`
+  dropped the escrow, which then defaulted to a full fill + 1 KAS (the CLI test wrote it in that order). Fixed: it is a
+  switch.
+- **The tool's open took a carrier from both orders** (`oracle_build::open`, both orders' `fill_spend`): the pair needs
+  one, so the funder's change kept the other. Fixed with 28.3.
+- **I-exit has no unilateral form against a renewing underwriter**: see 28.6, item 1 (not fixed).
+
+### 28.3 The rules
+
+**R10-F1: an order pays at most one carrier, and every part holds at least 0.2 KAS of its margin.** `KpfOpenO.escrow`
+allows `q(n, rate)` and adds the carrier only when the part empties the order (`left == 0`); `KpfOpenO.amount` requires
+`q(n, myRate) >= PART_FLOOR` and, when something is left, `q(left, myRate) >= PART_FLOOR` (`PART_FLOOR` = 0.2 KAS, ten
+payout floors). The carrier of a part that leaves a continuation is funded by whoever writes the part: the counterparty
+of a take or fill alone, the executor of a fill of two orders neither of which it empties (the tool's builder takes the
+carrier from the short order when the fill empties it, since the pair pays it back to the short; else from the long when
+it empties; else the funder pays), the pair's own carrier in a take of a whole pair (it moves with `keep`). The options
+weighed against I-order:
+
+- the carrier paid by whoever takes: taken in the form above, which keeps a whole fill exactly as before;
+- a part floor in the contract: taken; with it no part starts below the payout floor, and a part the renewals bring
+  below it has paid at least `F - D` = 9 D in premiums, so the payout floor's take is at most a ninth of those premiums;
+- an order that must name its slot: not taken. With the two rules an outsider's slot gains it nothing from an order
+  beyond the tip and one carrier, and the same attack by a colluding named underwriter is just as bounded (the walk
+  drives both); naming the slot would remove orders that accept any slot (live run 2 wrote one) and buy nothing
+  against collusion. An order that accepts any slot still accepts that any underwriter vouches the prices of the pairs
+  it writes (a false claim stands unless contested within `W`): the order text says so;
+- no `take` without a pair: not enforceable. An order cannot tell a pair from a look-alike genesis of the pair template
+  that its author lists and transfers; requiring a pair input changes nothing.
+
+**R10-F2: a claim is valid only if `P + W + step <= X`.** `KpfPendingO.finalize` voids a claim with `P + challengeDaa +
+stepDaa > expiry` (before: `P + challengeDaa > expiry`). A valid claim is finalizable at least one step before `X`,
+before the renewal window opens; the market bound `challengeDaa < termDaa` keeps a valid window in every term. The other
+answer the review asked about, refusing a cure after the expiry or making it restore the winner's protection, has no
+rule a covenant can check: nothing proves "now is before X", the cured state's hash is fixed at the proposal, and a
+renewal can only read the cured UTXO's own DAA. Checked against I-winner and I-exit: a pair liquidatable in the last
+`W + step` of a term is claimable after its on-time underwriter's renewal (which no party can stop, 27.2), so the loser
+cannot escape by waiting; it escapes only from a late underwriter (in the last `W + step` instead of `W`), by the lapse
+at the entry or a party entry after `X`, as 27.4 states for every late underwriter.
+
+**R10-N1: left documented.** Under I-party a late renewal racing a due lapse settle charges no premium beyond the
+on-time schedule (27.4), and under I-exit a party ends it by any entry after an expiry (its own signature, no one
+else's); a market bound `tail + idleDaa > term` would only lengthen every lapse exit (beyond 28 days on the testnet
+defaults). With 28.3's claim rule a cover resumed after its due settle offers a valid claim only from its next on-time
+renewal when the late renewal lands after `X' - W - step` (on the fixture with idle 300, always), which
+`r10_bounded_with_tail_plus_idle_...` now measures.
+
+**R10-N2 and the tool.** `oracle-order` defaults `--min-fill` to the whole size, refuses an order whose margin, or whose
+`--min-fill`'s margin, is below 0.2 KAS (and names the least part), and prints the least part, the number of parts and
+the whole order's worst case (`order_risk_lines`); `oracle-watch` reads `OPair::unrenewable_why` for a pair past its
+expiry, tells the winner and the underwriter of a pending valid liquidation to finalize it before the expiry, and gives
+the last DAA at which a claim is valid; `kpf vouch` refuses a claim that would land later than `X - W - step` (its bond
+would go to the defender) unless `--void-ok`, and says when the renewal opens; `--any-slot` and `--void-ok` are switches.
+
+**Not done: the payout floor.** Raising `PLAIN_DUST` to 0.05 KAS (27.5) would touch every payout of the pair and the
+pending part; none of 28.3's rules needs it, so it waits for a change that touches those lines.
+
+### 28.4 What remains, with numbers
+
+- **I-order, the whole-order bound.** Live run 2's long order (2 units, rate 1 KAS, no tip, `premMax` 0, any slot):
+  at most one carrier, 0.2 KAS, however it is taken; before, fifteen 0.01-unit rounds took 3.15 KAS of its 3.2 KAS
+  escrow (`r10_holds_small_takes_...`: ten 0.2-unit takes, 0.2 KAS). The fixture order (2,000 units, rate 1 KAS, tip
+  0.01, `premMax` 0.10): its tip 20 KAS, a fill's first premium half 100 KAS (`q(2,000, 0.05)`), one carrier 0.2 KAS, and
+  its half of each renewal's premium at most at that rate (100 KAS a term on 2,000 units) plus a ninth of it for the
+  payout floor; at most 10,000 parts (0.2 KAS of margin each), so the rounding term is at most 10,001 sompi.
+  Before: a carrier per part, 2.1 KAS for ten 1-unit parts (`r10_holds_each_take_...`: 0.1 KAS, the tip). The walk:
+  727 attacked orders in 1,935 parts, 0 sompi beyond the bound.
+- **A valid liquidation undone by a whole step of silence.** If nobody finalizes a valid claim during `[P + W, X]`, at
+  least one step (3.5 days on the testnet defaults, 100 DAA on the fixture), the loser's cure after `X` still writes a
+  pair no renewal accepts, which settles at the entry: on the fixture pair the loser regains 954 KAS
+  (`r10_bounded_a_cure_after_the_expiry_needs_the_finalize_withheld_for_a_whole_step`). Before: no step at all (`P + W =
+  X` was valid). The walk met it 104 times by construction and nothing else.
+- **No valid claim in the last `W + step` of an unrenewed term.** An on-time underwriter renews from `X - step` and
+  claims against the next expiry, so a pair liquidatable in `(X - W - step, X - step)` waits at most `W` (6 hours on the
+  testnet defaults, 200 DAA on the fixture; the walk's longest wait 195 DAA). Before: `max(0, W - step)`, i.e. none on
+  the testnet defaults, 100 DAA on the fixture.
+- **Rounding.** At most one sompi of lapse value per split (long to short) and per hand-over (to or from the stayer).
+- **Two carriers in one fill.** A fill that empties both orders lets each pay one carrier (the contract cannot tell which
+  one the pair needs): a builder other than the tool's can keep one. Bounded by I-order (one carrier per order).
+- Unchanged from 27.4: the late renewal's back-charge (never ahead of the on-time schedule), R10-N1, an order that
+  accepts any slot accepting any underwriter's vouch, and the entry a take without a pair writes in the order's favour.
+
+### 28.5 What it gives up
+
+- **Small parts.** No order is filled or taken in a part, or left with a rest, holding less than 0.2 KAS of its margin:
+  at a rate of 1 KAS per unit, 0.2 unit (20 of the testnet's minimum sizes); an order whose whole margin is below 0.2 KAS
+  can never be filled (the tool refuses to write it). A market maker that wants many small fills names a larger
+  `--min-fill`, and every partial fill now needs its carrier from the counterparty or the executor (0.2 KAS each; the
+  short gets it back at the pair's end).
+- **The executor's carrier.** A fill of two orders that empties neither costs its executor the pair's carrier (paid back
+  to the short at the pair's end, not to the executor), which the tips must cover.
+- **The last `W + step` before an unrenewed expiry.** A claim landing there is void (its bond goes to the defender), and
+  each term has a gap of up to `W` before the renewal opens in which a liquidatable pair cannot yet be claimed.
+- Script bytes: `KpfOpenO` 6,516 (was 6,204: the two floor checks and the conditional carrier), `KpfPendingO` 4,399 (was
+  4,395), `KpfPairO` 15,042, `KpfBond` 4,453, `KpfStake` 9,665 (unchanged; `KpfPairO`'s and `KpfOpenO`'s template hashes
+  changed with the templates they pin). The take's largest stack is 209 of 244 (was 197). Every shape of
+  `oracle_metrics_tests` still fits a block; an open costs 0.0948 KAS (was 0.0936), a take by an order 0.0830 KAS, one
+  pair-month 0.1836 KAS. The pinned artifacts and 41 of the 46 golden vectors were regenerated; the book market's
+  artifacts are byte for byte as before.
+
+### 28.6 What a reviewer should attack next
+
+1. **I-exit against a renewing underwriter.** While an underwriter renews on time (no party entry can stop it, 27.2), a
+   party's exits all need someone else: a taker, the counterparty's listing, both signatures, or the underwriter's
+   vouch of a close; the renewals stop only when the premiums have narrowed the range to the maintenance bands (97
+   terms on the fixture pair at 0.02 KAS; never at a premium of 0). An underwriter that renews and refuses to vouch
+   closes keeps a party in. A party opt-out of renewal (a state the renewal refuses, written by either party) would
+   restore a unilateral exit at `X + tail + idleDaa`, but it gives the loser of a coming liquidation the late
+   underwriter's escape; weigh it against I-winner.
+2. **The carrier's new payers.** Every partial take or fill now needs a carrier from the counterparty, the pair (a whole
+   take) or the executor: check the builders' funding (the open's funder, a take's executor), the storage mass of a
+   fill whose order pays no carrier, and whether a counterparty can make an order pay its carrier earlier than with its
+   last part (a part that empties the order by a rest the order did not choose).
+3. **The part floor and the premium.** The floor bounds what the payout floor takes after renewals by a ninth of their
+   premium; check renewals of parts whose entry lies outside the range (the premium then falls on one side's lapse
+   value, I-party's allowance), cures and hand-overs of parts at the floor, and fills whose premium half rounds to zero.
+

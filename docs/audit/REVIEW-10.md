@@ -232,4 +232,33 @@ the new rule refuses.
 
 ## Fix status
 
-Not fixed (this review changes no code).
+Fixed in the working tree after `c20e406` (DESIGN-ORACLE-IMPL 28). The method first: the invariants of 28.1 (what an
+order, a party, the winner of a liquidation, the underwriter and a staker can lose or be denied without signing again,
+as whole-order and whole-lineage quantities) and a walk that checks them after every step with hostile steps on
+(`invariant_walk_tests`, 20 seeds x 400 steps). Run on the templates of `c20e406` it found R10-F1 on every long-order
+route (280 orders, 147.33 KAS beyond the bound; the `fill` route included) and R10-F2 on every late cure (108), and, new,
+one sompi of rounding per split or hand-over (a Note, now an allowance of I-party). On the fixed templates it records no
+violation (6,456 hostile variants refused, 64,381 checks).
+
+- **R10-F1: fixed in `KpfOpenO`.** A part takes the carrier from the order only when it empties the order (`escrow`),
+  and every part, and what it leaves, holds at least `PART_FLOOR` = 0.2 KAS of the order's margin (`amount`). An order
+  loses at most `q(N, tip) + q(N, its premium half) + one carrier + its share of the renewals' premiums (+ a ninth of
+  it for the payout floor)` however many parts it is taken in. `r10_holds_small_takes_...` (live run 2's order: 0.01 and
+  0.19 unit refused, ten 0.2-unit takes cost it 0.2 KAS, before 3.15 KAS), `r10_holds_each_take_...` (the tip only),
+  `r10_holds_the_seeded_walk_with_small_takes_...`.
+- **R10-F2: fixed in `KpfPendingO`** as proposed: a claim is valid only if `P + W + step <= X`. A valid claim is
+  finalizable a step before the expiry; what remains is the finalize withheld by everyone for that whole step
+  (`r10_bounded_a_cure_after_the_expiry_needs_the_finalize_withheld_for_a_whole_step`; 27.3 row 9 now reads "bounded").
+  The cost: no valid claim in the last `W + step` of an unrenewed term (an on-time underwriter renews first; a
+  liquidatable pair waits at most `W`).
+- **R10-N1: left documented** (28.3): no extra premium, and a party ends it by an entry after an expiry; a cover resumed
+  this late offers a valid claim only from its next on-time renewal.
+- **R10-N2: fixed in the tool.** `oracle-watch` reads `OPair::unrenewable_why` and tells the winner to finalize a pending
+  valid liquidation before the expiry; `oracle-order` defaults `--min-fill` to the whole size, refuses a part margin
+  below 0.2 KAS and prints the least part and the whole-order bound; `kpf vouch` refuses a claim that would be void
+  unless `--void-ok`; `--any-slot` is now a switch (it took the next argument as its value).
+- Not fixed, found while stating I-exit: no unilateral exit while the underwriter keeps renewing on time and refuses to
+  vouch closes (28.6, item 1).
+
+Script bytes: `KpfOpenO` 6,516 (was 6,204), `KpfPendingO` 4,399 (was 4,395), the others unchanged; artifacts and 41 of the
+46 oracle golden vectors re-pinned. The live-run replay (42 transactions) passes unchanged.

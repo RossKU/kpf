@@ -511,7 +511,11 @@ is required since review 9, and the command prints what `--any-slot` lets an und
 longer than one term can be filled with a cover expiry already in the past (no contract can prove the present): that
 pair is never renewed and settles at its entry once its lapse time has passed, so the order gets its margin back and
 loses its tip, the carrier and its half of the first premium (the command prints the most). Cancel or replace an order
-that is not filled within a term. Each order also names the highest premium it pays; the open
+that is not filled within a term. Since review 10 an order is filled or taken whole unless it names `--min-fill`; every
+part must hold at least 0.2 KAS of the order's margin (as must what it leaves), and only the part that empties the order
+takes a carrier from it (the counterparty or the executor funds the carrier of every other part), so an order loses at
+most its tip, its first premium half and one carrier however many parts it is taken in. Each order also names the
+highest premium it pays; the open
 requires the slot to count the pair's cover (`q(n, coverRate)`) at its expiry, refuses an underwriter that is a party,
 and refuses a second output of the new pair's id. The expiry defaults to the first ring boundary one term after the
 orders. The underwriter receives the first term's premium, half from each order's escrow.
@@ -535,6 +539,12 @@ does, so an executor that builds the transaction cannot keep anything the signat
   nothing); `kpf` refuses otherwise and names the sum. The funder pays only the network fee.
 - **Close:** the closer posts the bond (and the carrier when `--n` is less than the pair's size): the vouch value goes
   back in full, and the funder, who is expected to be the closer (its key signs the claim), pays that and the fee.
+
+A claim is valid only if it lands at least the contest window and one step before the cover's expiry (`P + W + step <=
+X`, review 10); `kpf vouch` refuses a later one (its bond would go to the defender) unless `--void-ok`, and says when the
+renewal opens: renew first, then claim against the next expiry. Finalize a valid liquidation before the expiry
+(`oracle-watch` says so): a cure by the loser that lands after the expiry leaves a pair no renewal accepts, which then
+settles at its entry price.
 
 The underwriter should sign a transaction only after checking that it has the output that pays the rest of the vouch UTXO
 back to its own address. A funder that is also the underwriter must give another UTXO than the vouch one for funding (the

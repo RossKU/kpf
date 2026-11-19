@@ -22,13 +22,21 @@ pragma silverscript ^0.1.0;
 //   upheld     finalize()        anyone, at once: settle, or restore when the claim is void
 //   refuted    finalize()        anyone, at once: restore; the bond goes to the defender, the disputer's share to it
 //
-// The claim is valid (it may settle) only if P + challengeDaa <= expiry (its whole window lies inside the cover),
-// expiry <= P + termDaa + stepDaa (the bound of slice A: a pair a genesis made can rely on a slot it never bound for at
-// most one period), and P - t0 <= lateDaa (a vouched claim landed later than the market allows is void). P is this
-// UTXO's own DAA score while pending, the recorded one once contested.
+// The claim is valid (it may settle) only if P + challengeDaa + stepDaa <= expiry (its whole window lies inside the
+// cover and ends at least one step before it), expiry <= P + termDaa + stepDaa (the bound of slice A: a pair a genesis
+// made can rely on a slot it never bound for at most one period), and P - t0 <= lateDaa (a vouched claim landed later
+// than the market allows is void). P is this UTXO's own DAA score while pending, the recorded one once contested.
+// DESIGN: review 10 (R10-F2): with P + challengeDaa <= expiry a valid claim could still be pending at the expiry, where
+// no renewal reads it, and the loser's cure landing after the expiry wrote a pair state no renewal accepts (review 9):
+// the cover lapsed and the pair settled at its entry, the liquidation undone by one block of ordering. A valid claim is
+// now finalizable at least one step before the expiry, before the renewal window opens; a cure after the expiry needs
+// the finalize withheld by everyone, the winner and the paid underwriter included, for that whole step. No rule can
+// refuse the late cure itself (nothing proves "before X"). The cost: no claim is valid in the last challengeDaa +
+// stepDaa of an unrenewed term; an on-time underwriter renews from X - stepDaa and claims against the next expiry
+// (docs/DESIGN-ORACLE-IMPL.md 28).
 // DESIGN: the note (1.5) judges a late claim at tau = P instead of voiding it, and lets a claim be accepted up to the
-// expiry X; here a late claim is void and a claim must land at least challengeDaa before X, so no claim is ever pending
-// beyond its cover and an honest underwriter is never judged at a price it did not sign.
+// expiry X; here a late claim is void and a claim must land at least challengeDaa + stepDaa before X, so no valid claim
+// is ever pending beyond its cover and an honest underwriter is never judged at a price it did not sign.
 // DESIGN: the note's live dispute has no deadline the covenant can enforce (time has only lower bounds); here the
 // deadline is enforced after the fact: the contested part's own DAA score (the contest's acceptance, exact when decide
 // reads it) must be below P + challengeDaa, or the verdict is ignored and the claim settles as if uncontested. A timely
@@ -423,8 +431,8 @@ contract KpfPendingO(
         require(bondMin <= BOND_MIN_MAX);
         require(gBps > 0);
         require(gBps < BPS);
-        // A claim is valid only if P + challengeDaa <= X <= P + termDaa + stepDaa, so a window shorter than the term
-        // leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
+        // A claim is valid only if P + challengeDaa + stepDaa <= X <= P + termDaa + stepDaa, so a window shorter than the
+        // term leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
         require(challengeDaa > 0);
         require(challengeDaa < termDaa);
         require(lateDaa >= 0);
@@ -629,7 +637,7 @@ contract KpfPendingO(
             restorePaying(1);
         } else {
             int valid = 1;
-            if (p + challengeDaa > expiry) { valid = 0; }
+            if (p + challengeDaa + stepDaa > expiry) { valid = 0; }
             if (expiry > p + termDaa + stepDaa) { valid = 0; }
             if (p - t0 > lateDaa) { valid = 0; }
             if (valid == 1) {

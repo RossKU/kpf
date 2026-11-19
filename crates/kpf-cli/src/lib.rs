@@ -97,14 +97,17 @@ gives the present the lock time proves)
   stake         --market M.json --value KAS [--owner KEY|HEX|ADDR]   a judge stake (counts on claims made M_age later)
   oracle-order  --market M.json --side long|short --size T --limit P --rate P --expiry DAA [--prem-max P]
                 (--slot SLOT_ID | --any-slot) [--min-counter-rate P] [--min-fill T] [--tip P] [--active-from DAA] [--escrow KAS]
-                --any-slot lets any slot of the market fill it (prints the consequence); an order resting longer than a
-                term can be filled into a lapsed cover (margin back at the entry, tip, carrier and premium half lost)
+                --any-slot lets any slot of the market fill it (prints the consequence); --min-fill defaults to the whole
+                size; every part must hold at least 0.2 KAS of the order's margin (as must what it leaves), and only the
+                part that empties the order pays a carrier; an order resting longer than a term can be filled into a
+                lapsed cover (margin back at the entry; tip, one carrier and the first premium half lost, whole order)
   oracle-open   --long O.json --short O.json --slot S.json --n T --x P --cover-rate P [--premium P] [--expiry DAA] --key UW
                 [--uw-utxo UTXO.json]   the premium joins the funder's change when the funder is the underwriter, else one
                 output with that underwriter UTXO; a premium too small for an output of its own is refused otherwise
   vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
                 [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too); for a
-                liquidation the vouch UTXO funds the bond (and the new part's carrier when --n < size)
+                liquidation the vouch UTXO funds the bond (and the new part's carrier when --n < size); refused when the
+                claim would land later than the window and one step before the expiry (void) unless --void-ok
   contest       --pending W.json --stake ST.json --key STAKER [--base KAS]   within the window, with aged stake on NO
                 with --node: --claim-tx TX.json (the claim's birth, traced to a KpfPairO.propose); without: --accept-untraced
   deposit       --dispute D.json --side yes|no --stake ST.json... --key OWNER...   join the trailing side

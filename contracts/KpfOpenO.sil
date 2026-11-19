@@ -14,13 +14,15 @@ pragma silverscript ^0.1.0;
 //   fill(pairOut, n, x, bl, bs, counterKey, counterMk, u, k, xe, coverRate, premium, cPre, cSuf)
 //          T1' open: n units at x into the fresh KpfPairO at output pairOut, bound by the slot at input u (its bind
 //          entry counts q(n, coverRate) at expiry xe for claim k = OUT_REF + pairOut). This order pays its margin, its
-//          tip, one pair carrier and its half of the first term's premium.
+//          tip and its half of the first term's premium, and the pair's carrier only if the fill empties it.
 //   take(partOut, n, x, e, bound, counterKey, pm, ca, cm, ct, u, k, xe, coverRate, premium, cPre, cSuf)
 //          T2 transfer: n units at x take a same-side listing of an existing pair into a part under a fresh covenant
 //          id (this order checks that no input and no other output carries it); the part at partOut must be bound
 //          afresh by the pair's slot in the same transaction (claim OUT_REF + partOut, at the part's expiry).
 //   cancel(s)   owner only, SIGHASH_ALL.
 //   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
+// Every part (and what the order leaves) holds at least PART_FLOOR (0.2 KAS) of this order's margin, and the order pays
+// at most one carrier, with its last part (review 10, R10-F1).
 // What every fill and take checks, besides KpfOpen's: the market block's bounds and id (checkMarket, one text with the
 // pair and the pending part); the slot input is a KpfBond of this market spent by bind for the new output (the bind
 // proof, one text with the pair); the slot is accepted (uwAccept) and its owner is neither this order's owner nor the
@@ -157,6 +159,7 @@ contract KpfOpenO(
     int constant MAX_IDLE = 77760000;
     int constant OUT_REF = 65536;
     int constant MAX_OUTPUTS = 8;
+    int constant PART_FLOOR = 20000000;
     int constant BOND_STATE_LEN = 236;
     int constant BOND_STATUS_AT = 33;
     int constant BOND_MARKET_AT = 42;
@@ -326,8 +329,8 @@ contract KpfOpenO(
         require(bondMin <= BOND_MIN_MAX);
         require(gBps > 0);
         require(gBps < BPS);
-        // A claim is valid only if P + challengeDaa <= X <= P + termDaa + stepDaa, so a window shorter than the term
-        // leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
+        // A claim is valid only if P + challengeDaa + stepDaa <= X <= P + termDaa + stepDaa, so a window shorter than the
+        // term leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
         require(challengeDaa > 0);
         require(challengeDaa < termDaa);
         require(lateDaa >= 0);
@@ -349,7 +352,13 @@ contract KpfOpenO(
         require(premMax >= 0);
     }
 
-    // The amount of a fill or take: n >= minFill unless it takes all that is left, every part >= minSize.
+    // The amount of a fill or take: n >= minFill unless it takes all that is left, every part >= minSize, and this
+    // order's margin in the part and in what it leaves at least PART_FLOOR.
+    // DESIGN: review 10 (R10-F1): with only minFill as a floor (the order's own term, the tool's default the market's
+    // minimum size) an order was taken in parts whose margin lay below the payout floor of the lapse settle, which pays
+    // such a part's long nothing. PART_FLOOR is ten payout floors: no part starts below the floor, and a part whose lapse
+    // value the agreed renewals bring below it has paid at least nine times what it loses there in premiums
+    // (docs/DESIGN-ORACLE-IMPL.md 28).
     function amount(int n) : int {
         require(n > 0);
         require(n <= sizeLeft);
@@ -358,6 +367,8 @@ contract KpfOpenO(
         int left = sizeLeft - n;
         require(left == 0 || left >= minSize);
         require(n / scale <= (INT_MAX - carrier) / priceMax - 1);
+        require(quoteOf(n, myRate, 0) >= PART_FLOOR);
+        require(left == 0 || quoteOf(left, myRate, 0) >= PART_FLOOR);
         return left;
     }
 
@@ -383,12 +394,19 @@ contract KpfOpenO(
         return byte[](0x20) + byte[](uw) + byte[](0x20) + byte[](key) + i9(coverRate) + i9(xe) + i9(premium);
     }
 
-    // What a fill or take may take from the escrow (rate r per whole unit, rounded down, and one pair carrier), and the
-    // rest: a continuation with sizeLeft = left, or the owner's refund at output i.
+    // What a fill or take may take from the escrow (rate r per whole unit, rounded down, and one pair carrier only with
+    // the part that empties the order), and the rest: a continuation with sizeLeft = left, or the owner's refund at
+    // output i.
+    // DESIGN: review 10 (R10-F1): every part took a carrier, which the pair pays to its short at the end, so a long order
+    // taken in k parts lost k carriers. The carrier of a part that leaves a continuation is now the counterparty's or the
+    // builder's; an order pays at most one, with its last part (docs/DESIGN-ORACLE-IMPL.md 28).
     function escrow(int n, int r, int left) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
-        int spend = quoteOf(n, r, 0) + carrier;
+        int spend = quoteOf(n, r, 0);
+        if (left == 0) {
+            spend = spend + carrier;
+        }
         if (left > 0) {
             require(OpCovOutputCount(selfId) == 1);
             int c = OpCovOutputIdx(selfId, 0);

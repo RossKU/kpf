@@ -482,15 +482,60 @@ impl OOpen {
             premium / 2
         }
     }
-    /// What a fill of n takes from the escrow (`KpfOpenO.escrow`): `q(n, myRate + tip + half) + carrier`.
-    pub fn fill_spend(&self, n: i64, premium: i64) -> i64 {
-        q(n, self.my_rate + self.tip + self.premium_half(premium), self.m.p.scale, 0) + self.m.p.carrier
+    /// The carrier a part of n takes from this order (`KpfOpenO.escrow`, review 10): one carrier with the part that
+    /// empties the order, none with a part that leaves a continuation.
+    pub fn carrier_of(&self, n: i64) -> i64 {
+        if n == self.size_left {
+            self.m.p.carrier
+        } else {
+            0
+        }
     }
-    /// What a take of n takes from the escrow: `q(n, myRate + tip) + carrier`.
+    /// What a fill of n takes from the escrow (`KpfOpenO.escrow`): `q(n, myRate + tip + half)`, and the carrier when the
+    /// fill empties the order.
+    pub fn fill_spend(&self, n: i64, premium: i64) -> i64 {
+        q(n, self.my_rate + self.tip + self.premium_half(premium), self.m.p.scale, 0) + self.carrier_of(n)
+    }
+    /// What a take of n takes from the escrow: `q(n, myRate + tip)`, and the carrier when the take empties the order.
     pub fn take_spend(&self, n: i64) -> i64 {
-        q(n, self.my_rate + self.tip, self.m.p.scale, 0) + self.m.p.carrier
+        q(n, self.my_rate + self.tip, self.m.p.scale, 0) + self.carrier_of(n)
+    }
+    /// This order's margin in a part of n: `q(n, myRate)`.
+    pub fn margin_of(&self, n: i64) -> i64 {
+        q(n, self.my_rate, self.m.p.scale, 0)
+    }
+    /// `KpfOpenO.amount`: whether a fill or take of n may take from this order (review 10: the order's margin in the part
+    /// and in what it leaves at least `PART_FLOOR`).
+    pub fn part_ok(&self, n: i64) -> bool {
+        let left = self.size_left - n;
+        n > 0
+            && n <= self.size_left
+            && n >= self.m.p.min_size
+            && (n >= self.min_fill || n == self.size_left)
+            && (left == 0 || left >= self.m.p.min_size)
+            && n / self.m.p.scale <= (i64::MAX - self.m.p.carrier) / self.m.p.price_max - 1
+            && self.margin_of(n) >= PART_FLOOR
+            && (left == 0 || self.margin_of(left) >= PART_FLOOR)
+    }
+    /// The smallest part this order can be filled or taken in (its own minimum fill, the market's minimum size, and the
+    /// least size whose margin reaches `PART_FLOOR`), or `None` when not even the whole order reaches it.
+    pub fn least_part(&self) -> Option<i64> {
+        if self.my_rate <= 0 || self.margin_of(self.size_left) < PART_FLOOR {
+            return None;
+        }
+        let sc = self.m.p.scale as i128;
+        let by_floor = ((PART_FLOOR as i128 * sc + self.my_rate as i128 - 1) / self.my_rate as i128) as i64;
+        let mut n = by_floor.max(self.min_fill).max(self.m.p.min_size).min(self.size_left);
+        while n < self.size_left && self.margin_of(n) < PART_FLOOR {
+            n += 1;
+        }
+        Some(n)
     }
 }
+
+/// The least margin of the order in every part an order is filled or taken in, and in what it leaves (`KpfOpenO`,
+/// review 10): ten payout floors, 0.2 KAS.
+pub const PART_FLOOR: i64 = 10 * PLAIN_DUST;
 
 fn read_market(c: &mut Cursor) -> Result<OMarket> {
     let id = c.b32()?;
@@ -1057,11 +1102,16 @@ impl OPending {
         OPending { mk_parent: maker_of(op), ..self.clone() }
     }
 
-    /// The claim's validity at P (`KpfPendingO.finalize`): `P + W <= X <= P + term + step` and `P - t0 <= lateDaa`.
+    /// The claim's validity at P (`KpfPendingO.finalize`): `P + W + step <= X <= P + term + step` and `P - t0 <=
+    /// lateDaa` (review 10, R10-F2: a valid claim is finalizable at least one step before the expiry).
     pub fn valid_at(&self, p: i64) -> bool {
-        let (w, x) = (self.m.p.challenge_daa as i128, self.b.expiry as i128);
+        let (w, x, st) = (self.m.p.challenge_daa as i128, self.b.expiry as i128, self.m.bond.step as i128);
         let pp = p as i128;
-        pp + w <= x && x <= pp + (self.m.bond.term + self.m.bond.step) as i128 && pp - self.t0 as i128 <= self.m.p.late_daa as i128
+        pp + w + st <= x && x <= pp + (self.m.bond.term + self.m.bond.step) as i128 && pp - self.t0 as i128 <= self.m.p.late_daa as i128
+    }
+    /// The last DAA at which a claim on a pair of expiry `x` can land and still be valid.
+    pub fn last_valid_landing(m: &OMarket, x: i64) -> i64 {
+        x - m.p.challenge_daa - m.bond.step
     }
     /// Whether a contest accepted at `c` (the contested part's own DAA score) of a claim accepted at `p` was in time.
     pub fn contest_in_time(&self, p: i64, c: i64) -> bool {

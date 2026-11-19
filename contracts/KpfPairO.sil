@@ -43,7 +43,8 @@ pragma silverscript ^0.1.0;
 //                     a price claim vouched by uwKey's own P2PK input j (signed SIGHASH_ALL: every outpoint, so this
 //                     pair's state; every output, so the claim; the lock time): the part n moves into a KpfPendingO with
 //                     a bond, exactly as KpfPair.propose moves it into KpfPending (kind 1 close, signed by the closer;
-//                     kind 2 liquidation; restore, cure and forfeit states precomputed as P2SH hashes)
+//                     kind 2 liquidation; restore, cure and forfeit states precomputed as P2SH hashes); valid at
+//                     finalize only if P + challengeDaa + stepDaa <= expiry (KpfPendingO, review 10)
 // DESIGN: the note removes idle settle at E in oracle markets (1.4, 5.13: a blocker could run the clock out to it). It is
 // kept only for a pair whose cover has lapsed, idleDaa after the lapse by the calendar (tx.daa >= X + tailDaa +
 // idleDaa): while an underwriter renews, X moves on and the settle is never due; once the underwriter is silent it is
@@ -561,8 +562,8 @@ contract KpfPairO(
         require(bondMin <= BOND_MIN_MAX);
         require(gBps > 0);
         require(gBps < BPS);
-        // A claim is valid only if P + challengeDaa <= X <= P + termDaa + stepDaa, so a window shorter than the term
-        // leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
+        // A claim is valid only if P + challengeDaa + stepDaa <= X <= P + termDaa + stepDaa, so a window shorter than the
+        // term leaves claims possible; 0 < challengeDaa < termDaa < 2^32 (checkBond) is also the CSV range of finalize.
         require(challengeDaa > 0);
         require(challengeDaa < termDaa);
         require(lateDaa >= 0);

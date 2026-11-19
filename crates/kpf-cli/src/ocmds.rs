@@ -518,17 +518,30 @@ pub fn order_risk_lines(o: &OOpen) -> Vec<String> {
     let sc = o.m.p.scale;
     let half = o.premium_half(o.prem_max);
     let prem = kpf_protocol::payoff::q(o.size_left, half, sc, 0);
+    // Review 10 (R10-F1): the whole order's worst case, whatever the number of parts: the tip and the first premium half
+    // on its size, and one carrier (the contract takes it only with the part that empties the order).
     let worst = kpf_protocol::payoff::q(o.size_left, o.tip + half, sc, 0) + o.m.p.carrier;
     let mut v = vec![];
     if o.uw_accept == [0; 32] {
         v.push(format!(
-            "--any-slot: any underwriting slot of this market can fill this order and choose the cover rate (at least the range), the cover's expiry and the premium up to --prem-max {} KAS per unit and term; your half of the first premium (up to {} KAS on a full fill) goes to that underwriter.",
+            "--any-slot: any underwriting slot of this market can fill or take this order, choose the cover rate (at least the range), the cover's expiry and the premium up to --prem-max {} KAS per unit and term, and vouch the prices of the pairs it writes (contest a false claim within the market's window); your half of the first premium (up to {} KAS on a full fill) goes to that underwriter.",
             fmt_kas(o.prem_max as i128),
             fmt_kas(prem as i128)
         ));
     }
+    match o.least_part() {
+        Some(n) if n < o.size_left => v.push(format!(
+            "This order can be filled or taken in parts of at least {} units (its --min-fill, the market's minimum size, and {} KAS of your margin per part, the contracts' floor), at most {} parts. Each part pays your tip on its size; only the part that empties the order pays a carrier ({} KAS), whoever fills it.",
+            fmt_units(n as i128, sc as i128),
+            fmt_kas(PART_FLOOR as i128),
+            o.size_left / n,
+            fmt_kas(o.m.p.carrier as i128)
+        )),
+        Some(_) => v.push(format!("This order is filled or taken whole (one part), which pays your tip and one carrier ({} KAS).", fmt_kas(o.m.p.carrier as i128))),
+        None => v.push(format!("This order's whole margin is below the contracts' part floor of {} KAS: no fill or take can ever accept it.", fmt_kas(PART_FLOOR as i128))),
+    }
     v.push(format!(
-        "An order resting longer than one term ({} DAA) can be filled with a cover expiry already in the past (a contract proves only that the expiry is a term after the order was accepted). Such a pair is never renewed and settles at its entry price once its lapse time has passed: you get your margin back and lose your tip, the carrier and your half of the first premium (at most {} KAS on a full fill). Cancel or replace an order that is not filled within a term.",
+        "An order resting longer than one term ({} DAA) can be filled or taken with a cover expiry already in the past (a contract proves only that the expiry is a term after the order was accepted, and nothing for a take). Such a pair is never renewed and settles at its entry price once its lapse time has passed: you get your margin back and lose your tip, the carrier and your half of the first premium (at most {} KAS for the whole order, in however many parts). Cancel or replace an order that is not filled within a term.",
         o.m.bond.term,
         fmt_kas(worst as i128)
     ));
@@ -567,13 +580,30 @@ pub fn order_cmd(a: &Args) -> R<()> {
         limit: price(a, "limit")?,
         my_rate: price(a, "rate")?,
         min_counter_rate: price_or(a, "min-counter-rate", 0)?,
-        min_fill: if a.has("min-fill") { parse_amount(a.need("min-fill")?, sc)? } else { m.p.min_size },
+        // Review 10 (R10-F1, R10-N2): the default is the whole size (one part, one carrier); smaller parts are asked for.
+        min_fill: if a.has("min-fill") { parse_amount(a.need("min-fill")?, sc)? } else { size },
         tip: price_or(a, "tip", 0)?,
         active_from: int_or(a, "active-from", 0)?,
         expiry_daa: int(a, "expiry")?,
         uw_accept,
         prem_max: price_or(a, "prem-max", 0)?,
     };
+    // Review 10 (R10-F1): the contracts refuse a part whose margin (or what it leaves) is below PART_FLOOR, so an order
+    // whose minimum fill is below it, or whose whole margin is, would accept nothing smaller (or nothing at all).
+    if o.margin_of(size) < PART_FLOOR {
+        return Err(format!("REFUSED: the order's margin q(size, rate) = {} KAS is below the contracts' part floor of {} KAS: no fill or take can accept it", fmt_kas(o.margin_of(size) as i128), fmt_kas(PART_FLOOR as i128)).into());
+    }
+    if o.min_fill < size && o.margin_of(o.min_fill) < PART_FLOOR {
+        let least = o.least_part().unwrap_or(size);
+        return Err(format!(
+            "REFUSED: --min-fill {} gives a part a margin of {} KAS, below the contracts' part floor of {} KAS (review 10: a part below it is refused); the least part at --rate is {} units (or omit --min-fill: the whole size)",
+            fmt_units(o.min_fill as i128, sc as i128),
+            fmt_kas(o.margin_of(o.min_fill) as i128),
+            fmt_kas(PART_FLOOR as i128),
+            fmt_units(least as i128, sc as i128)
+        )
+        .into());
+    }
     let need = o.fill_spend(size, o.prem_max) as u64 + 100_000_000;
     let esc = if a.has("escrow") { kas(a.need("escrow")?)? as u64 } else { need };
     let b = create_order(&o, esc, &fu, &fk, rate(a)?).map_err(e)?;
@@ -622,7 +652,7 @@ pub fn open_cmd(a: &Args) -> R<()> {
 /// close's bond is the closer's: the vouch value goes back in full and the funder (expected to be the closer) pays the
 /// bond (and that carrier). The funder always pays the network fee.
 pub fn vouch_cmd(a: &Args) -> R<()> {
-    only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch"])?;
+    only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch", "void-ok"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let lp = pair_of(a, "pair", &mut node, net)?;
@@ -647,15 +677,27 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
     let n = if a.has("n") { parse_amount(a.need("n")?, lp.s.m.p.scale)? } else { lp.s.size };
     let c = ClaimTerms { kind, side: sd, n, price: price(a, "price")?, t0 };
     let (b, w) = propose(&lp, &c, vouch, &fu, &fk, rate(a)?).map_err(e)?;
+    // Review 10 (R10-F2): a claim is valid only if it lands challengeDaa + stepDaa before the expiry; one that cannot
+    // costs its proposer the bond (to the defender), so it is refused here unless --void-ok says it is meant.
+    let last = OPending::last_valid_landing(&w.m, w.b.expiry);
+    if (t as i64) > last && !a.has("void-ok") {
+        return Err(format!(
+            "REFUSED: a claim landing now (DAA {t}) or later is void: a claim must land at least the window and one step ({} DAA) before the cover's expiry {}, i.e. by DAA {last} (review 10). Renew first (the renewal opens at DAA {}), then claim against the next expiry; a void claim restores the part and pays its bond to the defender. Pass --void-ok to send it anyway",
+            w.m.p.challenge_daa + w.m.bond.step,
+            w.b.expiry,
+            w.b.expiry - w.m.bond.step
+        ));
+    }
     println!(
-        "claim: {} of the {} at {} KAS (t0 {t0}); bond {} KAS. It may be contested until P + {} (P: the DAA it lands at) and is void if it lands after DAA {} or more than {} DAA after t0.",
+        "claim: {} of the {} at {} KAS (t0 {t0}); bond {} KAS. It may be contested until P + {} (P: the DAA it lands at) and is void if it lands after DAA {last} or more than {} DAA after t0. Finalize it from P + {} and before the cover's expiry DAA {}: a cure landing after the expiry undoes a liquidation (the cured pair settles at its entry).",
         if kind == KIND_LIQ { "liquidation" } else { "close" },
         if sd == LONG { "long" } else { "short" },
         fmt_kas(c.price as i128),
         fmt_kas(w.bond as i128),
         w.m.p.challenge_daa - 1,
-        w.b.expiry - w.m.p.challenge_daa,
-        w.m.p.late_daa
+        w.m.p.late_daa,
+        w.m.p.challenge_daa,
+        w.b.expiry
     );
     let adds = funded_by_proposer(&lp, &w);
     let what = if n < lp.s.size { format!("the claim's bond {} KAS and the carrier of the new part {} KAS", fmt_kas(w.bond as i128), fmt_kas((adds - w.bond) as i128)) } else { format!("the claim's bond {} KAS", fmt_kas(w.bond as i128)) };
@@ -1023,7 +1065,7 @@ pub fn inspect_oracle(a: &Args, o: &OObj, rs: &[u8], file: Option<&ObjFile>, net
             println!("long   {}   listing ask {} (min part {}, tip {})", to_hex(&p.long_key), fmt_kas(p.long_ask as i128), p.long_min, fmt_kas(p.long_tip as i128));
             println!("short  {}   listing bid {} (min part {}, tip {})", to_hex(&p.short_key), fmt_kas(p.short_bid as i128), p.short_min, fmt_kas(p.short_tip as i128));
             println!("underwriter {}   slot {}   cover rate {} KAS   premium {} KAS a term", to_hex(&p.b.uw_key), to_hex(&p.b.uw_id), fmt_kas(p.b.cover_rate as i128), fmt_kas(p.b.premium as i128));
-            println!("cover expires at DAA {}; lapse settle from DAA {}; claims must land {} DAA before the expiry", p.b.expiry, p.lapse_from(), p.m.p.challenge_daa);
+            println!("cover expires at DAA {}; lapse settle from DAA {}; claims must land {} DAA before the expiry (the window and one step, review 10)", p.b.expiry, p.lapse_from(), p.m.p.challenge_daa + p.m.bond.step);
         }
         OObj::Pending(w) => {
             let status = match w.status {
@@ -1138,8 +1180,15 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                     (PENDING, Some(p)) => {
                         let until = p + w.m.p.challenge_daa - 1;
                         let valid = w.valid_at(p);
+                        // Review 10 (R10-F2, R10-N2): a valid liquidation must be finalized before the expiry, or a cure
+                        // landing after it leaves a pair no renewal accepts (it settles at its entry).
+                        let hurry = if w.kind == KIND_LIQ && valid && !against {
+                            format!("; FINALIZE IT BEFORE THE COVER'S EXPIRY (DAA {}): a cure by the loser landing after the expiry leaves a pair no renewal accepts, which then settles at its entry price", w.b.expiry)
+                        } else {
+                            String::new()
+                        };
                         format!(
-                            "{} {what} of the {} at {} KAS{}; {}; finalizable from DAA {}",
+                            "{} {what} of the {} at {} KAS{}; {}; finalizable from DAA {}{hurry}",
                             if against { "A CLAIM AGAINST YOU:" } else { "a claim on your pair:" },
                             if w.side == LONG { "long" } else { "short" },
                             fmt_kas(w.quote as i128),
@@ -1167,12 +1216,20 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 let step = p.m.bond.step;
                 let lapse = x + p.m.bond.tail;
                 let settle_from = p.lapse_from();
+                // Review 10 (R10-F2): a claim is valid only if it lands challengeDaa + stepDaa before the expiry.
+                let last_claim = OPending::last_valid_landing(&p.m, x);
                 let msg = if t < x - step {
-                    format!("your underwriter's cover runs until DAA {x} ({} DAA left); renewal from DAA {}", x - t, x - step)
+                    format!("your underwriter's cover runs until DAA {x} ({} DAA left); renewal from DAA {}; until a renewal, claims landing after DAA {last_claim} are void", x - t, x - step)
                 } else if t < x {
-                    format!("COVER EXPIRES at DAA {x} ({} DAA left): the underwriter may renew now; claims landing after DAA {} are void", x - t, x - p.m.p.challenge_daa)
+                    format!("COVER EXPIRES at DAA {x} ({} DAA left): the underwriter may renew now (and should before it proposes a claim: claims landing after DAA {last_claim} are void until a renewal)", x - t)
                 } else if t < lapse {
-                    format!("THE COVER HAS EXPIRED (DAA {x}): no claim is valid; the underwriter may still renew; the cover lapses at DAA {lapse}; lapse settle at the entry price from DAA {settle_from}")
+                    // Review 10 (R10-N2): whether the underwriter can still renew depends on when this UTXO was accepted.
+                    let renew = match daa.and_then(|d| p.unrenewable_why(d.max(0) as u64)) {
+                        Some(why) => format!("the underwriter can no longer renew it: {why}"),
+                        None if daa.is_some() => "the underwriter may still renew (this pair UTXO was accepted no later than the expiry); an entry of yours accepted after the expiry fixes the lapse date".into(),
+                        None => "the underwriter may still renew only if this pair UTXO was accepted no later than the expiry (its DAA is unknown: pass --node)".into(),
+                    };
+                    format!("THE COVER HAS EXPIRED (DAA {x}): no claim is valid; {renew}; the cover lapses at DAA {lapse}; lapse settle at the entry price from DAA {settle_from}")
                 } else if (t as u64) < settle_from {
                     format!("THE COVER HAS LAPSED (DAA {lapse}): anyone may settle the pair at its entry price from DAA {settle_from} (kpf lapse-settle --pair {f}), whatever its parties do meanwhile; a price-free exit (transfer, mutual or cooperative close) is open meanwhile")
                 } else {
@@ -1314,6 +1371,43 @@ mod tests {
         assert_eq!(stake_from(&stale, &mut node, net).unwrap().daa, 777);
         assert_eq!(node.as_ref().unwrap().t.asked, 2);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Review 10 (R10-F1, R10-N2): `--any-slot` and `--void-ok` are switches (before, `--any-slot` took the next argument
+    /// as its value, so `--any-slot --escrow 3000` dropped the escrow); the order text states the least part and the whole
+    /// order's worst case, one carrier however many parts.
+    #[test]
+    fn order_texts_state_the_part_floor_and_the_whole_order_bound() {
+        let a = args(&["oracle-order", "--any-slot", "--escrow", "3000"]);
+        assert!(a.has("any-slot"));
+        assert_eq!(a.get("escrow"), Some("3000"));
+        assert!(args(&["vouch", "--void-ok"]).has("void-ok"));
+        let m = OMarket::testnet([7; 32]);
+        let sc = m.p.scale;
+        let o = OOpen {
+            m,
+            side: LONG,
+            owner: [1; 32],
+            size_left: 2 * sc,
+            limit: 1_050_000_000,
+            my_rate: 100_000_000,
+            min_counter_rate: 0,
+            min_fill: m.p.min_size,
+            tip: 0,
+            active_from: 0,
+            expiry_daa: 1_000_000_000,
+            uw_accept: [0; 32],
+            prem_max: 0,
+        };
+        assert_eq!(o.least_part(), Some(20 * m.p.min_size), "0.2 unit at 1 KAS: the 0.2 KAS floor");
+        let t = order_risk_lines(&o).join("\n");
+        assert!(t.contains("at least 0.2 units") && t.contains("at most 10 parts") && t.contains("only the part that empties the order pays a carrier"), "{t}");
+        assert!(t.contains("at most 0.2 KAS for the whole order"), "{t}");
+        let whole = OOpen { min_fill: o.size_left, ..o.clone() };
+        assert!(order_risk_lines(&whole).join("\n").contains("filled or taken whole"));
+        let tiny = OOpen { size_left: 10 * m.p.min_size, ..o };
+        assert_eq!(tiny.least_part(), None);
+        assert!(order_risk_lines(&tiny).join("\n").contains("no fill or take can ever accept it"));
     }
 
     /// Defect 7: a dry run writes under `dry-run/`; only a submitted transaction writes at the top of the out-dir.

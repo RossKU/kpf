@@ -683,8 +683,31 @@ pub fn open_with(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, 
     d.contract(long, OWhich::Open, lo.redeem(k), "fill", fill(so.owner, maker_of(&short.op)), "long order", 0);
     d.contract(short, OWhich::Open, so.redeem(k), "fill", fill(lo.owner, maker_of(&long.op)), "short order", 0);
     d.contract(slot, OWhich::Bond, k.bond.redeem(&slot.s.state_bytes()), "bind", bind_args(&a, &slot.s.owner), "slot", m.bond.rate as u64);
+    // Review 10 (R10-F1): an order pays the pair's carrier only with the fill that empties it (`KpfOpenO.escrow`), and
+    // the pair needs one. It is taken from the short order when this fill empties it (the carrier comes back to the
+    // short with its side at the pair's end), else from the long order when this fill empties that one, else the funder
+    // pays it.
+    let payer = if short.s.size_left == t.n {
+        Some(1usize)
+    } else if long.s.size_left == t.n {
+        Some(0)
+    } else {
+        None
+    };
     for (i, o) in [(0usize, long), (1, short)] {
-        let spend = o.s.fill_spend(t.n, t.premium) as u64;
+        if !o.s.part_ok(t.n) {
+            let least = o.s.least_part().map(|n| format!("its least part is {} units", n as f64 / m.p.scale as f64)).unwrap_or_else(|| "its whole margin is below the floor: it can never be filled".into());
+            return invalid(format!(
+                "the {} order cannot be filled in {} units: every part must keep the order's minimum fill and the market's minimum size, and hold at least {} KAS of its margin, as must what it leaves (review 10); {least}",
+                if i == 0 { "long" } else { "short" },
+                t.n as f64 / m.p.scale as f64,
+                PART_FLOOR as f64 / 1e8
+            ));
+        }
+        let mut spend = o.s.fill_spend(t.n, t.premium) as u64;
+        if payer != Some(i) {
+            spend -= o.s.carrier_of(t.n) as u64;
+        }
         let left = o.s.size_left - t.n;
         if left < 0 || o.value < spend {
             return invalid("an order cannot fund this fill");

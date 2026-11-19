@@ -4,8 +4,9 @@
 //! builders (`kpf_protocol::oracle_build`, the pinned artifacts) and checks it with `verify::verify` (engine with
 //! consensus metering, fee floor, storage mass, block limits).
 //!
-//! `r10_exploit_` tests execute an attack that works, `r10_holds_` tests an attack that is refused (or a shape that keeps
-//! its rule), `r10_bounded_` tests a residual that is measured. Worked numbers use the fixture market of `oraclekit`
+//! `r10_holds_` tests an attack that is refused (or a shape that keeps its rule), `r10_bounded_` tests a residual that is
+//! measured. After the fix of review 10 (DESIGN-ORACLE-IMPL 28) the four former `r10_exploit_` tests build the same
+//! transactions: three hold, and the cure after the expiry is measured as the residual of 28.4. Worked numbers use the fixture market of `oraclekit`
 //! (term 800, step 100, tail 200, idle 1,000, W 200, quiet 20, mmr 5 %, g 2 %, carrier 0.2 KAS, scale 10^6) unless a
 //! test says it uses the testnet defaults (`OMarket::testnet`: scale 10^8, minimum size 0.01 unit).
 //!
@@ -128,21 +129,18 @@ fn own_slot(m: &OMarket, tag: u8) -> LSlot {
 
 // ---------------------------------------------------------------- R10-F1: a resting long order taken in small parts
 
-/// R10-F1, with the testnet defaults (scale 10^8, minimum size 0.01 unit, carrier 0.2 KAS). The victim is the order
-/// `kpf oracle-order` writes for live run 2's long: 2 units, limit 10.50, margin rate 1 KAS, `--any-slot`, no tip,
-/// `--prem-max` 0, and the command's defaults `min-fill` = the market's minimum size and escrow = a full fill + 1 KAS
-/// (3.2 KAS). The attacker holds a slot (a genesis at ring position 0: the order accepts any slot of its market) and a
-/// second key A. Each round, at DAA 20,000,000:
-///   take: in 0 the order (take, n = 0.01 unit, x = e = 10, the short's bound 10.50, cover rate 1.50, expiry 3,024,000,
-///   premium 0), 1 the slot (bind), 2 A's funding; out 0 the order's continuation (0.21 KAS less), 1 the part
-///   (0.215 KAS: long 9 .. short 10.50 and the carrier), 2 the slot, 3 A's change. Signed by the slot's owner and A.
-///   lapse settle (due: 3,024,000 + tail + idle = 11,880,000): the long is owed q(0.01, 10 - 9) = 0.01 KAS, below the
-///   0.02 KAS dust floor, so `lapseSettle` pays the whole part to the short, A.
-/// The order pays 0.21 KAS a round and gets nothing back; A puts in 0.005 KAS a round and takes 0.215 KAS. Fifteen
-/// rounds take 3.15 KAS of the 3.2 KAS escrow (all but what no further round can use). DESIGN-ORACLE-IMPL 27.4 bounds a
-/// take into the past by the order's tip and one carrier (0.2 KAS here), for the whole order.
+/// R10-F1, fixed (DESIGN-ORACLE-IMPL 28.3), with the testnet defaults (scale 10^8, minimum size 0.01 unit, carrier 0.2
+/// KAS). The victim is the order review 10 built for live run 2's long: 2 units, limit 10.50, margin rate 1 KAS, any
+/// slot, no tip, `--prem-max` 0, `min-fill` the market's minimum size, escrow a full fill + 1 KAS (3.2 KAS). The attacker
+/// holds a slot (a genesis at ring position 0) and a second key A, at DAA 20,000,000. Review 10's round, a take of 0.01
+/// unit with no pair into the expiry 3,024,000 (the part's margin 0.01 KAS, below the lapse settle's payout floor), is
+/// refused: every part must hold at least `PART_FLOOR` (0.2 KAS) of the order's margin, so 0.19 unit is refused too. The
+/// smallest part the order accepts is 0.2 unit; ten such takes, each lapse-settled at once, empty the order. Each lapse
+/// settle returns the part's margin, the attacker funds the carrier of every part that leaves a continuation (and gets it
+/// back as the part's short), and the order pays one carrier, with the take that empties it: 0.2 KAS for the whole order,
+/// the bound of 28.4. Before: fifteen 0.01-unit rounds took 3.15 KAS of the 3.2 KAS escrow.
 #[test]
-fn r10_exploit_small_takes_without_a_pair_drain_a_resting_long_orders_whole_escrow() {
+fn r10_holds_small_takes_without_a_pair_cost_a_resting_long_order_at_most_one_carrier() {
     let m = OMarket::testnet(feed_hash_of(b"review 10: a testnet-default market"));
     assert!(m.check().is_ok());
     let sc = m.p.scale;
@@ -167,51 +165,55 @@ fn r10_exploit_small_takes_without_a_pair_drain_a_resting_long_orders_whole_escr
     let mut lo = Live { op: uop(0x71, 0), value: escrow, daa: now - 1_000_000, id: Some(Hash::from_bytes([0x71; 32])), s: o.clone() };
     let mut sl = own_slot(&m, 0x5c);
     let att = keypair(77);
-    let n = m.p.min_size;
     let (xp, bs, cr, xe) = (1_000_000_000i64, 1_050_000_000i64, 150_000_000i64, m.bond.step);
+    // Review 10's round and a part one minimum size below the floor: refused by the order.
+    for (n, what) in [(m.p.min_size, "a take of 0.01 unit (margin 0.01 KAS)"), (19 * m.p.min_size, "a take of 0.19 unit (margin 0.19 KAS)")] {
+        let (t, ..) = take_piece(&lo, n, &sl, &att, xp, xp, bs, xe, cr, 0, now, uop(0x90, n as u32));
+        refused(what, &t, 0);
+    }
+    assert!(!o.part_ok(2 * sc - 10 * m.p.min_size), "nor a part that leaves less than the floor");
+    assert_eq!(o.least_part(), Some(20 * m.p.min_size));
+    let n = 20 * m.p.min_size;
     let (mut paid, mut back, mut put_in, mut took, mut rounds) = (0i64, 0i64, 0i64, 0i64, 0u32);
-    while lo.value as i64 >= o.take_spend(n) {
+    let mut refund = 0i64;
+    loop {
         let (t, part, b2, cont) = take_piece(&lo, n, &sl, &att, xp, xp, bs, xe, cr, 0, now, uop(0x91, rounds));
-        must(&format!("round {rounds}: the take of 0.01 unit with no pair"), &t);
+        must(&format!("round {rounds}: the take of 0.2 unit with no pair"), &t);
         let spend = lo.value as i64 - t.0.outputs[0].value as i64;
-        assert_eq!(spend, q(n, o.my_rate, sc) + m.p.carrier, "the order pays its margin and a carrier");
+        let last = cont.is_none();
+        assert_eq!(spend, q(n, o.my_rate, sc) + if last { m.p.carrier } else { 0 }, "the order pays its margin, and a carrier only with its last part");
         paid += spend;
         put_in += part.floor() - spend;
         let lp = live(&t, 1, now, &part);
         assert!(lp.s.lapse_from() <= now);
         let (lt, l, s) = lapse_by(&lp, now, &att, uop(0x92, rounds));
         must(&format!("round {rounds}: the immediate lapse settle"), &lt);
-        assert_eq!(l, 0, "the long's 0.01 KAS is below the dust floor: the short gets the whole part");
-        if rounds == 0 {
-            // Both transactions can be mined: KIP-9's storage mass is at most C * sum(1 / output value), far below the
-            // block limit (the smallest output is the 0.215 KAS part).
-            let upper = |tx: &kaspa_consensus_core::tx::Transaction| tx.outputs.iter().map(|o| 1_000_000_000_000u64 / o.value.max(1)).sum::<u64>();
-            let (st, sl_) = (upper(&t.0), upper(&lt.0));
-            assert!(st <= kpf_protocol::tx::BLOCK_STORAGE_LIMIT && sl_ <= kpf_protocol::tx::BLOCK_STORAGE_LIMIT, "{st} {sl_}");
-            println!("R10-F1 round 0: storage mass at most {st} (take) and {sl_} (lapse settle) of {}", kpf_protocol::tx::BLOCK_STORAGE_LIMIT);
-        }
+        assert_eq!(l, q(n, o.my_rate, sc), "the part's margin, 0.2 KAS, comes back");
         back += l;
         took += s;
-        lo = live(&t, 0, now, &cont.expect("the order continues"));
         sl = live(&t, 2, now, &b2);
         rounds += 1;
+        match cont {
+            Some(c) => lo = live(&t, 0, now, &c),
+            None => {
+                refund = t.0.outputs[0].value as i64;
+                break;
+            }
+        }
     }
-    println!("R10-F1 (testnet defaults): {rounds} rounds; the order paid {paid} sompi and got {back} back; the attacker put in {put_in} and took {took}");
-    assert_eq!(rounds, 15);
-    assert_eq!((paid, back), (315_000_000, 0), "3.15 KAS of the 3.2 KAS escrow, nothing back");
-    assert_eq!(took - put_in, paid, "everything the order paid went to the attacker");
-    let documented = q(o.size_left, o.tip, sc) + m.p.carrier;
-    assert!(paid - back > 15 * documented, "fifteen times the documented bound of 27.4");
+    println!("R10-F1 fixed (testnet defaults): {rounds} parts; the order paid {paid} sompi and got {back} back with a refund of {refund}; the attacker put in {put_in} and took {took}");
+    assert_eq!(rounds, 10);
+    assert_eq!(paid - back, m.p.carrier, "the whole order loses one carrier, 0.2 KAS");
+    assert_eq!(escrow as i64 - refund - back, m.p.carrier);
+    assert_eq!(took - put_in, m.p.carrier, "the attacker gains only the order's one carrier");
 }
 
-/// R10-F1 above the dust floor (the fixture market, 1-unit parts of the fixture order with the command's default
-/// `min-fill` = the minimum size and a tip of 0.01 KAS): each part's lapse settle returns the margin, and each part
-/// still costs the order one carrier and its tip, which the attacker keeps (the carrier at the lapse settle, as the
-/// short; the tip in its change at the take). Ten parts of one unit: 2.1 KAS, against the documented bound for ten
-/// units taken into the past (their tip and one carrier, 0.3 KAS). The number of parts is bounded only by
-/// `size / max(minFill, minSize)` and by the escrow.
+/// R10-F1 above the payout floor, fixed (the fixture market, 1-unit parts of the fixture order with `min-fill` = the
+/// minimum size and a tip of 0.01 KAS): each part's lapse settle returns the margin, and a part that leaves a
+/// continuation takes no carrier from the order (the attacker funds it and gets it back as the part's short). Ten parts
+/// of one unit cost the order their tip, 0.1 KAS, which the attacker keeps; before, 2.1 KAS (a carrier per part).
 #[test]
-fn r10_exploit_each_take_without_a_pair_costs_a_long_order_another_carrier() {
+fn r10_holds_each_take_without_a_pair_costs_a_long_order_only_its_tip() {
     let now = 30_000u64;
     let m = omarket();
     let lo0 = order(L, &long_kp(), 0x71, now - 100);
@@ -236,17 +238,15 @@ fn r10_exploit_each_take_without_a_pair_costs_a_long_order_another_carrier() {
         lo = live(&t, 0, now, &cont.unwrap());
         sl = live(&t, 2, now, &b2);
     }
-    assert_eq!(loss, 10 * (q(n, o.tip, sc) + m.p.carrier), "one carrier and the tip per part");
-    assert_eq!(loss, 210_000_000);
-    assert_eq!(took - put_in, 10 * m.p.carrier, "the attacker keeps the carriers (and the tips, in its change at each take)");
-    let documented = q(10 * n, o.tip, sc) + m.p.carrier;
-    assert!(loss >= 7 * documented, "seven times the documented bound for the units taken");
-    println!("R10-F1 (fixture): 10 parts cost the order {loss} sompi; 27.4 bounds a take of those units by {documented}");
+    assert_eq!(loss, q(10 * n, o.tip, sc), "the tip on the units taken, no carrier");
+    assert_eq!(loss, 10_000_000);
+    assert_eq!(took - put_in, 0, "the attacker gets back the carriers it funded (its tip gain is in its change at each take)");
+    println!("R10-F1 fixed (fixture): 10 parts cost the order {loss} sompi, the tip on 10 units");
 }
 
-/// R10-F1, the counter-check: a short order taken the same way loses only its tip (its carrier comes back with its side
-/// at the lapse settle, which pays the short the rest of the part), and a long order whose minimum fill is its whole
-/// size can be taken only once (the documented bound).
+/// R10-F1, the counter-check: a short order taken the same way loses only its tip (a part that leaves a continuation
+/// takes no carrier from it since review 10, and the carrier the taker funds goes to the short at the lapse settle), and
+/// a long order whose minimum fill is its whole size can be taken only once (one carrier).
 #[test]
 fn r10_holds_a_short_order_or_an_order_filled_whole_loses_only_tip_and_one_carrier() {
     let now = 30_000u64;
@@ -262,7 +262,7 @@ fn r10_holds_a_short_order_or_an_order_filled_whole_loses_only_tip_and_one_carri
     let lp = live(&t, 1, now, &part);
     let (lt, _, s) = lapse_by(&lp, now, &keypair(77), uop(0x96, 0));
     must("its lapse settle", &lt);
-    assert_eq!(spend - s, q(n, so.s.tip, sc), "the short order loses its tip only");
+    assert_eq!(spend - s, q(n, so.s.tip, sc) - m.p.carrier, "the short order loses its tip and gets the carrier the taker funded");
     // A long order with minFill = its size: a part of it is refused.
     let lo = order(L, &long_kp(), 0x73, now - 100);
     let whole = Live { s: OOpen { min_fill: lo.s.size_left, ..lo.s.clone() }, ..lo };
@@ -272,38 +272,47 @@ fn r10_holds_a_short_order_or_an_order_filled_whole_loses_only_tip_and_one_carri
 
 // ---------------------------------------------------------------- R10-F2: a cure after the expiry
 
-/// R10-F2. A valid liquidation of the long (the fixture pair, X = 1,200; vouched at 9.20 with P = 1,000, so P + W =
-/// 1,200 <= X) is pending through the renewal window [1,100, 1,200]: a pending part cannot be renewed. From 1,200 anyone
-/// can finalize it, which forfeits the long's part to the short. If the long's cure lands first and after X (at 1,201:
-/// one block of ordering, or nobody finalized during [P + W, X]), the cured pair is a state written after its expiry,
-/// which since review 9 is never renewed: the underwriter's renewal is refused, the cover lapses, and anyone settles the
-/// pair at its entry 10 at 2,400, whatever the price. The long, liquidatable at 9.20 (its equity there 200 KAS), gets
-/// its whole margin and its cure payment back (1,434.8 KAS for 434.8 KAS paid in); the short gets 2,000.2 KAS instead
-/// of the forfeited part (2,954.2 KAS: the pair less the 46 KAS keeper fee). Before review 9 the underwriter renewed the cured pair late and the cover went
-/// on. Control: the same cure landing at 1,199 is renewed.
+/// R10-F2, fixed (DESIGN-ORACLE-IMPL 28.3): a claim is valid only if P + W + step <= X. Review 10's claim (the fixture
+/// pair, X = 1,200, the long's liquidation vouched at 9.20 with P = 1,000, so P + W = X) is now void: its finalize at
+/// 1,200 restores the part and pays the bond to the long, so nothing a cure does afterwards can undo a liquidation. The
+/// latest valid claim lands at 900 and is finalizable from 1,100, one step before X (the renewal window opens then too):
+/// the forfeit then belongs to the short. What remains (28.4) is the finalize withheld by everyone, the winner and the
+/// underwriter (paid B + fee by it) included, for the whole step [1,100, 1,200]: then the long's cure at 1,201 still
+/// writes a pair no renewal accepts, which settles at its entry, the long recovering its whole margin (954 KAS on this
+/// pair). Control: the same cure at 1,199 is renewed.
 #[test]
-fn r10_exploit_a_cure_after_the_expiry_turns_a_valid_liquidation_into_a_lapse_at_the_entry() {
+fn r10_bounded_a_cure_after_the_expiry_needs_the_finalize_withheld_for_a_whole_step() {
     let (lp, sl, _) = opened();
     let p = 920_000_000i64;
     assert!(lp.s.long_liquidatable(p));
+    let (x_, w_, step) = (lp.s.b.expiry, lp.s.m.p.challenge_daa, lp.s.m.bond.step);
+    assert_eq!(OPending::last_valid_landing(&lp.s.m, x_), 900);
+    // Review 10's claim at 1,000: void now.
     let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 1_000, lock: 1_000 }, 1_000);
-    assert!(lw.s.cure_hash != [0; 32], "the claim offers a cure");
     let (ft, s) = finalize_tx(&lw, 1_000, 200);
-    must("the finalize from 1,200 (valid: P + W = X)", &ft);
+    must("the finalize from 1,200", &ft);
+    let Settlement::Restore { defender, .. } = s else { panic!("{s:?}") };
+    assert_eq!(defender, lw.s.bond, "void: the part is restored and the long gets the bond");
+    // The latest valid claim: P = 900, finalizable from 1,100 = X - step.
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 900, lock: 900 }, 900);
+    assert!(lw.s.valid_at(900) && !lw.s.valid_at(901));
+    assert_eq!(lw.s.finalize_from(900) as i64, x_ - step);
+    let (ft, s) = finalize_tx(&lw, 900, w_ as u64);
+    must("the finalize at 1,100, a step before the expiry", &ft);
     let Settlement::Forfeit { value: forfeit, part: fpart, .. } = s else { panic!("{s:?}") };
     assert_eq!((fpart.long_key, fpart.short_key), (lp.s.short_key, lp.s.short_key));
+    // The residual: nobody finalizes during [1,100, 1,200]; the long's cure lands at 1,201.
     let (ct, c) = cure_tx(&lw, &long_kp());
     must("the long's cure (conflicts with the finalize)", &ct);
     let paid_in = ct.0.outputs[1].value as i64 + ct.0.outputs[0].value as i64 - lw.value as i64;
     let late = live(&ct, 1, 1_201, &c);
     let rt = renew_tx(&late, &sl, 1_201, 8).0;
     refused("the underwriter's renewal of a pair cured at 1,201", &rt, 0);
-    assert!(verdicts(&rt)[1], "the slot's bind is satisfied: only the pair's date rule refuses");
     let (l, sh) = late.s.lapse_out(late.value);
     must("the lapse settle at the entry from 2,400", &lapse_tx(&late, late.s.lapse_from(), 0));
-    println!("R10-F2: the long paid {paid_in} into its cure and gets {l} at the lapse; the short gets {sh} instead of the forfeited part {forfeit}");
+    println!("R10-F2 residual: after a whole step without a finalize the long paid {paid_in} into its cure and gets {l} at the lapse; the short gets {sh} instead of {forfeit}");
     assert_eq!(l - paid_in, q(lp.s.size, lp.s.entry - lp.s.bl, lp.s.m.p.scale), "the long recovers its whole margin at the entry");
-    assert!(forfeit - sh > 950 * KAS, "the short loses about its gain of the liquidation");
+    assert!(forfeit - sh > 950 * KAS);
     // Control: the cure at 1,199 is renewed and stays covered.
     let early = live(&ct, 1, 1_199, &c);
     must("control: a cure landing before the expiry is renewed", &renew_tx(&early, &sl, 1_199, 8).0);
@@ -348,10 +357,12 @@ fn short_idle_market() -> OMarket {
 /// Lead 2 (DESIGN-ORACLE-IMPL 27.4, "the testnet defaults do not meet it"), measured. On a market with tail + idle <=
 /// term an underwriter that stays silent past every expiry and renews only after the lapse settle has become due keeps
 /// resuming the cover, term after term: each such renewal races the due settle (the miner picks), its continuation was
-/// accepted before its new expiry, so it is renewable again, and claims are valid again (a liquidation proposed after
-/// the renewal settles). Over five terms it charges five premiums (100 KAS, the on-time schedule's number), so it takes
-/// no extra premium; what it holds is the choice, at every due date, between letting one side out at the entry and
-/// keeping both in. A party ends it by any entry after an expiry (an amend: the date is then fixed).
+/// accepted before its new expiry, so it is renewable again. Over five terms it charges five premiums (100 KAS, the
+/// on-time schedule's number), so it takes no extra premium; what it holds is the choice, at every due date, between
+/// letting one side out at the entry and keeping both in. A party ends it by any entry after an expiry (an amend: the
+/// date is then fixed). Since review 10's fix (a claim valid only if P + W + step <= X) a cover resumed this late on
+/// this market offers no valid claim until its next renewal (the renewal lands after X' - W - step): a liquidation
+/// proposed right after it is void; one proposed after an on-time renewal from it is valid (DESIGN-ORACLE-IMPL 28.4).
 #[test]
 fn r10_bounded_with_tail_plus_idle_below_the_term_a_late_underwriter_resumes_the_cover_every_term() {
     let m = short_idle_market();
@@ -374,11 +385,21 @@ fn r10_bounded_with_tail_plus_idle_below_the_term_a_late_underwriter_resumes_the
         assert!(lp.daa as i64 <= lp.s.b.expiry, "its continuation is renewable again");
     }
     assert_eq!(premiums, 5 * q(p.size, p.b.premium, m.p.scale));
-    // The cover is live again: a liquidation proposed after the last renewal is valid and forfeits.
+    // The resumed cover: a liquidation proposed right after the last renewal is void (it lands after X - W - step) ...
     let at = lp.daa + 10;
+    assert!(at as i64 > OPending::last_valid_landing(&m, lp.s.b.expiry));
     let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p: 920_000_000, t0: at as i64, lock: at }, at);
     let (ft, s) = finalize_tx(&lw, at as i64, 200);
-    must("a liquidation after a renewal that overtook the due settle", &ft);
+    must("a liquidation right after a renewal that overtook the due settle", &ft);
+    assert!(matches!(s, Settlement::Restore { .. }), "{s:?}");
+    // ... and one proposed after the next, on-time renewal (the continuation was accepted before its expiry) is valid.
+    let on = (lp.s.b.expiry - m.bond.step) as u64;
+    let (t, r, _) = renew_tx(&lp, &sl, on, ((lp.s.b.expiry + m.bond.term) / m.bond.step - 12 - sl.s.j0).max(0));
+    must("the next renewal, on time", &t);
+    let lr = live(&t, 0, on, &r);
+    let lw = proposed(&lr, &ClaimSpec { kind: LIQ, side: L, n: lr.s.size, p: 920_000_000, t0: on as i64, lock: on }, on);
+    let (ft, s) = finalize_tx(&lw, on as i64, 200);
+    must("a liquidation after the on-time renewal", &ft);
     assert!(matches!(s, Settlement::Forfeit { .. }), "{s:?}");
     // The party's defence: an amend after the expiry fixes the date.
     let (amt, a) = amend_tx(&lp, L, &long_kp(), 1_000_000_000, 20);
@@ -1795,9 +1816,9 @@ impl Walk {
         }
         let bound = q(taken, o.tip, m.p.scale) + m.p.carrier;
         let loss = paid - back;
-        assert_eq!(loss, q(taken, o.tip, m.p.scale) + parts as i64 * m.p.carrier, "seed {} step {}: one carrier per part", self.seed, self.step);
+        assert_eq!(loss, q(taken, o.tip, m.p.scale), "seed {} step {}: the tip only (review 10: no part that leaves a continuation takes a carrier)", self.seed, self.step);
         self.books.shreds += 1;
-        self.books.shred_excess += loss - bound;
+        self.books.shred_excess += (loss - bound).max(0);
         self.count("shredded take");
     }
 
@@ -1882,15 +1903,16 @@ fn r10_holds_the_seeded_walk_on_new_seeds_and_longer_runs() {
     assert!(violations.is_empty(), "violations recorded: {violations:?}");
 }
 
-/// Lead 5, R10-F1 in the walk: with the hostile steps enabled (R9-F1's take into the past, and R10-F1's small takes of
-/// an order with the default minimum fill, interleaved with every other entry point on the same clock), every shredded
-/// order loses one carrier per part, beyond 27.4's bound of one carrier for the whole order; the walk's other checks
-/// record no violation.
+/// Lead 5, R10-F1 in the walk, fixed: with the hostile steps enabled (R9-F1's take into the past, and R10-F1's small
+/// takes of an order with the market's minimum size as its minimum fill, interleaved with every other entry point on the
+/// same clock), every shredded order loses exactly its tip on the units taken, within the bound of one carrier for the
+/// whole order; the walk's other checks record no violation. The invariant walk (`invariant_walk_tests`) drives every
+/// route of 28.1 and checks the whole-order bound.
 #[test]
-fn r10_exploit_the_seeded_walk_with_small_takes_finds_losses_beyond_the_documented_bound() {
+fn r10_holds_the_seeded_walk_with_small_takes_keeps_every_order_within_its_bound() {
     let (total, violations) = run_walks(1..=8, 200, true);
     println!("shredded orders: {}, lost beyond the documented bound: {} sompi", total.shreds, total.shred_excess);
     assert!(total.shreds > 0, "the walk did not reach the small takes");
-    assert!(total.shred_excess >= total.shreds as i64 * 20_000_000, "at least one extra carrier per shredded order");
+    assert_eq!(total.shred_excess, 0, "no order loses more than its tip and one carrier");
     assert!(violations.is_empty(), "violations recorded: {violations:?}");
 }
