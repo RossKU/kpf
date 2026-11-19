@@ -152,3 +152,22 @@ one burn output per pool at the mirrored index (the builder already places one o
 - Confusion with the book-market family: not revisited.
 - The seeded conservation run and the rest of the workspace's tests were not re-run (only `audit8_tests`).
 - Note 1 (a take into a past expiry with a colluding underwriter) was not built.
+
+## Fix status
+
+Fixed in the working tree after `df553e4` (docs/DESIGN-ORACLE-IMPL.md 26).
+
+- **R8-F1: fixed as proposed.** `closeDonor` writes P3's binding from the donor's own state
+  (`rs.slice(BIND_AT, LISTS_AT)`); the arguments `cr3`, `x3`, `pr3` are gone (the entry is
+  `closeDonor(n, x, e3, c, bs3, sk3, sa3, sm3, st3, hm)`). Every entry that writes a pair state was tabulated
+  (DESIGN-ORACLE-IMPL 26.2): `closeDonor` was the only one taking binding fields from arguments for a party that does not
+  sign; `KpfOpenO.fill` and `take` take them from arguments bounded by the order's own terms and proven by the slot's
+  bind. What it gives up: close-versus-close only between pairs with byte-identical bindings. Note 2 is closed with it.
+  Note 1 is not changed.
+- **R8-F2: fixed as proposed.** `KpfStake.close(j)` requires `j == M - 1 - self` and `j >= inputs`. No other entry of the
+  five contracts takes a free output index (26.2).
+- Tests: `audit8_tests` now holds 11 `r8_holds_` tests; each former `r8_exploit_` builds the same transaction and the
+  donor (or the pools) refuse it. Sizes: `KpfPairO` 14,613 to 14,509 bytes, `KpfStake` 9,652 to 9,665; `KpfOpenO` and
+  `KpfPendingO` changed only by their pinned template hashes; `KpfBond` unchanged.
+- Tooling items of live run 1 fixed with it: a partial liquidation's carrier funded by the underwriter's vouch, relative
+  locks compared with the node before submitting, `oracle-transfer` bounds checked before building (26.4).

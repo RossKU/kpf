@@ -617,6 +617,15 @@ pub fn open(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &O
 
 // ---------------------------------------------------------------- claims
 
+/// What a claim's proposer funds: what the pending part and the remainder (n < s) hold beyond the pair's own value. That
+/// is the bond for a whole-pair claim, and the bond plus the carrier of the new part otherwise (the pending part's
+/// `refund`); a cure or a valid settlement of a liquidation pays exactly it back to the underwriter.
+pub fn funded_by_proposer(pair: &OLive<OPair>, w: &OPending) -> i64 {
+    let p = &pair.s;
+    let rest = if w.n < p.size { p.rest_value(pair.value, w.n) } else { 0 };
+    p.pending_value(pair.value, w) + rest - pair.value as i64
+}
+
 /// A claim to propose.
 #[derive(Clone, Copy, Debug)]
 pub struct ClaimTerms {
@@ -631,13 +640,14 @@ pub struct ClaimTerms {
 /// funding; out 0 the pending part (under a fresh covenant id), 1 the remainder (n < s, the pair's id), then the vouch
 /// remainder to its owner, then change. The vouch input only authorises the claim: `KpfPairO` does not constrain where
 /// its value goes, so the builder always pays what is left of it to the underwriter in an explicit output.
-/// * Liquidation: the proposer is the underwriter and posts the bond (`KpfPendingO`: a settled liquidation pays the bond
-///   and the fee back to the underwriter), so the vouch input funds the bond and `vouch.amount - bond` goes back to the
-///   underwriter (no output if it is exactly zero; refused if the vouch holds less than the bond, or if the remainder is
-///   above zero but below the plain-output dust). The funder pays only the network fee, and the carrier of the
-///   remainder part when n < s.
-/// * Close: the closer posts the bond; the vouch value goes back in full and the funder, who is expected to be the
-///   closer (its key signs the claim), pays the bond and the fee.
+/// * Liquidation: the proposer is the underwriter and funds everything the claim adds to the contract outputs,
+///   `funded_by_proposer` = pending part + remainder - the pair's value: the bond, plus the carrier of the new part when
+///   n < s (the pending part's `refund`, which a cure or a valid settlement pays back to the underwriter, and which a
+///   void or refuted claim leaves in the restored part). So the vouch input funds that sum and `vouch.amount - sum`
+///   goes back to the underwriter (no output if it is exactly zero; refused if the vouch holds less, or if the rest is
+///   above zero but below the plain-output dust). The funder pays only the network fee.
+/// * Close: the closer posts the bond (and the carrier when n < s); the vouch value goes back in full and the funder,
+///   who is expected to be the closer (its key signs the claim), pays that and the fee.
 /// A close carries the closer's signature (`KeySet` must hold it).
 pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending)> {
     let k = pinned::kit();
@@ -659,12 +669,14 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     if c.n < p.size {
         d.obj(OObj::Pair(p.rest_of(p.size - c.n)), p.rest_value(pair.value, c.n) as u64, Some((0, id)), "remainder");
     }
-    let back = if c.kind == KIND_CLOSE { vouch.amount as i64 } else { vouch.amount as i64 - w.bond };
+    let adds = funded_by_proposer(pair, &w);
+    let what = if c.n < p.size { format!("the claim's bond {} and the carrier of the new part {}", w.bond, adds - w.bond) } else { format!("the claim's bond {}", w.bond) };
+    let back = if c.kind == KIND_CLOSE { vouch.amount as i64 } else { vouch.amount as i64 - adds };
     if back < 0 {
-        return invalid(format!("the vouch UTXO holds {} sompi, less than the claim's bond {}: a liquidation's bond is posted by the underwriter's vouch input", vouch.amount, w.bond));
+        return invalid(format!("the vouch UTXO holds {} sompi, less than the {adds} sompi the claim adds to the contract outputs ({what}): a liquidation's proposer is the underwriter, whose vouch input funds them", vouch.amount));
     }
     if back > 0 && back < PLAIN_DUST {
-        return invalid(format!("the vouch UTXO would leave {back} sompi for the underwriter, below the plain-output minimum {PLAIN_DUST}: vouch with a UTXO of exactly the bond or at least {} sompi", w.bond + PLAIN_DUST));
+        return invalid(format!("the vouch UTXO would leave {back} sompi for the underwriter, below the plain-output minimum {PLAIN_DUST}: vouch with a UTXO of exactly {adds} sompi ({what}) or at least {} sompi", adds + PLAIN_DUST));
     }
     if back > 0 {
         d.plain(back, &vouch.key, "underwriter: the vouch input's remainder back");
@@ -1091,6 +1103,65 @@ pub fn amend(pair: &OLive<OPair>, side: i64, ask: i64, min_part: i64, tip: i64, 
     Ok((d.finish()?, c))
 }
 
+/// The bounds `KpfPairO.transfer` (and its `handOver`) puts on a whole transfer of `side` at `x` with the entrant's
+/// bound `nb`, checked before a transaction is built so that a refused one is never signed or paid for (live run 1:
+/// an `--nb` above the leaver's bankruptcy price gave a bare verification error). Returns the allowed range of `nb`.
+pub fn transfer_bounds(p: &OPair, side: i64, x: i64, nb: i64) -> Result<(i64, i64)> {
+    use crate::error::kas_str;
+    let mp = &p.m.p;
+    let bps = 10_000i128;
+    let kas = |v: i64| kas_str(v as i128);
+    if x < 0 || x > mp.price_max {
+        return invalid(format!("the price {} KAS is outside [0, priceMax {} KAS]", kas(x), kas(mp.price_max)));
+    }
+    let (lo, hi, rule) = if side == LONG {
+        if !(p.long_ask > 0 && x >= p.long_ask) {
+            return invalid(format!("the long is not listed at or below {} KAS (ask {}, 0 is unlisted): the contract takes a long only at or above its ask", kas(x), kas(p.long_ask)));
+        }
+        // nb <= bl (no-downgrade: the stayer's counterparty bound may not rise), healthy at x
+        // (x * (10^4 - mmr) >= nb * 10^4), nb >= 0, and the new range within the cover rate (bs - nb <= coverRate).
+        let healthy = ((x as i128) * (bps - mp.mmr_bps as i128) / bps) as i64;
+        let lo = 0i64.max(p.bs - p.b.cover_rate);
+        let hi = p.bl.min(healthy);
+        let rule = if nb > p.bl {
+            format!("no-downgrade: the entrant's long bound may not be above the leaver's bankruptcy price bl {} KAS", kas(p.bl))
+        } else if nb > healthy {
+            format!("the entrant's long must be healthy at {} KAS: its bound at most {} KAS ({} % maintenance)", kas(x), kas(healthy), mp.mmr_bps as f64 / 100.0)
+        } else if nb < lo {
+            format!("the new range {} .. {} KAS would exceed the cover rate {} KAS per unit", kas(nb), kas(p.bs), kas(p.b.cover_rate))
+        } else {
+            String::new()
+        };
+        (lo, hi, rule)
+    } else {
+        if !(p.short_bid > 0 && x <= p.short_bid) {
+            return invalid(format!("the short is not listed at or above {} KAS (bid {}, 0 is unlisted): the contract takes a short only at or below its bid", kas(x), kas(p.short_bid)));
+        }
+        // nb >= bs (no-downgrade), nb <= priceMax, healthy at x (nb * 10^4 >= x * (10^4 + mmr)), the range within the
+        // cover rate (nb - bl <= coverRate).
+        let healthy = (((x as i128) * (bps + mp.mmr_bps as i128) + bps - 1) / bps) as i64;
+        let lo = p.bs.max(healthy);
+        let hi = mp.price_max.min(p.bl + p.b.cover_rate);
+        let rule = if nb < p.bs {
+            format!("no-downgrade: the entrant's short bound may not be below the leaver's bankruptcy price bs {} KAS", kas(p.bs))
+        } else if nb < healthy {
+            format!("the entrant's short must be healthy at {} KAS: its bound at least {} KAS ({} % maintenance)", kas(x), kas(healthy), mp.mmr_bps as f64 / 100.0)
+        } else if nb > hi {
+            format!("the new range {} .. {} KAS would exceed the cover rate {} KAS per unit (or priceMax {} KAS)", kas(p.bl), kas(nb), kas(p.b.cover_rate), kas(mp.price_max))
+        } else {
+            String::new()
+        };
+        (lo, hi, rule)
+    };
+    if lo > hi {
+        return invalid(format!("no entrant's bound is allowed at {} KAS (it would have to lie in {} .. {} KAS): {}", kas(x), kas(lo), kas(hi), if rule.is_empty() { "the leaver's side is not healthy at this price".to_string() } else { rule }));
+    }
+    if !rule.is_empty() {
+        return invalid(format!("--nb {} KAS refused: {rule}; allowed: {} .. {} KAS", kas(nb), kas(lo), kas(hi)));
+    }
+    Ok((lo, hi))
+}
+
 /// A whole transfer of a listed `side` at `x` to a signing taker `entrant` posting bound `nb` (the taker funds it):
 /// out 0 the leaver, 1 the new pair (under a fresh covenant id), then change.
 pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 32], funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPair)> {
@@ -1100,6 +1171,7 @@ pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 3
     if entrant == p.b.uw_key {
         return invalid("the underwriter cannot be a party");
     }
+    transfer_bounds(p, side, x, nb)?;
     let sc = p.m.p.scale;
     let mut part = p.rest_of(p.size);
     let (pay, leaver) = if side == LONG {

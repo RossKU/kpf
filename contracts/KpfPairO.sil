@@ -224,7 +224,6 @@ contract KpfPairO(
     int constant BS_AT = 329;
     int constant ENTRY_AT = 337;
     int constant BIND_AT = 412;
-    int constant COVER_AT = 478;
     int constant EXPIRY_AT = 487;
     int constant LISTS_AT = 505;
     int constant LISTS_END = 559;
@@ -681,9 +680,9 @@ contract KpfPairO(
     }
 
     // P4 close-versus-close, host side (as KpfPair), after quietDaa. P3, at output c under a fresh covenant id (checked
-    // here and by the donor), keeps this pair's binding; its long (the donor's) is not the underwriter and its range
-    // stays within this pair's cover rate. P3 names this input as its host and dm as its donor (review 7; dm takes the
-    // place of the long tag tl3, and the donor checks it).
+    // here and by the donor), keeps this pair's binding byte for byte (the donor keeps its own, so both must be equal);
+    // its long (the donor's) is not the underwriter and its range stays within this pair's cover rate. P3 names this
+    // input as its host and dm as its donor (review 7; dm takes the place of the long tag tl3, and the donor checks it).
     entry closeHost(int n, int x, int e3, int c, int bl3, byte[32] lk3, int la3, int lm3, int lt3, byte[32] dm) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -715,15 +714,17 @@ contract KpfPairO(
         partAndRest(selfId, rs, n, c, pairSpk(rs, n, bl3, bs, e3, lk3, byte[32](shortKey), rs.slice(BIND_AT, LISTS_AT), lists, mk), quoteOf(n, bs - bl3, 0), keep);
     }
 
-    // P4 close-versus-close, donor side (as KpfPair), after quietDaa. The long moves into the host's P3 at output c,
-    // which carries this pair's underwriter (uwId, uwKey) with the host's cover rate cr3, expiry x3 and premium pr3: P3's
-    // range is within both cover rates, x3 <= this expiry and pr3 <= this premium, so the moving long is never covered
-    // less, for longer or at a higher premium than this pair's own counted cover, even if the host is a look-alike; the
-    // host's short is not the underwriter. P3 names hm as its host and this input as its donor (review 7; this takes the
-    // place of the long tag that carried this pair's id).
-    // DESIGN: the note requires only the same uwId; a look-alike host would then move the donor's long into uncounted
-    // cover for longer or at a higher premium.
-    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, int cr3, int x3, int pr3, byte[32] hm) {
+    // P4 close-versus-close, donor side (as KpfPair), after quietDaa. The long moves into P3 at output c, which carries
+    // this pair's binding byte for byte (uwId, uwKey, coverRate, expiry, premium), as transfer and closeHost copy theirs;
+    // P3's range is within this cover rate and the host's short is not the underwriter. The host copies its own binding
+    // into P3 too, so close-versus-close joins only two pairs with identical bindings. P3 names hm as its host and this
+    // input as its donor (review 7; this takes the place of the long tag that carried this pair's id).
+    // DESIGN: the note requires only the same uwId. Review 8 (R8-F1): P3's cover rate, expiry and premium were
+    // arguments bounded one way (x3 <= expiry, pr3 <= premium, cr3 >= range), and a donor needs no host: the donor's
+    // short alone moved its long into a P3 whose cover had already lapsed (settled at once at the entry price), that no
+    // lapse settle could ever reach, or that no claim or renewal could afford. A party entry never rewrites a binding
+    // (docs/DESIGN-ORACLE-IMPL.md 26).
+    entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, byte[32] hm) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -740,17 +741,13 @@ contract KpfPairO(
         require(e3 >= entryPrice);
         require(sk3 != byte[32](uwKey));
         require(bs3 - bl <= coverRate);
-        require(bs3 - bl <= cr3);
-        require(x3 <= expiry);
-        require(pr3 <= premium);
         byte[] rs = ownRs();
         // DESIGN: review 6 (R6-F1): P3 starts a fresh lineage that this script checks, whatever the host is (a pair, a
         // look-alike, a plain key carrying an id): the donor's long never enters an id another UTXO holds.
         fresh(c);
         byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + win(sa3, sm3, st3);
-        byte[] bnd = rs.slice(BIND_AT, COVER_AT) + i9(cr3) + i9(x3) + i9(pr3);
         byte[] z = p33(zero32());
-        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, bnd, lists, z + z + z + p33(hm) + p33(me())));
+        require(tx.outputs[c].scriptPubKey == pairSpk(rs, n, bl, bs3, e3, byte[32](longKey), sk3, rs.slice(BIND_AT, LISTS_AT), lists, z + z + z + p33(hm) + p33(me())));
         require(tx.outputs[c].value >= quoteOf(n, bs3 - bl, 0) + carrier);
         int pay = owed(n, bs - x, shortTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);

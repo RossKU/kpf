@@ -46,7 +46,8 @@ pragma silverscript ^0.1.0;
 //              resolve(claimIdx)              anyone, once the round's window has closed: the verdict, delivered to
 //                                             the contested claim in the same transaction
 //   resolved:  settle(first, k)               anyone: receipts at [first, first + k): winners paid, losers forfeited
-//              close(j)                       anyone, every receipt settled: the remainder burned at output j
+//              close(j)                       anyone, every receipt settled: the remainder burned at output
+//                                             j = M - 1 - i (at least the input count)
 //   receipt:   redeem(d)                      anyone, with its resolved pool at input d (which checks everything)
 // Exits without anybody's cooperation: a dispute resolves by anyone once its window closes; a pool settles every
 // receipt and closes by anyone; a free or unbonding stake needs only its owner.
@@ -533,6 +534,10 @@ contract KpfStake(
     // Close: every receipt settled; what the pool holds beyond its base (the burn of the losers' stake and the
     // rounding) goes to the burn output j; the base, the carrier funded at the opening, is the executor's.
     // DESIGN: a burn below 0.02 KAS is not created and stays with the executor (as KpfLock's, DESIGN 4.5f, 6).
+    // DESIGN: review 8 (R8-F2): j was any output, so two pools closed in one transaction both accepted one burn output
+    // and the closer kept the other burn. The burn is now at this input's mirrored slot j = M - 1 - self, at least the
+    // input count, as every second payout of the family: two inputs never name one such slot. The argument stays (the
+    // entry's interface is unchanged) and must equal it.
     entry close(byte[8] jb) {
         int self = this.activeInputIndex;
         checkJudge();
@@ -545,6 +550,8 @@ contract KpfStake(
         int b = tx.inputs[self].value - base;
         if (b >= BURN_DUST) {
             int j = int(jb);
+            require(j == tx.outputs.length - 1 - self);
+            require(j >= tx.inputs.length);
             require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SH(BURN)));
             require(tx.outputs[j].value >= b);
         }

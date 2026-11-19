@@ -266,6 +266,13 @@ fn oracle_market_lifecycle_from_the_command_line() {
     assert!(h.last.contains("leaver") && h.last.contains("the entrant is"), "{}", h.last);
     assert!(h.ok(&["inspect", &t]).contains(&exk), "the entrant is the long of the new pair");
     assert!(h.fail(&["oracle-transfer", "--pair", &a1, "--side", "short", "--x", "10.5", "--nb", "13", "--funder", &ex, "--funding", &f]).contains("not listed"));
+    // Live run 1: an entrant's bound above the leaver's bankruptcy price (no-downgrade) is refused before anything is
+    // built or paid, naming the rule and the allowed range; so is a bound not healthy at the price.
+    let err = h.fail(&["oracle-transfer", "--pair", &a1, "--side", "long", "--x", "10.5", "--nb", "9.5", "--funder", &ex, "--funding", &f]);
+    assert!(err.contains("no-downgrade") && err.contains("allowed: ") && err.contains(" .. 9 KAS"), "{err}");
+    assert!(!err.contains("VerifyError"), "{err}");
+    // Relative locks: offline the transfer above said from which DAA it is usable (the pair must be quietDaa old).
+    assert!(h.last.contains("usable from DAA") && h.last.contains("must be") && h.last.contains("no --node"), "{}", h.last);
     let out = h.ok(&["oracle-coop-close", "--pair", &pair, "--long-pay", "1000", "--key", &lk, "--key", &sk, "--no-save"]);
     assert!(out.contains("oracle-coop-close") && out.contains("not submitted") && !out.contains("FAILED"), "{out}");
     assert!(h.fail(&["oracle-coop-close", "--pair", &pair, "--long-pay", "1000", "--key", &lk]).contains("needs a signature"));

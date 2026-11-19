@@ -581,8 +581,8 @@ fn the_price_free_exits_need_no_underwriter() {
 }
 
 /// Close-versus-close between two pairs of one underwriter: the leavers are paid, the stayers form P3 under the host's
-/// id with the host's binding. The donor refuses a P3 whose underwriter is not its own, whose expiry is later than its
-/// own or whose premium is higher; both refuse before quietDaa.
+/// id with the host's binding. The donor refuses a P3 whose binding differs from its own in any field (review 8);
+/// both refuse before quietDaa.
 #[test]
 fn close_versus_close_keeps_the_stayers_with_their_underwriter() {
     let list = |lp: &LPair, side: i64| {
@@ -614,6 +614,18 @@ fn close_versus_close_keeps_the_stayers_with_their_underwriter() {
     let mut cheap = donor.clone();
     cheap.s.b.premium = 1_000_000;
     refused("P3 premium above the donor's", &close_vs_close_tx(&host, &cheap, 1_000_000_000, 1_000_000_000).0, 1);
+    // Review 8 (R8-F1): P3's binding is the donor's own, byte for byte, so the directions accepted before are refused
+    // too: a donor whose cover runs longer than the host's (P3 would shorten the long's cover), one whose premium is
+    // higher, one whose cover rate is lower (P3 would carry the host's larger rate, review 8 note 2).
+    let mut late = donor.clone();
+    late.s.b.expiry = host.s.b.expiry + 100;
+    refused("P3 expiry before the donor's", &close_vs_close_tx(&host, &late, 1_000_000_000, 1_000_000_000).0, 1);
+    let mut dear = donor.clone();
+    dear.s.b.premium = host.s.b.premium + 1;
+    refused("P3 premium below the donor's", &close_vs_close_tx(&host, &dear, 1_000_000_000, 1_000_000_000).0, 1);
+    let mut narrow = donor.clone();
+    narrow.s.b.cover_rate = host.s.b.cover_rate - 1;
+    refused("P3 cover rate above the donor's", &close_vs_close_tx(&host, &narrow, 1_000_000_000, 1_000_000_000).0, 1);
     // Quiet.
     let mut young = close_vs_close_tx(&host, &donor, 1_000_000_000, 1_000_000_000).0;
     young.0.inputs[0].sequence = 19;

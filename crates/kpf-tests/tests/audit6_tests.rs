@@ -237,7 +237,7 @@ fn close_donor_with_handle(lin: Lineage) -> (T, OPair, Handle) {
     p3.short_key = x(&attacker());
     (p3.short_bid, p3.short_min, p3.short_tip) = (0, 0, 0);
     p3.mk.donor = maker_of(&donor.op);
-    let donor_args = vec![iv(n), iv(xp), iv(d.entry), iv(2), iv(d.bs), bv(&x(&attacker())), iv(0), iv(0), iv(0), iv(d.b.cover_rate), iv(d.b.expiry), iv(d.b.premium), bv(&[0; 32])];
+    let donor_args = vec![iv(n), iv(xp), iv(d.entry), iv(2), iv(d.bs), bv(&x(&attacker())), iv(0), iv(0), iv(0), bv(&[0; 32])];
     let spay = kpf_protocol::payoff::owed(n, d.bs - xp, d.short_tip, d.m.p.scale) + donor.value as i64 - d.range_of(n);
     let id = h.id();
     let fund = key_in(outpoint(0x33), 900_000_000_000, 0, &attacker());

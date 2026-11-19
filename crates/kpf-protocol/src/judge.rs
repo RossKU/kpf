@@ -656,6 +656,9 @@ fn stake_entry(tx: &JTx, me: usize, s: &Js, sp: Spend, env: &dyn Env) -> Result<
             chk(s.w_left == 0 && s.l_left == 0, "receipts not settled")?;
             let b = sub(v_in, s.base)?;
             if b >= BURN_DUST {
+                // Review 8 (R8-F2): the burn at this input's mirrored slot, so two pools never share one.
+                chk(j == tx.outs.len() as i64 - 1 - me as i64, "the burn is not at M - 1 - i")?;
+                chk(j >= tx.ins.len() as i64, "the burn's slot is below the input count")?;
                 let o = tx.out(j)?;
                 chk(o.script == Script::Burn, "no burn output")?;
                 chk(o.value >= b, "burn below the pool's remainder")?;
@@ -965,15 +968,14 @@ impl Arena {
         JTx { ins, outs, lock: 0 }
     }
 
-    /// Close: in 0 the pool (`close(1)`), 1 the funder; out 0 change (with the pool's base), 1 the burn (when due).
+    /// Close: in 0 the pool (`close(1)`) alone, its base paying the fee (as the tool's `pool_close`); out 0 the base
+    /// less the fee to the funder's key, 1 the burn when due (M - 1 - 0, at least the input count: review 8, R8-F2).
     pub fn close_tx(&mut self, pool: u64) -> JTx {
         let pu = self.w.utxos[&pool].clone();
         let p = self.js(pool);
         let b = pu.out.value - p.base;
-        let f = self.funder_in();
-        let fv = f.utxo.value;
-        let ins = vec![self.w.input(pool, Spend::Close { j: 1 }, None, SIGHASH_ALL, 0), f];
-        let mut outs = vec![self.change(fv + p.base)];
+        let ins = vec![self.w.input(pool, Spend::Close { j: 1 }, None, SIGHASH_ALL, 0)];
+        let mut outs = vec![self.change(p.base)];
         if b >= BURN_DUST {
             outs.push(JOut { script: Script::Burn, value: b, cov: None });
         } else {

@@ -519,12 +519,15 @@ for a liquidation, the closer for a close; a settled liquidation pays the bond a
 `KpfPairO.propose` does not constrain where the vouch input's value goes: only the underwriter's SIGHASH_ALL signature
 does, so an executor that builds the transaction cannot keep anything the signature does not allow. Hence:
 
-- **Liquidation:** the vouch UTXO funds the bond and the rest goes back to the underwriter in an explicit output
-  (`underwriter: the vouch input's remainder back`; none if it is exactly zero). The vouch UTXO must therefore hold at
-  least the bond (and a remainder of at least 0.02 KAS, or exactly nothing); `kpf` refuses otherwise. The funder pays only
-  the network fee (and the carrier of the remainder part when `--n` is less than the pair's size).
-- **Close:** the closer posts the bond: the vouch value goes back in full, and the funder, who is expected to be the
-  closer (its key signs the claim), pays the bond and the fee.
+- **Liquidation:** the underwriter is the proposer and funds everything the claim adds to the contract outputs: the
+  bond, and when `--n` is less than the pair's size also the carrier of the new part (together the pending part's
+  refund, which a cure or a valid settlement pays back to the underwriter: live run 1 had the funder pay the 0.2 KAS
+  carrier and the cure refund bond + carrier, 1.2 KAS, to the underwriter). So the vouch UTXO funds that sum and the rest
+  goes back to the underwriter in an explicit output (`underwriter: the vouch input's remainder back`; none if it is
+  exactly zero). The vouch UTXO must therefore hold at least that sum (and a remainder of at least 0.02 KAS, or exactly
+  nothing); `kpf` refuses otherwise and names the sum. The funder pays only the network fee.
+- **Close:** the closer posts the bond (and the carrier when `--n` is less than the pair's size): the vouch value goes
+  back in full, and the funder, who is expected to be the closer (its key signs the claim), pays that and the fee.
 
 The underwriter should sign a transaction only after checking that it has the output that pays the rest of the vouch UTXO
 back to its own address. A funder that is also the underwriter must give another UTXO than the vouch one for funding (the
@@ -580,6 +583,18 @@ If the underwriter goes silent, the parties leave without any price: `oracle-ame
 signs, a mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the
 calendar: no party can postpone it). Each party entry needs the pair's UTXO to be `quietDaa` old.
 
+Every oracle command whose transaction has a relative lock (an input that must be some DAA old: the slot's rate limit
+at an open, a bind or an unbond; `quietDaa` at an amend, transfer or mutual close; `W` at a finalize; the unbonding delay
+at `stake-withdraw` and `withdraw-bond`) or a DAA lock time (resolve, renew, lapse settle, a claim's `t0`) prints
+`usable from DAA X`. With `--node` it compares X with the node's DAA score: `--submit` before X is refused locally
+("not submitted, the node would refuse it: usable from DAA X (now Y, about Z s)"), so the node's bare "sequence locks
+conditions was not met" is not reached; a dry run says `NOT YET USABLE`.
+
+`oracle-transfer` checks the rules of `KpfPairO.transfer` before it builds anything: the listing (`--x` within it), and
+for the entrant's bound `--nb` the no-downgrade rule (a long's bound at most the leaver's `bl`, a short's at least its
+`bs`), health at `--x` (the maintenance band) and the range within the cover rate. A refusal names the rule and the
+allowed range of `--nb` instead of building a transaction that fails verification.
+
 ```sh
 kpf oracle-amend --pair <pair file> --side long --price 10 [--min-part T] [--tip P] --key $A --funder $EX --node $NODE   # list the long's ask
 kpf oracle-amend --pair <pair file> --side short --price 11 --key $B --funder $EX --node $NODE                       # list the short's bid
@@ -609,5 +624,6 @@ a defence 0.0400, the resolution 0.0291, settling and closing the pool 0.0793: a
 - **Discovery**: pending parts, disputes and receipts are found only from object files (as pending parts and locks).
 - **A request to a silent underwriter, rebind, the lock path, a retrospective dispute**: not in this slice.
 - **Commands for the other price-free entries of an oracle pair**: add margin and close-versus-close (`KpfPairO.addMargin`,
-  `closeHost`, `closeDonor`) have no builder or command yet. A transfer to an order (`KpfOpenO.take`) and a partial
+  `closeHost`, `closeDonor`) have no builder or command yet. Since review 8 close-versus-close joins only two pairs with
+  identical bindings (one slot, cover rate, expiry and premium: P3 keeps the binding of each side's own pair). A transfer to an order (`KpfOpenO.take`) and a partial
   transfer or mutual close (`--n`) are not built either: the commands above move whole pairs.

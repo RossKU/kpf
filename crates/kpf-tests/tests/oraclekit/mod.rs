@@ -740,11 +740,12 @@ pub fn settle_tx(lp: &LStake, receipts: &[LStake], lock: u64) -> (T, Js, Vec<u64
     (build_ext(&ins, outs, lock, &seqs), p2, pays)
 }
 
-/// The close of a settled pool: in 0 the pool (close(1)), 1 the executor; out 0 the executor's base back, 1 the burn.
+/// The close of a settled pool: in 0 the pool (close(2)), 1 the executor; out 0 the executor's base back, 1 change, 2
+/// the burn (M - 1 - 0, at least the input count: review 8, R8-F2).
 pub fn pool_close_tx(lp: &LStake) -> (T, u64) {
     let b = lp.value as i64 - lp.s.base;
-    let ins = vec![stake_in(lp, "close", vec![b8(1)]), exec_in(216)];
-    let mut outs = vec![change(lp.s.base.max(2_000_000) as u64)];
+    let ins = vec![stake_in(lp, "close", vec![b8(2)]), exec_in(216)];
+    let mut outs = vec![change(lp.s.base.max(2_000_000) as u64), change(90_000_000_000)];
     let burn = if b >= 2_000_000 { b as u64 } else { 0 };
     outs.push(out(burn.max(2_000_000), kpf_protocol::lock::burn_spk(), None));
     (build_ext(&ins, outs, 0, &[0, 0]), burn)
@@ -996,7 +997,7 @@ pub fn split_tx(sl: &LSlot, a: &[i64; 12], va: u64, lock: u64) -> (T, Bond, Bond
 }
 
 /// Close-versus-close of two whole pairs at x: the host's long listing and the donor's short listing are filled; the
-/// stayers form P3 under a fresh id (review 6) with the host's binding. in 0 the host (closeHost), 1 the donor (closeDonor), 2
+/// stayers form P3 under a fresh id (review 6) with the binding both pairs share (review 8). in 0 the host (closeHost), 1 the donor (closeDonor), 2
 /// the executor; out 0 the host's long, 1 the donor's short, 2 P3, 3 change.
 pub fn close_vs_close_tx(host: &LPair, donor: &LPair, xp: i64, e3: i64) -> (T, OPair) {
     close_vs_close_tx_with(host, donor, xp, e3, Lineage::Fresh)
@@ -1016,7 +1017,7 @@ pub fn close_vs_close_tx_with(host: &LPair, donor: &LPair, xp: i64, e3: i64, lin
     let lpay = kpf_protocol::payoff::owed(n, xp - h.bl, h.long_tip, sc);
     let spay = kpf_protocol::payoff::owed(n, d.bs - xp, d.short_tip, sc) + donor.value as i64 - d.range_of(n);
     let host_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&maker_of(&donor.op))];
-    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), iv(h.b.cover_rate), iv(h.b.expiry), iv(h.b.premium), bv(&maker_of(&host.op))];
+    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(2), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), bv(&maker_of(&host.op))];
     let ins = vec![pair_in(host, "closeHost", host_args), pair_in(donor, "closeDonor", donor_args), exec_in(229)];
     let keep_h = host.value as i64 - h.range_of(n);
     let mut outs = vec![

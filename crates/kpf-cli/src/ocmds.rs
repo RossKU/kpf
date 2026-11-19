@@ -296,6 +296,54 @@ fn now(a: &Args, node: &mut Option<Node<WsTransport>>) -> R<u64> {
     }
 }
 
+/// The first DAA score at which consensus accepts `tx` (rusty-kaspa `check_sequence_lock`: an input with a relative
+/// lock r is spendable once the DAA score exceeds `its UTXO's DAA + r - 1`; `check_tx_is_finalized`: a DAA lock time t
+/// once it exceeds t), with what sets it; None when nothing locks it. Inputs with sequence 0 lock nothing beyond the
+/// UTXO's existence and are skipped.
+pub fn usable_from(tx: &kaspa_consensus_core::tx::Transaction, entries: &[kaspa_consensus_core::tx::UtxoEntry]) -> Option<(u64, String)> {
+    const DISABLED: u64 = 1 << 63;
+    const MASK: u64 = 0x0000_0000_ffff_ffff;
+    let mut best: Option<(u64, String)> = None;
+    let mut take = |from: u64, why: String| {
+        if best.as_ref().is_none_or(|(b, _)| from > *b) {
+            best = Some((from, why));
+        }
+    };
+    for (i, (inp, e)) in tx.inputs.iter().zip(entries).enumerate() {
+        if inp.sequence & DISABLED != 0 {
+            continue;
+        }
+        let r = inp.sequence & MASK;
+        if r > 0 {
+            take(e.block_daa_score + r, format!("input {i} must be {r} DAA old: its UTXO is at DAA {}", e.block_daa_score));
+        }
+    }
+    let all_max = tx.inputs.iter().all(|i| i.sequence == u64::MAX);
+    if tx.lock_time > 0 && (tx.lock_time as i64) < kpf_protocol::state::LOCK_TIME_THRESHOLD && !all_max {
+        take(tx.lock_time + 1, format!("lock time DAA {}", tx.lock_time));
+    }
+    best
+}
+
+/// What `finish` does with a transaction usable from DAA `from`: with the node's DAA `now`, a submission before `from`
+/// is refused ("usable from DAA X (now Y, about Z s)"), a dry run says it is not yet usable; without a node the line is
+/// information only.
+pub fn lock_verdict(from: u64, why: &str, now: Option<u64>, submit: bool) -> R<String> {
+    match now {
+        Some(now) => {
+            let line = format!("usable from DAA {from} (now {now}, about {:.1} s; {why})", from.saturating_sub(now) as f64 / DAA_PER_SECOND as f64);
+            if now >= from {
+                Ok(line)
+            } else if submit {
+                Err(format!("not submitted, the node would refuse it: {line}; nothing written"))
+            } else {
+                Ok(format!("NOT YET USABLE: {line}"))
+            }
+        }
+        None => Ok(format!("usable from DAA {from} ({why}; no --node, so not compared with the present)")),
+    }
+}
+
 /// Signs, verifies, prints, writes the transaction and the objects it creates, submits if asked.
 fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &mut Option<Node<WsTransport>>) -> R<()> {
     let sg = b.sign(keys).map_err(e)?;
@@ -313,6 +361,16 @@ fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: 
             println!("  FAILED: {x}");
         }
         return Err("verification failed: nothing written, nothing submitted".into());
+    }
+    // Relative locks (CSV, an input's sequence) and the lock time (CLTV): the node refuses the transaction before the
+    // DAA they name ("sequence locks conditions was not met", live run 1). With --node it is compared with the node's
+    // DAA score and a submission is refused here; offline the same line is printed for information.
+    if let Some((from, why)) = usable_from(&sg.tx, &sg.entries) {
+        let now = match node.as_mut() {
+            Some(n) => Some(n.check_network()?),
+            None => None,
+        };
+        println!("{}", lock_verdict(from, &why, now, a.has("submit"))?);
     }
     let save = |dry: bool| -> R<()> {
         let dir = out_dir(a, dry);
@@ -507,10 +565,11 @@ pub fn open_cmd(a: &Args) -> R<()> {
 // ---------------------------------------------------------------- claims
 
 /// `vouch`: the underwriter vouches a price and proposes a claim (a liquidation; or a close, which the closing party
-/// signs too). `--vouch` is the underwriter's own UTXO (a funding file of one P2PK UTXO of its key). A liquidation's bond is
-/// posted by the underwriter: the vouch UTXO must hold at least the bond and what is left of it goes back to the
-/// underwriter. A close's bond is the closer's: the vouch value goes back in full and the funder (expected to be the
-/// closer) pays the bond. The funder always pays the network fee.
+/// signs too). `--vouch` is the underwriter's own UTXO (a funding file of one P2PK UTXO of its key). A liquidation's
+/// proposer is the underwriter: the vouch UTXO funds what the claim adds to the contract outputs (the bond, and the
+/// carrier of the new part when `--n` is below the pair's size) and what is left of it goes back to the underwriter. A
+/// close's bond is the closer's: the vouch value goes back in full and the funder (expected to be the closer) pays the
+/// bond (and that carrier). The funder always pays the network fee.
 pub fn vouch_cmd(a: &Args) -> R<()> {
     only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch"])?;
     let net = network(a)?;
@@ -547,10 +606,12 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
         w.b.expiry - w.m.p.challenge_daa,
         w.m.p.late_daa
     );
+    let adds = funded_by_proposer(&lp, &w);
+    let what = if n < lp.s.size { format!("the claim's bond {} KAS and the carrier of the new part {} KAS", fmt_kas(w.bond as i128), fmt_kas((adds - w.bond) as i128)) } else { format!("the claim's bond {} KAS", fmt_kas(w.bond as i128)) };
     if kind == KIND_LIQ {
-        println!("The vouch input ({} KAS) funds the claim's bond {} KAS and the rest goes back to the underwriter; the funder pays only the network fee.", fmt_kas(vouch.amount as i128), fmt_kas(w.bond as i128));
+        println!("The vouch input ({} KAS) funds {what} and the rest goes back to the underwriter (a cure or a valid settlement refunds those {} KAS to the underwriter); the funder pays only the network fee.", fmt_kas(vouch.amount as i128), fmt_kas(adds as i128));
     } else {
-        println!("The vouch input's {} KAS go back to the underwriter in full. The closer posts the bond ({} KAS): the funder is expected to be the closer, and pays it and the fee.", fmt_kas(vouch.amount as i128), fmt_kas(w.bond as i128));
+        println!("The vouch input's {} KAS go back to the underwriter in full. The closer posts {what}: the funder is expected to be the closer, and pays it and the fee.", fmt_kas(vouch.amount as i128));
     }
     finish(a, "vouch: a price claim", &b, &keys, net, &mut node)
 }
@@ -1119,6 +1180,35 @@ mod tests {
         assert!(untraced_or_refuse(&none, false, "deposit", true).is_err(), "without a node the UTXO is unchecked: the flag is needed");
         assert!(untraced_or_refuse(&none, false, "contest", false).unwrap_err().contains("--accept-untraced"));
         assert!(untraced_or_refuse(&ack, false, "contest", false).is_ok());
+    }
+
+    /// Live run 1 (three node refusals "sequence locks conditions was not met"): a relative lock r on an input of DAA d
+    /// is usable from d + r (consensus: spendable once the DAA exceeds d + r - 1), a DAA lock time t from t + 1; the
+    /// latest one wins; with a node a submission before it is refused locally, a dry run says it is not yet usable,
+    /// offline the line is information.
+    #[test]
+    fn relative_locks_are_compared_with_the_node_before_submitting() {
+        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, UtxoEntry};
+        let op = |i: u32| TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([1; 32]), index: i };
+        let inp = |i: u32, seq: u64| TransactionInput::new(op(i), vec![], seq, 1);
+        let ent = |daa: u64| UtxoEntry::new(1, ScriptPublicKey::from_vec(0, vec![]), daa, false, None);
+        let tx = |ins: Vec<TransactionInput>, lock: u64| Transaction::new(0, ins, vec![], lock, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, vec![]);
+        // Nothing locked: a funder (sequence 0) and no lock time.
+        assert_eq!(usable_from(&tx(vec![inp(0, 0)], 0), &[ent(100)]), None);
+        // The slot of an open, rateDaa = 50, its UTXO at DAA 1,000: usable from 1,050.
+        let t = tx(vec![inp(0, 0), inp(1, 50)], 0);
+        let (from, why) = usable_from(&t, &[ent(7), ent(1_000)]).unwrap();
+        assert_eq!(from, 1_050);
+        assert!(why.contains("input 1 must be 50 DAA old"), "{why}");
+        // A lock time later than the relative lock wins; one disabled sequence is ignored.
+        let t = tx(vec![inp(0, 50), inp(1, (1 << 63) | 9_999)], 2_000);
+        assert_eq!(usable_from(&t, &[ent(1_000), ent(0)]).unwrap().0, 2_001);
+        // The verdicts.
+        let e = lock_verdict(1_050, "x", Some(1_000), true).unwrap_err();
+        assert!(e.contains("usable from DAA 1050 (now 1000, about 5.0 s"), "{e}");
+        assert!(lock_verdict(1_050, "x", Some(1_000), false).unwrap().starts_with("NOT YET USABLE: usable from DAA 1050"));
+        assert!(lock_verdict(1_050, "x", Some(1_050), true).unwrap().starts_with("usable from DAA 1050 (now 1050"));
+        assert!(lock_verdict(1_050, "x", None, true).unwrap().contains("no --node"));
     }
 
     /// A node that knows one UTXO and counts the queries it is asked.

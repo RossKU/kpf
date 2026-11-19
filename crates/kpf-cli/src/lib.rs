@@ -99,7 +99,8 @@ gives the present the lock time proves)
                 [--underwriter SLOT_ID] [--min-counter-rate P] [--min-fill T] [--tip P] [--active-from DAA] [--escrow KAS]
   oracle-open   --long O.json --short O.json --slot S.json --n T --x P --cover-rate P [--premium P] [--expiry DAA] --key UW
   vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
-                [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too)
+                [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too); for a
+                liquidation the vouch UTXO funds the bond (and the new part's carrier when --n < size)
   contest       --pending W.json --stake ST.json --key STAKER [--base KAS]   within the window, with aged stake on NO
                 with --node: --claim-tx TX.json (the claim's birth, traced to a KpfPairO.propose); without: --accept-untraced
   deposit       --dispute D.json --side yes|no --stake ST.json... --key OWNER...   join the trailing side
@@ -117,11 +118,14 @@ gives the present the lock time proves)
   oracle-amend  --pair P.json --side long|short (--price P [--min-part T] [--tip P] | --unlist) --key OWNER
             list (or unlist) a side for a hand-over; the pair's UTXO must be quietDaa old
   oracle-transfer --pair P.json --side long|short --x P --nb P [--entrant KEY|HEX|ADDR]   a listed side changes hands
-            (the whole side, at x within its listing; the entrant, default the funder, posts the bound nb)
+            (the whole side, at x within its listing; the entrant, default the funder, posts the bound nb: a long's at
+             most the leaver's bl, a short's at least its bs, healthy at x, within the cover rate; checked before building)
   oracle-mutual-close --pair P.json --x P                            both sides listed and crossing: anyone closes at x
   oracle-coop-close --pair P.json --long-pay KAS --key LONG --key SHORT   both owners sign; the short's output pays the fee
   (a dry run writes its files under OUT-DIR/dry-run/; only submitted transactions write at the top of OUT-DIR.
-   With --node, every object file's UTXO and DAA score are read from the node, whatever the file says)
+   With --node, every object file's UTXO and DAA score are read from the node, whatever the file says.
+   A transaction with a relative lock or a lock time prints `usable from DAA X`; with --node, --submit before X is
+   refused locally)
   oracle-watch  --me KEY|HEX|ADDR (--object FILE | --scan DIR)... [--daa N | --node URL] [--json]
             claims against you and the time left to contest, your underwriter's cover expiry, the disputes you have
             stake in

@@ -239,7 +239,7 @@ fn cvc_many(hosts: &[&LPair], donors: &[&LPair], xp: i64, mk: Makers, dm: [u8; 3
     let sc = h.m.p.scale;
     let c3 = (hosts.len() + donors.len()) as i64;
     let host_args = vec![iv(n), iv(xp), iv(e3), iv(c3), iv(d.bl), bv(&d.long_key), iv(d.long_ask), iv(d.long_min), iv(d.long_tip), bv(&dm)];
-    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(c3), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), iv(h.b.cover_rate), iv(h.b.expiry), iv(h.b.premium), bv(&hm)];
+    let donor_args = vec![iv(n), iv(xp), iv(e3), iv(c3), iv(h.bs), bv(&h.short_key), iv(h.short_bid), iv(h.short_min), iv(h.short_tip), bv(&hm)];
     let mut ins = vec![];
     let mut outs = vec![];
     let mut seqs = vec![];

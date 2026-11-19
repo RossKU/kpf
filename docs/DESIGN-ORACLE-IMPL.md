@@ -420,7 +420,7 @@ cover.
 |---|---|---|
 | order `fill` (T1′) | anyone | the book order's checks; the slot input is a `KpfBond` of this market spent by `bind` counting `q(n, coverRate)` at `X` for `OUT_REF + pairOut` (the bind proof); the slot accepted (`uwAccept`, zero for any), its owner neither this order's owner nor the counterparty; `premium <= premMax`; `coverRate >= bs - bl`; `X >= this order's DAA score + term`; the pair id fresh and carried by no other output (the scan, at most 8 outputs); the escrow spend `q(n, rate + tip + half the premium) + carrier` |
 | order `take` (T2) | anyone | as `KpfOpen.take`, but the part starts a fresh covenant id the order checks (review 6), and the slot binds the entered part afresh in the same transaction (claim `OUT_REF + partOut`, at the part's `X`) |
-| pair `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose` | as KpfPair | as KpfPair; the pair UTXO `quietDaa` old (CSV); the range within `coverRate`; no entrant and no key of P3 is `uwKey`; `closeDonor` requires P3 under its own underwriter with `x3 <= X`, `premium3 <= premium` and P3's range within both cover rates |
+| pair `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose` | as KpfPair | as KpfPair; the pair UTXO `quietDaa` old (CSV); the range within `coverRate`; no entrant and no key of P3 is `uwKey`; every part and P3 carries the spent pair's binding byte for byte (review 8, section 26: `closeDonor` took P3's cover rate, expiry and premium as arguments before), so close-versus-close joins only pairs with identical bindings |
 | pair `coopClose` | both owners | any split |
 | pair `lapseSettle` | anyone | `tx.daa >= X + tail + idleDaa` (CLTV, review 6; before: `X + tail` and the UTXO `idleDaa` old by CSV): settle at the entry price, as KpfPair's idle settle |
 | pair `renew(u, k)` | the slot's bind (the underwriter signs) | the bind counts `q(s, coverRate)` at `X + term` for this input; the premium leaves the margins (the long's bound up by `premium - floor(premium / 2)`, the short's down by `floor(premium / 2)`); what may leave is `q(s, range) - q(s, new range)`; the range stays wider than both bands; possible only from `X - step` (the slot's window) |
@@ -467,7 +467,7 @@ feed definition without a `sessions:` line. A weekend maintenance rate (`mmr_w`)
 
 It is never stuck: (1) a transfer to a signing taker (no underwriter needed; an entrant through an order needs the slot's
 bind, so the underwriter), (2) a mutual close (both list, anyone executes), (3) a cooperative close (both sign), (4)
-close-versus-close with another pair of the same underwriter, (5) once the cover has lapsed (`X + tail`) and `idleDaa` more
+close-versus-close with another pair of the same binding (the same slot, cover rate, expiry and premium; section 26), (5) once the cover has lapsed (`X + tail`) and `idleDaa` more
 has passed by the calendar (review 6), a settlement by anyone at the entry price (`lapseSettle`, what replaces the idle settle). The cost: no
 liquidation and no unilateral close while the underwriter is silent; a winner whose loser is past its trigger gets its
 entry-price payoff at the lapse settle instead of the loser's margin
@@ -562,7 +562,9 @@ close).
     from each side at open (from the escrow) and at each renewal (bounds inward). A back-dated renewal is possible
     (section 21).
 13. **Close-versus-close "only between pairs with the same uwId"** is not enough when the host is a look-alike: the donor
-    also requires P3's expiry no later, its premium no higher and its range within the donor's own cover rate.
+    also required P3's expiry no later, its premium no higher and its range within the donor's own cover rate. That was
+    not enough either (review 8, R8-F1: no host is needed, and an earlier expiry is a lapse the builder chooses): since
+    section 26 the donor writes its own binding into P3, as the host does, so the two must be identical.
 14. **The bind proof's text** of the stand-ins exceeds the stack limit with the oracle market's state; an equivalent lean
     text is the one text of the oracle order and pair.
 
@@ -607,7 +609,10 @@ receipt; a false claim contested in time never settles (17 restored); a false cl
 (27). A party that did not act loses value only through such a claim, an upheld one, the agreed premium at a renewal,
 or the lapse settle at its entry price. (This sentence was false between the fixes of reviews 6 and 7, when two inputs
 could accept one output, R7-F1; the run then checked lineages but not that each output is relied on once. It is true of
-the code since section 25, whose statement the run now checks.)
+the code since section 25, whose statement the run now checks.) (Review 8, R8-F1: it was false again until section 26:
+a short alone moved its passive long by `closeDonor` into a P3 whose cover the short had written as already lapsed,
+and the lapse settle at the entry price took the long's gain; the run never built a `closeDonor` without a host.
+Since section 26 no party entry writes a binding: `audit8_tests`.)
 
 ## 22. Public wording (oracle-only markets, as built; O2§6 corrected)
 
@@ -619,7 +624,9 @@ window is reversed: your position comes back as it was, and the claim's bond is 
 "Disputes are won by the side committing more aged bonded KAS, by a factor `μ`; if colluders control that, false prices
 stand." "A false price nobody contests within the window stands: you can lose your whole margin in that pair." "If your
 underwriter stops, you can still leave without any price (transfer, mutual or cooperative close), and once its cover has
-lapsed anyone can settle your pair at its entry price, after a fixed time nobody can postpone." (Review 6: the contest wording holds again only since the fixes of section 24; before them it was false for a part entered into an id another UTXO held. Review 7: it was false again between the fixes of reviews 6 and 7, when a bystander could take a stayer's margin by handing two pairs over into one part, and an underwriter could delete half a pair inside a proposal nobody could contest; it holds since section 25.) "The winner bears gaps beyond the loser's margin." "Prices are in
+lapsed anyone can settle your pair at its entry price, after a fixed time nobody can postpone." (Review 8, R8-F1: false
+until section 26 for a long whose short sold its side by `closeDonor`, which chose the long's new expiry; true since:
+no party entry rewrites your cover.) (Review 6: the contest wording holds again only since the fixes of section 24; before them it was false for a part entered into an id another UTXO held. Review 7: it was false again between the fixes of reviews 6 and 7, when a bystander could take a stayer's margin by handing two pairs over into one part, and an underwriter could delete half a pair inside a proposal nobody could contest; it holds since section 25.) "The winner bears gaps beyond the loser's margin." "Prices are in
 KAS." "Before you commit stake to a dispute, your wallet traces it to its opening and its claim to a pair's proposal;
 without a node it tells you what it could not check." (Review 7, R7-F2: since section 25.)
 
@@ -937,3 +944,146 @@ are byte for byte as before. The whole workspace: 600 tests.
 | 7 proposals vouched by one input | 631,820 to 631,846 each | 178,488 | 129,438 | 0.2589, 0.2525 |
 
 One pair-month (open, one renewal, a close proposed and finalized): **0.1789 KAS** of network fees (was 0.1752).
+
+## 26. Changes after review 8
+
+Review 8 (`docs/audit/REVIEW-8.md`) found one Critical and one Low finding. R8-F1: `KpfPairO.closeDonor` took P3's cover
+rate, expiry and premium as arguments with one-sided bounds (`x3 <= X`, `pr3 <= premium`, `cr3 >= range`), and since
+review 6 a donor accepts any host or none. The donor's short alone (or anyone who bought its listing) moved the passive
+long into a P3 whose cover had already lapsed, so anyone settled it at once at the entry price and the long lost its
+gain over the entry; or into a P3 no lapse settle could reach (an expiry of `-4 * 10^18`), or one whose cover rate made
+every claim and renewal unaffordable. R8-F2: `KpfStake.close(j)` named its burn output by argument, so two pools closed
+together shared one burn and the closer kept the other. Both are fixed. This is the third review in a row whose
+critical was opened or exposed by the previous fix, so the change is kept to the two rules below.
+
+### 26.1 The rule
+
+**A party entry never writes a binding.** Every pair state a price-free entry writes (a continuation, a remainder, the
+part an entrant gets, P3) carries the spent pair's binding (`uwId`, `uwKey`, `coverRate`, `expiry`, `premium`, state
+`[411..504)`) byte for byte; only the underwriter's renewal moves the expiry (by exactly one term, proven by its slot's
+bind), and only an opening or a take writes a binding afresh, each proven by the slot's bind in the same transaction and
+bounded by the order's own terms. In `closeDonor` the arguments `cr3`, `x3`, `pr3` are gone and P3's binding is
+`rs.slice(BIND_AT, LISTS_AT)`, as `transfer` and `closeHost` already wrote theirs; `bs3 - bl <= coverRate` stays (the
+range rule). The entry is now `closeDonor(n, x, e3, c, bs3, sk3, sa3, sm3, st3, hm)`.
+
+**R8-F2: the burn at the mirrored slot.** `KpfStake.close(j)` requires `j == M - 1 - self` and `j >= inputs`, the rule
+every second payout of the family follows (`mutualClose`, `lapseSettle`, a refuted claim's disputer, a short's close
+payout, and `KpfLock`'s burn in the book family). Two inputs never name one such slot, and the slot is never an input's
+own index, where another input's first payout sits. The argument is kept (the entry's interface and dispatch tag are
+unchanged) and must equal it. The tool's `pool_close` already put the burn there (one input, the burn at output 1).
+
+### 26.2 Every entry that writes a pair state, field by field
+
+What each entry point that writes a `KpfPairO` state (or a `KpfPendingO` state that becomes one) takes for the binding
+of the written state, and who is bound by an argument.
+
+| Entry | Writes | Binding of the written state | Other fields from arguments, and who they bind |
+|---|---|---|---|
+| `KpfPairO.amend` | continuation | spent state (`contSpk`) | the signer's own listing |
+| `KpfPairO.addMargin` | continuation | spent state | the signer's own bound (outward only, paid for) |
+| `KpfPairO.transfer` (`handOver`) | the entrant's part, the remainder | spent state (`rs.slice(BIND_AT, LISTS_AT)`; `restSpk`) | the entrant's key, bound `nb` and maker: the entrant (a signing taker, or an order that checks them in `take`); the stayer's key, bound, entry and listing are copied |
+| `KpfPairO.closeHost` | P3, the remainder | spent (host) state | the entering long's key, bound `bl3 <= bl`, entry `e3 <= E`, listing, `dm`: the donor's side, which the donor checks against its own state |
+| `KpfPairO.closeDonor` | P3, the remainder | **arguments `cr3`, `x3`, `pr3` before review 8 (R8-F1, unsafe: the passive long is bound by them); spent (donor) state since** | the entering short's key, bound `bs3 >= bs`, entry `e3 >= E`, listing, `hm`: the host's side |
+| `KpfPairO.mutualClose` | the remainder | spent state | none |
+| `KpfPairO.renew` | continuation | spent state, the expiry moved to `X + term` (computed, proven by the slot's bind) | none (`u`, `k` are indices the bind proof ties to this input) |
+| `KpfPairO.propose` | the pending part; its restore, cure and forfeit states (hashes); the remainder | spent state (`pairHash`; the pending state copies `[ENTRY_AT, LISTS_END)`) | `kind, side, p, t0` vouched by `uwKey`'s SIGHASH_ALL input (a close also signed by the closer); `fb` and `n` bounded as KpfPair |
+| `KpfPairO.lapseSettle`, `coopClose` | no pair state (`coopClose`: any outputs, both owners sign) | none | none |
+| `KpfPendingO.contest`, `decide` | the pending continuation | spent state | none |
+| `KpfPendingO.cure`, `finalize` | the cure, restore or forfeit state | the hash `propose` fixed (the spent pair's binding) | none |
+| `KpfOpenO.fill` | a new pair | arguments `coverRate`, `xe`, `premium`; `uwId`, `uwKey` from the slot's bind proof | binds the two orders, each within its own terms: `uwAccept`, `premium <= premMax`, `range <= coverRate <= priceMax`, `xe >= the order's DAA + term`, the slot counting `q(n, coverRate)` at `xe` |
+| `KpfOpenO.take` | the part an order enters | arguments, proven by the slot's bind in the same transaction | with a pair (its `transfer` beside it): equal to the pair's binding, which the pair copies; without a pair: binds only the order, within its terms (review 8 note 1) |
+
+Result: `closeDonor` was the only entry that took binding fields from arguments for a state a non-signing party is
+moved into. `fill` and `take` take them from arguments by design, but the party bound by them is the order whose own
+terms bound them and whose cover the slot counts in that transaction; no staying party of an existing pair is moved
+into a binding it did not have. `take` without a pair accepts an expiry with no lower bound (review 8 note 1: the order
+gets at least its margin back at the lapse settle and loses its tip; not fixed, bounded by the order's terms) and, like
+`fill`, a cover rate up to `priceMax` (no claim on the pair is then affordable and no slot can count a renewal: the
+pair lapses at its expiry and settles at the order's own price; the slot counts the inflated cover, so the underwriter
+pays for it in capacity). Neither moves a party that did not consent through its terms.
+
+**Output indices given as arguments (R8-F2's pattern), every entry of the five contracts.** `KpfPairO`: `transfer`,
+`closeHost`, `closeDonor` (`c`) and `propose` (`k`) name a fresh output, which `fresh` and the maker field tie to the
+input; `propose`'s `j` and `renew`'s `u` are inputs checked by script and (for `u`) by a bind ref equal to this input;
+every payout is at `self` or `M - 1 - self`. `KpfOpenO`: `fill`'s `pairOut` and `take`'s `partOut` are fresh outputs with
+makers, `u`, `k` a bind ref `OUT_REF + out`; the refund at `self`. `KpfPendingO`: `contest`'s `u` is a stake whose `open`
+names this input, `dOut` an output of the claim's id (three counted); `decide`'s `d` an input of the id whose `resolve`
+names this input; payouts at `self`, `M - 1 - self`, continuations by id. `KpfStake`: `open`'s `cOut`, `dOut` outputs of
+the claim's id (three counted by both the stake and the claim); `deposit`, `settle` input ranges, receipts at their own
+index, counted by id; `resolve`, `redeem` inputs of the id; `close`'s `j` **the one free output index (R8-F2), fixed**.
+`KpfBond`: every output by its own id; `withdraw` wherever the owner's SIGHASH_ALL signature says.
+
+### 26.3 What stops working
+
+- **Close-versus-close joins only two pairs with byte-identical bindings**: one slot (`uwId`, `uwKey`), one cover
+  rate, one expiry, one premium. Two pairs of one underwriter opened in different expiry buckets, at different cover
+  rates or premiums, or one renewed and the other not, can no longer close against each other (before, the donor's long
+  moved to the host's cover, which could be shorter: the harm of R8-F1 in a milder form). Every other exit of section 17
+  remains. No command builds close-versus-close (TESTNET.md 9.8), so no command changes.
+- **A pool's burn at any other index** is refused. The tool's own `pool_close` is unchanged (its transaction id changes
+  only because the templates did).
+
+### 26.4 Tooling (live run 1)
+
+- `oracle_build::propose`: for a liquidation the underwriter funds `funded_by_proposer` = pending part + remainder - the
+  pair's value, which is the bond, plus the carrier of the new part when `n < s` (the pending part's `refund`, which a
+  cure or a valid settlement pays back to the underwriter). The vouch input funds it and the rest goes back to the
+  underwriter; the funder pays only the fee. Live run 1 had the funder pay a 0.2 KAS carrier that the cure then
+  refunded, with the bond, to the underwriter (1.2 KAS). A close is unchanged (the closer funds it).
+- Relative locks: `kpf`'s oracle commands share one `finish`, which now computes the first DAA at which consensus accepts
+  the transaction (`usable_from`: an input with a relative lock `r` on a UTXO at DAA `d` from `d + r`, a DAA lock time
+  `t` from `t + 1`, as rusty-kaspa's `check_sequence_lock` and `check_tx_is_finalized`) and prints it; with `--node`
+  a submission before it is refused locally ("usable from DAA X (now Y, about Z s)"), and a dry run says it is not yet
+  usable. This covers every command with a lock: open (the slot's rate limit), the price-free pair entries
+  (`quietDaa`), finalize (`W`), resolve, renew and lapse settle (lock times), the slot's unbond and withdraw, the
+  stake's withdraw.
+- `oracle_build::transfer_bounds`: `oracle-transfer` checks the listing, the no-downgrade rule, health at `x` and the
+  cover rate before it builds, and a refusal names the rule and the allowed range of `--nb`.
+
+### 26.5 What a reviewer should attack next
+
+1. **Headroom an entrant takes from a stayer.** Every hand-over (transfer, closeHost, closeDonor) lets the entrant post
+   any bound that keeps the range within `coverRate`. An entrant that takes all the headroom (`bs3 = bl + coverRate`)
+   leaves the stayer no `addMargin` and no cure (a cure is offered only within `coverRate`). This is not a binding
+   field and was not changed; whether it lets a listed side strip its counterparty's defence against a liquidation is
+   open.
+2. **The identical-binding join.** The host and the donor each write their own binding into one P3; P3's cover is then
+   counted by the slot in both pairs' original counts until the expiry. Check that no shape lets a host and a donor
+   with different bindings both accept (all of `[411..504)` is in both scripts' equality) and that the double count
+   cannot be used to free capacity.
+3. **The relative-lock gate is local only.** `usable_from` trusts the UTXO DAA scores the command loaded (read from the
+   node with `--node`); without `--node` the line is information only. It does not change what consensus accepts.
+4. Review 8 note 1 (a take without a pair into a past expiry) remains as stated in 26.2.
+
+### 26.6 Tests and numbers
+
+`audit8_tests` (11, all `r8_holds_`): each of the five former exploits builds the same transaction and the donor refuses
+it (a past, a later, a far-past and a maximal expiry; a cover rate of `priceMax`, one above and one below the donor's,
+and equal to the range; a premium one above and one below); the control with the donor's binding keeps the long's
+lapse date, a valid close and a valid liquidation, and renews; `closeHost` refuses another expiry, cover rate or
+premium; `transfer` refuses each binding field changed in the part, and a partial `closeDonor` a remainder with another
+premium; two pools sharing one burn are refused, each burn at its own `M - 1 - i` is accepted and burns both.
+`oracle_tests` (close-versus-close refuses a donor whose expiry is later, premium higher or cover rate lower than the
+host's: the directions accepted before), `oracle_builders` (a partial liquidation's vouch funds bond + carrier and the
+funder pays only the fee; exact fits; the refusal names the sum), `oracle_cli` (`oracle-transfer --nb` above `bl`
+refused with the rule and the range; the offline "usable from" line), and
+`ocmds::tests::relative_locks_are_compared_with_the_node_before_submitting`. Kits whose premise changed:
+`oraclekit::close_vs_close_tx`, `audit6_tests`, `audit7_tests` (no binding arguments), `oraclekit::pool_close_tx` and
+`judge::close_tx` (the burn at `M - 1 - 0`), and the golden vectors.
+
+Script bytes: `KpfPairO` 14,509 (was 14,613: the three arguments and their checks are gone), `KpfStake` 9,665 (was
+9,652: two checks), `KpfOpenO` 6,204 and `KpfPendingO` 4,395 (byte counts unchanged; their pinned template hashes
+changed with the templates they pin), `KpfBond` 4,453 (unchanged). The stake's dispatch tags (`open`, `resolve`) and
+the slot's `bind` tag are unchanged. Largest stack 197 of 244 (the take, unchanged); the pair's largest 178 (propose).
+Every shape of `oracle_metrics_tests` still fits a block, 7 proposals under one vouch and 7 renewals under one bind
+included; one pair-month costs 0.1781 KAS of network fees (was 0.1789). The pinned artifacts and 44 of the 46 golden
+vectors were regenerated (`CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`, `KPF_GOLDEN=print`; slot
+and stake creation unchanged); the book market's artifacts are byte for byte as before.
+
+| Transaction | Script units (first input) | Compute mass | Bytes | Fee (KAS), was |
+|---|---|---|---|---|
+| open (2 orders, slot bind, funder) | 285,307 | 56,114 | 45,714 | 0.0914, 0.0918 |
+| propose a liquidation / a close | 627,436 / 422,441 | 27,648 / 25,648 | 18,718 | 0.0374, 0.0376 |
+| transfer to a signing taker | 257,157 | 19,649 | 15,059 | 0.0301, 0.0303 |
+| close the pool (the burn at `M - 1 - 0`) | 19,849 | 12,297 | 10,107 | 0.0202 |
+| 7 proposals vouched by one input | 627,868 to 627,894 each | 177,060 | 128,710 | 0.2574, 0.2589 |
