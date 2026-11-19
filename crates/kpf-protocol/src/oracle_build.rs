@@ -627,9 +627,18 @@ pub struct ClaimTerms {
     pub t0: i64,
 }
 
-/// A proposal: in 0 the pair (propose), 1 the underwriter's vouching input (`vouch`, its own P2PK UTXO, which also
-/// funds the bond unless the closer's funding does), then the funding; out 0 the pending part (under a fresh covenant
-/// id), 1 the remainder (n < s, the pair's id), then change. A close carries the closer's signature (`KeySet` must hold it).
+/// A proposal: in 0 the pair (propose), 1 the underwriter's vouching input (`vouch`, its own P2PK UTXO), then the
+/// funding; out 0 the pending part (under a fresh covenant id), 1 the remainder (n < s, the pair's id), then the vouch
+/// remainder to its owner, then change. The vouch input only authorises the claim: `KpfPairO` does not constrain where
+/// its value goes, so the builder always pays what is left of it to the underwriter in an explicit output.
+/// * Liquidation: the proposer is the underwriter and posts the bond (`KpfPendingO`: a settled liquidation pays the bond
+///   and the fee back to the underwriter), so the vouch input funds the bond and `vouch.amount - bond` goes back to the
+///   underwriter (no output if it is exactly zero; refused if the vouch holds less than the bond, or if the remainder is
+///   above zero but below the plain-output dust). The funder pays only the network fee, and the carrier of the
+///   remainder part when n < s.
+/// * Close: the closer posts the bond; the vouch value goes back in full and the funder, who is expected to be the
+///   closer (its key signs the claim), pays the bond and the fee.
+/// A close carries the closer's signature (`KeySet` must hold it).
 pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending)> {
     let k = pinned::kit();
     let p = &pair.s;
@@ -649,6 +658,16 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     d.genesis(OObj::Pending(w.clone()), p.pending_value(pair.value, &w) as u64, 0, "pending part");
     if c.n < p.size {
         d.obj(OObj::Pair(p.rest_of(p.size - c.n)), p.rest_value(pair.value, c.n) as u64, Some((0, id)), "remainder");
+    }
+    let back = if c.kind == KIND_CLOSE { vouch.amount as i64 } else { vouch.amount as i64 - w.bond };
+    if back < 0 {
+        return invalid(format!("the vouch UTXO holds {} sompi, less than the claim's bond {}: a liquidation's bond is posted by the underwriter's vouch input", vouch.amount, w.bond));
+    }
+    if back > 0 && back < PLAIN_DUST {
+        return invalid(format!("the vouch UTXO would leave {back} sompi for the underwriter, below the plain-output minimum {PLAIN_DUST}: vouch with a UTXO of exactly the bond or at least {} sompi", w.bond + PLAIN_DUST));
+    }
+    if back > 0 {
+        d.plain(back, &vouch.key, "underwriter: the vouch input's remainder back");
     }
     d.fund(funder, change_to);
     Ok((d.finish()?, w))

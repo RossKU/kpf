@@ -20,7 +20,7 @@ Nothing is submitted without --submit. Every transaction is verified locally in 
 Keys and inspection
   keygen   [--name N | --out FILE] [--show-secret]        new key file (default ~/.kpf/keys/N.json, never in a git repo)
   address  --key FILE | --pubkey HEX|ADDR|FILE | --object FILE | --redeem HEX
-  inspect  OBJECT.json | --redeem HEX [--json]            decode a pair or an order
+  inspect  OBJECT.json | --redeem HEX [--json]            decode any object, book market or oracle market
   quote    --pair OBJECT.json [--prices 9,10,11 | --from P --to P --steps N] [--n TOKENS] [--json]
   market   [--idle-daa N] [--carrier KAS] [--scale N] [--min-size N] | --check FILE   example market block / validate one
 
@@ -111,6 +111,17 @@ gives the present the lock time proves)
   renew         --pair P.json... --slot S.json --key UW              up to 7 pairs, from one step before expiry
   lapse-settle  --pair P.json                                        a lapsed, idle pair at its entry price
   settle-pool   --pool D.json [--receipt R.json]...                  pay the winners (no receipt: close the pool)
+                forfeits the losers: give the loser's receipt together with the winner's
+  stake-unbond  --stake ST.json --key OWNER                          a free stake (e.g. returned by settle-pool) starts leaving
+  stake-withdraw --stake ST.json --key OWNER [--to ADDR]             an unbonding stake, unbondDaa old, to its owner
+  oracle-amend  --pair P.json --side long|short (--price P [--min-part T] [--tip P] | --unlist) --key OWNER
+            list (or unlist) a side for a hand-over; the pair's UTXO must be quietDaa old
+  oracle-transfer --pair P.json --side long|short --x P --nb P [--entrant KEY|HEX|ADDR]   a listed side changes hands
+            (the whole side, at x within its listing; the entrant, default the funder, posts the bound nb)
+  oracle-mutual-close --pair P.json --x P                            both sides listed and crossing: anyone closes at x
+  oracle-coop-close --pair P.json --long-pay KAS --key LONG --key SHORT   both owners sign; the short's output pays the fee
+  (a dry run writes its files under OUT-DIR/dry-run/; only submitted transactions write at the top of OUT-DIR.
+   With --node, every object file's UTXO and DAA score are read from the node, whatever the file says)
   oracle-watch  --me KEY|HEX|ADDR (--object FILE | --scan DIR)... [--daa N | --node URL] [--json]
             claims against you and the time left to contest, your underwriter's cover expiry, the disputes you have
             stake in
@@ -178,6 +189,12 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "renew" => ocmds::renew_cmd(&a),
         "lapse-settle" => ocmds::lapse_cmd(&a),
         "settle-pool" => ocmds::settle_pool_cmd(&a),
+        "stake-unbond" => ocmds::stake_unbond_cmd(&a),
+        "stake-withdraw" => ocmds::stake_withdraw_cmd(&a),
+        "oracle-amend" => ocmds::oracle_amend_cmd(&a),
+        "oracle-transfer" => ocmds::oracle_transfer_cmd(&a),
+        "oracle-mutual-close" => ocmds::oracle_mutual_close_cmd(&a),
+        "oracle-coop-close" => ocmds::oracle_coop_close_cmd(&a),
         "oracle-watch" => ocmds::watch_cmd(&a),
         "evidence" => evcmds::evidence_cmd(&a),
         "kob-file" => evcmds::kob_file_cmd(&a),

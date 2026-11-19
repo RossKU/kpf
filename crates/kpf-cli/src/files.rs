@@ -70,7 +70,7 @@ impl ObjFile {
     pub fn known_daa(&self) -> Result<u64, String> {
         self.daa.ok_or_else(|| {
             format!(
-                "the file of UTXO {}:{} has no `daa` (its DAA score is unknown, e.g. it was written before the transaction was accepted): pass --node, or run `kpf status --object FILE --node URL --update` once it is accepted. It is not read as 0: the evidence rest, the evidence clock and the hand-over limit depend on it",
+                "the file of UTXO {}:{} has no `daa` (its DAA score is unknown, e.g. it was written before the transaction was accepted): pass --node <ws-url> (the command then reads the DAA from the node itself), or run `kpf status --object FILE --node URL --update` once it is accepted. It is not read as 0: the evidence rest, the evidence clock and the hand-over limit depend on it",
                 self.op.transaction_id, self.op.index
             )
         })

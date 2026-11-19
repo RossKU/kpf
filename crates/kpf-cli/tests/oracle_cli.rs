@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 struct H {
     dir: PathBuf,
     n: usize,
+    last: String,
 }
 
 impl Drop for H {
@@ -30,7 +31,7 @@ impl H {
         let dir = std::env::temp_dir().join(format!("kpf-oracle-cli-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        H { dir, n: 0 }
+        H { dir, n: 0, last: String::new() }
     }
     fn p(&self, name: &str) -> String {
         self.dir.join(name).display().to_string()
@@ -72,7 +73,11 @@ impl H {
         a.extend(["--out-dir", &out]);
         let stdout = self.ok(&a);
         assert!(stdout.contains("not submitted"), "{stdout}");
-        self.obj(&out, kind, daa)
+        self.last = stdout.clone();
+        // A dry run writes only under `dry-run/`: nothing at the top level looks like a live object.
+        let top: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(top, vec!["dry-run".to_string()], "{top:?}");
+        self.obj(&format!("{out}/dry-run"), kind, daa)
     }
     fn obj(&self, out: &str, kind: &str, daa: u64) -> String {
         let f = std::fs::read_dir(out)
@@ -145,6 +150,10 @@ fn oracle_market_lifecycle_from_the_command_line() {
     std::fs::write(&vouch, serde_json::to_string(&v).unwrap()).unwrap();
     let f = h.funding(10);
     let pend = h.step(&["vouch", "--pair", &pair, "--kind", "liquidate", "--side", "long", "--price", "9.2", "--t0", "7999000", "--vouch", &vouch, "--key", &uw, "--funder", &ex, "--funding", &f, "--daa", "7999000"], "oracle pending part", 8_000_000);
+    // Defect 1 of the first live run: the vouch input (700 KAS) funds the liquidation's bond (600 KAS) and the remaining 100 KAS
+    // go back to the underwriter in an explicit output; the funder pays only the fee.
+    assert!(h.last.contains("underwriter: the vouch input's remainder back 100 KAS"), "{}", h.last);
+    assert!(h.last.contains("in  1: the underwriter's vouch"), "{}", h.last);
     let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8100000"]);
     assert!(out.contains("A CLAIM AGAINST YOU") && out.contains("contest until DAA 8215999 (115999 DAA left)"), "{out}");
     // Review 6 (note 3): without a node the file's DAA is shown as unchecked.
@@ -172,7 +181,7 @@ fn oracle_market_lifecycle_from_the_command_line() {
     assert!(err.contains("refused without --node") && err.contains("--accept-untraced"), "{err}");
     let o = h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out, "--claim-tx", &claim_tx, "--accept-untraced"]);
     assert!(o.contains("traced: the claim was born alone") && o.contains("NOT CHECKED that the claim is live"), "{o}");
-    let cw = h.obj(&out, "oracle pending part", 8_100_000);
+    let cw = h.obj(&format!("{out}/dry-run"), "oracle pending part", 8_100_000);
     // Review 6 (note 2): a contested part whose contest landed after the window (its UTXO at P + W or later) is shown
     // as one whose verdict will be ignored.
     {
@@ -187,7 +196,7 @@ fn oracle_market_lifecycle_from_the_command_line() {
         std::fs::remove_file(&late).unwrap();
     }
     let dispute = {
-        let files: Vec<PathBuf> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().contains("judge-stake")).collect();
+        let files: Vec<PathBuf> = std::fs::read_dir(format!("{out}/dry-run")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().contains("judge-stake")).collect();
         let d = files.iter().find(|p| std::fs::read_to_string(p).unwrap().contains("status: 7")).expect("the dispute").clone();
         let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&d).unwrap()).unwrap();
         v["daa"] = json!(8_100_000);
@@ -198,7 +207,7 @@ fn oracle_market_lifecycle_from_the_command_line() {
     // opening (the contest's transaction file) and the claim's birth, the dispute is traced and the deposit builds and
     // verifies (nothing saved).
     {
-        let opening = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).find(|p| p.to_string_lossy().ends_with("-tx.json")).unwrap().display().to_string();
+        let opening = std::fs::read_dir(format!("{out}/dry-run")).unwrap().map(|e| e.unwrap().path()).find(|p| p.to_string_lossy().ends_with("-tx.json")).unwrap().display().to_string();
         let f = h.funding(10);
         let err = h.fail(&["deposit", "--dispute", &dispute, "--side", "yes", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f]);
         assert!(err.contains("refused without --node") && err.contains("genesis keeps every stake"), "{err}");
@@ -216,4 +225,48 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let restored = h.step(&["oracle-finalize", "--pending", &decided, "--funder", &ex, "--funding", &f], "oracle pair", 8_600_000);
     let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &restored, "--daa", "30300000"]);
     assert!(out.contains("THE COVER HAS LAPSED") && out.contains("lapse-settle"), "{out}");
+
+    // `inspect` decodes every object of the oracle family (defect 2 of the first live run), as text and as JSON.
+    for (file, want) in [(&pair, "oracle pair"), (&slot, "underwriting slot"), (&stake, "judge stake"), (&lo, "oracle order"), (&pend, "oracle pending part")] {
+        let out = h.ok(&["inspect", file]);
+        assert!(out.contains(want) && out.contains("utxo "), "{want}: {out}");
+        let j: Value = serde_json::from_str(&h.ok(&["inspect", file, "--json"])).unwrap();
+        assert_eq!((j["kind"].as_str(), j["family"].as_str()), (Some(want), Some("oracle")), "{j}");
+    }
+    assert!(h.ok(&["inspect", &pair]).contains("cover expires at DAA 27216000"));
+    assert!(h.fail(&["inspect", "--redeem", "00"]).contains("not an object of this tool's contracts"));
+
+    // The judge stake's exit: unbond a free stake, withdraw it once unbonding; each refuses the other's state.
+    let f = h.funding(10);
+    let unb = h.step(&["stake-unbond", "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f], "judge stake", 9_000_000);
+    assert!(h.last.contains("stops counting"), "{}", h.last);
+    assert!(h.fail(&["stake-unbond", "--stake", &unb, "--key", &st, "--funder", &ex, "--funding", &f]).contains("only a free stake unbonds"));
+    assert!(h.fail(&["stake-withdraw", "--stake", &stake, "--key", &st]).contains("only an unbonding stake withdraws"));
+    let wd = h.p("withdraw");
+    let out = h.ok(&["stake-withdraw", "--stake", &unb, "--key", &st, "--out-dir", &wd]);
+    assert!(out.contains("withdrawable from DAA") && out.contains("not submitted"), "{out}");
+    assert!(h.fail(&["stake-withdraw", "--stake", &unb, "--key", &lk]).contains("needs a signature"), "the owner's key is needed");
+
+    // The pair's price-free exits: list both sides (each side's owner signs), a mutual close where the listings cross, a
+    // transfer of a listed side, a cooperative close (both owners sign).
+    let f = h.funding(10);
+    let a1 = h.step(&["oracle-amend", "--pair", &pair, "--side", "long", "--price", "10", "--key", &lk, "--funder", &ex, "--funding", &f], "oracle pair", 7_200_000);
+    let f = h.funding(10);
+    let a2 = h.step(&["oracle-amend", "--pair", &a1, "--side", "short", "--price", "11", "--key", &sk, "--funder", &ex, "--funding", &f], "oracle pair", 7_400_000);
+    assert!(h.ok(&["inspect", &a2]).contains("listing ask 10 ") && h.ok(&["inspect", &a2]).contains("listing bid 11 "));
+    let f = h.funding(10);
+    assert!(h.fail(&["oracle-amend", "--pair", &pair, "--side", "long", "--price", "10", "--key", &sk, "--funder", &ex, "--funding", &f]).contains("needs a signature"), "only the side's owner lists it");
+    let f = h.funding(10);
+    let out = h.ok(&["oracle-mutual-close", "--pair", &a2, "--x", "10.5", "--funder", &ex, "--funding", &f, "--no-save"]);
+    assert!(out.contains("oracle-mutual-close") && out.contains("not submitted") && !out.contains("FAILED"), "{out}");
+    assert!(h.fail(&["oracle-mutual-close", "--pair", &a2, "--x", "12", "--funder", &ex, "--funding", &f]).contains("do not cross"));
+    assert!(h.fail(&["oracle-mutual-close", "--pair", &a1, "--x", "10.5", "--funder", &ex, "--funding", &f]).contains("do not cross"), "an unlisted short");
+    let f = h.funding(5_000);
+    let t = h.step(&["oracle-transfer", "--pair", &a1, "--side", "long", "--x", "10.5", "--nb", "9", "--funder", &ex, "--funding", &f], "oracle pair", 7_500_000);
+    assert!(h.last.contains("leaver") && h.last.contains("the entrant is"), "{}", h.last);
+    assert!(h.ok(&["inspect", &t]).contains(&exk), "the entrant is the long of the new pair");
+    assert!(h.fail(&["oracle-transfer", "--pair", &a1, "--side", "short", "--x", "10.5", "--nb", "13", "--funder", &ex, "--funding", &f]).contains("not listed"));
+    let out = h.ok(&["oracle-coop-close", "--pair", &pair, "--long-pay", "1000", "--key", &lk, "--key", &sk, "--no-save"]);
+    assert!(out.contains("oracle-coop-close") && out.contains("not submitted") && !out.contains("FAILED"), "{out}");
+    assert!(h.fail(&["oracle-coop-close", "--pair", &pair, "--long-pay", "1000", "--key", &lk]).contains("needs a signature"));
 }

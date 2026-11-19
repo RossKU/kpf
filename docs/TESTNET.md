@@ -439,13 +439,24 @@ parties (long and short), a staker (contests), and the executor (pays fees). It 
 
 Everything of sections 1 and 2, and: keys `uw` (underwriter), `alice` (long), `bob` (short), `sam` (staker), `exec`
 (executor, the funder of fees); about 700 KAS for the underwriter (a 600 KAS slot at the small test size below, its
-vouching UTXO, a defence stake), 200 KAS each for alice and bob, 120 KAS for sam, 10 KAS for exec. The judge counts a
+vouching UTXO, a defence stake), 200 KAS each for alice and bob, 120 KAS for sam, 10 KAS for exec (and, for a claim, a close's bond if the funder is the closer, see 9.5). The judge counts a
 stake only if it was bonded `M_age` (7 days at the defaults) before the claim it judges: **create the stakes first and
 wait**, or create the market with a short age (`--stake-age-daa`, `--round-daa`) for a quick drill. Since review 6 the contracts bound
 the judge (a round at most 2,592,000 DAA, stake age at most 25,920,000, unbonding at most 77,760,000, the least stake at
 most 10,000 KAS); `oracle-market` refuses a market beyond them, and `oracle-check` states every judge parameter and warns
 when a contest within the window is not realistically possible. `oracle-watch --node` reads every object's DAA from the
 node; without `--node` a DAA read from a file is marked unchecked.
+
+**Object files and the DAA.** A builder writes the objects it creates without a DAA score (the transaction is not yet
+accepted). Every command that is given `--node` reads each object file's UTXO, value and DAA score from the node itself
+(one small query per object, the same as `kpf status --object FILE --node URL --update`), whatever the file says, so
+there is no separate step between a transaction and the next command. Without `--node` a command uses the file as it is
+and refuses a file without a DAA, with a message that names the fix (`--node`, or `kpf status ... --update`).
+
+**Dry run and live run.** A command without `--submit` is a dry run: its object and transaction files go to
+`OUT-DIR/dry-run/` (marked `"dryRun": true`), never to the top of `OUT-DIR`. A live run (`--submit`) writes its files at
+the top of `OUT-DIR` once the node has accepted the transaction (a refused submission leaves its files under `dry-run/`).
+A dry run and its live rerun have different transaction ids; only the top-level files belong to the chain.
 
 ### 9.2 The market
 
@@ -503,7 +514,21 @@ orders. The underwriter receives the first term's premium, half from each order'
 ### 9.5 A claim, a contest, the verdict
 
 The underwriter vouches by spending one of its own plain UTXOs in the claim (write it to a file with `kpf utxos --key $UW
---node $NODE --out vouch.json` and keep one entry):
+--node $NODE --out vouch.json` and keep one entry). The contract makes the proposer post the claim's bond (the underwriter
+for a liquidation, the closer for a close; a settled liquidation pays the bond and the fee back to the underwriter), and
+`KpfPairO.propose` does not constrain where the vouch input's value goes: only the underwriter's SIGHASH_ALL signature
+does, so an executor that builds the transaction cannot keep anything the signature does not allow. Hence:
+
+- **Liquidation:** the vouch UTXO funds the bond and the rest goes back to the underwriter in an explicit output
+  (`underwriter: the vouch input's remainder back`; none if it is exactly zero). The vouch UTXO must therefore hold at
+  least the bond (and a remainder of at least 0.02 KAS, or exactly nothing); `kpf` refuses otherwise. The funder pays only
+  the network fee (and the carrier of the remainder part when `--n` is less than the pair's size).
+- **Close:** the closer posts the bond: the vouch value goes back in full, and the funder, who is expected to be the
+  closer (its key signs the claim), pays the bond and the fee.
+
+The underwriter should sign a transaction only after checking that it has the output that pays the rest of the vouch UTXO
+back to its own address. A funder that is also the underwriter must give another UTXO than the vouch one for funding (the
+tool sets the vouch UTXO aside).
 
 ```sh
 kpf vouch --pair out/open/*-oracle-pair.json --kind liquidate --side long --price 9.2 --vouch vouch.json \
@@ -516,9 +541,24 @@ kpf deposit --dispute <the dispute file of out/contest> --side yes --stake out/u
 kpf resolve --dispute <the latest dispute file> --pending out/contest/*-oracle-pending-part.json --funder $EX --node $NODE \
     --out-dir out/verdict                                  # once the round's window has closed
 kpf oracle-finalize --pending out/verdict/*-oracle-pending-part.json --funder $EX --node $NODE --out-dir out/final
-kpf settle-pool --pool <the pool file of out/verdict> --receipt <each receipt file> --funder $EX --node $NODE
+kpf settle-pool --pool <the pool file of out/verdict> --receipt <the winner's receipt> --receipt <the loser's receipt> \
+    --funder $EX --node $NODE
 kpf settle-pool --pool <the settled pool file> --funder $EX --node $NODE    # close: the base back, the rest burned
 ```
+
+`settle-pool` needs **the loser's receipt together with the winner's**: the pool pays the winners out of what the losers
+forfeit, so a winner's receipt alone is refused with "the pool cannot pay these winners before the losers are forfeited"
+(up to seven receipts in one transaction; the opener's receipt is on NO, every deposit has its own).
+
+A stake that comes back from `settle-pool` is a free `KpfStake` UTXO. To take it out, unbond it and withdraw it after the
+unbonding delay (`--stake-unbond-daa` of the market):
+
+```sh
+kpf stake-unbond   --stake <the winner's stake file of settle-pool> --key $UW --funder $EX --node $NODE --out-dir out/leave
+kpf stake-withdraw --stake out/leave/*-judge-stake.json --key $UW [--to ADDRESS] --node $NODE   # pays its own fee
+```
+
+An unbonding stake counts nowhere; `kpf inspect` shows a stake file's state.
 
 What to check: a contest landing at `P + W` or later is ignored (the claim settles); a refuted claim restores the part
 exactly and pays its bond to the long and to sam; an upheld one finalizes at once; an uncontested one finalizes after
@@ -536,11 +576,26 @@ kpf unbond --slot <slot file> --key $UW --funder $UW --node $NODE   # once every
 kpf withdraw-bond --slot <unbonding slot file> --key $UW --node $NODE
 ```
 
-If the underwriter goes silent, the parties leave without any price: `amend` and `transfer` to a taker who signs, a
-mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the calendar: no party can postpone it).
-A part handed over to a taker starts a new covenant id (review 6): use the new object file the builder writes. Book-market commands that touch a pair
-(`amend`, `transfer`, `mutual-close`, `coop-close`) do not read oracle pairs; the library builders do
-(`kpf_protocol::oracle_build`), and their commands are the next step of the tooling.
+If the underwriter goes silent, the parties leave without any price: `oracle-amend` and `oracle-transfer` to a taker who
+signs, a mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the
+calendar: no party can postpone it). Each party entry needs the pair's UTXO to be `quietDaa` old.
+
+```sh
+kpf oracle-amend --pair <pair file> --side long --price 10 [--min-part T] [--tip P] --key $A --funder $EX --node $NODE   # list the long's ask
+kpf oracle-amend --pair <pair file> --side short --price 11 --key $B --funder $EX --node $NODE                       # list the short's bid
+kpf oracle-amend --pair <pair file> --side long --unlist --key $A --funder $EX --node $NODE
+kpf oracle-transfer --pair <pair file> --side long --x 10.5 --nb 9 [--entrant KEY|HEX|ADDR] --funder $TAKER --node $NODE
+kpf oracle-mutual-close --pair <pair file with both sides listed> --x 10.5 --funder $EX --node $NODE
+kpf oracle-coop-close --pair <pair file> --long-pay 1000 --key $A --key $B --node $NODE   # no funder: the short's output pays the fee
+```
+
+`oracle-transfer` hands the whole of a listed side (price `x` within its listing) to the entrant (default the funder),
+who posts the bound `--nb` and funds the new pair; the leaver is paid out of the pair. `oracle-mutual-close` needs both
+sides listed with the long's ask at most `x` and the short's bid at least `x`; anyone may run it. In a cooperative close
+both owners' keys sign. A part handed over to a taker starts a new covenant id (review 6): use the new object file the
+command writes. The book-market commands of the same names (`amend`, `transfer`, `mutual-close`, `coop-close`) do not
+read oracle pairs. `kpf inspect FILE` decodes every object of this section (pair, pending part, slot, stake, receipt,
+dispute, pool, order).
 
 ### 9.7 Measured cost (offline, 100 sompi per gram)
 
@@ -553,5 +608,6 @@ a defence 0.0400, the resolution 0.0291, settling and closing the pool 0.0793: a
 
 - **Discovery**: pending parts, disputes and receipts are found only from object files (as pending parts and locks).
 - **A request to a silent underwriter, rebind, the lock path, a retrospective dispute**: not in this slice.
-- **The price-free pair commands for oracle pairs** on the command line (amend, transfer, mutual and cooperative close):
-  built in the library and tested in the engine, not yet commands.
+- **Commands for the other price-free entries of an oracle pair**: add margin and close-versus-close (`KpfPairO.addMargin`,
+  `closeHost`, `closeDonor`) have no builder or command yet. A transfer to an order (`KpfOpenO.take`) and a partial
+  transfer or mutual close (`--n`) are not built either: the commands above move whole pairs.

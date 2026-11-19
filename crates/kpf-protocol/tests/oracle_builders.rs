@@ -12,7 +12,7 @@ use kpf_protocol::oracle::*;
 use kpf_protocol::oracle_artifacts as pinned;
 use kpf_protocol::oracle_build::*;
 use kpf_protocol::state::{KIND_CLOSE, KIND_LIQ, LONG, SHORT};
-use kpf_protocol::tx::{pubkey_of, rpc_json, KeySet, KeyUtxo, MIN_FEE_RATE};
+use kpf_protocol::tx::{p2pk_spk, pubkey_of, rpc_json, KeySet, KeyUtxo, MIN_FEE_RATE};
 use sha2::{Digest, Sha256};
 
 const KAS: u64 = 100_000_000;
@@ -93,45 +93,45 @@ const GOLDEN: &[(&str, &str, &str)] = &[
     ("create short order", "9fae47a9748b39cc17e3c91c8c575eaac1669ebd5e7ee440d619329d6a24ba83", "c3ff5a6e98fdf92b324225c22938f56ae56d5863db05f3332929eb4a8269b3ba"),
     ("open pair A", "a6666ca373261ca6b768a467a1e63bc85bdaa0808543574e1f06fd8dde84e0f2", "26a204135c190351f37d52e35db582f8b928dd07e4b0b9bf0d9ad67d0c6cf2da"),
     ("open pair B", "98d3efcc2d34e4bfc4ad1b3aca25b99c885523561fc723dd046298e6ad521e64", "44e99c89d242f6024438f0997fb966a9831b7d4eb227e14ff11a4e5dddcbd040"),
-    ("propose a liquidation", "6a330c8e850639e07149bc340575f0a48df81da24aa07cd2d40ad6979fa0cddc", "34fd3059e82c5cec767aa3ed34ffec934501efd427e862ede1882b26fc517514"),
-    ("contest", "d5199188800c57ed6bdb0f136838c393356a5cf97fd320e5dec233f8beec794c", "5ca8edfea17ca9597423cdc223326af043725ccb2628cd32f43a1200d7e3eeef"),
-    ("resolve and decide (refuted)", "947a9a6188f0770657c0d61bc9a6b31c9dd4f52690655dd116ff4ac987945706", "78de7246142bc4ddf0abad2bfc8a652df42a3bc3c34bf2b337f7ae98f1dc8940"),
-    ("finalize refuted (restore)", "9ddfb99bc53fa0bfb980079e9df6d7306995bcf3c026b7d3bbfa3d604de54c07", "c1f4765763c16e502e52e49c6de0848d9915374af1cbe0574b2dc59730f8ffb6"),
-    ("settle the opener's receipt", "3fc8c70c389a4102ddf433b727408135c69722070a42876ba8dd2f209379da66", "76d46fb8442f7c64c4444ca42e140f077cf54b0af5ac474a5cbf1764788000a2"),
-    ("close the pool", "cc5efccbec03f58e5310ca28f34ca336e1b81e2f8a207a074060bdc2ee807c69", "27e8cb5550712a967ac12eca462b107b036f803875d0e5e5c388bcedd38f7b23"),
-    ("propose again", "e1f90b48468fd5c4bb0e6b79ee7653e11ed60be3f64bf84e9b2def3ac62ebbcd", "38247dd0317ae67130d9ace27d24b2f83e58604894412070db8cf758fcfef226"),
+    ("propose a liquidation", "adbcdfdb069fe59b328cdbbbbded1699143547162a2995732bf439018ab96717", "cdfb229bf3f4f2970b3c7af6c57103ac28dd580ee24d6bb2789e2a91123e3e4a"),
+    ("contest", "dd113e1e606058257333864e5e7e40131a4df852439013deb758c6e7bbdd5c33", "162490c5180c7d4eaa59b7d81a14860c33851f8236fe3c1cc45183fcfd373f38"),
+    ("resolve and decide (refuted)", "8240850108bcc9b9deb0f17f03160909fc0a8059a0e618f7a678dd407e2ce181", "318ca4d526f7a99f0abbab1e6e24d298b9cd473d39dd73298c7d4a650b9f9c9a"),
+    ("finalize refuted (restore)", "68dfffc9a96b119b2fb942079acc80dade7a1a34d6dbe38b37eefe9d9671a092", "5110d95712a96970c1903dbc094c935d45827e743ccf9d55cac7f71a8f4adbd8"),
+    ("settle the opener's receipt", "003a51df0c2af4655bc758f72a0fbd36178c849210b75ebc0d4ec115392d17d2", "ed0b7a97c155aac70c775eafdb029861c01edf2f279bb56f14bdefb96dcac5c8"),
+    ("close the pool", "57cea8f70350dda158a89fbdd01fcd39a13f659ec8651e905a1db149af7183cf", "8b1c397c97ce191aaa1eaac28a9a9fbba4576e52c1eea78deaeb32f42fa45eee"),
+    ("propose again", "2a032ee88b65413dd51c40fb654296c9a73353ffd057c4f592235f88d811f540", "6ec96410d39f69bafcd2c4470237b00ea43d71ede2cf00c31e4e4b1972ac7ad7"),
     ("create a second stake", "4f70794569c748301bef78e2806255354c4f6b6745257445c46bdfab89e0d975", "aa2d43d936c89687e31388fed49d01470925c7557892feb47a926bf7a8a28907"),
-    ("contest a true claim", "d178be7ce6dbfab242ea24fb4f4d85cba9e186968914b675231ad7008769f03c", "8df9c0adab7441ffa336ea037aa972b82cba0264de4c8e2c9653417df1038a54"),
-    ("deposit the defence", "8fe991cc10abb777e13dd85efb2b9cc5764d6fe653d83c8beed4f7b8c8b6ab27", "b441a63b49630ca30f9cefbd069f88c0c269e812a88895847a96cb911146d9f1"),
-    ("resolve and decide (upheld)", "54faf5c72aeea0a3ba396d368700e145567d11b3e62ab5831f19ad8a9e908eff", "69f3fc7536cf09eeffadb662d3928b70bbb302b9f464228f22ac7bd3c2177599"),
-    ("finalize upheld (forfeit)", "82890f07c08d20d290307d491411484ddf7be6a9a725b7dc097bed43824fdcd1", "21d29088a4017ab252c6a82b80ffd048b5ab2deeec6bc78deb95c81f337052cb"),
-    ("settle a winning and a losing receipt", "952e27f1b99520ba84b6894ffa47b4e35e7cd190110aa5134b83c42f23523aac", "78dbb801f6f57fdc8674185159bdb670af15744eb5ae45f26cb3ed1092ad7c89"),
-    ("close the pool with a burn", "27ee832c425b2babd2a56e063ced9fdcbef857392bc3017d9ce17b208676f3d9", "e1e532e2f04e11c9a154a47fe90b28f650ed3a6d8a74affb0464c59add2024e7"),
-    ("propose on B", "40a0eba7396b627b71f0eea3fd2ce83bc14746cbe62589daba8bf88b12869fff", "1ae74d73d59943552724ba974740e7b84e7f9edd7c84ca26d6bc110566fc380d"),
-    ("cure", "1fab8df5b667cdcf974b1062cf20b6f4c7bb24c3997ac9fe22ef88122726bb06", "52e7fb7f3b588a11711112305c55ffad1369544ba2e0d52ae3f52e3cf4a25096"),
-    ("renew B", "9d10a45249c4814351cedf353e7173ad43be2fa73347df131d3db0179ae7dfd3", "6b10406c078c5cf6ce2a31015a897783f1386eec2809f8eb23a9dc86ff8a3d2c"),
-    ("amend: list the long", "f41f7e9b30abbe3c011a8a0fdc299b273869c88ad6d7db9a4ce381160d6559ba", "2813a1c7cdeca578d01cef92069896ef90e97feb3167e7baf6de0273b5b84b55"),
-    ("transfer the long to a signing taker", "83abb3d3178ddfc240bd99404d974f29d622a8b65adb7e95f5f863d1762e43b7", "fe899713a933258464d4a8d8aa0adc4766d87409fbf5f647cb59f82242da199a"),
-    ("amend: the taker lists", "5132aaffdb6ee848afb622675fc9e51260c40d49aab9ce450e4c8cb76aaca17c", "f4b64e976eff94957f1438e6569b0fb2252c58a8fc62786074f9b83bc6e556c0"),
-    ("amend: the short lists", "584a0ea8aeaad6e464b37ff441eeb4f0b96b2de57a957a00f05256f29ab2b893", "04f41c2cbef5b7e861d7175a6ee661bf8035fd131c9083f8957ba2279ddd2fa1"),
-    ("mutual close", "e0e3a1bfa1b2207180168c2bca411b0bd6168b538f9d8c1b288b51be489f15ad", "d135a8f5fd3189ce32dbd4b2ba0f0fc60556c1ad4fec479ca482975887d59a42"),
-    ("lapse settle", "3300333fc93987cfdd46676305e403b07a4ef406495217e5b6813f0a5c3d86f8", "dd96557fb888de3139e211d5d12e6ef4bd9a26ef1f171f093a68cfc9136ade37"),
+    ("contest a true claim", "af0f034b4d373921e6378b242c02e770f3792daab6d87c08bda77d1556579ecd", "a2297fcdc66cedd158708c6d1d7292265fddf60fcb9e3afbea8de2d8c24cb46d"),
+    ("deposit the defence", "bb293ea4901375f8d56308e6dfc446f5758added06c3a6c8b34a73e78235287f", "acacb5447d8d0db1892729c07fa3ba004ccf1dcff25539ffcd8dccc00bd6ff35"),
+    ("resolve and decide (upheld)", "873d094d3e7ac28409bad7a70ed812cbb5cf5956c927873b62c00717b292a5e4", "3366427a0cfa582db58fd09104f6b44c274d89cb22b118d6626d206064aaee76"),
+    ("finalize upheld (forfeit)", "c4af4e88da6b286cdbf955875382d6f5b5e0877618c7eefd0032e6c8a269cdef", "e875fd1c5b11d46e21bb6768f09b5a5221487d6ff43f5076ed8df53f96c12173"),
+    ("settle a winning and a losing receipt", "6eded51f21e0f61f5d90237a9c0b3922c4d13bc781077fa3300f415cd0b65f7d", "cf7f7ad76c8adf0c192cd1579478c40b31d368efff8330d663d68424ab684904"),
+    ("close the pool with a burn", "cb4ce99f9987da187f5f900fa0a617173fd4fb95b501b7947451c6ae2f3dec1b", "5f92939d35cf968c4cd818f78a1d758e60413ac1d1ff30accea276b273b08cb2"),
+    ("propose on B", "721fff367db74ceb7db1838daa1741c0862fd0a42123004f42c95d22c1b20b25", "ce8aa228b906f77af280eb229b54e6b74f39086fac327f6d83c7a931b0e2a622"),
+    ("cure", "7ad1ab1f60d5913d5337087a9afd14e7608071ce46b4e533c714e0203298ed79", "81c631648a81ab6c910dc7e348a037bd6d93fa8837d7e01f3d8fc2b72de8edc3"),
+    ("renew B", "b1780a583d3930419dba0dde25bc9515d8a0f336e6881d67cdfcf7592b16bf4a", "a03de639cb0625ada0174fd021813b8809b654f3330ace866eca9c0a12bfec81"),
+    ("amend: list the long", "ba7a43c8c43540b3695c08f613733c54f36ecd60d5d98586f21ad92a9d0369fe", "5fbf9b66665c284e17d9f975d3811f81290326ee95a57e01a4a9a5764ba69eaf"),
+    ("transfer the long to a signing taker", "0b5e2069633baa1c6f8a099865a4738f5aaedd3d5c4f0aaae3edb998f183cd3a", "3908df12e4799db88e45fc62048bcc640e344fb92781ba843ed8c769c97c158a"),
+    ("amend: the taker lists", "8be4d0360068d050678bfcd58e68ab0ebd3e7bee260708169d6520d48ff27d21", "55ad9326a783b7b45f4ec9dab900137e210876a1b75dffcf6dd26aabefa9ee20"),
+    ("amend: the short lists", "8da98917fabaa95d9ddfc69ef91fb7e53e0c740b291a49e62d27eb54b6057bd9", "853b62c142040abef0d424501db04766a996938db081b55d435904ed210cfe6a"),
+    ("mutual close", "922cee2eb1405d53e4bc02ff7848939171e46c4cf92296d0770a5ed0a35a8a06", "e97cfcbf71404aeb2306639a9075e8633fcdf9bc9daf6da4f7f53f41bf46c4f3"),
+    ("lapse settle", "34e6d28504b8dc671c1172d0d7433bea70651d8b2748a9afcf85534e6fa4bb59", "b03f2877e29fbee197a5845994858d99ceb7946d4b8fef46b1c15cff006834aa"),
     ("create long order 3", "6111562188dc173cf6062cdb673a87409a202f99612bc48f22b75c4604af2fc2", "05630999200ed4fdb67f3af82bc3e22791e5ba7d680deb284ce4a448ec59da12"),
     ("create short order 3", "c70fe9405312ee11cb5202c4a0a4ca34c0cf166540d2a60c05b6e28d0ee538cd", "c03dcf6d7797bb244de8663f6b328dda73193a8d8ca934975f46c6b730fa62bf"),
-    ("open pair C", "044d2c589d3a5e20148595f9f9fef02b906af15d5ab4ff2e20c679091934fd3b", "3218e493481bc9d75b35f50b39c496a87b17893ef03a4df27d9180b9c6736895"),
-    ("cooperative close", "9406143b42f7f604606c447f5142dcab2f44a9cbab09938878a1dc7e742c7c85", "f48aeef7df9ae280d51cac4bd681b82624df712258d13f2c722523cab22089a2"),
-    ("advance the slot", "14aeaeb1817cd72fa6696d5baca2de88bee254172048eec761ca2c0110907355", "c0a1a4f82a61f42021d672d8d3dc480d60464eecc3d3689f8d11d0785e004f4e"),
-    ("split the slot", "7e85ca28e0ca2309159e958fc8e545a36f7931972c669b5db50bb6834c3a826d", "6ce346b259d1b3316f6d732517cae7224dfa327410fc07395fc79193dccefbc3"),
-    ("unbond child A", "6468b266339ec852845b1a7cdcac27c9ddec6dd168839f3c60778a4bb6d732a0", "565fe04cebc8a1b41ff81a1a216a8a685e514a84791440ce77e779d4f5aec53c"),
-    ("withdraw child A", "d6a145e2524e4be300d99bd5bfd0043874cec71de4780bfd9bfecd87ffea423d", "d80c8628e0e5d9528d3f06a98b887030fa208189f29c1863c86a063baaea6739"),
-    ("unbond a stake", "535c6212349f096093f7d8db7e03ac80eb4fb1a8b54d7adefaa915cdcdeca065", "e513a8a9b13b94eda0b67f8403c551bce73c38b6be06796c6e1b790694a687be"),
-    ("withdraw a stake", "9a957b9591e30743049eac6aa2c4c79bf3053adab1eeb2185355db9760aaff37", "6cd034b8bdcb46be372920aa6e1ddb569f9a56cf38625df107798d585c4f2d47"),
+    ("open pair C", "06993f6c9d40c903dfabb586e9ab2b90f2bf3c2a3cf682039bd81217978d34c8", "cb3b098d13d9fe5f2956dc3c703a8267990f517b27ad9661760408b0825e2b54"),
+    ("cooperative close", "0ed23909c30bdae36994e602c5f191bfe4fc866acec0102041d93703de7c88ef", "5d69fb62e0ace9d5fec358a5bc52d60d8ae5bbb778cda7f05a4d54a8b9190ed1"),
+    ("advance the slot", "57a169045039aeb441e346e51408ee4f090d7181950e9186d98ca326bf970683", "8c5d2b71c9c057d39943a7389c0e812198de571010c6737129ee667612d696ae"),
+    ("split the slot", "75ff3ad53727afe2fb626807af8da48de9804376302803023d1a9fe222b3ed5b", "9ca4bd5472ffe9fb22bad49016a457b6360276d92f5496600e40b9effcc347ca"),
+    ("unbond child A", "7bcec5f333a92602da7dc2222767093027a20c1b5652b2563b5ea83933097f68", "dfab3133c566d4304a109f6580b1528bb938f11f2b76d131df62f61325923026"),
+    ("withdraw child A", "b367865a9c20382a0eb9f3f4467e6bd829a699d3a2105cf54afa175404e2a177", "8465bfd8367200ffafcd0ef96fddc90d7198a2ab99c5a2fe808e4f68b424f92d"),
+    ("unbond a stake", "c326e038d2ff43a594956e88a5429f6857ae861ea68d9571f411ff8df3046f1e", "e5b3c2d4fae97f76acdf91a896be2d2afe167ba0a485b7fe80f28e5ebaf831bd"),
+    ("withdraw a stake", "77dc74ac1de00028caeddf67d11a693ef32bdd3183000dc9ffbdd64b575d9f1e", "6929a357fa1d01f08c0dd8b7afe21ba4a737a87346221af4c76fd64fa688dc69"),
     ("create long order 4", "05e7f85f89087fbdf2489864b03da1132987c318a036c341e32bbc77d54a3d5e", "d0bbdcd3012abad2927ee6b5c9dd22d03ca538254e882298dd24f808ba62c4b4"),
     ("create short order 4", "c3eaf8b045b0ce6922f5e87bace8438e1342ce94f92b571f84eacba14fa1d8b4", "33c009b7cdadcf3da99f76b0d66430083e021a0bc9a1f5bb31b8f2fa6ee301db"),
     ("create a second slot", "99cde7f0151cec52b0056b168c7f96f4d1c481f22045c03e1baa50aba766ad05", "d8074749166facddae6856fc8dac1fd5ae5ce5e61a169307501d861b75ed8ca5"),
     ("open pair D", "038c01eace96b4d2179efda97e1114b9141f6128f7cf8ea4a1613435b1da7105", "5683747910521aac0be9bcfc181b8c928e9fec66659fc4e15ff7a9edff4158d0"),
-    ("propose a close", "dffdff60472b57ebeba1becf924e1fbfa5f814a5aa29c4efcb60fd80650a6d75", "f1df9e795cf3bd168b5a43bd3699ac0f1fcff7d704e7ef905f5adfb80b75cfc4"),
-    ("finalize the close", "5cf22a14260d6e960065170c0011de86eb86601f64646f8fdc415c640277125a", "6a3f1a4f2f7d08e5e70a4806b9d21b5b61535b65a9f84b6e579a8dd3f5982eeb"),
+    ("propose a close", "8d54cf3f7dcc85102c6f5ed889255721633f2b6332ac6bea7924aa11debc7a97", "fb82ada5fb06b3e6528dd6b24733abc361b9091429d9612146d710eee1965825"),
+    ("finalize the close", "77961119d63ef4756b8edc8f9d6a7fca685267bea4c0f8a9ea0bfcaebcd681bd", "a64751a418c82a502e7902f0964240edf0b547b81084a60ed71fd32a8e80d04d"),
 ];
 
 struct Chain {
@@ -160,6 +160,39 @@ impl Chain {
 fn nth<T>(sg: &OSigned, i: usize, s: T, daa: u64) -> OLive<T> {
     let o = &sg.tx.outputs[i];
     OLive { s, value: o.value, id: o.covenant.map(|c| c.covenant_id), op: TransactionOutpoint { transaction_id: sg.tx.id(), index: i as u32 }, daa }
+}
+
+/// Defect 1 of the first live run: the vouch input is the underwriter's own plain UTXO; `KpfPairO.propose` checks only
+/// that it is a P2PK input of the underwriter with a SIGHASH_ALL signature, never where its value goes. What is left of
+/// it must reach the underwriter in an explicit output (never the funder's change), and the underwriter's signature
+/// must cover that output: redirecting it breaks the vouch input. A liquidation's bond is posted by the underwriter
+/// (the vouch input funds it: the owner gets `value - bond`, no output if that is zero); a close's bond is the closer's
+/// (the owner gets the whole value back).
+fn assert_vouch_returned(sg: &OSigned, vouch: &KeyUtxo, funder: &[u8; 32], is_close: bool, bond: i64) {
+    let back = if is_close { vouch.amount } else { vouch.amount - bond as u64 };
+    let closer_signs = is_close;
+    let to_owner: Vec<usize> = (0..sg.tx.outputs.len()).filter(|&i| sg.tx.outputs[i].script_public_key == p2pk_spk(&vouch.key)).collect();
+    assert_eq!(to_owner.len(), 1, "exactly one output goes to the underwriter: {:?}", sg.output_labels);
+    assert_eq!(sg.tx.outputs[to_owner[0]].value, back, "the underwriter gets exactly {back}: {:?}", sg.output_labels);
+    // The bond is inside the pending part (the pair's value plus the bond, whole claim).
+    assert!(sg.tx.outputs[0].value as i64 >= sg.entries[0].amount as i64 + bond, "the pending part holds the bond");
+    let j = sg.input_labels.iter().position(|l| l.contains("vouch")).expect("a vouch input");
+    assert_eq!(sg.entries[j].amount, vouch.amount);
+    // SIGHASH_ALL: one 65-byte signature, 0x01 last (the contract's `vouched` requires exactly this).
+    let ss = &sg.tx.inputs[j].signature_script;
+    assert!(ss.len() == 66 && ss[0] == 0x41 && ss[65] == 0x01, "the vouch signature is SIGHASH_ALL");
+    // The funder's change is a different output.
+    let change = sg.output_labels.iter().position(|l| l == "change").expect("change");
+    assert_ne!(change, to_owner[0]);
+    assert_eq!(sg.tx.outputs[change].script_public_key, p2pk_spk(funder));
+    // Anyone who rebuilds the transaction to keep the remainder breaks the owner's signature.
+    let mut stolen = sg.tx.clone();
+    stolen.outputs[to_owner[0]].script_public_key = p2pk_spk(funder);
+    stolen.finalize();
+    let v = kpf_protocol::verify::verify(&stolen, &sg.entries);
+    assert!(!v.input_ok(j), "an output redirected after the owner signed must fail the vouch input");
+    // A liquidation has no other signature: the pair's own script accepts the redirected output (only a close carries the closer's SIGHASH_ALL signature, which also covers it).
+    assert_eq!(v.input_ok(0), !closer_signs, "{:?}: the pair's script does not look at where the vouch value goes", v.errors());
 }
 
 #[test]
@@ -224,6 +257,22 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let f = c.mint(ek, 10, 0);
     let (b, w) = propose(&pair_a, &ClaimTerms { kind: KIND_LIQ, side: LONG, n: terms.n, price: 920_000_000, t0: 7_999_000 }, &vouch, &[f], &ek, r).unwrap();
     let sg = c.sign("propose a liquidation", &b);
+    assert_vouch_returned(&sg, &vouch, &ek, false, w.bond);
+    // The vouch input funds a liquidation's bond: it must hold at least the bond, and what is left must not be dust; an
+    // exact fit pays the underwriter nothing back (no output). Not part of the golden chain.
+    {
+        let term = ClaimTerms { kind: KIND_LIQ, side: LONG, n: terms.n, price: 920_000_000, t0: 7_999_000 };
+        let fund = KeyUtxo { outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x11; 32]), index: 0 }, amount: 10 * KAS, daa: 0, key: ek };
+        let with = |amount: u64| KeyUtxo { amount, ..vouch.clone() };
+        let e = propose(&pair_a, &term, &with(w.bond as u64 - 1), &[fund.clone()], &ek, r).unwrap_err().to_string();
+        assert!(e.contains("less than the claim's bond"), "{e}");
+        let e = propose(&pair_a, &term, &with(w.bond as u64 + 1), &[fund.clone()], &ek, r).unwrap_err().to_string();
+        assert!(e.contains("below the plain-output minimum"), "{e}");
+        let (b, _) = propose(&pair_a, &term, &with(w.bond as u64), &[fund], &ek, r).unwrap();
+        let s = b.sign(&c.keys).unwrap();
+        assert!(kpf_protocol::verify::verify(&s.tx, &s.entries).is_ok());
+        assert!(s.tx.outputs.iter().all(|o| o.script_public_key != p2pk_spk(&uk)), "an exact fit leaves nothing to pay back");
+    }
     let pend = nth(&sg, 0, w, 8_000_000);
     let f = c.mint(ek, 10, 0);
     let (b, cw, d) = contest(&pend, &opener, 50_000_000, &[f], &ek, r, &Trust::Untraced).unwrap();
@@ -251,6 +300,7 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let f = c.mint(ek, 10, 0);
     let (b, w) = propose(&restored, &ClaimTerms { kind: KIND_LIQ, side: LONG, n: terms.n, price: 920_000_000, t0: 8_999_000 }, &vouch, &[f], &ek, r).unwrap();
     let sg = c.sign("propose again", &b);
+    assert_vouch_returned(&sg, &vouch, &ek, false, w.bond);
     let birth = sg.tx.clone();
     let pend = nth(&sg, 0, w, 9_000_000);
     let opener2 = won; // the winner's stake came back fresh: too young to open a dispute on this claim
@@ -295,6 +345,7 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let f = c.mint(ek, 10, 0);
     let (b, w) = propose(&pair_b, &ClaimTerms { kind: KIND_LIQ, side: LONG, n: terms.n, price: 920_000_000, t0: 7_999_000 }, &vouch, &[f], &ek, r).unwrap();
     let sg = c.sign("propose on B", &b);
+    assert_vouch_returned(&sg, &vouch, &ek, false, w.bond);
     let pend = nth(&sg, 0, w, 8_000_000);
     let f = c.mint(lk, 2_000, 0);
     let (b, cured) = cure(&pend, &[f], &lk, r).unwrap();
@@ -393,6 +444,7 @@ fn every_oracle_shape_builds_signs_and_verifies() {
     let f = c.mint(lk, 700, 0);
     let (b, w) = propose(&pair_d, &ClaimTerms { kind: KIND_CLOSE, side: LONG, n: terms.n, price: 1_050_000_000, t0: 7_999_000 }, &vouch, &[f], &lk, r).unwrap();
     let sg = c.sign("propose a close", &b);
+    assert_vouch_returned(&sg, &vouch, &lk, true, w.bond);
     let pend = nth(&sg, 0, w, 8_000_000);
     let f = c.mint(ek, 10, 0);
     c.sign("finalize the close", &finalize(&pend, &[f], &ek, r).unwrap().0);

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use crate::args::*;
 use crate::files::*;
 use crate::keys;
-use crate::node::{Node, WsTransport};
+use crate::node::{Node, Transport, WsTransport};
 use crate::report;
 
 pub(crate) type R<T> = Result<T, String>;
@@ -95,7 +95,7 @@ pub(crate) fn connect(a: &Args) -> R<Option<Node<WsTransport>>> {
     }
 }
 
-pub(crate) fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Network) -> R<()> {
+pub(crate) fn refresh<T: Transport>(node: &mut Node<T>, o: &mut ObjFile, net: Network) -> R<()> {
     let list = node.utxos(&[p2sh_address(&o.redeem, net)])?;
     let u = list
         .iter()
@@ -109,12 +109,18 @@ pub(crate) fn refresh(node: &mut Node<WsTransport>, o: &mut ObjFile, net: Networ
     Ok(())
 }
 
-pub(crate) fn load_obj(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<ObjFile> {
-    let mut o = ObjFile::load(a.need(flag)?)?;
+/// An object file as a command may use it: with a node, its UTXO, value, covenant id and DAA score are read from the
+/// node (one small query), whatever the file says (a just-built file has no DAA; an old one may be stale); without a
+/// node the file is used as it is, and a use that needs the DAA refuses an unknown one (`ObjFile::known_daa`).
+pub(crate) fn with_node_facts<T: Transport>(mut o: ObjFile, node: &mut Option<Node<T>>, net: Network) -> R<ObjFile> {
     if let Some(n) = node {
         refresh(n, &mut o, net)?;
     }
     Ok(o)
+}
+
+pub(crate) fn load_obj(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<ObjFile> {
+    with_node_facts(ObjFile::load(a.need(flag)?)?, node, net)
 }
 
 pub(crate) struct Funder {
@@ -283,30 +289,45 @@ pub fn address(a: &Args) -> R<()> {
 
 // ---------------------------------------------------------------- inspect, quote
 
-fn load_decoded(a: &Args) -> R<(Decoded, Vec<u8>, Option<ObjFile>)> {
+/// The redeem script (and the object file, if one was given) the arguments name.
+fn load_raw(a: &Args) -> R<(Vec<u8>, Option<ObjFile>)> {
     if let Some(f) = a.get("object").or_else(|| a.get("pair")).or_else(|| a.get("order")) {
         let o = ObjFile::load(f)?;
-        return Ok((o.decoded()?, o.redeem.clone(), Some(o)));
+        return Ok((o.redeem.clone(), Some(o)));
     }
     let hex = if let Some(r) = a.get("redeem") {
         r.to_string()
     } else if let Some(p) = a.positional.first() {
         if Path::new(p).is_file() {
             let o = ObjFile::load(p)?;
-            return Ok((o.decoded()?, o.redeem.clone(), Some(o)));
+            return Ok((o.redeem.clone(), Some(o)));
         }
         p.clone()
     } else {
         return Err("give an object file, a redeem script in hex (positional or --redeem)".into());
     };
-    let rs = from_hex(&hex).map_err(e)?;
-    Ok((decode_redeem(&rs).map_err(e)?, rs, None))
+    Ok((from_hex(&hex).map_err(e)?, None))
+}
+
+fn load_decoded(a: &Args) -> R<(Decoded, Vec<u8>, Option<ObjFile>)> {
+    let (rs, obj) = load_raw(a)?;
+    Ok((decode_redeem(&rs).map_err(e)?, rs, obj))
 }
 
 pub fn inspect(a: &Args) -> R<()> {
     a.only(&["object", "pair", "order", "redeem", "json"])?;
     let net = network(a)?;
-    let (d, rs, obj) = load_decoded(a)?;
+    let (rs, obj) = load_raw(a)?;
+    let d = match decode_redeem(&rs) {
+        Ok(d) => d,
+        // Not a book-market object: try the oracle family before giving up.
+        Err(book) => {
+            return match kpf_protocol::oracle_build::OObj::decode(&rs) {
+                Ok(o) => crate::ocmds::inspect_oracle(a, &o, &rs, obj.as_ref(), net),
+                Err(oracle) => Err(format!("not an object of this tool's contracts: as a book-market object: {book}; as an oracle-market object: {oracle}")),
+            };
+        }
+    };
     let (kind, state, tpl) = match &d {
         Decoded::Pair(p) => ("pair", p.to_json(), kpf_protocol::artifacts::pair_template().hash),
         Decoded::Open(o) => ("order", o.to_json(), kpf_protocol::artifacts::open_template().hash),

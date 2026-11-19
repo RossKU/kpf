@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use kaspa_consensus_core::Hash;
 use kpf_protocol::bond::{Bond, BondParams};
 use kpf_protocol::error::{from_hex, to_hex};
-use kpf_protocol::judge::{Js, JudgeParams, NO, YES};
+use kpf_protocol::judge::{Js, JudgeParams, NO, STATUS_FREE, STATUS_UNBONDING, YES};
 use kpf_protocol::network::{p2pk_address, p2sh_address, Network};
 use kpf_protocol::oracle::*;
 use kpf_protocol::oracle_build::*;
@@ -20,7 +20,7 @@ use crate::args::*;
 use crate::cmds::{connect, e, int, int_or, network, price, price_or, side, R};
 use crate::files::*;
 use crate::keys;
-use crate::node::{Node, WsTransport};
+use crate::node::{Node, Transport, WsTransport};
 
 const DAA_PER_SECOND: i64 = 10;
 
@@ -239,19 +239,14 @@ fn slot_of(a: &Args, flag: &str, node: &mut Option<Node<WsTransport>>, net: Netw
         (_, o) => Err(format!("--{flag} is a {}, not an underwriting slot", o.kind())),
     }
 }
-fn stake_of_path(path: &str) -> R<OLive<Js>> {
-    let f = ObjFile::load(path)?;
-    match OObj::decode(&f.redeem).map_err(e)? {
-        OObj::Stake(s) => live_of(&f, s),
-        o => Err(format!("{path} is a {}, not a judge stake", o.kind())),
-    }
+/// A stake file (a free or unbonding stake, a receipt, a dispute, a pool): with `--node` its UTXO, value and DAA score
+/// are read from the node (review 7; defect 3 of the first live run), without it the file is used as it is.
+fn stake_at(path: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<OLive<Js>> {
+    stake_from(path, node, net)
 }
-/// A stake file refreshed through the node (its UTXO, value and DAA confirmed; review 7).
-fn stake_live(_a: &Args, path: &str, node: &mut Option<Node<WsTransport>>, net: Network) -> R<OLive<Js>> {
-    let mut f = ObjFile::load(path)?;
-    if let Some(n) = node {
-        crate::cmds::refresh(n, &mut f, net)?;
-    }
+
+fn stake_from<T: Transport>(path: &str, node: &mut Option<Node<T>>, net: Network) -> R<OLive<Js>> {
+    let f = crate::cmds::with_node_facts(ObjFile::load(path)?, node, net)?;
     match OObj::decode(&f.redeem).map_err(e)? {
         OObj::Stake(s) => live_of(&f, s),
         o => Err(format!("{path} is a {}, not a judge stake", o.kind())),
@@ -319,25 +314,61 @@ fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: 
         }
         return Err("verification failed: nothing written, nothing submitted".into());
     }
-    if !a.has("no-save") {
-        let dir = PathBuf::from(a.get("out-dir").unwrap_or("kpf-out"));
+    let save = |dry: bool| -> R<()> {
+        let dir = out_dir(a, dry);
         let tag: String = sg.tx.id().to_string().chars().take(8).collect();
         for (i, obj, _) in &sg.created {
             let p = dir.join(format!("{tag}-out{i}-{}.json", obj.kind().replace(' ', "-")));
-            write_json(&p, &obj_json(&sg, *i, obj, net))?;
+            let mut v = obj_json(&sg, *i, obj, net);
+            if dry {
+                v["dryRun"] = json!(true);
+            }
+            write_json(&p, &v)?;
             println!("written: {}", p.display());
         }
         let p = dir.join(format!("{tag}-tx.json"));
-        write_json(&p, &json!({ "format": "kpf-tx/1", "title": title, "network": net.name(), "txid": sg.tx.id().to_string(), "transaction": rpc_json(&sg.tx) }))?;
+        write_json(&p, &json!({ "format": "kpf-tx/1", "title": title, "network": net.name(), "txid": sg.tx.id().to_string(), "dryRun": dry, "transaction": rpc_json(&sg.tx) }))?;
         println!("written: {}", p.display());
-    }
+        Ok(())
+    };
     if a.has("submit") {
         let n = node.as_mut().ok_or("--submit needs --node <ws-url>")?;
-        println!("SUBMITTED: node accepted {}", n.submit(&rpc_json(&sg.tx))?);
+        // Files at the top level of the out-dir are those of submitted transactions only: a refused submission leaves its
+        // files under `dry-run/`.
+        match n.submit(&rpc_json(&sg.tx)) {
+            Ok(id) => {
+                println!("SUBMITTED: node accepted {id}");
+                if !a.has("no-save") {
+                    save(false)?;
+                }
+            }
+            Err(x) => {
+                if !a.has("no-save") {
+                    save(true)?;
+                }
+                return Err(format!("the node refused the transaction (its files, if any, are under {}): {x}", out_dir(a, true).display()));
+            }
+        }
     } else {
-        println!("not submitted (add --submit --node <ws-url> to send it)");
+        if !a.has("no-save") {
+            save(true)?;
+        }
+        println!("not submitted: a dry run (its files are under {}, apart from the live ones; add --submit --node <ws-url> to send it, which writes the files again at {})", out_dir(a, true).display(), out_dir(a, false).display());
     }
     Ok(())
+}
+
+/// The subfolder of `--out-dir` that holds the files of a dry run (a transaction not submitted), so that the top level
+/// holds only the files of transactions the node accepted.
+pub const DRY_RUN_DIR: &str = "dry-run";
+
+fn out_dir(a: &Args, dry: bool) -> PathBuf {
+    let base = PathBuf::from(a.get("out-dir").unwrap_or("kpf-out"));
+    if dry {
+        base.join(DRY_RUN_DIR)
+    } else {
+        base
+    }
 }
 
 const BUILD: &[&str] = &["funder", "funding", "key", "node", "fee-rate", "out-dir", "no-save", "submit", "daa"];
@@ -476,7 +507,10 @@ pub fn open_cmd(a: &Args) -> R<()> {
 // ---------------------------------------------------------------- claims
 
 /// `vouch`: the underwriter vouches a price and proposes a claim (a liquidation; or a close, which the closing party
-/// signs too). `--vouch` is the underwriter's own UTXO (a funding file of one P2PK UTXO of its key).
+/// signs too). `--vouch` is the underwriter's own UTXO (a funding file of one P2PK UTXO of its key). A liquidation's bond is
+/// posted by the underwriter: the vouch UTXO must hold at least the bond and what is left of it goes back to the
+/// underwriter. A close's bond is the closer's: the vouch value goes back in full and the funder (expected to be the
+/// closer) pays the bond. The funder always pays the network fee.
 pub fn vouch_cmd(a: &Args) -> R<()> {
     only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch"])?;
     let net = network(a)?;
@@ -492,6 +526,12 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
     let v = parse_utxos(&read_json(a.need("vouch")?)?)?;
     let vu = funding_utxos(&v, &lp.s.b.uw_key);
     let vouch = vu.first().ok_or("--vouch lists no plain UTXO of the pair's underwriter key")?;
+    // The vouch input is the underwriter's (see `propose`: it funds a liquidation's bond, the rest goes back to it): it never funds the fee, so a funder that
+    // is also the underwriter must not list it twice.
+    let fu: Vec<KeyUtxo> = fu.into_iter().filter(|u| u.outpoint != vouch.outpoint).collect();
+    if fu.is_empty() {
+        return Err("no funding left once the vouch UTXO is set aside: the funder pays the network fee (and, for a close, the bond), so give another plain UTXO of the funder".into());
+    }
     let t = now(a, &mut node)?;
     let t0 = int_or(a, "t0", t as i64)?;
     let n = if a.has("n") { parse_amount(a.need("n")?, lp.s.m.p.scale)? } else { lp.s.size };
@@ -507,6 +547,11 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
         w.b.expiry - w.m.p.challenge_daa,
         w.m.p.late_daa
     );
+    if kind == KIND_LIQ {
+        println!("The vouch input ({} KAS) funds the claim's bond {} KAS and the rest goes back to the underwriter; the funder pays only the network fee.", fmt_kas(vouch.amount as i128), fmt_kas(w.bond as i128));
+    } else {
+        println!("The vouch input's {} KAS go back to the underwriter in full. The closer posts the bond ({} KAS): the funder is expected to be the closer, and pays it and the fee.", fmt_kas(vouch.amount as i128), fmt_kas(w.bond as i128));
+    }
     finish(a, "vouch: a price claim", &b, &keys, net, &mut node)
 }
 
@@ -550,7 +595,7 @@ pub fn contest_cmd(a: &Args) -> R<()> {
     let net = network(a)?;
     let mut node = connect(a)?;
     let w = pending_of(a, "pending", &mut node, net)?;
-    let st = stake_of_path(a.need("stake")?)?;
+    let st = stake_at(a.need("stake")?, &mut node, net)?;
     let trace = match a.get("claim-tx") {
         Some(p) => {
             let id = w.id.ok_or("the pending part has no covenant id")?;
@@ -602,7 +647,7 @@ pub fn deposit_cmd(a: &Args) -> R<()> {
         _ => return Err("the trace needs both --opening and --claim-tx".into()),
     };
     untraced_or_refuse(a, node.is_some(), "deposit", trace.is_some())?;
-    let stakes = a.all("stake").into_iter().map(|p| if node.is_some() { stake_live(a, p, &mut node, net) } else { stake_of_path(p) }).collect::<R<Vec<_>>>()?;
+    let stakes = a.all("stake").into_iter().map(|p| stake_at(p, &mut node, net)).collect::<R<Vec<_>>>()?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let trust = match &trace {
         Some(t) => Trust::Traced(t),
@@ -618,7 +663,7 @@ pub fn resolve_cmd(a: &Args) -> R<()> {
     only(a, &["dispute", "pending"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
-    let d = stake_of_path(a.need("dispute")?)?;
+    let d = stake_at(a.need("dispute")?, &mut node, net)?;
     let w = pending_of(a, "pending", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let (b, w2, _) = decide(&d, &w, &fu, &fk, rate(a)?).map_err(e)?;
@@ -655,7 +700,7 @@ pub fn renew_cmd(a: &Args) -> R<()> {
     let mut node = connect(a)?;
     let mut pairs = vec![];
     for p in a.all("pair") {
-        let f = ObjFile::load(p)?;
+        let f = crate::cmds::with_node_facts(ObjFile::load(p)?, &mut node, net)?;
         match OObj::decode(&f.redeem).map_err(e)? {
             OObj::Pair(x) => pairs.push(live_of(&f, x)?),
             o => return Err(format!("{p} is a {}", o.kind())),
@@ -683,11 +728,243 @@ pub fn settle_pool_cmd(a: &Args) -> R<()> {
     only(a, &["pool", "receipt"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
-    let pool = stake_of_path(a.need("pool")?)?;
-    let rs = a.all("receipt").into_iter().map(stake_of_path).collect::<R<Vec<_>>>()?;
+    let pool = stake_at(a.need("pool")?, &mut node, net)?;
+    let rs = a.all("receipt").into_iter().map(|p| stake_at(p, &mut node, net)).collect::<R<Vec<_>>>()?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let b = if rs.is_empty() { pool_close(&pool, &fk, rate(a)?).map_err(e)? } else { pool_settle(&pool, &rs, &fu, &fk, rate(a)?).map_err(e)?.0 };
     finish(a, if rs.is_empty() { "close the pool" } else { "settle receipts" }, &b, &keys, net, &mut node)
+}
+
+// ---------------------------------------------------------------- the judge stake's exit
+
+/// `stake-unbond`: the owner's free stake (a stake returned by `settle-pool` is one) starts leaving; it counts nowhere
+/// from then on. `--key` is the owner's.
+pub fn stake_unbond_cmd(a: &Args) -> R<()> {
+    only(a, &["stake"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let st = stake_at(a.need("stake")?, &mut node, net)?;
+    if st.s.status != STATUS_FREE {
+        return Err(format!("--stake is {}: only a free stake unbonds", stake_state_words(&st.s)));
+    }
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    let (b, _) = stake_unbond(&st, &fu, &fk, rate(a)?).map_err(e)?;
+    println!("The stake of {} KAS stops counting now and can be withdrawn {} DAA after the unbonding transaction is accepted (kpf stake-withdraw).", fmt_kas(st.value as i128), st.s.m.p.unbond);
+    finish(a, "stake-unbond: the stake starts leaving", &b, &keys, net, &mut node)
+}
+
+/// `stake-withdraw`: an unbonding stake that is `unbond` DAA old pays its whole value, less the fee, to `--to` (default
+/// the owner). `--key` is the owner's; no funder is needed.
+pub fn stake_withdraw_cmd(a: &Args) -> R<()> {
+    only(a, &["stake", "to"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let st = stake_at(a.need("stake")?, &mut node, net)?;
+    if st.s.status != STATUS_UNBONDING {
+        return Err(format!("--stake is {}: only an unbonding stake withdraws (run kpf stake-unbond first)", stake_state_words(&st.s)));
+    }
+    let keys = crate::cmds::funder_and_keys(a, false)?.expect("keys").keys;
+    let to = match a.get("to") {
+        Some(t) => keys::party(t, net)?,
+        None => st.s.owner,
+    };
+    println!("withdrawable from DAA {} (the stake's UTXO DAA {} + the unbonding delay {})", st.daa + st.s.m.p.unbond as u64, st.daa, st.s.m.p.unbond);
+    finish(a, "stake-withdraw: the stake leaves", &stake_withdraw(&st, &to, rate(a)?).map_err(e)?, &keys, net, &mut node)
+}
+
+fn stake_state_words(s: &Js) -> &'static str {
+    use kpf_protocol::judge::*;
+    match s.status {
+        STATUS_FREE => "a free stake",
+        STATUS_UNBONDING => "an unbonding stake",
+        STATUS_RECEIPT => "a receipt (committed stake leaves only through its pool's settlement)",
+        STATUS_DISPUTE => "a dispute",
+        STATUS_RESOLVED => "a resolved pool",
+        _ => "a stake in an unknown state",
+    }
+}
+
+// ---------------------------------------------------------------- the pair's price-free exits
+
+/// `oracle-amend`: a party lists its side for a hand-over (`--price P`, the ask of a long or the bid of a short) or
+/// unlists it. `--key` is that side's owner; the pair's UTXO must be quietDaa old.
+pub fn oracle_amend_cmd(a: &Args) -> R<()> {
+    only(a, &["pair", "side", "price", "min-part", "tip", "unlist"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let lp = pair_of(a, "pair", &mut node, net)?;
+    let sd = side(a.need("side")?)?;
+    let (ask, min_part, tip) = if a.has("unlist") {
+        (0, 0, 0)
+    } else {
+        (price(a, "price")?, if a.has("min-part") { parse_amount(a.need("min-part")?, lp.s.m.p.scale)? } else { 0 }, price_or(a, "tip", 0)?)
+    };
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    let (b, _) = amend(&lp, sd, ask, min_part, tip, &fu, &fk, rate(a)?).map_err(e)?;
+    println!("The pair's UTXO must be {} DAA old (quietDaa); it is DAA {}, so from DAA {}.", lp.s.m.p.quiet_daa, lp.daa, lp.daa as i64 + lp.s.m.p.quiet_daa);
+    finish(a, if a.has("unlist") { "oracle-amend: unlist" } else { "oracle-amend: list" }, &b, &keys, net, &mut node)
+}
+
+/// `oracle-transfer`: the whole of a listed side changes hands at `--x` to `--entrant` (default the funder), who posts
+/// the bound `--nb` and funds the new pair. The leaver is paid out of the pair at `x`. `--key` is not needed: no party
+/// signs a transfer (the listing is the leaver's consent).
+pub fn oracle_transfer_cmd(a: &Args) -> R<()> {
+    only(a, &["pair", "side", "x", "nb", "entrant"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let lp = pair_of(a, "pair", &mut node, net)?;
+    let sd = side(a.need("side")?)?;
+    let x = price(a, "x")?;
+    let nb = price(a, "nb")?;
+    let p = &lp.s;
+    if sd == LONG && !(p.long_ask > 0 && x >= p.long_ask) {
+        return Err(format!("the long is not listed at or below {} KAS (ask {}): the contract takes a long only at or above its ask", fmt_kas(x as i128), fmt_kas(p.long_ask as i128)));
+    }
+    if sd != LONG && !(p.short_bid > 0 && x <= p.short_bid) {
+        return Err(format!("the short is not listed at or above {} KAS (bid {}): the contract takes a short only at or below its bid", fmt_kas(x as i128), fmt_kas(p.short_bid as i128)));
+    }
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    let entrant = match a.get("entrant") {
+        Some(k) => keys::party(k, net)?,
+        None => fk,
+    };
+    let (b, part) = transfer(&lp, sd, x, nb, entrant, &fu, &fk, rate(a)?).map_err(e)?;
+    println!("new pair [{} .. {}] KAS of {} units; the entrant is {}", fmt_kas(part.bl as i128), fmt_kas(part.bs as i128), fmt_units(part.size as i128, part.m.p.scale as i128), to_hex(&entrant));
+    finish(a, "oracle-transfer: a side changes hands", &b, &keys, net, &mut node)
+}
+
+/// `oracle-mutual-close`: both sides are listed and the listings cross (long ask <= `--x` <= short bid): anyone closes
+/// the whole pair at `--x`.
+pub fn oracle_mutual_close_cmd(a: &Args) -> R<()> {
+    only(a, &["pair", "x"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let lp = pair_of(a, "pair", &mut node, net)?;
+    let x = price(a, "x")?;
+    let p = &lp.s;
+    if !(p.long_ask > 0 && p.short_bid > 0 && x >= p.long_ask && x <= p.short_bid) {
+        return Err(format!("the listings do not cross at {} KAS (long ask {}, short bid {}; 0 is unlisted)", fmt_kas(x as i128), fmt_kas(p.long_ask as i128), fmt_kas(p.short_bid as i128)));
+    }
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    finish(a, "oracle-mutual-close", &mutual_close(&lp, x, &fu, &fk, rate(a)?).map_err(e)?, &keys, net, &mut node)
+}
+
+/// `oracle-coop-close`: both owners sign; the long gets `--long-pay` KAS, the short the rest less the fee.
+/// `--key` twice: the long's and the short's.
+pub fn oracle_coop_close_cmd(a: &Args) -> R<()> {
+    only(a, &["pair", "long-pay"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let lp = pair_of(a, "pair", &mut node, net)?;
+    let long_pay = kas(a.need("long-pay")?).map_err(|m| format!("--long-pay: {m}"))?;
+    if long_pay < 0 {
+        return Err("--long-pay must not be negative".into());
+    }
+    let keys = crate::cmds::funder_and_keys(a, false)?.expect("keys").keys;
+    println!("both owners' keys are needed: long {} and short {}", to_hex(&lp.s.long_key), to_hex(&lp.s.short_key));
+    finish(a, "oracle-coop-close", &coop_close(&lp, long_pay as u64, rate(a)?).map_err(e)?, &keys, net, &mut node)
+}
+
+// ---------------------------------------------------------------- inspect
+
+/// `inspect` of an oracle-market object: what it is, its state in words, and (for a file) its UTXO.
+pub fn inspect_oracle(a: &Args, o: &OObj, rs: &[u8], file: Option<&ObjFile>, net: Network) -> R<()> {
+    let k = kpf_protocol::oracle_artifacts::kit();
+    let tpl = match o {
+        OObj::Order(_) => k.open.hash,
+        OObj::Pair(_) => k.pair.hash,
+        OObj::Pending(_) => k.pending.hash,
+        OObj::Slot(_) => k.bond.hash,
+        OObj::Stake(_) => k.stake.hash,
+    };
+    let market = match o {
+        OObj::Order(x) => x.m.id(),
+        OObj::Pair(x) => x.m.id(),
+        OObj::Pending(x) => x.m.id(),
+        OObj::Slot(x) => x.m.id,
+        OObj::Stake(x) => x.m.id,
+    };
+    let mut doc = json!({
+        "kind": o.kind(), "family": "oracle", "network": net.name(), "address": p2sh_address(rs, net), "redeemBytes": rs.len(),
+        "templateHash": to_hex(&tpl), "marketId": to_hex(&market), "state": format!("{o:?}"),
+    });
+    if let Some(f) = file {
+        doc["utxo"] = json!({"outpoint": outpoint_json(&f.op), "amount": f.amount, "daa": f.daa, "covenantId": f.covenant_id.to_string()});
+    }
+    if a.has("json") {
+        println!("{}", serde_json::to_string_pretty(&doc).expect("json"));
+        return Ok(());
+    }
+    let side_word = |s: i64| if s == LONG { "long" } else { "short" };
+    println!("{}   {}   template {}   market {}", o.kind(), p2sh_address(rs, net), &to_hex(&tpl)[..16], &to_hex(&market)[..16]);
+    match o {
+        OObj::Pair(p) => {
+            let sc = p.m.p.scale as i128;
+            println!("size {} units ({} base units)   range bl {} .. bs {} KAS   entry {}   floor value {} KAS", fmt_units(p.size as i128, sc), p.size, fmt_kas(p.bl as i128), fmt_kas(p.bs as i128), fmt_kas(p.entry as i128), fmt_kas(p.floor() as i128));
+            println!("long   {}   listing ask {} (min part {}, tip {})", to_hex(&p.long_key), fmt_kas(p.long_ask as i128), p.long_min, fmt_kas(p.long_tip as i128));
+            println!("short  {}   listing bid {} (min part {}, tip {})", to_hex(&p.short_key), fmt_kas(p.short_bid as i128), p.short_min, fmt_kas(p.short_tip as i128));
+            println!("underwriter {}   slot {}   cover rate {} KAS   premium {} KAS a term", to_hex(&p.b.uw_key), to_hex(&p.b.uw_id), fmt_kas(p.b.cover_rate as i128), fmt_kas(p.b.premium as i128));
+            println!("cover expires at DAA {}; lapse settle from DAA {}; claims must land {} DAA before the expiry", p.b.expiry, p.lapse_from(), p.m.p.challenge_daa);
+        }
+        OObj::Pending(w) => {
+            let status = match w.status {
+                PENDING => "pending: contestable until the window ends",
+                CONTESTED => "contested: its dispute decides",
+                UPHELD => "upheld: finalize at once",
+                REFUTED => "refuted: finalize at once (restores the part)",
+                _ => "in an unknown state",
+            };
+            println!(
+                "{} claim ({status}): the {} of {} units of the range {} .. {} KAS at the vouched price {} KAS (t0 {})",
+                if w.kind == KIND_LIQ { "liquidation" } else { "close" },
+                side_word(w.side),
+                fmt_units(w.n as i128, w.m.p.scale as i128),
+                fmt_kas(w.bl as i128),
+                fmt_kas(w.bs as i128),
+                fmt_kas(w.quote as i128),
+                w.t0
+            );
+            println!("bond {} KAS, refund {} KAS, keeper fee {} KAS; underwriter {}; long {} short {}", fmt_kas(w.bond as i128), fmt_kas(w.refund as i128), fmt_kas(w.fee as i128), to_hex(&w.b.uw_key), to_hex(&w.long_key), to_hex(&w.short_key));
+            if w.status != PENDING {
+                println!("contested at P = {}; disputer {}", w.clock, to_hex(&w.disputer));
+            }
+            println!("contest window {} DAA from the UTXO's DAA", w.m.p.challenge_daa);
+        }
+        OObj::Order(x) => {
+            let sc = x.m.p.scale as i128;
+            println!(
+                "{} order of {} units left, limit {} KAS, own margin rate {} KAS, accepts counter rate >= {} KAS, min fill {} units, tip {} KAS, premium at most {} KAS",
+                side_word(x.side),
+                fmt_units(x.size_left as i128, sc),
+                fmt_kas(x.limit as i128),
+                fmt_kas(x.my_rate as i128),
+                fmt_kas(x.min_counter_rate as i128),
+                fmt_units(x.min_fill as i128, sc),
+                fmt_kas(x.tip as i128),
+                fmt_kas(x.prem_max as i128)
+            );
+            println!("owner {}   active from DAA {}   expires DAA {}   slot accepted {}", to_hex(&x.owner), x.active_from, x.expiry_daa, if x.uw_accept == [0; 32] { "any".to_string() } else { to_hex(&x.uw_accept) });
+        }
+        OObj::Slot(b) => {
+            let sum: i64 = b.ring.iter().sum();
+            println!("{} slot of {}   cover counted {} KAS", if b.status == kpf_protocol::bond::STATUS_UNBONDING { "unbonding" } else { "active" }, to_hex(&b.owner), fmt_kas(sum as i128));
+            if let Some(f) = file {
+                println!("capacity {} KAS (rho {})   unbonding delay {} DAA", fmt_kas(capacity(f.amount as i64, b.m.p.rho_bps) as i128), b.m.p.rho_bps as f64 / 1e4, b.m.p.unbond);
+            }
+        }
+        OObj::Stake(s) => {
+            println!("{}   owner {}", stake_state_words(s), to_hex(&s.owner));
+            match s.status {
+                kpf_protocol::judge::STATUS_RECEIPT => println!("receipt: {} KAS on {} (round {}, anchor {})", fmt_kas(s.amt as i128), if s.side == YES { "YES" } else { "NO" }, s.round, s.anchor),
+                kpf_protocol::judge::STATUS_DISPUTE | kpf_protocol::judge::STATUS_RESOLVED => println!("{} leads (YES {} KAS, NO {} KAS), anchor {}, lead changes {}", if s.side == YES { "YES" } else { "NO" }, fmt_kas(s.yes as i128), fmt_kas(s.no as i128), s.anchor, s.round),
+                _ => println!("unbonding delay {} DAA, minimum stake {} KAS, stake counts if {} DAA older than the claim", s.m.p.unbond, fmt_kas(s.m.p.min_stake as i128), s.m.p.age),
+            }
+        }
+    }
+    if let Some(f) = file {
+        println!("utxo {}:{}  {} KAS  DAA {}  covenant id {}", f.op.transaction_id, f.op.index, fmt_kas(f.amount as i128), crate::cmds::daa_str(f.daa), crate::cmds::short_hash(&f.covenant_id));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- watch
@@ -842,5 +1119,61 @@ mod tests {
         assert!(untraced_or_refuse(&none, false, "deposit", true).is_err(), "without a node the UTXO is unchecked: the flag is needed");
         assert!(untraced_or_refuse(&none, false, "contest", false).unwrap_err().contains("--accept-untraced"));
         assert!(untraced_or_refuse(&ack, false, "contest", false).is_ok());
+    }
+
+    /// A node that knows one UTXO and counts the queries it is asked.
+    struct Mock {
+        txid: String,
+        daa: u64,
+        asked: usize,
+    }
+    impl Transport for Mock {
+        fn call(&mut self, method: &str, _params: Value) -> Result<Value, String> {
+            assert_eq!(method, "getUtxosByAddresses", "one small query per object, nothing else");
+            self.asked += 1;
+            Ok(json!({"entries": [{"outpoint": {"transactionId": self.txid, "index": 1},
+                "utxoEntry": {"amount": 1_000_000_000u64, "blockDaaScore": self.daa, "covenantId": null}}]}))
+        }
+    }
+
+    /// Defect 3 of the first live run: a command given a node refreshes an object file that has no DAA score (or a
+    /// stale one) from the node, one query per object; without a node the refusal names the fix.
+    #[test]
+    fn a_node_fills_in_a_missing_or_stale_daa_and_offline_refuses_with_the_fix() {
+        let net = Network::Testnet10;
+        let m = OMarket::testnet([7; 32]);
+        let st = Js::free([9; 32], m.judge_market());
+        let txid = "ab".repeat(32);
+        let dir = std::env::temp_dir().join(format!("kpf-daa-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, daa: Option<u64>| {
+            let f = ObjFile { op: kaspa_consensus_core::tx::TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes(hex32(&txid).unwrap()), index: 1 }, amount: 1_000_000_000, daa, covenant_id: Hash::default(), redeem: OObj::Stake(st.clone()).redeem() };
+            let p = dir.join(name);
+            write_json(&p, &f.to_json(net)).unwrap();
+            p.display().to_string()
+        };
+        let fresh = write("no-daa.json", None);
+        let stale = write("stale.json", Some(5));
+        // Offline: refused, and the message says what fixes it.
+        let none: &mut Option<Node<Mock>> = &mut None;
+        let err = stake_from(&fresh, none, net).unwrap_err();
+        assert!(err.contains("has no `daa`") && err.contains("--node"), "{err}");
+        // Offline with a DAA in the file: used as it is.
+        assert_eq!(stake_from(&stale, none, net).unwrap().daa, 5);
+        // With a node: filled in, and a stale score replaced; one query per object.
+        let mut node = Some(Node::new(Mock { txid: txid.clone(), daa: 777, asked: 0 }));
+        assert_eq!(stake_from(&fresh, &mut node, net).unwrap().daa, 777);
+        assert_eq!(stake_from(&stale, &mut node, net).unwrap().daa, 777);
+        assert_eq!(node.as_ref().unwrap().t.asked, 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Defect 7: a dry run writes under `dry-run/`; only a submitted transaction writes at the top of the out-dir.
+    #[test]
+    fn dry_runs_have_their_own_folder() {
+        let a = args(&["x", "--out-dir", "somewhere"]);
+        assert_eq!(out_dir(&a, true), PathBuf::from("somewhere").join("dry-run"));
+        assert_eq!(out_dir(&a, false), PathBuf::from("somewhere"));
+        assert_eq!(out_dir(&args(&["x"]), true), PathBuf::from("kpf-out").join("dry-run"));
     }
 }
