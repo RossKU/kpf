@@ -487,44 +487,50 @@ pair); exits (1)-(4) stay open throughout. No rebind or request exists in this s
 
 ## 19. Numbers
 
-Script bytes (prefix + state + suffix): `KpfOpenO` 5,845 (1 + 465 + 5,379), `KpfPairO` 13,337 (1 + 624 + 12,712; the note
-estimated about 10 kB), `KpfPendingO` 4,302 (1 + 780 + 3,521; about 5 kB), `KpfBond` 4,453 (1 + 236 + 4,216), `KpfStake`
-9,688 (1 + 270 + 9,417). The stack limit is 244: the stand-ins' bind proof (a local per argument) exceeds it with the
-oracle market's 41 state fields, so the oracle order and pair carry an equivalent lean text (the same push checks, three
-reads).
+Refreshed after review 11 (the numbers of this slice as first built are in the history of this file; each later section
+states what its change moved). Script bytes (prefix + state + suffix): `KpfOpenO` 6,536 (1 + 465 + 6,070), `KpfPairO`
+16,149 (1 + 723 + 15,425; the note estimated about 10 kB), `KpfPendingO` 4,427 (1 + 813 + 3,613; about 5 kB), `KpfBond`
+4,493 (1 + 236 + 4,256), `KpfStake` 9,665 (1 + 270 + 9,394). The stack limit is 244: the stand-ins' bind proof (a local
+per argument) exceeds it with the oracle market's 41 state fields, so the oracle order and pair carry an equivalent lean
+text (the same push checks, three reads). The largest stack is the take's, 209; the pair's largest 181 (a liquidation's
+propose).
 
 Transactions (each input committing the smallest covering compute budget; relay fee at 100 sompi per gram; the fixture
 pair: 1,000 units, cover 6,000 KAS, a 10 KAS opening stake, a 0.5 KAS dispute base; `oracle_metrics_tests`):
 
 | Transaction | Inputs | Script units per input | Compute mass | Storage mass | Bytes | Fee (KAS) |
 |---|---|---|---|---|---|---|
-| open (2 orders, slot bind, funder) | 4 | 268,178 / 268,325 / 169,945 / 100,001 | 52,850 | 529 | 42,850 | 0.0857 |
-| propose a liquidation (pair, vouch, funder) | 3 | 583,177 / 100,001 / 100,001 | 26,016 | 0 | 17,486 | 0.0350 |
-| propose a close | 3 | 399,986 / 100,001 / 100,001 | 24,116 | 0 | 17,486 | 0.0350 |
-| finalize: forfeit, close, void, upheld, refuted | 2 | 9,386 to 9,601 / 100,001 | 6,814 to 7,271 | <= 109 | 4,734 to 4,821 | 0.0095 |
-| cure | 2 | 110,188 / 100,001 | 8,025 | 28 | 4,835 | 0.0097 |
-| contest (pending, opener's stake, funder) | 3 | 176,046 / 302,767 / 100,001 | 21,922 | 80,390 | 14,752 | 0.0295 |
-| deposit, 1 stake / 7 stakes | 3 / 9 | dispute 299,751 / 1,136,235, each stake 229,904 | 27,260 / 110,660 | 80,079 / 82,231 | 20,060 / 79,640 | 0.0401 / 0.1593 |
-| resolve and decide | 3 | 128,825 / 168,226 / 100,001 | 19,472 | 79,972 | 14,572 | 0.0291 |
-| settle 1 winning + 1 losing receipt | 4 | 350,457 / 99,335 / 99,335 / 100,001 | 37,092 | 3,483 | 29,692 | 0.0594 |
-| close the pool | 2 | 19,873 / 100,001 | 11,908 | 20,913 | 10,078 | 0.0202 |
-| renew 1 / 4 / 7 pairs (one bind) | 3 / 6 / 9 | each pair 278,371 to 278,405, slot 170,049 to 170,363 | 25,487 / 75,161 / 124,835 | <= 524 | 18,627 / 59,091 / 99,555 | 0.0373 / 0.1182 / 0.1991 |
-| lapse settle / mutual close | 2 | 27,638 / 28,266 | 16,049 / 16,059 | 4 | 13,769 / 13,779 | 0.0275 / 0.0276 |
-| amend / transfer to a signing taker / cooperative close | 2 | 304,745 / 236,924 / 227,767 | 18,556 / 18,277 / 18,181 | <= 24 | 13,826 / 13,887 / 13,901 | 0.0277 / 0.0278 / 0.0278 |
-| take by an order with the slot's bind | 4 | 236,924 / 268,118 / 169,945 / 100,001 | 46,820 | 30 | 37,490 | 0.0750 |
-| unbond the slot | 2 | 167,792 / 100,001 | 8,273 | 12 | 4,943 | 0.0099 |
+| open (2 orders, slot bind, funder) | 4 | 306,013 / 306,165 / 170,523 / 100,001 | 60,598 | 529 | 49,698 | 0.0994 |
+| propose a liquidation (pair, vouch, funder) | 3 | 690,223 / 100,001 / 100,001 | 30,020 | 0 | 20,390 | 0.0408 |
+| a party's own close (pair, the closer's funding) | 2 | 452,181 / 100,001 | 26,500 | 6 | 20,270 | 0.0405 |
+| finalize: forfeit, close, void, upheld, refuted | 2 | 9,636 to 9,884 / 100,001 | 6,939 to 7,396 | <= 109 | 4,859 to 4,946 | 0.0097 to 0.0099 |
+| cure | 2 | 110,438 / 100,001 | 8,150 | 28 | 4,960 | 0.0099 |
+| contest (pending, opener's stake, funder) | 3 | 187,039 / 302,307 / 100,001 | 22,124 | 80,390 | 14,854 | 0.0297 |
+| deposit, 1 stake / 7 stakes | 3 / 9 | dispute 299,061 / 1,133,613, each stake 229,605 | 27,214 / 110,476 | 80,079 / 82,231 | 20,014 / 79,456 | 0.0400 / 0.1589 |
+| resolve and decide | 3 | 128,526 / 179,201 / 100,001 | 19,674 | 79,972 | 14,674 | 0.0293 |
+| settle 1 winning + 1 losing receipt | 4 | 349,652 / 99,105 / 99,105 / 100,001 | 36,923 | 3,483 | 29,623 | 0.0592 |
+| close the pool | 2 | 19,849 / 100,001 | 12,297 | 20,924 | 10,107 | 0.0202 |
+| renew 1 / 4 / 7 pairs (one bind) | 3 / 6 / 9 | each pair 327,236 to 327,271, slot 170,627 to 170,941 | 28,839 / 88,449 / 148,059 | <= 524 | 21,479 / 70,379 / 119,279 | 0.0430 / 0.1408 / 0.2386 |
+| lapse settle / mutual close | 2 | 33,255 / 33,890 | 18,961 / 18,971 | 4 | 16,581 / 16,591 | 0.0332 / 0.0332 |
+| amend / transfer to a signing taker / cooperative close | 2 | 347,552 / 285,152 / 233,391 | 21,768 / 21,589 / 21,093 | <= 24 | 16,638 / 16,699 / 16,713 | 0.0333 / 0.0334 / 0.0334 |
+| take by an order with the slot's bind | 4 | 285,298 / 306,926 / 170,523 / 100,001 | 54,109 | 30 | 43,779 | 0.0876 |
+| unbond the slot | 2 | 168,370 / 100,001 | 8,313 | 12 | 4,983 | 0.0100 |
 
 The storage masses near 80,000 come from the 0.5 KAS dispute base and the 10 KAS receipts (KIP-9); a larger base lowers
-them. **The largest multi-pair shapes:** (before review 6; since then the fresh-id scan limits one proposal transaction to 7 whole pairs, section 24) proposals vouched by one input are limited by no scan: 4 / 8 / 12 pairs use
-95,826 / 188,906 / 281,986 compute mass and 68,786 / 137,186 / 205,586 bytes (0.41 KAS for 12); the byte limit stops at
-14 (17,150 bytes a pair). A renewal of 7 pairs (the bind's 7 claims) uses 124,835 compute mass and 99,555 bytes. An open
-carries one pair (the twin scan admits 8 outputs; two order rests, the pair, the slot, the premium and change are six).
+them. **The largest multi-pair shapes:** the fresh-id scan limits one proposal transaction to 7 whole pairs (section
+24): 1 / 4 / 7 proposals under one vouch use 30,020 / 111,842 / 193,664 compute mass and 20,390 / 80,402 / 140,414 bytes
+(0.0408 / 0.1608 / 0.2808 KAS). A renewal of 7 pairs (the bind's 7 claims) uses 148,059 compute mass and 119,279 bytes.
+An open carries one pair (the twin scan admits 8 outputs; two order rests, the pair, the slot, the premium and change
+are six).
 
-**One pair-month** (one term `Λ` = 28 days on testnet): open 0.0857 + one renewal 0.0373 + one claim (propose 0.0350 +
-finalize 0.0095) = **0.1674 KAS of network fees**, plus the premium the orders agreed. At 10 % of the cover a year the
+**One pair-month** (one term `Λ` = 28 days on testnet): open 0.0994 + one renewal 0.0430 + one claim (propose 0.0408 +
+finalize 0.0098) = **0.1929 KAS of network fees**, plus the premium the orders agreed. At 10 % of the cover a year the
 premium is 46.03 KAS a term for the fixture pair (0.767 % of its 6,000 KAS cover); the note's cost, `y/(Lρ)` a year per
 side, is in the premium, not in the fees. A contested claim adds about 0.12 KAS (contest, a defence, decide, settle,
-close).
+close). The honest life of the gold pair on the testnet defaults (`r11_holds_the_honest_life_...`, 30 transactions with
+the tool's builders) pays: open 0.0994, a liquidation's propose 0.0409, a party's own close 0.0406, finalize 0.0097 to
+0.0099, cure 0.0099, renewal 0.0430, contest 0.0297, resolve 0.0293, amend 0.0333, transfer 0.0334, lapse settle 0.0332,
+pool settle 0.0398 and close 0.0198 KAS.
 
 ## 20. Where the notes are wrong or ambiguous (each a `// DESIGN:` comment)
 
@@ -1437,7 +1443,9 @@ allows `q(n, rate)` and adds the carrier only when the part empties the order (`
 payout floors). The carrier of a part that leaves a continuation is funded by whoever writes the part: the counterparty
 of a take or fill alone, the executor of a fill of two orders neither of which it empties (the tool's builder takes the
 carrier from the short order when the fill empties it, since the pair pays it back to the short; else from the long when
-it empties; else the funder pays), the pair's own carrier in a take of a whole pair (it moves with `keep`). The options
+it empties; else the funder pays), the pair's own carrier in a take of a whole pair (it moves with `keep`; the order that
+this take empties still pays its own carrier, which then goes to the transaction's builder, not to the short: review 11,
+R11-N1, bounded by I-order). The options
 weighed against I-order:
 
 - the carrier paid by whoever takes: taken in the form above, which keeps a whole fill exactly as before;
@@ -1538,3 +1546,262 @@ pending part; none of 28.3's rules needs it, so it waits for a change that touch
    premium; check renewals of parts whose entry lies outside the range (the premium then falls on one side's lapse
    value, I-party's allowance), cures and hand-overs of parts at the floor, and fills whose premium half rounds to zero.
 
+
+## 29. Changes after review 11
+
+Review 11 (`docs/audit/REVIEW-11.md`) is the first of six reviews of this family without a critical finding. It found
+one High, four Mediums, two Lows and two notes, and two of the Mediums are holes in the safety net of section 28 rather
+than in the contracts: the invariants valued every side at its entry price, so every loss that depends on the price
+passed them by construction (R11-F5), and the exit invariant held by construction for a renewing underwriter. R11-F1: an
+underwriter that renews on time and vouches no close held both parties for 52 terms of the gold pair. R11-F2: a closer
+and its underwriter (or an underwriter alone, for a liquidation) chose the best moment of the last `lateDaa`. R11-F3:
+an honest, true claim landing late paid its bond to the party it was right about. R11-F4: a market with `rateDaa >=
+stepDaa` let anyone stop every bind of a slot. R11-F6: any SIGHASH_ALL spend of an underwriter UTXO vouches the claims
+beside it. R11-F7: hand-overs split a passive side below the payout floor. The method is review 10's with one change:
+the walk values every side at a simulated feed price, and a rule is accepted only when that walk holds with hostile
+steps on.
+
+The founder's decision of this round is part of it: the testnet contest window `W` is 2 minutes (1,200 DAA, from 6
+hours) and the reference-time bound `lateDaa` is 10 s (100 DAA, from 10 minutes).
+
+### 29.1 The economic invariants
+
+Notation as in 28.1, and: `f(τ)` the feed at DAA `τ` (the walk's simulated feed; for a market, what its feed definition
+names), `g` the tolerance, `m` the maintenance rate, `P` the DAA of the block that accepted a claim, `t0` the DAA it
+names. A side's **value at the feed** in a pair is the long's `q(s, clamp(f, bl, bs) - bl)` and the short's the rest of
+the UTXO's value; a party's value at the feed is that, summed over its sides of live pairs, plus its plain outputs less
+its plain inputs. **The judge's rule** (the feed definition's, 29.3): a claim at price `p` is true only if `f` lies in
+`[p (1 - g), p (1 + g)]` both at `t0` and at `P`, and neither moment falls in a closed session.
+
+- **E-party.** In an action that a party does not sign, its value at the present feed falls only by these causes, each
+  with its bound (gold pair: 0.1 oz at 80,000, 10x, `g` 0.5 %, `m` 5 %, premium 15.34 KAS a term):
+
+  | Cause | Bound at the feed | Gold pair |
+  |---|---|---|
+  | premium of a renewal | its half of `q(s, premium)` + 1 sompi; the whole premium + 2 when the feed lies outside the renewed range | 7.67 KAS a term |
+  | a true liquidation of its side (below maintenance at the feed at `t0` and at `P`) | its value at the feed in the part, `< q(n, f m)` + the pair's excess over its range | at most 400 KAS (its maintenance margin at 80,000) |
+  | the keeper fee beyond the loser's value (the winner, when the loser's residual at the feed is below the fee) | the fee, `<=` the maintenance slice | at most 37.5 KAS at 75,000 |
+  | a close by the other party | 1 sompi of rounding (the closer is paid at most the feed at `P`); the payout floor `D` when the party's payout is below it | 0 |
+  | rounding of a split or hand-over | 3 sompi | 3 sompi |
+  | the payout floor at the lapse settle | `D` per lineage end; with the part floor (29.3) a passive side's lineages each hold at least `PART_FLOOR` when created | 0.02 KAS |
+  | a lapse at the entry | the side the feed favours loses its value at the feed less its value at the entry; it can be forced on a party only by its underwriter's silence (no renewal by `X`), and the party had `tail + idleDaa` after `X` to close its own side at the feed | 10.25 days to act; then its distance from the entry (a 10 % move: 800 KAS) |
+  | a false claim the judge upholds, or nobody contests within `W` | its value in the part: outside the invariant (the judge's honesty and a watcher are the assumptions, as in 28.1) | 800 KAS |
+
+- **E-exit.** From every state each party of a live pair reaches a settlement of its side (or of any part leaving both
+  pieces above the part floor) by its own action, without the underwriter and without the counterparty: its own close
+  at the price it states for the present, landing as soon as the pair UTXO is `quietDaa` old (60 s) and settled `W`
+  later (2 minutes), at the feed at `P` moved by between 0 and `2g` against it (an honest close quoting the feed pays
+  `g`; as the short, also the pair's excess over its range, which stays with the long). If the counterparty contests a
+  true close it adds at least one judge round (12 hours) and loses its contest stake. A party below its maintenance, or
+  within `g` of it, at the feed first adds margin within its share, or its exit is the liquidation (the market's rule). During a closed
+  session the close waits for the reopening.
+- **E-claim.** An honest claim, true at the time it prices and still true when it lands, never costs its proposer its
+  bond: a late claim is judged, not voided, and a liquidation that lands after its last valid DAA (delayed across the
+  boundary) returns its bond to the underwriter. A claim false at `P` because the feed moved by more than `g` during its
+  delay may be refuted; that is the proposer's risk, which it removes by revoking (spending its vouch or funding input)
+  a claim that has not landed within `lateDaa`.
+- **I-order, I-winner, I-uw, I-staker** as in 28.1; the lapse date part of I-exit (the date and not one DAA before) stays.
+
+The walk (`crates/kpf-tests/tests/econ_walk_tests.rs`) is review 11's extended walk with a feed: one seeded price path
+for the market, a move of up to 2 % a tick on a volatile seed and 0.2 % on a calm one (a third of the seeds), a gap of
+up to 6 % now and then and at every reopening, closed sessions of 300 to 800 DAA in which the price is frozen and no
+claim is true. Every action step is checked at the feed of that step (the feed does not move inside an action); every
+loss of a party that did not act is booked against its cause and checked against the sum of the bounds the step allows.
+The E-exit check is a real one: the walk builds, for each party of a pair (each step for a random pair, and every pair
+at the end), its own close of its whole side at the feed with no underwriter input, runs it and its finalize `W` later
+in the engine, and checks both payouts against the stated tolerance. E-claim is driven by honest claims landing at once,
+within `lateDaa`, beyond it, and delayed across the last valid landing of a term. The walk detects which rules the
+templates carry by probing a party's own close once, so the same file runs on the old templates (29.2).
+
+### 29.2 What the walk found on the old templates
+
+Run on the templates of `c8a3a29` (20 seeds x 400 steps, the same walk), 4,402 violations:
+
+| Invariant | Violations | What |
+|---|---|---|
+| E-exit | 4,025 | no party could close its own side at the feed: every close needed the underwriter's vouch, refused (silent underwriter) or withheld (a renewing one). **R11-F1** |
+| E-party | 127 | a lapse at the entry where the party had no close of its own: 41,460.76 KAS of value at the feed lost to the entry in all, up to 2,948.76 KAS in one (the walk's fixture pair). **R11-F1 with R11-F5's blind spot** |
+| E-party | 5 | look-back closes: the non-closer below its value at the feed by up to 243.74 KAS. **R11-F2** |
+| E-claim | 245 | an honest claim true at both moments void, its bond (up to 600 KAS) to the defender: claims landing more than `lateDaa` after `t0`, and claims delayed across the last valid landing (`P + W + step > X`), 100,606.29 KAS of bonds in all. **R11-F3**, and its second form: a delay across the expiry boundary punished an honest proposer exactly as lateness did |
+| I-order, I-winner, I-uw, I-staker | 0 | |
+
+Nothing outside R11-F1, F2 and F3 (F4, F6 and F7 have shapes the walk does not drive: a market with a long rate limit,
+a foreign transaction signed by the underwriter, splits of a pair whose side is worth less than the floor; each has its
+own test). The second form of R11-F3 (across the expiry boundary) is the one new element: the review measured lateness.
+
+### 29.3 The rules
+
+**R11-F1: a party's own close.** `KpfPairO.propose` kind 1 no longer reads a vouch: the closer signs, states the price,
+posts the bond (and the new part's carrier for a partial close), and the pair UTXO must be `quietDaa` old (a close is a
+party entry). The closer may not be below its maintenance at the price it is paid, its price moved by g against it (a
+long: `c = floor(p (10^4 - g) / 10^4)`, `c (10^4 - m) >= bl 10^4`; a short: `c = ceil(p (10^4 + g) / 10^4)`, `bs 10^4
+>= c (10^4 + m)`). `KpfPendingO.finalize` no longer applies the expiry rules to a close: a close is valid at
+any time, so a party exits at the feed whatever the cover's state. The options weighed against E-exit:
+
+- *The review's request with `T_req`* (a party-priced close allowed once the pair has carried the party's signed close
+  request for `T_req` without a vouched close). It satisfies E-exit only after `T_req`, needs a request state that every
+  renewal, hand-over, restore, cure and forfeit must carry or clear (each a new way to lose it or to outlast it), and
+  buys nothing the judge does not already give: a false party-priced close stands only if nobody contests within `W`,
+  whether or not the underwriter was asked first. The underwriter's vouch of a close was never a check of the price
+  that the judge does not make; it was a veto.
+- *A "do not renew" flag* restores an exit only at the entry, and lets a loser escape every coming liquidation.
+- *Any party proposes a close at any time with its own bond and no underwriter signature*: taken. It removes the
+  underwriter's veto (a degree of freedom) instead of adding a request state and a timer.
+
+Attacked before implementing:
+- *A false price when nobody watches*: it stands exactly as any uncontested claim (28.1's assumption, now extended from
+  the underwriter to each party). A false close costs its closer the bond (10 % of the cover, 200 KAS on the gold pair)
+  whenever a watcher contests it within `W`; the disputer gets 20 % of it.
+- *Escaping a due liquidation*: refused by the maintenance rule, stated at the price the closer is paid. A long's close
+  at `p` is paid at `c = floor(p (1 - g))` and needs `c (1 - m) >= bl`; it is true at `P` only if `f(P) >= p (1 - g) >=
+  c`, so then `f(P) (1 - m) >= bl`: the long is healthy at the feed, where no liquidation is true (the lowest price true
+  at `P`, `f / (1 + g)`, triggers only if `f (1 - m) < bl`). The short's mirror holds. So a true close and a true
+  liquidation of the same side never coexist. A first draft of the rule read the maintenance at `p` itself; attacking it
+  showed a band of width `g` below the maintenance band in which a loser could close at the top of the true range and
+  keep its residual, which the close price closes. A healthy party within `g` of its band adds margin before it closes.
+  A close racing the underwriter's liquidation is a race of two spends; a false one is refuted (the bond to the winner
+  and the disputer), and the quiet time gives the underwriter 60 s after every restore before the next.
+- *Griefing by repeated requests*: there are none; a true close ends the part, a false one costs the bond.
+- *The slot's cover accounting*: a close moves value between the two sides of the part only; the slot is not read.
+- *What the underwriter can do meanwhile*: renew (a pending part is not renewed; a partial close leaves the remainder
+  renewable), and liquidate a part the close does not cover; nothing that stops the close.
+- *Hand-overs, renewals, the share rule*: a close spends the pair like any claim; nothing is carried that a renewal
+  could clear or outlast. *The part floor*: a partial close is a split (29.3, R11-F7). *The claim-validity window and a
+  lapse*: a close is valid after `X`, so a party of a pair whose underwriter went silent closes at the feed before the
+  lapse settle at the entry is due (`tail + idleDaa` = 10.25 days at the defaults).
+
+**The underwriter's role afterwards**: it sells cover (renewals; the slot bounds the cover it sells by `rho x K`), and
+it is the only source of liquidation prices (the vouch). It has no say in closes and no way to hold a party: a party
+pays premiums only for the terms it stays.
+
+**R11-F2 and R11-F3: the two-moment rule.** The feed definition, the judge and every staker hold a claim to the feed at
+its `t0` and at `P`. On chain: `KpfPendingO.finalize` no longer voids a claim for lateness (`P - t0 > lateDaa`), and a
+void claim (a liquidation landed after `X - W - step`, or with `X > P + term + step`) restores the part and returns the
+bond to its proposer, the underwriter. So that a void claim cannot be repeated to freeze a pair for free,
+`KpfPairO.propose` refuses a liquidation from a pair UTXO that cannot carry a valid one (`born + W + step <= X <= born +
+term + step`, `born` the UTXO's own DAA score): the restored part of a void claim is such a UTXO, so each part can be
+frozen once per term, for `W`. Checked against the invariants:
+
+- *What remains of the look-back* (E-party): a long closer is paid at most `floor(p (1 - g))` with `f(P) >= p (1 - g)`:
+  at most the feed at `P`, whatever `t0` it picks; the non-closer gets at least its value at the feed. A liquidation
+  needs the loser below maintenance at the feed at both moments (the lowest price true at `P`, `f / (1 + g)`, triggers
+  only if `f (1 - m) < bl`). On the gold pair: before, the short lost 55.80 KAS (10 minutes) or 6.80 KAS (10 s) against
+  the feed; now 0 at any `lateDaa`. The honest closer quoting the feed pays `g` (40 KAS).
+- *Delaying a claim* (E-claim): a delay changes the outcome only if the feed moves by more than `g` during it. At 80 % a
+  year the feed moves 0.045 % (one sigma) in 10 s, 0.11 % in 10 minutes and 0.85 % in an hour: a miner or a party that
+  keeps blocks full for an hour (on the order of 36,000 KAS by the review's estimate) gives a true liquidation about an
+  even chance of being false at `P`, against a 200 KAS bond, and the proposer revokes a claim that has not landed within
+  `lateDaa` by spending its vouch input. Delaying a liquidation across its last valid DAA only freezes the part for `W`
+  and returns the bond.
+- *`lateDaa` as an outer bound*: kept as a market parameter (the block's layout is unchanged) with the tools' meaning:
+  `kpf vouch` and `kpf oracle-close` take `t0` from the node's DAA score, refuse a `--t0` older than `lateDaa` or in the
+  future, and with `--node` sign and submit in one step (R11-N2). Default 100 DAA (10 s, the founder's wish). On chain it
+  is only bounded (`0 <= lateDaa < 2^32`); a void for lateness would bring R11-F3 back for every delay above it.
+- The feed definition template (`kpf oracle-market --feed-template`, and the sample market's feed text) states the rule
+  in its `time:` and `disagreement:` lines; `vouch`, `oracle-close`, `contest` and `deposit` print it.
+
+**R11-F4.** Every copy of the bond bounds (`KpfBond`, `KpfOpenO`, `KpfPairO`, `KpfPendingO`, the two stand-ins) and
+`BondParams::check` require `2 rateDaa <= stepDaa`: the owner has at least half of every step after an outsider's
+advance. The walk (both markets) found no other parameter combination that makes an honest path unreachable; the
+combinations the bounds already exclude are 28.3's.
+
+**R11-F6.** `OBuilt::vouch_guard` (run by every signing of the tool) refuses to sign a transaction that holds a proposal
+and a plain input of that pair's underwriter key, unless it is a liquidation the tool built (`propose`: the vouch, and
+the funding when the underwriter funds). A close needs no vouch, so a close beside such an input is refused (the honest
+life checks it). The documentation tells underwriters to keep vouching funds on a key of their own. A contract-level
+binding (the vouch input naming the claim: a tagged script or a data signature over the claim) is not worth its size:
+one more output and a script per claim, and it protects only an underwriter that signs others' transactions with its
+slot key, which no command asks it to do.
+
+**R11-F7.** `KpfPairO.checkPart` (transfer, closeHost, closeDonor, mutualClose, propose): when a split leaves a
+remainder, each side with value at the entry must hold at least `PART_FLOOR` (0.2 KAS) of it in the smaller piece (so in
+both). The review's attack (a 1-unit pair at 1 KAS a unit, 10x: the long's 0.1 KAS) is refused at its first take; a
+split of 0.01 oz of the gold pair (80 KAS a side in the piece) is accepted. A side with nothing at the entry (its bound
+at or past the entry) has nothing to lose and is not checked.
+
+**R11-N1.** Documentation: in a take of a whole pair that empties the order, the pair's carrier moves with `keep` and the
+order's carrier goes to the transaction's builder (28.3 said it came back to the short; corrected there). Bounded by
+I-order (one carrier per order). **R11-N2**: covered by `vouch`'s freshness rule above.
+
+**The founder's window.** With `W` = 1,200 DAA: the claim-validity rule `P + W + step <= X` loses 2 minutes and a step
+of each unrenewed term (was 6 hours and a step); a liquidatable pair of an on-time underwriter waits at most `W` for a
+valid claim (2 minutes); a party's own close settles 2 minutes after it lands; the quiet time (60 s) stays below `W`, so
+an underwriter's claim still lands within the window after a party entry; `KpfStake`'s rules are unchanged (a contest
+must be accepted before `P + W`, then the judge's rounds of 12 hours). A contested claim therefore takes at least 12
+hours and 2 minutes, and each change of the lead another round (the supply bounds them, about 87 rounds). The tool's
+warning that a short window is "not realistically" contestable is replaced by the true statement: only an automated
+watcher can contest within it, every party needs one, and `kpf oracle-watch --feed-price P` is that watcher's check
+(`CONTEST NOW` with the deadline, `--json` fields `contestNow` and `contestUntil`, exit code 3). The judge's round, stake
+age and unbonding stay at their defaults: no rule needs them changed.
+
+### 29.4 What remains, at the feed price, with numbers on the gold pair
+
+- **Lapse at the entry.** Only for a party that does not close its own side within `tail + idleDaa` (10.25 days) after
+  its underwriter failed to renew by `X`; then the side the feed favours loses its move since the entry (10 % = 800
+  KAS). The walk met it 88 times (fixture), up to 2,004.93 KAS, each time with the party's own close proved available.
+- **A true liquidation** takes at most the loser's maintenance margin at the feed (400 KAS at 80,000); the keeper fee may
+  exceed what the loser had left (a gap): the winner's loss is at most the fee (37.5 KAS at 75,000).
+- **The closer's spread.** An honest close quoting the feed pays `g`: 40 KAS on the gold pair; quoting the top of the band
+  true at both moments pays nothing; the non-closer never gets less than its value at the feed. Closing as the short also
+  leaves the pair's excess over its range (its carrier, 0.2 KAS, and premium rounding) to the long.
+- **False claims** stand if nobody contests within 2 minutes (the whole side, 800 KAS): every party needs an automated
+  watcher (its own or a service). Since review 11 the counterparty, not only the underwriter, can post a false claim (a
+  close); each costs its poster the bond (200 KAS) when contested.
+- **A frozen part**: a liquidation delayed across its last valid landing freezes the part for `W` once per term, with
+  the bond returned.
+- **A claim delayed long enough to be false at `P`** costs its proposer the bond; it needs a move above `g` during the
+  delay (about an hour of full blocks at 80 % a year), and the proposer revokes a claim not landed within 10 s.
+- Unchanged from 28.4: the late renewal's back-charge (never ahead of the on-time schedule), the two carriers of a fill
+  that empties both orders, the entry a take without a pair writes in the order's favour, an order that accepts any slot
+  accepting any underwriter's liquidation prices.
+
+The walk's measurements (20 seeds x 400 steps on the fixture, 8 x 400 with the window, quiet time and `lateDaa` in the
+testnet proportions), each cause's largest loss against its bound:
+
+| Cause (fixture walk / short-window walk) | Losses | Largest | Its bound |
+|---|---|---|---|
+| premium of a renewal | 3,938 / 1,709 | 20.00 KAS / 20.00 | 20.00 KAS (+2 sompi) |
+| a true liquidation of its side | 5 / 1 | 210.22 KAS / 48.42 | 454.21 KAS / 174.12 |
+| the keeper fee beyond the loser's value | 6 / 2 | 46.38 KAS / 21.32 | 46.38 KAS / 21.52 |
+| rounding of a split or hand-over | 18 / 9 | 1 sompi | 3 sompi |
+| a lapse at the entry its own close could have avoided | 88 / 28 | 2,004.93 KAS / 1,665.31 | the same (the party's distance from the entry; its own close proved available each time) |
+| a false claim the judge upheld (outside E-party) | 29 / 3 | 1,756.25 KAS / 4,028.71 | the defender's value in the part |
+| look-back closes: the non-closer below its value at the feed | 54 / 20 | 0 | 0 |
+| an honest closer below its value at the feed (E-exit probe; the fixture's g is 2 %) | 3,616 / 1,551 | 323.27 KAS / 291.18 | g of the price |
+
+Counts: 20 seeds x 400 steps, 77,092 invariant checks (E-party 61,911, I-uw 9,104, E-exit 4,718, I-order 723, I-winner 254,
+I-staker 201, E-claim 181), 3,751 refusals as the rules say, 723 attacked orders in 1,893 parts (0 sompi beyond
+I-order), hostile variants refused of every kind of review 11's walk plus a party's own close signed by the other party
+and one below its maintenance (372); the short-window walk, 8 seeds x 400 steps, 32,259 checks. No violation in either.
+
+### 29.5 What it gives up
+
+- **The underwriter's veto over closes**, and with it the second signature on a close: a party alone can now post a
+  false close against its counterparty, as the underwriter alone could post a false liquidation. Both stand only if
+  nobody contests within `W`.
+- **A contest by hand.** With `W` = 2 minutes a claim is contestable only by an automated watcher; a party without one
+  (its own or a service) is exposed to any false claim.
+- **Small splits.** No hand-over, close or claim splits a pair so that a side keeps less than 0.2 KAS of its value at the
+  entry in a piece: on a pair at 1 KAS a unit, 10x, a split needs at least 2 units in each piece.
+- **Long slot rate limits.** No market with `rateDaa` above half a step.
+- **The void for lateness** as an on-chain hygiene rule: a claim signed long ago and released late is judged at the feed
+  when it lands, not voided.
+- Script bytes: `KpfPairO` 16,149 (was 15,042: the own close and its maintenance rule, the liquidation's claimability,
+  the part floor inlined at five entries, the rate bound), `KpfPendingO` 4,427 (was 4,399), `KpfOpenO` 6,536 (was 6,516),
+  `KpfBond` 4,493 (was 4,453), `KpfStake` 9,665 (unchanged). Largest stack: the take 209 (unchanged), the pair 181 (a
+  liquidation's propose, was 180), a party's own close 167. Fees: amend, transfer, lapse settle 0.033 KAS (were 0.031), a
+  claim 0.041 (was 0.0386), a renewal 0.043 (was 0.0407), an open 0.0994 (was 0.0949). The pinned artifacts and the golden vectors were regenerated; the book market's artifacts are byte
+  for byte as before.
+
+### 29.6 What a reviewer should attack next
+
+1. **The judge's two moments.** The covenant enforces nothing of the rule: check that every staker's tool, the feed
+   definition template and the dispute texts state it identically, how a feed that publishes less often than `lateDaa`
+   reads "the feed at `P`", and the closed-session boundary (a claim whose `t0` is the last open moment and `P` the first
+   closed one).
+2. **A party's own close against a liquidation in flight.** The race of a false close with a true liquidation (both spend
+   the pair): measure what a loser gains by buying `W` + one round of delay for a bond, at 2-minute windows, and whether
+   the quiet time after a restore suffices; and a partial close that leaves the loser's remainder liquidatable.
+3. **The 2-minute window.** Contest landing times under load (a contest accepted at `P + W` is ignored): what share of
+   false claims an honest watcher can no longer stop when blocks are full for 2 minutes, which costs far less than the
+   hour a delay attack on a claim needs.

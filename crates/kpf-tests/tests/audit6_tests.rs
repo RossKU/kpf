@@ -451,20 +451,20 @@ struct TwoPools {
     b: Vec<LStake>,
 }
 
-/// Two pair UTXOs of one lineage (a part restored after a void claim and the remainder) and two claims proposed on
+/// Two pair UTXOs of one lineage (a part restored after a refuted claim and the remainder) and two claims proposed on
 /// them in two independent transactions that land in the same chain block: both pending parts have the same DAA score
 /// P = 700, so their disputes have the same anchor; after the fix each claim has its own covenant id.
 fn two_disputes_one_anchor() -> TwoPools {
     let (lp, _, _) = opened();
     let half = lp.s.size / 2;
-    let (t, w) = propose_tx(&lp, &liq(L, half, FALSE_P, 349), &uw_kp(), None);
-    must("a void claim on half", &t);
-    let lw = live(&t, 0, 450, &w);
-    let rest = live(&t, 1, 450, &lp.s.rest_of(lp.s.size - half));
-    let (ft, s) = finalize_tx(&lw, 450, 200);
-    must("void: restored", &ft);
+    let (t, w) = propose_tx(&lp, &liq(L, half, FALSE_P, 500), &uw_kp(), None);
+    must("a claim on half", &t);
+    let lw = live(&t, 0, 500, &w);
+    let rest = live(&t, 1, 500, &lp.s.rest_of(lp.s.size - half));
+    // Review 11: lateness no longer voids, so the half is restored by a refuted contest.
+    let (ft, s, at) = refute(&lw, 501);
     let Settlement::Restore { part, .. } = s else { panic!() };
-    let a = live(&ft, 1, 650, &part);
+    let a = live(&ft, 1, at, &part);
     let wa = proposed(&a, &liq(L, half, FALSE_P, 690), 700);
     let wb = proposed(&rest, &liq(L, half, 900_000_000, 690), 700);
     assert_eq!((wa.daa, wb.daa), (700, 700));

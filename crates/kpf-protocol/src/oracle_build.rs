@@ -467,6 +467,35 @@ pub fn storage_refusal(tx: &Transaction, entries: &[UtxoEntry], labels: &[String
 }
 
 impl OBuilt {
+    /// Review 11 (R11-F6): any SIGHASH_ALL spend of a plain UTXO of a pair's underwriter key vouches every proposal of
+    /// that pair in its transaction. So this tool never signs, with an underwriter key, a transaction holding a proposal
+    /// it was not asked to vouch: the only transactions with a proposal and a plain input of the pair's underwriter key
+    /// it signs are the liquidations [`propose`] builds (the vouch, and the funding when the underwriter funds); beside a
+    /// close (which needs no vouch) such an input is refused. The tool builds no transaction for another's signature.
+    pub fn vouch_guard(&self) -> Result<()> {
+        let mut uw: Vec<([u8; 32], bool)> = vec![];
+        for p in &self.plans {
+            if let OPlan::Contract { which: OWhich::Pair, redeem, entry: "propose", args } = p {
+                let Ok(OObj::Pair(pair)) = OObj::decode(redeem) else { continue };
+                let liq = matches!(args.get(1), Some(Arg::V(ArtifactValue::Int(k))) if *k == crate::state::KIND_LIQ);
+                uw.push((pair.b.uw_key, liq));
+            }
+        }
+        for (i, p) in self.plans.iter().enumerate() {
+            let OPlan::Key { key } = p else { continue };
+            for (k, liq) in &uw {
+                if k == key && !*liq {
+                    return Err(Error::Signing(format!(
+                        "input {i} ({}) is a plain UTXO of the underwriter key {} of a pair this transaction proposes a claim on: signing it would vouch that claim (R11-F6). Refused: an underwriter signs only the vouch input of a liquidation it was asked to vouch; keep the vouching funds on a key of their own",
+                        self.input_labels[i],
+                        crate::error::to_hex(key)
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn set_change(&mut self, fee: u64) -> Result<()> {
         let Some(c) = self.change else { return Ok(()) };
         let have: u128 = self.entries.iter().map(|e| e.amount as u128).sum();
@@ -494,6 +523,7 @@ impl OBuilt {
     /// Signs (SIGHASH_ALL), meters every input, commits the smallest covering budgets, sets the fee from the mass and
     /// the storage mass, signs again.
     pub fn sign(&self, keys: &KeySet) -> Result<OSigned> {
+        self.vouch_guard()?;
         for (i, p) in self.plans.iter().enumerate() {
             for k in p.signers() {
                 if !keys.has(&k) {
@@ -764,14 +794,25 @@ pub struct ClaimTerms {
 ///   carrier of every split it proposes and gets it back only on a cure. The vouch input funds that sum and `vouch.amount - sum`
 ///   goes back to the underwriter (no output if it is exactly zero; refused if the vouch holds less, or if the rest is
 ///   above zero but below the plain-output dust). The funder pays only the network fee.
-/// * Close: the closer posts the bond (and the carrier when n < s); the vouch value goes back in full and the funder,
-///   who is expected to be the closer (its key signs the claim), pays that and the fee.
-/// A close carries the closer's signature (`KeySet` must hold it).
+/// * Close: refused here (review 11): a close is a party's own, with no underwriter input ([`propose_close`]).
 pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending)> {
     let k = pinned::kit();
     let p = &pair.s;
+    if c.kind == KIND_CLOSE {
+        return invalid("a close is the party's own (review 11): it carries no underwriter input; build it with propose_close (kpf oracle-close)");
+    }
     if vouch.key != p.b.uw_key {
         return invalid("only the pair's underwriter can vouch a price for it");
+    }
+    // Review 11 (R11-F3): KpfPairO.propose refuses a liquidation from a pair UTXO accepted too late (or too early) for
+    // any claim on it to be valid.
+    if !p.liquidatable_from(pair.daa as i64) {
+        return invalid(format!(
+            "no liquidation of this pair UTXO can be valid: it was accepted at DAA {}, and a claim must be able to land at least the window and one step ({} DAA) before the cover's expiry {} (review 10, 11). Renew first, then claim against the next expiry",
+            pair.daa,
+            p.m.p.challenge_daa + p.m.bond.step,
+            p.b.expiry
+        ));
     }
     let id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
     let (w, fb) = p.pending_of(k, c.n, c.kind, c.side, c.price, c.t0).ok_or_else(|| Error::Invalid("the claim cannot be proposed (no trigger within g, one owner, or another kind)".into()))?;
@@ -804,6 +845,38 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     }
     if back > 0 && !folded {
         d.plain(back, &vouch.key, "underwriter: the vouch input's remainder back");
+    }
+    d.fund(funder, change_to);
+    Ok((d.finish()?, w))
+}
+
+/// Review 11 (R11-F1): a party's own close of `n` units of its `side` at the price it states for `t0`: in 0 the pair
+/// (propose kind 1, the closer's signature, sequence quietDaa), then the funding (the closer's own: it posts the bond, and
+/// the carrier of the new part when n < s); out 0 the pending part (a fresh covenant id), 1 the remainder (n < s), then
+/// change. No underwriter input. The close settles W after it lands at `price` moved by g against the closer, unless it
+/// is contested and refuted (the feed definition: true only within g of the feed at t0 and when it lands), which costs
+/// the closer its bond. Refused when the closer is below its maintenance at `price`.
+pub fn propose_close(pair: &OLive<OPair>, side: i64, n: i64, price: i64, t0: i64, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPending)> {
+    let k = pinned::kit();
+    let p = &pair.s;
+    let id = pair.id.ok_or_else(|| Error::Invalid("the pair has no covenant id".into()))?;
+    if side != LONG && side != SHORT {
+        return invalid("a close names the long or the short");
+    }
+    if n < p.size && !p.split_ok(n) {
+        return invalid(format!("a close of {n} base units would leave a side of a piece with less than {} KAS of value at the entry (the part floor, review 11)", PART_FLOOR as f64 / 1e8));
+    }
+    let (w, fb) = p.pending_of(k, n, KIND_CLOSE, side, price, t0).ok_or_else(|| {
+        Error::Invalid(format!("the {} is below its maintenance at {} sompi: a party may not close at a price at which it would be liquidated (review 11); add margin first", if side == LONG { "long" } else { "short" }, price))
+    })?;
+    let w = w.made_by(&pair.op);
+    let closer = if side == LONG { p.long_key } else { p.short_key };
+    let mut d = ODraft::new(rate, FeeMode::Relay);
+    d.lock(t0.max(0) as u64);
+    d.contract(pair, OWhich::Pair, p.redeem(k), "propose", vec![iv(n), iv(KIND_CLOSE), iv(side), iv(price), iv(t0), iv(0), Arg::Sig(closer), iv(fb), iv(0), bv(&k.pending.prefix), bv(&k.pending.suffix)], "pair", p.m.p.quiet_daa as u64);
+    d.genesis(OObj::Pending(w.clone()), p.pending_value(pair.value, &w) as u64, 0, "pending part (the close)");
+    if n < p.size {
+        d.obj(OObj::Pair(p.rest_of(p.size - n)), p.rest_value(pair.value, n) as u64, Some((0, id)), "remainder");
     }
     d.fund(funder, change_to);
     Ok((d.finish()?, w))
@@ -1066,8 +1139,8 @@ pub fn decide(dispute: &OLive<Js>, contested: &OLive<OPending>, funder: &[KeyUtx
 }
 
 /// Finalize: in 0 the part, then the funding; the outputs of [`OPending::settlement`]: (close) the long at 0, change,
-/// the short last; (forfeit) the underwriter at 0, the forfeited part at 1, change; (restore) the defender at 0, the
-/// restored part at 1, change, the disputer last.
+/// the short last; (forfeit) the underwriter at 0, the forfeited part at 1, change; (restore) the defender (refuted) or
+/// the underwriter (void) at 0, the restored part at 1, change, the disputer last.
 pub fn finalize(pending: &OLive<OPending>, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, Settlement)> {
     let k = pinned::kit();
     let w = &pending.s;
@@ -1094,9 +1167,13 @@ pub fn finalize(pending: &OLive<OPending>, funder: &[KeyUtxo], change_to: &[u8; 
             d.payout(*uw, &w.b.uw_key, "underwriter: bond and fee");
             d.obj(OObj::Pair(part.clone()), *value as u64, Some((0, id)), "forfeited part");
         }
-        Settlement::Restore { part, value, defender, disputer } => {
+        Settlement::Restore { part, value, defender, disputer, proposer } => {
             if *defender > 0 {
                 d.payout(*defender, &w.defender(), "defender: the bond");
+            }
+            // Review 11: a void liquidation (one that landed after its last valid DAA) pays the bond back to its proposer.
+            if *proposer > 0 {
+                d.payout(*proposer, &w.b.uw_key, "underwriter: its bond back (a void claim)");
             }
             d.obj(OObj::Pair(part.clone()), *value as u64, Some((0, id)), "restored part");
             if *disputer > 0 {

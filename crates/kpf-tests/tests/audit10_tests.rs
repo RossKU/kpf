@@ -274,7 +274,7 @@ fn r10_holds_a_short_order_or_an_order_filled_whole_loses_only_tip_and_one_carri
 
 /// R10-F2, fixed (DESIGN-ORACLE-IMPL 28.3): a claim is valid only if P + W + step <= X. Review 10's claim (the fixture
 /// pair, X = 1,200, the long's liquidation vouched at 9.20 with P = 1,000, so P + W = X) is now void: its finalize at
-/// 1,200 restores the part and pays the bond to the long, so nothing a cure does afterwards can undo a liquidation. The
+/// 1,200 restores the part and returns the bond to the underwriter (review 11), so nothing a cure does afterwards can undo a liquidation. The
 /// latest valid claim lands at 900 and is finalizable from 1,100, one step before X (the renewal window opens then too):
 /// the forfeit then belongs to the short. What remains (28.4) is the finalize withheld by everyone, the winner and the
 /// underwriter (paid B + fee by it) included, for the whole step [1,100, 1,200]: then the long's cure at 1,201 still
@@ -291,8 +291,8 @@ fn r10_bounded_a_cure_after_the_expiry_needs_the_finalize_withheld_for_a_whole_s
     let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 1_000, lock: 1_000 }, 1_000);
     let (ft, s) = finalize_tx(&lw, 1_000, 200);
     must("the finalize from 1,200", &ft);
-    let Settlement::Restore { defender, .. } = s else { panic!("{s:?}") };
-    assert_eq!(defender, lw.s.bond, "void: the part is restored and the long gets the bond");
+    let Settlement::Restore { defender, proposer, .. } = s else { panic!("{s:?}") };
+    assert_eq!((defender, proposer), (0, lw.s.bond), "void: the part is restored and the bond goes back to the underwriter (review 11)");
     // The latest valid claim: P = 900, finalizable from 1,100 = X - step.
     let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 900, lock: 900 }, 900);
     assert!(lw.s.valid_at(900) && !lw.s.valid_at(901));
@@ -385,13 +385,11 @@ fn r10_bounded_with_tail_plus_idle_below_the_term_a_late_underwriter_resumes_the
         assert!(lp.daa as i64 <= lp.s.b.expiry, "its continuation is renewable again");
     }
     assert_eq!(premiums, 5 * q(p.size, p.b.premium, m.p.scale));
-    // The resumed cover: a liquidation proposed right after the last renewal is void (it lands after X - W - step) ...
+    // The resumed cover: a liquidation right after the last renewal can never be valid (the pair UTXO was accepted after
+    // X - W - step), so since review 11 it is refused at the proposal ...
     let at = lp.daa + 10;
     assert!(at as i64 > OPending::last_valid_landing(&m, lp.s.b.expiry));
-    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p: 920_000_000, t0: at as i64, lock: at }, at);
-    let (ft, s) = finalize_tx(&lw, at as i64, 200);
-    must("a liquidation right after a renewal that overtook the due settle", &ft);
-    assert!(matches!(s, Settlement::Restore { .. }), "{s:?}");
+    refused("a liquidation right after a renewal that overtook the due settle", &propose_tx(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p: 920_000_000, t0: at as i64, lock: at }, &uw_kp(), None).0, 0);
     // ... and one proposed after the next, on-time renewal (the continuation was accepted before its expiry) is valid.
     let on = (lp.s.b.expiry - m.bond.step) as u64;
     let (t, r, _) = renew_tx(&lp, &sl, on, ((lp.s.b.expiry + m.bond.term) / m.bond.step - 12 - sl.s.j0).max(0));
@@ -1654,7 +1652,7 @@ impl Walk {
                     self.count(if mode == 1 { "upheld by YES, pool with a loser closed" } else { "late contest ignored, pool closed" });
                 }
                 (_, Settlement::Restore { defender, disputer, .. }) => {
-                    assert_eq!((*defender, *disputer), (pw.bond, 0), "an upheld but void claim's bond goes to the defender");
+                    assert_eq!((*defender, *disputer), (0, 0), "an upheld but void claim's bond goes back to its proposer (review 11)");
                     self.count("upheld but void, restored");
                 }
                 (_, Settlement::Close { .. }) => panic!("a liquidation settled as a close"),
@@ -1707,7 +1705,7 @@ impl Walk {
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }
             Settlement::Restore { part, defender, .. } => {
-                assert_eq!(defender, pw.bond, "a void claim's bond goes to the defender");
+                assert_eq!(defender, 0, "a void claim's bond goes back to its proposer (review 11)");
                 self.count("void claim restored");
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }

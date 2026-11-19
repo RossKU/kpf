@@ -157,15 +157,15 @@ fn oracle_sizes_masses_and_fees() {
     let (t, w) = propose_tx(&lp, &liq(920_000_000, 450), &uw_kp(), None);
     rows.push(measure("propose liquidation (pair, vouch, funder)", &t));
     let lw = live(&t, 0, 500, &w);
-    let c = ClaimSpec { kind: CLOSE, side: L, n: lp.s.size, p: 1_050_000_000, t0: 450, lock: 450 };
-    let (t, wc) = propose_tx(&lp, &c, &uw_kp(), Some(&long_kp()));
-    rows.push(measure("propose close (pair, vouch, funder)", &t));
+    // Review 11: a party's own close, no underwriter input (the pair and the closer's funding).
+    let (t, wc) = self_close_tx(&lp, L, lp.s.size, 1_050_000_000, 450, 450, &long_kp());
+    rows.push(measure("propose close (pair, the closer's funding)", &t));
     let lwc = live(&t, 0, 500, &wc);
     // Finalize.
     rows.push(measure("finalize liquidation (forfeit)", &finalize_tx(&lw, 500, 200).0));
     rows.push(measure("finalize close", &finalize_tx(&lwc, 500, 200).0));
     let void = live(&propose_tx(&lp, &liq(920_000_000, 899), &uw_kp(), None).0, 0, 1_001, &lp.s.pending_of(k, lp.s.size, LIQ, L, 920_000_000, 899).unwrap().0.made_by(&lp.op));
-    rows.push(measure("finalize void (restore, bond to the defender)", &finalize_tx(&void, 1_001, 200).0));
+    rows.push(measure("finalize void (restore, bond back to the proposer)", &finalize_tx(&void, 1_001, 200).0));
     // Cure.
     rows.push(measure("cure", &cure_tx(&lw, &long_kp()).0));
     // Contest, defence, decide, restore, settle, close.

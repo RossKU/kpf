@@ -175,20 +175,20 @@ fn holds_partial_hand_overs_of_two_pairs_never_share_one_part() {
     assert!(verdicts(&t)[0], "the named pair's own checks pass");
 }
 
-/// The restored half and its remainder of `exploit_underwriter...` (review 7): the underwriter's void claim on half the
-/// pair, finalized after W, restores the half under the claim's id with the remainder's exact state.
+/// The restored half and its remainder of `exploit_underwriter...` (review 7): the underwriter's claim on half the pair,
+/// refuted (review 11: a late claim is no longer void; a refuted one restores just as a void one did), restores the half
+/// under the claim's id with the remainder's exact state.
 fn restored_half_beside_its_remainder() -> (LPair, LPair) {
     let (lp, _, _) = opened();
     let half = lp.s.size / 2;
-    let (t, w) = propose_tx(&lp, &liq(L, half, FALSE_P, 250, 400), &uw_kp(), None);
-    must("a void claim on half", &t);
-    let lw = live(&t, 0, 400, &w);
-    let rest = live(&t, 1, 400, &lp.s.rest_of(lp.s.size - half));
-    let (ft, s) = finalize_tx(&lw, 400, 200);
-    must("the void claim restores", &ft);
-    let Settlement::Restore { part: back, defender, .. } = s else { panic!("{s:?}") };
-    assert_eq!(defender, 300 * KAS, "the void claim's bond, to the long");
-    let back = live(&ft, 1, 600, &back);
+    let (t, w) = propose_tx(&lp, &liq(L, half, FALSE_P, 500, 500), &uw_kp(), None);
+    must("a claim on half", &t);
+    let lw = live(&t, 0, 500, &w);
+    let rest = live(&t, 1, 500, &lp.s.rest_of(lp.s.size - half));
+    let (ft, s, at) = refute(&lw, 501);
+    let Settlement::Restore { part: back, defender, disputer, .. } = s else { panic!("{s:?}") };
+    assert_eq!(defender + disputer, 300 * KAS, "the refuted claim's bond, to the long and the disputer");
+    let back = live(&ft, 1, at, &back);
     assert_eq!(back.s, rest.s, "the restored half and the remainder have one state");
     assert_ne!(back.id, rest.id);
     (rest, back)

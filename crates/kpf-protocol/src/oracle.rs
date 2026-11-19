@@ -70,7 +70,8 @@ pub struct OParams {
     pub idle_daa: i64,
     /// W: the contest window from P, the earliest finalize (CSV).
     pub challenge_daa: i64,
-    /// A claim landed more than this after its `t0` is void.
+    /// The tools' bound on how stale a claim's `t0` may be when it is built and sent (review 11: no longer read on chain;
+    /// the feed definition judges a claim at `t0` and at the DAA it lands at).
     pub late_daa: i64,
     /// The age every party entry of a pair needs (CSV).
     pub quiet_daa: i64,
@@ -175,9 +176,10 @@ impl OMarket {
 
     /// The testnet defaults at 10 DAA per second for a slow underlying: the slot of slice A (rho 1, a 28-day term of 8
     /// steps, tail 3.25 days) and the judge of slice B1 (mu 1.25, 7-day age and unbonding, 12-hour rounds, 10 % burn,
-    /// 100 KAS stakes); W 6 hours, a claim void if it lands more than 10 minutes after the time it prices, 60 s of
-    /// quiet after every party entry, a lapsed pair settles at its entry after 7 days idle, the bond 10 % of the cover
-    /// (at least 1 KAS), the disputer 20 % of a refuted bond; mmr 5 %, g 0.5 %, fee 0.5 %.
+    /// 100 KAS stakes); W 2 minutes (review 11: a claim is contestable only by an automated watcher), a claim's t0 at
+    /// most 10 s old when the tools send it (the judge reads the feed at t0 and at P), 60 s of quiet after every party
+    /// entry, a lapsed pair settles at its entry after 7 days idle, the bond 10 % of the cover (at least 1 KAS), the
+    /// disputer 20 % of a refuted bond; mmr 5 %, g 0.5 %, fee 0.5 %.
     pub fn testnet(feed_hash: [u8; 32]) -> OMarket {
         OMarket {
             bond: BondParams::testnet(),
@@ -193,8 +195,8 @@ impl OMarket {
                 min_size: 1_000_000,
                 carrier: 20_000_000,
                 idle_daa: 6_048_000,
-                challenge_daa: 216_000,
-                late_daa: 6_000,
+                challenge_daa: 1_200,
+                late_daa: 100,
                 quiet_daa: 600,
                 sigma_bps: 1_000,
                 beta_bps: 2_000,
@@ -280,6 +282,11 @@ pub struct FeedCheck {
     /// price, the session calendar, the disagreement rule), each found or missing.
     pub missing: Vec<&'static str>,
 }
+
+/// The feed definition template `kpf oracle-market --feed-template` writes (review 11): the judge's convention is part of
+/// every market, so the `time:` and `disagreement:` lines carry the two-moment rule (a claim is true only if within g of
+/// the feed both at its t0 and at P, the DAA it landed at), and the series must publish faster than the tools' lateDaa.
+pub const FEED_TEMPLATE: &str = "kpf feed definition v1\nquantity: example slow underlying, published at least every 10 seconds\nunit: KAS per whole unit\nsources: median of three named public sources\ntime: a claim names the DAA score t0 it prices; it is judged at t0 and at P, the DAA score of the block that accepted it, each mapped to that block's timestamp\nsessions: always open; a claim whose t0 or P falls in a closed session is false\ndisagreement: a claim is true only if its price is within g (the market's gBps) of the median both at t0 and at P\n";
 
 /// The keys a feed definition is expected to state, one per line as `key: value` (`docs/TESTNET.md`).
 pub const FEED_KEYS: [&str; 6] = ["quantity", "unit", "sources", "time", "sessions", "disagreement"];
@@ -854,12 +861,49 @@ impl OPair {
         f
     }
 
+    /// Review 11 (R11-F1, `KpfPairO.propose` kind 1): a party may close its own side at `p` only if it is not below its
+    /// maintenance at the close price `c` (p moved by g against it: a long `c = floor(p (10^4 - g) / 10^4)`, `c (10^4 - m)
+    /// >= bl 10^4`; a short `c = ceil(p (10^4 + g) / 10^4)`, `bs 10^4 >= c (10^4 + m)`). A close true at P (the feed within
+    /// g of p) then leaves the closer healthy at the feed, where no liquidation is valid: a true close never escapes a due
+    /// liquidation.
+    pub fn close_ok(&self, side: i64, p: i64) -> bool {
+        let (b, g, m) = (BPS as i128, self.m.p.g_bps as i128, self.m.p.mmr_bps as i128);
+        let p = p as i128;
+        if side == LONG {
+            (p * (b - g) / b) * (b - m) >= self.bl as i128 * b
+        } else {
+            self.bs as i128 * b >= ((p * (b + g) + b - 1) / b) * (b + m)
+        }
+    }
+    /// Review 11 (R11-F3, `KpfPairO.propose` kind 2): a liquidation may be proposed from a pair UTXO accepted at `born`
+    /// only if a claim landing then could be valid: `born + W + step <= X <= born + term + step`.
+    pub fn liquidatable_from(&self, born: i64) -> bool {
+        let (w, st, t, x) = (self.m.p.challenge_daa as i128, self.m.bond.step as i128, self.m.bond.term as i128, self.b.expiry as i128);
+        let b = born as i128;
+        born >= 0 && b + w + st <= x && x <= b + t + st
+    }
+    /// Review 11 (R11-F7, `KpfPairO.checkPart`): a split of n from this pair gives each side with value at the entry at
+    /// least `PART_FLOOR` of it in the smaller piece (so in both).
+    pub fn split_ok(&self, n: i64) -> bool {
+        if n >= self.size || n <= 0 {
+            return true;
+        }
+        let e = self.entry.clamp(self.bl, self.bs);
+        let m = n.min(self.size - n);
+        [e - self.bl, self.bs - e].iter().all(|&r| r == 0 || q(m, r, self.m.p.scale, 0) >= PART_FLOOR)
+    }
+
     /// The pending part `propose` writes for a claim (kind, side, price p at t0) on the part n, and the forfeit bound
     /// argument `fb`. Refused (`None`) when the claim cannot be proposed: a liquidation that does not trigger, of a part
-    /// whose keys are equal, or whose range is not wider than both bands.
+    /// whose keys are equal, or whose range is not wider than both bands; a close at a price below the closer's
+    /// maintenance (review 11). The pair UTXO's age rules (`liquidatable_from`, the quiet time of a close) are the
+    /// caller's.
     pub fn pending_of(&self, k: &OKit, n: i64, kind: i64, side: i64, p: i64, t0: i64) -> Option<(OPending, i64)> {
         let restore = self.restore_state(n);
         let (mut cure_bound, mut cure_hash, mut forfeit_hash, mut fee, mut fb) = (0, [0u8; 32], [0u8; 32], 0, if side == LONG { self.bl } else { self.bs });
+        if kind == KIND_CLOSE && !self.close_ok(side, p) {
+            return None;
+        }
         if kind == KIND_LIQ {
             if self.long_key == self.short_key {
                 return None;
@@ -976,8 +1020,9 @@ pub enum Settlement {
     Close { long: i64, short: i64 },
     /// kind 2: the forfeited part (its state and least value), the underwriter B + fee at output i.
     Forfeit { part: OPair, value: i64, uw: i64 },
-    /// Refuted or void: the restored part (least value), the defender at i, the disputer at M - 1 - i.
-    Restore { part: OPair, value: i64, defender: i64, disputer: i64 },
+    /// Refuted or void: the restored part (least value), the defender at i, the disputer at M - 1 - i; a void claim (a
+    /// liquidation that landed after its last valid DAA, review 11) pays its bond back to its proposer at i instead.
+    Restore { part: OPair, value: i64, defender: i64, disputer: i64, proposer: i64 },
 }
 
 impl OPending {
@@ -1102,12 +1147,16 @@ impl OPending {
         OPending { mk_parent: maker_of(op), ..self.clone() }
     }
 
-    /// The claim's validity at P (`KpfPendingO.finalize`): `P + W + step <= X <= P + term + step` and `P - t0 <=
-    /// lateDaa` (review 10, R10-F2: a valid claim is finalizable at least one step before the expiry).
+    /// The claim's validity at P (`KpfPendingO.finalize`): a liquidation needs `P + W + step <= X <= P + term + step`
+    /// (review 10, R10-F2: a valid claim is finalizable at least one step before the expiry); a close is always valid.
     pub fn valid_at(&self, p: i64) -> bool {
+        // Review 11: a close is always valid; lateness voids nothing (the judge reads the feed at t0 and at P).
+        if self.kind == KIND_CLOSE {
+            return true;
+        }
         let (w, x, st) = (self.m.p.challenge_daa as i128, self.b.expiry as i128, self.m.bond.step as i128);
         let pp = p as i128;
-        pp + w + st <= x && x <= pp + (self.m.bond.term + self.m.bond.step) as i128 && pp - self.t0 as i128 <= self.m.p.late_daa as i128
+        pp + w + st <= x && x <= pp + (self.m.bond.term + self.m.bond.step) as i128
     }
     /// The last DAA at which a claim on a pair of expiry `x` can land and still be valid.
     pub fn last_valid_landing(m: &OMarket, x: i64) -> i64 {
@@ -1148,7 +1197,8 @@ impl OPending {
         let part = self.pair_part();
         if self.status == REFUTED || !self.valid_at(p) {
             let (disputer, defender) = self.m.bond_split(self.bond, self.status == REFUTED);
-            return Settlement::Restore { part: part.restore_state(self.n), value: v - self.bond, defender, disputer };
+            let refuted = self.status == REFUTED;
+            return Settlement::Restore { part: part.restore_state(self.n), value: v - self.bond, defender: if refuted { defender } else { 0 }, disputer, proposer: if refuted { 0 } else { defender } };
         }
         if self.kind == KIND_CLOSE {
             let c = self.close_price();
@@ -1272,8 +1322,15 @@ pub fn market_warnings(m: &OMarket, daa_per_second: i64) -> Vec<String> {
     let hours = |d: i64| d as f64 / s as f64 / 3600.0;
     let p = &m.p;
     let mut w = vec![];
+    // Review 11 (the founder's W of minutes): a window that short is not an error, but no person contests within it.
     if p.challenge_daa < 3_600 * s {
-        w.push(format!("the contest window is {:.2} h: a false claim against an offline party finalizes unless someone contests within it (the note asks at least 1 h)", hours(p.challenge_daa)));
+        w.push(format!(
+            "the contest window is {:.1} min: a false claim is contestable only by an automated watcher, so every party needs one running (its own or a service) that reads the feed and contests within the window; `kpf oracle-watch --feed-price <the feed now>` is that check: it exits with code 3 and prints CONTEST NOW with the deadline when a pending claim against you is not within g of the feed",
+            p.challenge_daa as f64 / s as f64 / 60.0
+        ));
+    }
+    if p.late_daa > p.challenge_daa {
+        w.push("the tools may send a claim whose t0 is older than the whole contest window (lateDaa above W)".into());
     }
     if m.bond.rho_bps > 20_000 {
         w.push(format!("rho is {}: an underwriter may underwrite {} times its bond; a coalition of underwriters can falsely settle that multiple of what it holds", m.bond.rho_bps as f64 / 1e4, m.bond.rho_bps as f64 / 1e4));
@@ -1286,9 +1343,6 @@ pub fn market_warnings(m: &OMarket, daa_per_second: i64) -> Vec<String> {
     }
     if p.quiet_daa < 60 * s {
         w.push("the quiet time is under a minute: a party can respend its pair almost every block and void the underwriter's signed claims".into());
-    }
-    if p.late_daa > p.challenge_daa {
-        w.push("a claim may land later after its price than the whole contest window".into());
     }
     if p.idle_daa < 24 * 3_600 * s {
         w.push(format!("a pair whose cover lapsed settles at its entry price after {:.1} h idle", hours(p.idle_daa)));
@@ -1303,9 +1357,6 @@ pub fn market_warnings(m: &OMarket, daa_per_second: i64) -> Vec<String> {
     // 3 days, stake age 30 days, unbonding 90 days, the least stake 10,000 KAS at 10 DAA/s); the wallet warns well inside.
     let days = |d: i64| d as f64 / s as f64 / 86_400.0;
     let mut unreachable = vec![];
-    if p.challenge_daa < 3_600 * s {
-        unreachable.push(format!("the contest window is only {:.2} h", hours(p.challenge_daa)));
-    }
     if m.judge.min_stake > 100_000_000_000 {
         w.push(format!("a judge stake must be at least {} KAS: few defenders can post it", m.judge.min_stake as f64 / 1e8));
         unreachable.push(format!("each stake must be at least {} KAS", m.judge.min_stake as f64 / 1e8));
@@ -1345,7 +1396,7 @@ pub mod samples {
     use super::*;
 
     /// The feed definition of the sample market (and of the testnet runbook's example, `docs/TESTNET.md`).
-    pub const FEED: &str = "kpf feed definition v1\nquantity: example slow underlying, published once per hour\nunit: KAS per whole unit\nsources: median of three named public sources\ntime: the price at the DAA score t0, mapped to the accepting block's timestamp\nsessions: always open\ndisagreement: a claim is true if within 0.25 % of the median\n";
+    pub const FEED: &str = super::FEED_TEMPLATE;
 
     pub fn market() -> OMarket {
         OMarket::testnet(feed_hash_of(FEED.as_bytes()))

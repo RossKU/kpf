@@ -1142,7 +1142,10 @@ impl Walk {
             return;
         }
         // Review 11: the same claim vouched by another key is refused.
-        self.hostile("a claim vouched by a key that is not the underwriter's", &propose_tx(&w.lp, &spec, &keypair(45), closer.as_ref()).0);
+        // A close carries no vouch since review 11: only a liquidation can be vouched by a wrong key.
+        if kind == LIQ {
+            self.hostile("a claim vouched by a key that is not the underwriter's", &propose_tx(&w.lp, &spec, &keypair(45), None).0);
+        }
         if lookback_close {
             self.count("propose close at the look-back's best price");
         }
@@ -1240,7 +1243,7 @@ impl Walk {
                     self.count(if mode == 1 { "upheld by YES, pool with a loser closed" } else { "late contest ignored, pool closed" });
                 }
                 (_, Settlement::Restore { defender, disputer, .. }) => {
-                    assert_eq!((*defender, *disputer), (pw.bond, 0), "an upheld but void claim's bond goes to the defender");
+                    assert_eq!((*defender, *disputer), (0, 0), "an upheld but void claim's bond goes back to its proposer (review 11)");
                     self.count("upheld but void, restored");
                 }
                 (_, Settlement::Close { .. }) => panic!("a liquidation settled as a close"),
@@ -1370,7 +1373,7 @@ impl Walk {
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }
             Settlement::Restore { part, defender, .. } => {
-                assert_eq!(defender, pw.bond, "a void claim's bond goes to the defender");
+                assert_eq!(defender, 0, "a void claim's bond goes back to its proposer (review 11)");
                 self.count("void claim restored");
                 if tardy {
                     assert!(!pw.valid_at(pdaa));

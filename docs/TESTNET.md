@@ -428,12 +428,22 @@ units, 2,939 bytes; 8 disputes on one bid 449,376 script units, compute mass 38,
 
 ## 9. An oracle-only market with a slow underlying
 
-An oracle-only market (`docs/DESIGN-ORACLE-IMPL.md`, sections 15-23) has no order book behind it: the price of every
-claim on a pair is vouched by that pair's underwriter, and a false price stands unless someone contests it within the
-window with aged judge stake. This exercise runs one market on an underlying that changes slowly (published once an
-hour), so that a person at a terminal can play every role: the underwriter (bonds a slot, vouches prices, renews), two
-parties (long and short), a staker (contests), and the executor (pays fees). It was exercised only offline
+An oracle-only market (`docs/DESIGN-ORACLE-IMPL.md`, sections 15-23 and 29) has no order book behind it: the price of
+every liquidation of a pair is vouched by that pair's underwriter, every close is priced by the closing party itself,
+and a false price stands unless someone contests it within the window with aged judge stake. A claim is true only if
+its price lies within g of the feed both at its `t0` and at `P`, the DAA of the block that accepted it (review 11; the
+feed definition states it). This exercise runs one market on an underlying that changes slowly, so that a person at a
+terminal can play every role: the underwriter (bonds a slot, vouches liquidations, renews), two parties (long and
+short), a staker (contests), and the executor (pays fees). It was exercised only offline
 (`crates/kpf-cli/tests/oracle_cli.rs`); nothing here has been run against a network.
+
+**The contest window is 2 minutes at the testnet defaults (review 11).** Nobody at a terminal contests within it: a
+claim is contestable only by an automated watcher, so every party needs one running (its own or a service) that reads
+the feed and contests a false claim at once. `kpf oracle-watch --feed-price P` is that watcher's check: it marks every
+pending claim within its window whose price is not within g of the feed as `CONTEST NOW` with its deadline (`--json`:
+`contestNow`, `contestUntil`) and exits with code 3; the watcher then runs `kpf contest`. A contested claim takes at
+least one judge round (12 hours) after the contest to resolve. For a drill by hand, create the market with a longer
+window (`--window-daa`, below).
 
 ### 9.1 What must exist before
 
@@ -443,8 +453,8 @@ vouching UTXO, a defence stake), 200 KAS each for alice and bob, 120 KAS for sam
 stake only if it was bonded `M_age` (7 days at the defaults) before the claim it judges: **create the stakes first and
 wait**, or create the market with a short age (`--stake-age-daa`, `--round-daa`) for a quick drill. Since review 6 the contracts bound
 the judge (a round at most 2,592,000 DAA, stake age at most 25,920,000, unbonding at most 77,760,000, the least stake at
-most 10,000 KAS); `oracle-market` refuses a market beyond them, and `oracle-check` states every judge parameter and warns
-when a contest within the window is not realistically possible. `oracle-watch --node` reads every object's DAA from the
+most 10,000 KAS); `oracle-market` refuses a market beyond them, and `oracle-check` states every judge parameter and says
+that a window under an hour is contestable only by an automated watcher. `oracle-watch --node` reads every object's DAA from the
 node; without `--node` a DAA read from a file is marked unchecked.
 
 **Object files and the DAA.** A builder writes the objects it creates without a DAA score (the transaction is not yet
@@ -466,20 +476,24 @@ disagreement rule the judge applies. The market's id is `blake3` of its paramete
 byte changed is another market.
 
 ```sh
-cat > feed.txt <<'EOF'
-kpf feed definition v1
-quantity: example slow underlying, published once per hour
-unit: KAS per whole unit
-sources: median of three named public sources
-time: the price at the DAA score t0, mapped to the accepting block's timestamp
-sessions: always open
-disagreement: a claim is true if within 0.25 % of the median
-EOF
+kpf oracle-market --feed-template feed.txt                     # the template: edit quantity, unit, sources, sessions
+cat feed.txt
+# kpf feed definition v1
+# quantity: example slow underlying, published at least every 10 seconds
+# unit: KAS per whole unit
+# sources: median of three named public sources
+# time: a claim names the DAA score t0 it prices; it is judged at t0 and at P, the DAA score of the block that accepted it, each mapped to that block's timestamp
+# sessions: always open; a claim whose t0 or P falls in a closed session is false
+# disagreement: a claim is true only if its price is within g (the market's gBps) of the median both at t0 and at P
 kpf oracle-market --feed feed.txt --out market.json            # testnet defaults; prints the id and the worst cases
-# a quick drill: a 1-hour window, 10-minute judge rounds, stake counted after 20 minutes
+# a drill by hand: a 1-hour window, 10-minute judge rounds, stake counted after 20 minutes
 kpf oracle-market --feed feed.txt --out drill.json --window-daa 36000 --round-daa 6000 --stake-age-daa 12000 --stake-unbond-daa 6000
 kpf oracle-check --market market.json --feed feed.txt --size 10 --x 10 --long-rate 1 --short-rate 2 --cover-rate 6 --premium 0.02
 ```
+
+Keep the `time:` and `disagreement:` lines of the template: the judge's two-moment rule is part of every market, and the
+series must publish faster than the tools' `lateDaa` (10 s at the defaults: `kpf vouch` and `kpf oracle-close` price the
+present and refuse a `t0` older than that).
 
 `oracle-check` is what every party runs before trading: it refuses a market whose feed text does not hash to the
 market's feed hash or whose parameters fail the contracts' bounds, warns on characters that render misleadingly and on
@@ -522,38 +536,42 @@ orders. The underwriter receives the first term's premium, half from each order'
 
 ### 9.5 A claim, a contest, the verdict
 
-The underwriter vouches by spending one of its own plain UTXOs in the claim (write it to a file with `kpf utxos --key $UW
---node $NODE --out vouch.json` and keep one entry). The contract makes the proposer post the claim's bond (the underwriter
-for a liquidation, the closer for a close; a settled liquidation pays the bond and the fee back to the underwriter), and
-`KpfPairO.propose` does not constrain where the vouch input's value goes: only the underwriter's SIGHASH_ALL signature
-does, so an executor that builds the transaction cannot keep anything the signature does not allow. Hence:
+**A liquidation** is vouched by the underwriter: it spends one of its own plain UTXOs in the claim (write it to a file
+with `kpf utxos --key $UW --node $NODE --out vouch.json` and keep one entry). Keep the vouching funds on a key of their
+own: any transaction that spends a UTXO of the underwriter's key with SIGHASH_ALL vouches every claim beside it
+(review 11, R11-F6), and `kpf` refuses to sign with that key any transaction holding a proposal it did not build as the
+vouched liquidation. The contract makes the underwriter post the claim's bond (a settled liquidation pays the bond and
+the fee back to it), and `KpfPairO.propose` does not constrain where the vouch input's value goes: only the
+underwriter's SIGHASH_ALL signature does. So the vouch UTXO funds everything the claim adds to the contract outputs:
+the bond, and when `--n` is less than the pair's size also the carrier of the new part (together the pending part's
+refund). The underwriter pays the carrier of every split it proposes and gets it back only on a cure; a valid settlement
+pays it the bond and the keeper fee and leaves the carrier in the forfeited part (the winner's); a refuted claim leaves
+the carrier in the restored part and pays the bond to the defender and the disputer; a void one (it landed after its
+last valid DAA) leaves the carrier there and returns the bond to the underwriter (review 11). The rest of the vouch UTXO
+goes back to the underwriter in an explicit output (`underwriter: the vouch input's remainder back`; none if it is
+exactly zero); the funder pays only the network fee.
 
-- **Liquidation:** the underwriter is the proposer and funds everything the claim adds to the contract outputs: the
-  bond, and when `--n` is less than the pair's size also the carrier of the new part (together the pending part's
-  refund). The underwriter pays the carrier of every split it proposes and gets it back only on a cure (live run 1: the
-  cure refunded bond + carrier, 1.2 KAS); a valid settlement pays it the bond and the keeper fee and leaves the carrier
-  in the forfeited part (the winner's), and a void or refuted claim leaves the carrier in the restored part and pays the
-  bond to the defender (and the disputer) (review 9, R9-N1). So the vouch UTXO funds that sum and the rest
-  goes back to the underwriter in an explicit output (`underwriter: the vouch input's remainder back`; none if it is
-  exactly zero). The vouch UTXO must therefore hold at least that sum (and a remainder of at least 0.02 KAS, or exactly
-  nothing); `kpf` refuses otherwise and names the sum. The funder pays only the network fee.
-- **Close:** the closer posts the bond (and the carrier when `--n` is less than the pair's size): the vouch value goes
-  back in full, and the funder, who is expected to be the closer (its key signs the claim), pays that and the fee.
-
-A claim is valid only if it lands at least the contest window and one step before the cover's expiry (`P + W + step <=
-X`, review 10); `kpf vouch` refuses a later one (its bond would go to the defender) unless `--void-ok`, and says when the
-renewal opens: renew first, then claim against the next expiry. Finalize a valid liquidation before the expiry
+`kpf vouch` prices the present: `t0` is the node's DAA score (a `--t0` older than `lateDaa`, 10 s, is refused), and with
+`--node` it signs and submits in one step (`--dry-run` writes it without sending). A liquidation is valid only if it
+lands at least the contest window and one step before the cover's expiry (`P + W + step <= X`, review 10); the contract
+refuses one from a pair UTXO accepted too late for that, and `kpf vouch` refuses a later one unless `--void-ok`, and says
+when the renewal opens: renew first, then claim against the next expiry. Finalize a valid liquidation before the expiry
 (`oracle-watch` says so): a cure by the loser that lands after the expiry leaves a pair no renewal accepts, which then
-settles at its entry price.
+settles at its entry price. A claim that has not landed within `lateDaa` of its `t0` should be revoked by spending the
+vouch UTXO: it would be judged at the feed when it lands, and refuted (the bond lost) if the feed moved by more than g.
 
-The underwriter should sign a transaction only after checking that it has the output that pays the rest of the vouch UTXO
-back to its own address. A funder that is also the underwriter must give another UTXO than the vouch one for funding (the
-tool sets the vouch UTXO aside).
+**A close** is the party's own (review 11, R11-F1): the closing party states the price for the present, posts the bond
+(and the new part's carrier when `--n` is less than the pair's size) and signs alone; no underwriter and no
+counterparty sign, and the close is valid whatever the cover's expiry. It needs the pair's UTXO `quietDaa` old, and the
+closer may not be below its maintenance at its own price (it adds margin first). It settles `W` after it lands at the
+price moved by g against the closer; a close that is not true at both moments is refuted when contested and costs the
+closer its bond.
 
 ```sh
+kpf oracle-close --pair out/open/*-oracle-pair.json --side long --price 10.1 --key $A --funder $A --node $NODE --out-dir out/close
 kpf vouch --pair out/open/*-oracle-pair.json --kind liquidate --side long --price 9.2 --vouch vouch.json \
     --key $UW --funder $EX --node $NODE --out-dir out/claim
-kpf oracle-watch --me $A --scan out/claim --node $NODE       # A CLAIM AGAINST YOU ... contest until DAA ...
+kpf oracle-watch --me $A --scan out/claim --node $NODE --feed-price 10   # A CLAIM AGAINST YOU ... CONTEST NOW (by DAA ...)
 kpf contest --pending out/claim/*-oracle-pending-part.json --stake out/stake/*-judge-stake.json --key $SAM \
     --funder $EX --node $NODE --out-dir out/contest
 kpf deposit --dispute <the dispute file of out/contest> --side yes --stake out/uwstake/*-judge-stake.json --key $UW \
@@ -582,9 +600,9 @@ An unbonding stake counts nowhere; `kpf inspect` shows a stake file's state.
 
 What to check: a contest landing at `P + W` or later is ignored (the claim settles); a refuted claim restores the part
 exactly and pays its bond to the long and to sam; an upheld one finalizes at once; an uncontested one finalizes after
-`W`. A claim that lands more than `lateDaa` after its `t0`, or less than `W` before the expiry, is void: finalize
-restores the part and pays the bond to the defender. The loser of a pending liquidation can cure instead
-(`kpf oracle-cure --pending ... --key $A`).
+`W`. Lateness voids nothing (review 11): a claim is judged at the feed at its `t0` and at `P`. A liquidation that lands
+less than `W` and a step before the expiry is void: finalize restores the part and returns the bond to the underwriter.
+The loser of a pending liquidation can cure instead (`kpf oracle-cure --pending ... --key $A`).
 
 ### 9.6 Renewal, lapse, leaving
 
@@ -596,9 +614,12 @@ kpf unbond --slot <slot file> --key $UW --funder $UW --node $NODE   # once every
 kpf withdraw-bond --slot <unbonding slot file> --key $UW --node $NODE
 ```
 
-If the underwriter goes silent, the parties leave without any price: `oracle-amend` and `oracle-transfer` to a taker who
-signs, a mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the
-calendar: no party entry postpones it). The underwriter can still renew late as long as the pair's UTXO was accepted no
+Whatever the underwriter does (renews on time, refuses to vouch, goes silent), each party leaves by its own close at
+the feed (`oracle-close`, 9.5: its own bond, no other signature, settled `W` after it lands); the price-free exits remain
+(`oracle-amend` and `oracle-transfer` to a taker who signs, a mutual close, a cooperative close), and the lapse settle
+pays both at the entry once `idleDaa` has passed after the cover lapsed (by the calendar: no party entry postpones it).
+A party that does not close in the tail and idle time after a silent underwriter's expiry is settled at the entry: the
+side the feed favours gets less than its own close would have paid it. The underwriter can still renew late as long as the pair's UTXO was accepted no
 later than its expiry (review 9): a late renewal charges a full premium and moves the lapse date one term later, and the
 pair is renewable again only if that renewal landed by the new expiry. Any party entry after the expiry (an amend is
 enough) makes the pair unrenewable and fixes the lapse date; `kpf renew` refuses such a pair locally and names the
@@ -637,10 +658,10 @@ dispute, pool, order).
 
 ### 9.7 Measured cost (offline, 100 sompi per gram)
 
-Open 0.0900 KAS, a claim 0.0367 + finalize 0.0095, a renewal 0.0390 (seven pairs in one bind 0.2115), a contest 0.0294,
-a defence 0.0400, the resolution 0.0291, settling and closing the pool 0.0793: a pair-month without a dispute is about
-0.18 KAS of network fees, plus the premium the orders agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` sections 19 and 24.6
-(after review 6).
+Open 0.0994 KAS, a liquidation's claim 0.0408 + finalize 0.0098, a party's own close 0.0405 + finalize 0.0097, a
+renewal 0.0430 (seven pairs in one bind 0.2386), a contest 0.0297, a defence 0.0400, the resolution 0.0293, settling and
+closing the pool 0.0794: a pair-month without a dispute is about 0.19 KAS of network fees, plus the premium the orders
+agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` section 19 (refreshed after review 11).
 
 ### 9.8 Not possible yet
 

@@ -40,11 +40,14 @@ pragma silverscript ^0.1.0;
 //   renew(u, k)       the slot at input u binds this pair's cover at expiry + termDaa (claim k names this input); the
 //                     premium leaves the margins, half from each side, bounds moved inward; nobody else signs
 //   propose(n, kind, side, p, t0, j, s, fb, k, pPre, pSuf)
-//                     a price claim vouched by uwKey's own P2PK input j (signed SIGHASH_ALL: every outpoint, so this
-//                     pair's state; every output, so the claim; the lock time): the part n moves into a KpfPendingO with
-//                     a bond, exactly as KpfPair.propose moves it into KpfPending (kind 1 close, signed by the closer;
-//                     kind 2 liquidation; restore, cure and forfeit states precomputed as P2SH hashes); valid at
-//                     finalize only if P + challengeDaa + stepDaa <= expiry (KpfPendingO, review 10)
+//                     a price claim: the part n moves into a KpfPendingO with a bond, exactly as KpfPair.propose moves it
+//                     into KpfPending (restore, cure and forfeit states precomputed as P2SH hashes). Kind 2 liquidation:
+//                     vouched by uwKey's own P2PK input j (signed SIGHASH_ALL: every outpoint, so this pair's state; every
+//                     output, so the claim; the lock time), only from a pair UTXO that can still carry a valid claim, and
+//                     valid at finalize only if P + challengeDaa + stepDaa <= expiry (KpfPendingO, review 10). Kind 1
+//                     close (review 11): a party's own, signed by the closer alone, after quietDaa, at a price whose close
+//                     price (moved by g against the closer) leaves the closer not below its maintenance; no underwriter
+//                     input, valid whatever the expiry
 // DESIGN: the note removes idle settle at E in oracle markets (1.4, 5.13: a blocker could run the clock out to it). It is
 // kept only for a pair whose cover has lapsed, idleDaa after the lapse by the calendar (tx.daa >= X + tailDaa +
 // idleDaa): while an underwriter renews, X moves on and the settle is never due; once the underwriter is silent it is
@@ -139,7 +142,7 @@ contract KpfPairO(
     int carrier = init_carrier;          // C
     int idleDaa = init_idleDaa;          // the age of a lapsed pair before lapseSettle (CSV)
     int challengeDaa = init_challengeDaa; // W: the contest window from P; earliest finalize (CSV)
-    int lateDaa = init_lateDaa;          // a claim landed more than lateDaa after its t0 is void
+    int lateDaa = init_lateDaa;          // the tools' bound on how stale a claim's t0 may be (review 11: not read on chain)
     int quietDaa = init_quietDaa;        // the age every party entry needs (CSV)
     int sigmaBps = init_sigmaBps;        // the bond of a claim, of its cover
     int betaBps = init_betaBps;          // the disputer's share of a refuted claim's bond
@@ -185,6 +188,7 @@ contract KpfPairO(
     int constant STATUS_SLOT = 2;
     int constant BPS = 10000;
     int constant PLAIN_DUST = 2000000;
+    int constant PART_FLOOR = 20000000;
     int constant INT_MAX = 9223372036854775807;
     int constant RING = 12;
     int constant CSV_LIMIT = 4294967296;
@@ -374,12 +378,28 @@ contract KpfPairO(
         return byte[](0x08) + byte[](a as byte[8]) + byte[](0x08) + byte[](m as byte[8]) + byte[](0x08) + byte[](t as byte[8]);
     }
 
+    // Review 11 (R11-F7): a split gives each side with value at the entry at least PART_FLOOR of it in each piece (the
+    // smaller piece is checked; q is monotone in the size), so no hand-over, close or claim splits a passive side into
+    // lineages whose value the payout floor takes. A side with nothing at the entry (rate 0) has nothing to lose.
+    function floorOk(int m, int r) {
+        require(r == 0 || quoteOf(m, r, 0) >= PART_FLOOR);
+    }
+
     function checkPart(int n) {
         require(n > 0);
         require(n <= size);
         require(n >= minSize);
         int rest = size - n;
         require(rest == 0 || rest >= minSize);
+        if (rest > 0) {
+            int e = entryPrice;
+            if (e < bl) { e = bl; }
+            if (e > bs) { e = bs; }
+            int m = n;
+            if (rest < m) { m = rest; }
+            floorOk(m, e - bl);
+            floorOk(m, bs - e);
+        }
     }
 
     function owed(int n, int r, int t) : int {
@@ -518,6 +538,7 @@ contract KpfPairO(
         require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
         require(rateDaa >= 0);
         require(rateDaa < CSV_LIMIT);
+        require(2 * rateDaa <= stepDaa);
         require(slotUnbondDaa >= 0);
         require(slotUnbondDaa < CSV_LIMIT);
     }
@@ -982,9 +1003,18 @@ contract KpfPairO(
     // a KpfPendingO with the claim (kind, side, the vouched price p, the DAA t0 it refers to, tx.daa >= t0 by CLTV) and
     // a bond B = max(bondMin, 0.02 KAS, q(n, floor(coverRate * sigmaBps / 10^4))), the remainder continues this pair as
     // on every split. Nothing settles here.
-    //   kind 1 close: the owner of `side` signs (and posts the bond); the underwriter vouches p; at settlement the closer
-    //          is paid at p moved by g against it.
-    //   kind 2 liquidation: anyone builds it, the underwriter vouches p and posts the bond; the loser `side` is
+    //   kind 1 close: the owner of `side` signs, prices p and posts the bond; the pair UTXO is quietDaa old; the closer
+    //          is not below its maintenance at the close price c, p moved by g against it (a long: c = floor(p (10^4 -
+    //          g) / 10^4), c (10^4 - m) >= bl 10^4; a short: c = ceil(p (10^4 + g) / 10^4), bs 10^4 >= c (10^4 + m)); at
+    //          settlement the closer is paid at c. A false close is refuted by the judge
+    //          when contested within W (the feed definition: true only within g of the feed at t0 and at P).
+    // DESIGN: review 11 (R11-F1): the close needed the underwriter's vouch, so an underwriter that renews on time and
+    // vouches no close held both parties until the premiums had narrowed the range to the bands (52 terms on review 11's
+    // gold pair). The vouch added no price check the judge does not make; it is removed for closes, which also no longer
+    // depend on the expiry (KpfPendingO): a party's own exit at the feed whatever its underwriter does
+    // (docs/DESIGN-ORACLE-IMPL.md 29).
+    //   kind 2 liquidation: anyone builds it, the underwriter vouches p and posts the bond; the pair UTXO was accepted at
+    //          least challengeDaa + stepDaa before the expiry and at most termDaa + stepDaa before it; the loser `side` is
     //          liquidatable at p only with the tolerance g inside the trigger: a long iff
     //          ceil(p * (10^4 + g) / 10^4) * (10^4 - mmrBps) < bl * 10^4, a short iff
     //          bs * 10^4 < floor(p * (10^4 - g) / 10^4) * (10^4 + mmrBps); and bl * (10^4 + m) < bs * (10^4 - m); the
@@ -1008,7 +1038,6 @@ contract KpfPairO(
         checkPair();
         checkMarket();
         checkPart(n);
-        vouched(j);
         require(t0 >= 0);
         require(t0 < LOCK_TIME_THRESHOLD);
         require(tx.daa >= t0);
@@ -1024,14 +1053,31 @@ contract KpfPairO(
         int cb = 0;
         int fee = 0;
         if (kind == KIND_CLOSE) {
+            // Review 11 (R11-F1): a party's own close. The closer prices it and posts its bond; no underwriter input: the
+            // underwriter can no longer hold a party by refusing to vouch. A party entry (quietDaa), and the closer may not
+            // be below its maintenance at its own price, so a true close never escapes a due liquidation.
+            // The closer is not below its maintenance at the price it is paid (p moved by g against it): a close true at P
+            // (the feed within g of p) then leaves the closer healthy at the feed, where no liquidation is valid.
+            quiet();
             if (side == SIDE_LONG) {
                 signedBy(sig(byte[65](s)), longKey);
+                require((p * (BPS - gBps) / BPS) * (BPS - mmrBps) >= bl * BPS);
             } else {
                 require(side == SIDE_SHORT);
                 signedBy(sig(byte[65](s)), shortKey);
+                require(bs * BPS >= ((p * (BPS + gBps) + BPS - 1) / BPS) * (BPS + mmrBps));
             }
         } else {
             require(kind == KIND_LIQ);
+            vouched(j);
+            // Review 11 (R11-F3): a liquidation must be able to be valid: the pair UTXO (its DAA score exact, a lower bound
+            // on P) leaves the window and a step before the expiry, and the expiry is within a term and a step of it. A
+            // liquidation void by the expiry window refunds its proposer (KpfPendingO), so a certainly void one is refused
+            // here; a part restored after the boundary cannot be claimed again until it is renewed.
+            int born = OpTxInputDaaScore(self);
+            require(born >= 0);
+            require(born + challengeDaa + stepDaa <= expiry);
+            require(expiry <= born + termDaa + stepDaa);
             require(lk != sk);
             require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
             int t = 0;

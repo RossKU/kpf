@@ -299,13 +299,18 @@ impl World {
         if lp.s.pending_of(k, n, kind, side, p, t0).is_none() {
             return;
         }
+        // Review 11: a liquidation needs a pair UTXO that can carry a valid claim (KpfPairO.propose); a close is a party
+        // entry (quietDaa).
+        if (kind == LIQ && !lp.s.liquidatable_from(lp.daa as i64)) || (kind == CLOSE && self.now < lp.daa + lp.s.m.p.quiet_daa as u64) {
+            return;
+        }
         let c = ClaimSpec { kind, side, n, p, t0, lock: self.now };
         let closer = if kind == CLOSE { Some(if side == L { long_kp() } else { short_kp() }) } else { None };
         let (t, w) = propose_tx(&lp, &c, &uw_kp(), closer.as_ref());
         self.reg_pend(&w);
         self.ok("propose", &t);
-        // Hostile: vouched by another key.
-        let (h, _) = propose_tx(&lp, &c, &keypair(77), closer.as_ref());
+        // Hostile: a liquidation vouched by another key (a close carries no vouch since review 11: signed by the closer).
+        let (h, _) = if kind == CLOSE { propose_tx(&lp, &c, &uw_kp(), Some(&keypair(77))) } else { propose_tx(&lp, &c, &keypair(77), None) };
         self.hostile("propose vouched by a stranger", &h);
         self.count(if lie { "propose false" } else { "propose true" });
         self.books.bonds_posted += w.bond;
@@ -443,11 +448,13 @@ impl World {
                 assert_eq!(part.long_key, part.short_key);
                 self.cover.remove(&c.w.idb());
             }
-            Settlement::Restore { part, value, defender, disputer } => {
-                assert!(value + defender + disputer <= v);
-                assert_eq!(defender + disputer, w.bond, "the bond to the defender and the disputer, to the sompi");
+            Settlement::Restore { part, value, defender, disputer, proposer } => {
+                assert!(value + defender + disputer + proposer <= v);
+                // Refuted: the bond to the defender and the disputer; void (review 11): back to the proposer.
+                assert_eq!(defender + disputer + proposer, w.bond, "the bond, to the sompi");
                 self.books.bonds_to_defender += defender;
                 self.books.bonds_to_disputer += disputer;
+                self.books.bonds_to_proposer += proposer;
                 // The parties' positions come back unchanged (keys, bounds, entry, binding).
                 assert_eq!((part.long_key, part.short_key, part.bl, part.bs, part.entry, part.b), (w.long_key, w.short_key, w.bl, w.bs, w.entry, w.b));
                 let back = live(t, 1, self.now, part);

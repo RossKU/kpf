@@ -85,6 +85,7 @@ Guaranteed fast settlement (DESIGN 4.5f; optional, the slow path above stays the
 Oracle-only markets (docs/DESIGN-ORACLE-IMPL.md, third slice; runbook docs/TESTNET.md. Prices come only from each pair's
 underwriter; a false price stands unless contested within the window. common flags as the builders; --daa N or --node
 gives the present the lock time proves)
+  oracle-market --feed-template FEED.txt    writes a feed definition template (the judge's two-moment rule in it)
   oracle-market --feed FEED.txt [--out M.json] [--rho-bps N] [--window-daa N] [--quiet-daa N] [--late-daa N]
                 [--sigma-bps N] [--beta-bps N] [--bond-min KAS] [--mmr-bps N] [--g-bps N] [--idle-daa N] ...
             a market block from a feed definition (testnet defaults, each overridable): its id and the worst cases
@@ -104,15 +105,21 @@ gives the present the lock time proves)
   oracle-open   --long O.json --short O.json --slot S.json --n T --x P --cover-rate P [--premium P] [--expiry DAA] --key UW
                 [--uw-utxo UTXO.json]   the premium joins the funder's change when the funder is the underwriter, else one
                 output with that underwriter UTXO; a premium too small for an output of its own is refused otherwise
-  vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
-                [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too); for a
-                liquidation the vouch UTXO funds the bond (and the new part's carrier when --n < size); refused when the
-                claim would land later than the window and one step before the expiry (void) unless --void-ok
+  vouch         --pair P.json --kind liquidate --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
+                [--dry-run]   the underwriter's liquidation claim: t0 is the node's DAA (a --t0 older than lateDaa is
+                refused), signed and submitted in one step with --node; the vouch UTXO funds the bond (and the new part's
+                carrier when --n < size); refused when the claim would land later than the window and one step before
+                the expiry (void: the bond comes back) unless --void-ok. Keep the vouch funds on a key of their own
+  oracle-close  --pair P.json --side long|short --price P [--n T] [--t0 DAA] --key PARTY [--dry-run]
+                a party's own close at the feed: its own bond, no underwriter and no counterparty; settles W after it
+                lands at the price moved g against the closer; refused below the closer's maintenance; any time
   contest       --pending W.json --stake ST.json --key STAKER [--base KAS]   within the window, with aged stake on NO
                 with --node: --claim-tx TX.json (the claim's birth, traced to a KpfPairO.propose); without: --accept-untraced
+                contest a claim whose price is not within g of the feed at its t0 or at P (the DAA it landed at)
   deposit       --dispute D.json --side yes|no --stake ST.json... --key OWNER...   join the trailing side
                 with --node: --opening TX.json --claim-tx TX.json (the dispute traced to its opening and its claim
                 to a propose; refused if the trace fails); without --node: --accept-untraced (prints what is unchecked)
+                vote YES only for a claim within g of the feed at both t0 and P, NO otherwise
   resolve       --dispute D.json --pending W.json                    after the round: the verdict reaches the part
   oracle-cure   --pending W.json --key LOSER                         the loser clears a pending liquidation
   oracle-finalize --pending W.json                                   settle, or restore a refuted or void claim
@@ -135,8 +142,12 @@ gives the present the lock time proves)
    A transaction with a relative lock or a lock time prints `usable from DAA X`; with --node, --submit before X is
    refused locally)
   oracle-watch  --me KEY|HEX|ADDR (--object FILE | --scan DIR)... [--daa N | --node URL] [--json]
+                [--feed-price P [--feed-at-t0 P]]
             claims against you and the time left to contest, your underwriter's cover expiry, the disputes you have
-            stake in
+            stake in. With --feed-price (the feed now) it is an automated watcher's check: a pending claim within its
+            window that is not within g of the feed (at t0 and now) is marked CONTEST NOW with its deadline
+            (--json: contestNow, contestUntil) and the command exits with code 3. With a window of minutes only such
+            a watcher can contest: run one (your own or a service)
 
 Node (needs --node)
   utxos   --key FILE | --address A [--out FILE]      list UTXOs (a funding file)
@@ -193,6 +204,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "oracle-order" => ocmds::order_cmd(&a),
         "oracle-open" => ocmds::open_cmd(&a),
         "vouch" => ocmds::vouch_cmd(&a),
+        "oracle-close" => ocmds::oracle_close_cmd(&a),
         "contest" => ocmds::contest_cmd(&a),
         "deposit" => ocmds::deposit_cmd(&a),
         "resolve" => ocmds::resolve_cmd(&a),

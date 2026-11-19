@@ -39,7 +39,17 @@ fn tag(art: &SilAbiArtifact, entry: &str) -> [u8; 4] {
 /// less underlying of 6 decimals priced in sompi (the DESIGN 5 example's numbers), W 200, a claim void 100 after its t0,
 /// 20 DAA of quiet, a lapsed pair settles after 1,000 idle, the bond 10 % of the cover (at least 1 KAS), the disputer 20 %.
 pub fn omarket() -> OMarket {
-    omarket_with(kpf_protocol::bond::BondParams { rho_bps: 10_000, step: 100, term: 800, tail: 200, rate: 10, unbond: 50 })
+    MARKET_OVERRIDE.with(|c| c.get()).unwrap_or_else(|| omarket_with(kpf_protocol::bond::BondParams { rho_bps: 10_000, step: 100, term: 800, tail: 200, rate: 10, unbond: 50 }))
+}
+
+thread_local! {
+    static MARKET_OVERRIDE: std::cell::Cell<Option<OMarket>> = const { std::cell::Cell::new(None) };
+}
+
+/// Review 11 fix (the economic walk): runs `omarket()` on this thread with other parameters (a template does not depend
+/// on its state, so the compiled templates stay valid); `None` restores the fixture.
+pub fn set_omarket(m: Option<OMarket>) {
+    MARKET_OVERRIDE.with(|c| c.set(m));
 }
 
 pub fn omarket_with(b: kpf_protocol::bond::BondParams) -> OMarket {
@@ -595,7 +605,41 @@ pub fn propose_tx_with(lp: &LPair, c: &ClaimSpec, voucher: &Keypair, closer: Opt
     }
     outs.push(change(90_000_000_000));
     place(&mut outs, 0, 0, lp.op, id, lin);
-    (build_ext(&ins, outs, c.lock, &[0, 0, 0]), w)
+    // A close is a party entry: the pair UTXO must be quietDaa old (review 11 fix).
+    let seq = if c.kind == KIND_CLOSE { seq_quiet(lp) } else { 0 };
+    (build_ext(&ins, outs, c.lock, &[seq, 0, 0]), w)
+}
+
+/// Review 11 (R11-F1): a party's own close, no underwriter input: in 0 the pair (propose kind 1, the closer's signature,
+/// sequence quietDaa; `j` names input 1), 1 the closer's own funding (it posts the bond, and the carrier when n < s);
+/// out 0 the pending part (a fresh id), 1 the remainder (n < s), then the closer's change.
+pub fn self_close_tx(lp: &LPair, side: i64, n: i64, p: i64, t0: i64, lock: u64, closer: &Keypair) -> (T, OPending) {
+    let k = kit();
+    // A close the model refuses (the closer below its maintenance at p) still gets a pending state to build.
+    let (w, fb) = lp.s.pending_of(k, n, KIND_CLOSE, side, p, t0).unwrap_or_else(|| {
+        let mut w = sample_pending(&lp.s);
+        (w.kind, w.side, w.n, w.quote, w.t0, w.cure_bound, w.cure_hash, w.forfeit_hash, w.fee) = (KIND_CLOSE, side, n, p, t0, 0, [0; 32], [0; 32], 0);
+        w.restore_hash = lp.s.restore_state(n).script_hash(k);
+        (w, if side == LONG { lp.s.bl } else { lp.s.bs })
+    });
+    let w = w.made_by(&lp.op);
+    let args = vec![iv(n), iv(KIND_CLOSE), iv(side), iv(p), iv(t0), iv(1), Arg::Sig(*closer), iv(fb), iv(0), bv(&k.pending.prefix), bv(&k.pending.suffix)];
+    let fv: i64 = 1_000_000_000_000;
+    let fop = TransactionOutpoint { transaction_id: lp.op.transaction_id, index: 9_000 + lp.op.index };
+    let ins = vec![pair_in(lp, "propose", args), key_in(fop, fv as u64, 0, closer)];
+    let id = lp.id.unwrap();
+    let pv = lp.s.pending_value(lp.value, &w);
+    let mut outs = vec![out(pv as u64, pend_spk(&w), None)];
+    let mut adds = pv - lp.value as i64;
+    if n < lp.s.size {
+        let rest = lp.s.rest_of(lp.s.size - n);
+        let rv = lp.s.rest_value(lp.value, n);
+        adds += rv;
+        outs.push(out(rv as u64, pair_spk(&rest), bind(0, id)));
+    }
+    outs.push(out((fv - adds - 10_000) as u64, p2pk_spk(closer), None));
+    place(&mut outs, 0, 0, lp.op, id, Lineage::Fresh);
+    (build_ext(&ins, outs, lock, &[seq_quiet(lp), 0]), w)
 }
 
 /// Proposes and requires acceptance; the pending part lands at DAA `daa`.
@@ -773,8 +817,13 @@ pub fn finalize_tx(lw: &LPend, p: i64, seq: u64) -> (T, Settlement) {
             outs.push(out(*value as u64, pair_spk(part), bind(0, id)));
             outs.push(change(90_000_000_000));
         }
-        Settlement::Restore { part, value, defender, disputer } => {
-            outs.push(out((*defender).max(2_000_000) as u64, key_spk(&lw.s.defender()), None));
+        Settlement::Restore { part, value, defender, disputer, proposer } => {
+            // Refuted: the defender at 0; void (review 11): the bond back to the proposer (the underwriter) at 0.
+            if *proposer > 0 {
+                outs.push(out(*proposer as u64, key_spk(&lw.s.b.uw_key), None));
+            } else {
+                outs.push(out((*defender).max(2_000_000) as u64, key_spk(&lw.s.defender()), None));
+            }
             outs.push(out(*value as u64, pair_spk(part), bind(0, id)));
             outs.push(change(90_000_000_000));
             if *disputer > 0 {
@@ -784,6 +833,24 @@ pub fn finalize_tx(lw: &LPend, p: i64, seq: u64) -> (T, Settlement) {
     }
     let _ = k;
     (build_ext(&ins, outs, 0, &[seq, 0]), s)
+}
+
+/// Review 11: lateness no longer voids a claim, so a test that needs a restored part beside its remainder refutes the
+/// claim instead: a contest at `at` by stake 70 (NO, unanswered), the dispute resolved and decided one round later, and
+/// the finalize. Returns the finalize, its settlement (a restore: the bond to the defender and the disputer) and the DAA
+/// at which the restored part lands.
+pub fn refute(lw: &LPend, at: u64) -> (T, Settlement, u64) {
+    let st = stake(70, 10 * UNIT as u64, 0, 0xc0);
+    let (ct, w2, _, dj) = contest_tx(lw, &st, 70, at);
+    must("contest", &ct);
+    let (cw, ld) = (live(&ct, 0, at, &w2), live(&ct, 2, at, &dj));
+    let r_daa = at + lw.s.m.judge.round as u64;
+    let (dt, _, dw) = decide_tx(&ld, &cw, r_daa);
+    must("resolve and decide", &dt);
+    let ldw = live(&dt, 1, r_daa, &dw);
+    let (ft, s) = finalize_tx(&ldw, ldw.s.clock, 0);
+    must("finalize the refuted claim", &ft);
+    (ft, s, r_daa)
 }
 
 /// A cure by the loser: in 0 the part (cure), 1 the loser's funding; out 0 the underwriter's refund, 1 the cured part,

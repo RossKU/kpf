@@ -285,6 +285,7 @@ contract KpfOpenO(
         require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
         require(rateDaa >= 0);
         require(rateDaa < CSV_LIMIT);
+        require(2 * rateDaa <= stepDaa);
         require(slotUnbondDaa >= 0);
         require(slotUnbondDaa < CSV_LIMIT);
     }

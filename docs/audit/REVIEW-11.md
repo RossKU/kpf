@@ -277,3 +277,31 @@ attacks, other vouchers, look-back and late claims): nothing in ids, makers, bin
 What does not hold is what the invariants were never asked: they value positions at the entry, so every loss that
 depends on the price (the hold, the look-back, the lapse at the entry) passes them by construction.
 Convergence now needs economic invariants at the feed's price and a unilateral exit, not more covenant rules.
+
+## Fix status
+
+Fixed in the working tree after `c8a3a29` (not committed); the rules, the walk and the residuals are in
+`docs/DESIGN-ORACLE-IMPL.md` 29. Method: the economic invariants first (29.1: E-party, E-exit, E-claim at a simulated
+feed price), a walk that checks them with hostile steps on (`crates/kpf-tests/tests/econ_walk_tests.rs`, 20 seeds x 400
+steps, and 8 x 400 with the testnet proportions of the window), run first on these templates (4,402 violations: E-exit
+4,025 for R11-F1, E-party 127 lapses with no exit of the party's own and 5 look-back closes for R11-F1 / R11-F2, E-claim
+245 for R11-F3 and its second form, an honest claim delayed across its last valid landing), then on the fixed ones (none).
+The founder's decision of the round is included: the testnet window `W` is 2 minutes and `lateDaa` 10 s.
+
+| # | Status | Rule (29.3) | Test |
+|---|---|---|---|
+| R11-F1 | Fixed | A close is the party's own: `KpfPairO.propose` kind 1 reads no vouch, needs the closer's signature, its bond, `quietDaa`, and the closer not below its maintenance at the price it is paid (`p` moved by g against it), so a true close never escapes a due liquidation; `KpfPendingO` treats a close as valid whatever the expiry. The underwriter sells cover and prices liquidations; it can hold nobody | `r11_holds_a_party_leaves_by_its_own_close_while_its_underwriter_renews`, the walk's E-exit probe |
+| R11-F2 | Fixed | The judge's two-moment rule (true only within g of the feed at `t0` and at `P`), stated in the feed definition template, the sample feed and every claim and dispute command: a closer is paid at most the feed at `P`, a liquidation needs the loser below maintenance at both moments | `r11_holds_a_close_is_paid_at_most_the_feed_when_it_lands`, `r11_holds_a_liquidation_needs_the_loser_below_maintenance_when_it_lands` |
+| R11-F3 | Fixed | No void for lateness; a void liquidation (delayed past its last valid landing) returns its bond to the underwriter; `propose` refuses a liquidation from a pair UTXO that cannot carry a valid one, so a part is frozen once per term at most. `lateDaa` (default 100 DAA) is the tools' bound: `kpf vouch` and `kpf oracle-close` take `t0` from the node, refuse a stale one, and sign and submit in one step | `r11_holds_a_late_honest_claim_settles_and_one_delayed_past_its_last_landing_keeps_its_bond`, the walk's E-claim |
+| R11-F4 | Fixed | `2 rateDaa <= stepDaa` in every copy of the bond bounds and in `BondParams::check` | `r11_holds_a_market_whose_rate_limit_exceeds_half_a_step_is_refused` |
+| R11-F5 | Fixed | 29.1 and the economic walk (feed-priced values, a real E-exit check, E-claim) | `r11_holds_the_economic_walk_at_the_feed_price`, `r11_holds_the_economic_walk_with_a_short_contest_window` |
+| R11-F6 | Bounded (tool) | `OBuilt::vouch_guard` refuses to sign with an underwriter key a transaction holding a proposal beside a close or that the tool did not build as the vouched liquidation; the runbook says to keep vouch funds on a key of their own; a contract-level binding is not worth its size (29.3) | `r11_bounded_any_sighash_all_...` (the bound at the feed asserted), the honest life (the refusal) |
+| R11-F7 | Fixed | `checkPart` gives each side with value at the entry at least 0.2 KAS of it in each piece of every split | `r11_holds_hand_overs_cannot_split_a_passive_side_below_the_part_floor` |
+| R11-N1 | Documented | 28.3 corrected: the order's carrier goes to the builder; bounded by I-order | `r11_bounded_the_carrier_of_an_emptying_take_of_a_whole_pair_is_the_executors` |
+| R11-N2 | Fixed | `kpf vouch` refuses a stale `t0` and sends at once (R11-F3) | `oracle_cli` |
+
+Also: `kpf oracle-watch --feed-price P` is the automated watcher's check (`CONTEST NOW` with the deadline, `--json`
+`contestNow` / `contestUntil`, exit code 3); the short-window warning now says that only an automated watcher can
+contest. Section 19's fee table is refreshed. What remains and what it gives up: 29.4, 29.5 (a lapse at the entry for a
+party that does not close within 10.25 days of a silent underwriter's expiry; a party alone can now post a false close
+against its counterparty, as the underwriter can a false liquidation; every party needs an automated watcher).

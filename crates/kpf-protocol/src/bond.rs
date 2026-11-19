@@ -93,6 +93,8 @@ impl BondParams {
         // term, tail < 2^32 and step <= term: no overflow below.
         chk(p.term + p.tail + 2 * p.step <= RING as i64 * p.step, "the ring cannot hold a renewal")?;
         chk(p.rate >= 0 && p.rate < CSV_LIMIT, "rate")?;
+        // Review 11 (R11-F4): an outsider's advance once per step restarts the slot's age; the owner needs half a step.
+        chk(2 * p.rate <= p.step, "the slot's rate limit is more than half a step: an outsider advancing the ring at every step end would keep the owner from binding")?;
         chk(p.unbond >= 0 && p.unbond < CSV_LIMIT, "unbond")
     }
 

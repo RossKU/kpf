@@ -229,7 +229,7 @@ fn holds_a_false_claim_disputed_in_time_costs_its_underwriter_the_bond() {
     let dw = live(&t, 1, 799, &dw);
     let (t, s) = finalize_tx(&dw, 500, 0);
     must("restore", &t);
-    let Settlement::Restore { part, value, defender, disputer } = s else { panic!() };
+    let Settlement::Restore { part, value, defender, disputer, .. } = s else { panic!() };
     assert_eq!((part.bl, part.bs, part.long_key, part.short_key), (lp.s.bl, lp.s.bs, lp.s.long_key, lp.s.short_key));
     assert_eq!(value, lp.value as i64);
     assert_eq!((defender, disputer), (480 * KAS, 120 * KAS));
@@ -328,23 +328,22 @@ fn exploit_an_underwriter_that_renews_but_never_vouches_holds_the_pair_for_a_bou
     assert!(!p.range_ok() || p.renewed().is_none());
 }
 
-/// Void claims cost their proposer the bond: an underwriter that proposes claims it knows will be void (landed late, or
-/// too close to the expiry) to freeze a pair pays the defender 600 KAS per freeze of W.
+/// Void claims and freezes (review 11): a void liquidation now returns its bond to its proposer (an honest claim delayed
+/// past its last valid landing must not pay the loser), so a freeze is bounded by the proposal instead: `propose` refuses
+/// a liquidation from a pair UTXO accepted too late for any claim on it to be valid, and the restored part of a void claim
+/// is such a UTXO. One void claim per part per term: the pair (accepted at 300, X 1,200, last valid landing 900) is frozen
+/// once by a claim landing at 950 (W, then restored at 1,150 with the bond back to the underwriter); the restored part,
+/// accepted 50 DAA before the expiry, cannot carry a valid claim, so no second freeze of it is accepted.
 #[test]
-fn holds_a_freeze_by_void_claims_costs_the_bond_each_time() {
+fn holds_a_freeze_by_void_claims_is_once_per_part_per_term() {
     let (lp, _, _) = opened();
-    let mut cur = lp;
-    let mut paid = 0;
-    for round in 0..3u64 {
-        let p = 500 + 300 * round;
-        let lw = proposed(&cur, &liq(L, FALSE_P, p as i64 - 101), p);
-        let (t, s) = finalize_tx(&lw, p as i64, 200);
-        must("void", &t);
-        let Settlement::Restore { part, defender, .. } = s else { panic!("void") };
-        paid += defender;
-        cur = live(&t, 1, p + 200, &part);
-    }
-    assert_eq!(paid, 3 * 600 * KAS, "three freezes, three bonds to the long");
+    let lw = proposed(&lp, &liq(L, FALSE_P, 900), 950);
+    let (t, s) = finalize_tx(&lw, 950, 200);
+    must("void", &t);
+    let Settlement::Restore { part, defender, proposer, .. } = s else { panic!("void") };
+    assert_eq!((defender, proposer), (0, 600 * KAS), "the bond back to the underwriter");
+    let back = live(&t, 1, 1_150, &part);
+    refused("a second freeze of the restored part", &propose_tx(&back, &liq(L, FALSE_P, 1_150), &uw_kp(), None).0, 0);
 }
 
 /// The underwriter cannot vouch a claim after the cover's liability ended: it is void, and it cannot reach the slot;
@@ -483,12 +482,12 @@ fn exploit_a_genesis_pair_naming_a_real_slot_is_bounded_and_no_order_enters_it_u
     // The underwriter can vouch it (it is the attacker).
     let lw = proposed(&fake, &liq(L, FALSE_P, 450), 500);
     must("an uncounted pair's claim settles", &finalize_tx(&lw, 500, 200).0);
-    // The same state with X beyond P + 900 is void at any P it can land at before X - W.
+    // The same state with X beyond the pair UTXO's DAA + term + step: no claim on it can be valid, so the proposal is
+    // refused (review 11; before, it was proposed and void at finalize).
     let mut far = gp.clone();
     far.b.expiry = 1_200 + 900 + 100;
-    let lw = proposed(&genesis_pair(far, lp.value, 0x5b, 400), &liq(L, FALSE_P, 450), 500);
-    let (_, s) = finalize_tx(&lw, 500, 200);
-    assert!(matches!(s, Settlement::Restore { .. }));
+    let gfar = genesis_pair(far, lp.value, 0x5b, 400);
+    refused("a liquidation of a pair whose expiry lies beyond its DAA + term + step", &propose_tx(&gfar, &liq(L, FALSE_P, 450), &uw_kp(), None).0, 0);
     // An order entering it: refused without the bind, accepted with it (and then the slot counts the part).
     let lo = order(L, &keypair(46), 0x7a, 0);
     refused("take without a bind", &take_tx(&fake, &lo, &sl, 1_000_000_000, 400, false).0, 1);
@@ -613,10 +612,12 @@ fn exploit_a_hostile_market_passes_the_bounds_and_only_a_wallet_can_flag_it() {
     assert_eq!(lw.s.bond, 2_000_000, "a claim's bond is the dust floor");
     must("a false claim finalizes one DAA after it lands", &finalize_tx(&lw, 500, 1).0);
     let w = market_warnings(&m, 10);
-    for needle in ["contest window", "rho is 5", "bond is 0", "disputer takes 100", "quiet time", "lapsed settles", "later after its price"] {
+    for needle in ["contest window", "automated watcher", "rho is 5", "bond is 0", "disputer takes 100", "quiet time", "lapsed settles", "older than the whole contest window"] {
         assert!(w.iter().any(|l| l.contains(needle)), "{needle}: {w:?}");
     }
-    assert!(market_warnings(&OMarket::testnet([0; 32]), 10).is_empty(), "the testnet defaults raise no warning");
+    // Review 11: the testnet defaults' 2-minute window raises one statement: only an automated watcher can contest.
+    let tw = market_warnings(&OMarket::testnet([0; 32]), 10);
+    assert!(tw.len() == 1 && tw[0].contains("automated watcher"), "{tw:?}");
     // The feed definition.
     let honest = FEED.as_bytes();
     let c = check_feed(honest);

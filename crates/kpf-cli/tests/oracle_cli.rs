@@ -102,7 +102,9 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let market = h.p("market.json");
     let out = h.ok(&["oracle-market", "--feed", &feed, "--out", &market]);
     assert!(out.contains("market id") && out.contains("not approved, listed or verified"), "{out}");
-    assert!(!out.contains("WARNING"), "the testnet defaults raise no warning: {out}");
+    // Review 11: the testnet defaults' 2-minute window: one warning, that only an automated watcher can contest.
+    assert_eq!(out.matches("WARNING").count(), 1, "{out}");
+    assert!(out.contains("automated watcher") && out.contains("oracle-watch --feed-price"), "{out}");
     // The wallet's check: the text matches, the worst case in words.
     let out = h.ok(&["oracle-check", "--market", &market, "--feed", &feed, "--size", "1000", "--x", "10", "--long-rate", "1", "--short-rate", "2", "--cover-rate", "6", "--premium", "0.02"]);
     assert!(out.contains("feed definition: hash matches") && out.contains("the long's margin 1000 KAS"), "{out}");
@@ -154,8 +156,13 @@ fn oracle_market_lifecycle_from_the_command_line() {
     // go back to the underwriter in an explicit output; the funder pays only the fee.
     assert!(h.last.contains("underwriter: the vouch input's remainder back 100 KAS"), "{}", h.last);
     assert!(h.last.contains("in  1: the underwriter's vouch"), "{}", h.last);
-    let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8100000"]);
-    assert!(out.contains("A CLAIM AGAINST YOU") && out.contains("contest until DAA 8215999 (115999 DAA left)"), "{out}");
+    let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8000100"]);
+    assert!(out.contains("A CLAIM AGAINST YOU") && out.contains("contest until DAA 8001199 (1099 DAA left)"), "{out}");
+    // Review 11: the watcher's check. The feed at 10 KAS: 9.2 is not within g of it, contest now (an error: exit code 3).
+    let err = h.fail(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8000100", "--feed-price", "10", "--json"]);
+    assert!(err.contains("CONTEST NOW") && err.contains("8001199"), "{err}");
+    let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pend, "--daa", "8000100", "--feed-price", "9.2"]);
+    assert!(out.contains("true, do not contest"), "{out}");
     // Review 6 (note 3): without a node the file's DAA is shown as unchecked.
     assert!(out.contains("[DAA from the object file, not checked against a node: pass --node]"), "{out}");
     // A stranger cannot vouch: the tool refuses a vouch input of another key.
@@ -177,21 +184,21 @@ fn oracle_market_lifecycle_from_the_command_line() {
         .expect("the vouch's transaction file")
         .display()
         .to_string();
-    let err = h.fail(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out]);
+    let err = h.fail(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8000100", "--out-dir", &out]);
     assert!(err.contains("refused without --node") && err.contains("--accept-untraced"), "{err}");
-    let o = h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8100000", "--out-dir", &out, "--claim-tx", &claim_tx, "--accept-untraced"]);
+    let o = h.ok(&["contest", "--pending", &pend, "--stake", &stake, "--key", &st, "--funder", &ex, "--funding", &f, "--daa", "8000100", "--out-dir", &out, "--claim-tx", &claim_tx, "--accept-untraced"]);
     assert!(o.contains("traced: the claim was born alone") && o.contains("NOT CHECKED that the claim is live"), "{o}");
-    let cw = h.obj(&format!("{out}/dry-run"), "oracle pending part", 8_100_000);
+    let cw = h.obj(&format!("{out}/dry-run"), "oracle pending part", 8_000_100);
     // Review 6 (note 2): a contested part whose contest landed after the window (its UTXO at P + W or later) is shown
     // as one whose verdict will be ignored.
     {
         let late = format!("{cw}.late.json");
         let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&cw).unwrap()).unwrap();
-        v["daa"] = json!(8_216_000);
+        v["daa"] = json!(8_001_200);
         std::fs::write(&late, serde_json::to_string_pretty(&v).unwrap()).unwrap();
-        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &late, "--daa", "8216000"]);
+        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &late, "--daa", "8001200"]);
         assert!(o.contains("after the window") && o.contains("the verdict will be ignored"), "{o}");
-        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &cw, "--daa", "8216000"]);
+        let o = h.ok(&["oracle-watch", "--me", &lkk, "--object", &cw, "--daa", "8001200"]);
         assert!(!o.contains("after the window"), "{o}");
         std::fs::remove_file(&late).unwrap();
     }
@@ -199,7 +206,7 @@ fn oracle_market_lifecycle_from_the_command_line() {
         let files: Vec<PathBuf> = std::fs::read_dir(format!("{out}/dry-run")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().contains("judge-stake")).collect();
         let d = files.iter().find(|p| std::fs::read_to_string(p).unwrap().contains("status: 7")).expect("the dispute").clone();
         let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&d).unwrap()).unwrap();
-        v["daa"] = json!(8_100_000);
+        v["daa"] = json!(8_000_100);
         std::fs::write(&d, serde_json::to_string_pretty(&v).unwrap()).unwrap();
         d.display().to_string()
     };

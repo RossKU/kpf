@@ -1,4 +1,5 @@
-//! Review 11 (docs/audit/REVIEW-11.md): the oracle-market family at commit `b3675fb` (the fix of review 10). Every
+//! Review 11 (docs/audit/REVIEW-11.md): the oracle-market family at commit `b3675fb` (the fix of review 10), and its
+//! fixes (docs/DESIGN-ORACLE-IMPL.md 29: every former `r11_exploit_` and most `r11_bounded_` are now `r11_holds_`). Every
 //! transaction here runs every input in the real script engine with the covenant context (`common::run`), except the
 //! honest life and the live-run replay (`r11_holds_the_honest_life_...`), which build every transaction with the tool's
 //! own builders on the pinned artifacts and check it with `verify::verify`.
@@ -6,7 +7,8 @@
 //! `r11_exploit_` tests an attack that works, `r11_holds_` one that is refused (or a shape that keeps its rule),
 //! `r11_bounded_` a residual that is measured. Worked numbers use a gold-like pair on the testnet defaults
 //! (`OMarket::testnet`: scale 10^8, minimum size 0.01 unit, term 28 days, step 3.5 days, tail 3.25 days, idle 7 days,
-//! W 6 hours, late 10 minutes, quiet 60 s, mmr 5 %, g 0.5 %, bond 10 % of the cover, rate limit 60 s, at 10 DAA/s):
+//! W 2 minutes (review 11; 6 hours before), lateDaa as given (100 DAA = 10 s, the default since review 11), quiet 60 s,
+//! mmr 5 %, g 0.5 %, bond 10 % of the cover, rate limit 60 s, at 10 DAA/s):
 //! 0.1 oz at 80,000 KAS an ounce (8,000 KAS notional), 10x on each side (bounds 72,000 and 88,000, 800 KAS of margin
 //! each), cover rate 20,000 KAS an ounce (2,000 KAS of cover, a 200 KAS bond), premium 10 % of the cover a year.
 
@@ -101,9 +103,9 @@ fn kas(v: i64) -> String {
     format!("{:.4}", v as f64 / KAS as f64)
 }
 
-// ---------------------------------------------------------------- lead 1: the look-back option
+// ---------------------------------------------------------------- lead 1: the look-back option (R11-F2)
 
-/// The look-back a closer and its underwriter hold: the expected and the 95 % largest move of the best price over a
+/// The look-back a closer and its underwriter held: the expected and the 95 % largest move of the best price over a
 /// window of `secs` seconds for a yearly volatility `sigma` (a driftless Brownian motion: E[max] = sqrt(2/pi) s, P(max >
 /// a) = 2 (1 - Phi(a / s)), so the 95 % point is 1.96 s, with s = sigma sqrt(secs / year)).
 fn lookback(sigma: f64, secs: f64) -> (f64, f64) {
@@ -111,20 +113,29 @@ fn lookback(sigma: f64, secs: f64) -> (f64, f64) {
     ((2.0 / std::f64::consts::PI).sqrt() * s, 1.96 * s)
 }
 
-/// Lead 1 (I-party's "a close by the other party at the vouched price"). The contract proves only `t0 <= lock time` at
-/// the proposal and `P - t0 <= lateDaa` at the finalize (P exact); nothing else ties `t0` to the present. A judge refutes
-/// only a price further than g from the feed at t0. So a closer and the pair's underwriter choose the moment in the
-/// last `lateDaa` with the best price and vouch it moved by g in the closer's favour; the settlement moves it back by g:
-/// the closer is paid at max(feed over [P - lateDaa, P]) (1 - g^2). On the gold-like pair (the feed at P 80,000) with
-/// the window's best price 80,560 (the 95 % look-back over 10 minutes at 80 % a year, the volatility of gold priced in
-/// KAS): a vouched 80,962.80 is within g of 80,560 (not refutable), and the long closer is paid 855.80 KAS where a close
-/// at the present feed pays 800 and the documented close (at the feed moved by g against the closer) 760. The short,
-/// which signed nothing, loses 55.80 KAS against the fair price (7.0 % of its margin) and 95.80 KAS against the close the
-/// documentation describes. With `t0` one DAA earlier the claim is void (its bond goes to the short). With `lateDaa` 100
-/// (10 s) the window's 95 % best price is 80,070 and the take falls to 6.6 KAS against the fair price; the g of the
-/// documented close (40 KAS) is still taken in full.
+/// The feed definition's rule for one moment (29.3): a claimed price `p` is true if the feed `f` lies in
+/// `[p (1 - g), p (1 + g)]`. A claim is true only if this holds at its t0 and at P.
+fn true_at(p: i64, f: i64, g: i64) -> bool {
+    let (p, f, g) = (p as i128, f as i128, g as i128);
+    f * 10_000 >= p * (10_000 - g) && f * 10_000 <= p * (10_000 + g)
+}
+
+/// The highest price true both at a moment with feed `a` and at one with feed `b`: `min(a, b) / (1 - g)`, rounded down.
+fn highest_true(a: i64, b: i64, g: i64) -> i64 {
+    (a.min(b) as i128 * 10_000 / (10_000 - g as i128)) as i64
+}
+
+/// R11-F2, fixed (29.3). The review's look-back: a closer (with its underwriter, before) vouched the best price of the
+/// last lateDaa moved by g, true at its t0, and was paid that best moment. Now a close is the party's own (no vouch) and
+/// the judge holds every claim to the feed at t0 AND at P. On the gold pair (the feed at P 80,000; the window's 95 %
+/// best price 80,560 over 10 minutes at 80 % a year, 80,070 over 10 s): the review's price 80,962.80 is true at t0 and
+/// false at P, so a contest refutes it and the closer's bond goes to the short and the disputer. The highest price true
+/// at both moments is the lower feed moved up by g; it pays the long closer at most the feed at P (800 KAS at 80,000, its
+/// value at the feed): the short, which signed nothing, gets at least its value at the feed. An honest closer quoting
+/// the feed pays g (40 KAS here). The contract accepts every one of these claims (lateness voids nothing): only the
+/// judge's rule decides, which is what the feed definition now states.
 #[test]
-fn r11_bounded_a_close_is_priced_at_the_best_moment_of_the_last_late_daa() {
+fn r11_holds_a_close_is_paid_at_most_the_feed_when_it_lands() {
     for (late, best) in [(6_000i64, 8_056_000_000_000i64), (100, 8_007_000_000_000)] {
         let m = gold_market(late);
         let (step, term, w_) = (m.bond.step, m.bond.term, m.p.challenge_daa);
@@ -134,218 +145,186 @@ fn r11_bounded_a_close_is_priced_at_the_best_moment_of_the_last_late_daa() {
         let p = gold_pair(&m, x_, 0);
         let lp = genesis_pair(p.clone(), p.floor() as u64, 0x60, (pland - 1_000_000) as u64);
         let g = m.p.g_bps;
-        let vouched = (best as i128 * (10_000 + g as i128) / 10_000) as i64;
-        assert!((vouched as i128 * 10_000) <= best as i128 * (10_000 + g as i128), "within g of the best price: not refutable");
-        // At t0 = P - lateDaa the close is valid and pays the long at the vouched price moved back by g.
-        let lw = proposed(&lp, &ClaimSpec { kind: CLOSE, side: L, n: p.size, p: vouched, t0: pland - late, lock: pland as u64 }, pland as u64);
-        assert!(lw.s.valid_at(pland));
-        let (ft, s) = finalize_tx(&lw, pland, w_ as u64);
-        must("the close priced lateDaa back", &ft);
-        let Settlement::Close { long, short } = s else { panic!("{s:?}") };
-        let long_net = long - lw.s.refund;
         let fair = q(p.size, E - p.bl, m.p.scale);
-        let documented = q(p.size, E * (10_000 - g) / 10_000 - p.bl, m.p.scale);
+        // The review's price: true at t0 (the window's best), false at P (the feed 80,000).
+        let vouched = (best as i128 * (10_000 + g as i128) / 10_000) as i64;
+        assert!(true_at(vouched, best, g) && !true_at(vouched, E, g), "the review's look-back price is false at P");
+        let (t, w) = self_close_tx(&lp, L, p.size, vouched, pland - late, pland as u64, &long_kp());
+        must("the closer's own claim at the look-back price (the contract accepts it; the judge decides)", &t);
+        let lw = live(&t, 0, pland as u64, &w);
+        // Contested within W and refuted: the part is restored, the bond to the short and the disputer.
+        let refuted = lw.s.contested(pland, x(&keypair(70))).decided(false, pland + 1);
+        let Settlement::Restore { defender, disputer, proposer, .. } = refuted.settlement(lw.value, pland) else { panic!() };
+        assert_eq!((defender + disputer, proposer), (w.bond, 0));
+        // The highest price true at both moments pays the long at most its value at the feed at P.
+        let pstar = highest_true(best, E, g);
+        assert!(true_at(pstar, best, g) && true_at(pstar, E, g) && !true_at(pstar + 1, E, g));
+        let (t, w2) = self_close_tx(&lp, L, p.size, pstar, pland - late, pland as u64, &long_kp());
+        must("the closer's own claim at the highest price true at both moments", &t);
+        let lw2 = live(&t, 0, pland as u64, &w2);
+        let (ft, s) = finalize_tx(&lw2, pland, w_ as u64);
+        must("finalize, W later", &ft);
+        let Settlement::Close { long, short } = s else { panic!("{s:?}") };
+        let long_net = long - lw2.s.refund;
+        assert!(long_net <= fair, "the closer is paid at most its value at the feed at P");
+        assert!(short >= lp.value as i64 - fair, "the short gets at least its value at the feed at P");
+        // An honest closer quoting the feed pays g.
+        let honest = q(p.size, (E as i128 * (10_000 - g as i128) / 10_000) as i64 - p.bl, m.p.scale);
         println!(
-            "lateDaa {late}: the long closer is paid {} KAS (fair at the feed {} KAS, documented close {} KAS); the short gets {} KAS: {} KAS below fair ({:.1} % of its 800 KAS margin), {} KAS below the documented close",
+            "lateDaa {late}: the review's price {} is false at P (refuted: {} KAS to the short, {} to the disputer); the highest price true at both moments {} pays the long {} KAS, its value at the feed {} KAS; an honest close at the feed pays it {} KAS (g: {} KAS)",
+            kas(vouched),
+            kas(defender),
+            kas(disputer),
+            kas(pstar),
             kas(long_net),
             kas(fair),
-            kas(documented),
-            kas(short),
-            kas(long_net - fair),
-            (long_net - fair) as f64 / (800 * KAS) as f64 * 100.0,
-            kas(long_net - documented)
+            kas(honest),
+            kas(fair - honest)
         );
-        assert!(long_net > fair && long_net > documented);
-        // One DAA further back: void, the closer's bond to the short.
-        let lw2 = proposed(&lp, &ClaimSpec { kind: CLOSE, side: L, n: p.size, p: vouched, t0: pland - late - 1, lock: pland as u64 }, pland as u64);
-        assert!(!lw2.s.valid_at(pland));
-        let (ft, s) = finalize_tx(&lw2, pland, w_ as u64);
-        must("the same close one DAA older", &ft);
-        let Settlement::Restore { defender, .. } = s else { panic!("{s:?}") };
-        assert_eq!(defender, lw2.s.bond);
     }
     for (sigma, name) in [(0.15, "15 % a year (gold in a stable unit)"), (0.80, "80 % a year (gold priced in KAS)")] {
         for secs in [600.0, 10.0] {
             let (e, p95) = lookback(sigma, secs);
-            println!("look-back at {name} over {secs} s: expected {:.4} %, 95 % {:.4} % of the price; at 10x {:.3} % / {:.3} % of a side's margin", e * 100.0, p95 * 100.0, e * 1000.0, p95 * 1000.0);
+            println!("look-back the old rule allowed at {name} over {secs} s: expected {:.4} %, 95 % {:.4} % of the price; at 10x {:.3} % / {:.3} % of a side's margin; under the two-moment rule: 0 beyond the feed at P", e * 100.0, p95 * 100.0, e * 1000.0, p95 * 1000.0);
         }
     }
 }
 
-/// Lead 1, the liquidation side: the underwriter vouches the lowest moment of the last `lateDaa`. The long of the gold
-/// pair stands at 76,000 (healthy: its trigger with g is about 75,412) and dipped to 75,000 inside the window; a claim at
-/// 75,000 with `t0` in the dip is valid and, uncured, forfeits the long's whole 400 KAS (its value at the present feed)
-/// to the short. The cure is offered here (cure bound 70,893.75, inside the long's share) and costs the long a top-up of
-/// 110.6 KAS within W (6 hours) and no value; where the cure is not offered (a bound beyond the loser's share, 27.2) the
-/// dip costs the whole residual. A claim on the present price (76,000) is refused (no trigger within g).
+/// R11-F2, the liquidation side, fixed. The long of the gold pair stands at 76,000 (healthy: below maintenance only under
+/// 72,000 / 0.95 = 75,789) and dipped to 75,000 inside the window. The dip claim at 75,000 is accepted by the contract and
+/// is true at t0, but false at P (76,000 lies 1.33 % above it): refuted when contested. No price true at P liquidates the
+/// long: the lowest, 76,000 / 1.005, fails the trigger (g is inside it), so a true liquidation needs the loser below its
+/// maintenance at the feed at both moments, and it then takes at most the loser's maintenance margin at the feed (at a
+/// feed of 75,000 the long's 300 KAS, within q(0.1, 5 % of 75,000) = 375 KAS).
 #[test]
-fn r11_bounded_a_liquidation_may_price_the_lowest_moment_of_the_last_late_daa() {
-    let m = gold_market(6_000);
+fn r11_holds_a_liquidation_needs_the_loser_below_maintenance_when_it_lands() {
+    let m = gold_market(100);
     let (step, w_) = (m.bond.step, m.p.challenge_daa);
+    let g = m.p.g_bps;
     let pland: i64 = 30_000_000;
     let x_ = ((pland + w_ + step) / step + 1) * step;
     let p = gold_pair(&m, x_, 0);
     let lp = genesis_pair(p.clone(), p.floor() as u64, 0x61, (pland - 1_000_000) as u64);
     let now_price = 7_600_000_000_000i64;
     let dip = 7_500_000_000_000i64;
-    assert!(!p.long_liquidatable(now_price), "healthy at the present feed");
+    assert!(true_at(dip, dip, g) && !true_at(dip, now_price, g), "the dip claim is false at P");
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: dip, t0: pland - 50, lock: pland as u64 }, pland as u64);
+    let refuted = lw.s.contested(pland, x(&keypair(70))).decided(false, pland + 1);
+    assert!(matches!(refuted.settlement(lw.value, pland), Settlement::Restore { proposer: 0, .. }), "refuted: restored, the bond to the long and the disputer");
+    let lowest = ((now_price as i128 * 10_000 + 10_000 + g as i128 - 1) / (10_000 + g as i128)) as i64;
+    assert!(true_at(lowest, now_price, g) && !p.long_liquidatable(lowest), "no price true at P liquidates a long above its maintenance");
     let k = kit();
-    assert!(p.pending_of(k, p.size, LIQ, L, now_price, pland).is_none(), "no claim at the present price");
-    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: dip, t0: pland - 6_000, lock: pland as u64 }, pland as u64);
-    assert!(lw.s.valid_at(pland));
-    println!("the dip claim's cure bound {} KAS an ounce, the top-up {} KAS", kas(lw.s.cure_bound), kas(q(p.size, p.bl - lw.s.cure_bound, m.p.scale)));
-    let (ft, s) = finalize_tx(&lw, pland, w_ as u64);
-    must("the uncured dip claim", &ft);
-    assert!(matches!(s, Settlement::Forfeit { .. }));
-    println!("uncured: the long loses {} KAS, its value at the present feed", kas(q(p.size, now_price - p.bl, m.p.scale)));
+    assert!(p.pending_of(k, p.size, LIQ, L, lowest, pland).is_none());
+    // A due liquidation: the feed at 75,000 at both moments; the long loses its value at the feed, its maintenance margin.
+    let lost = q(p.size, dip - p.bl, m.p.scale);
+    let bound = q(p.size, dip * m.p.mmr_bps / 10_000, m.p.scale);
+    assert!(lost <= bound);
+    println!("a true liquidation at a feed of 75,000 takes the long's {} KAS, within its maintenance margin at the feed {} KAS; the dip claim is refuted", kas(lost), kas(bound));
 }
 
-/// Lead 1 (b), the setting asked about: `lateDaa` = 100 (10 s). An honest, true liquidation (the feed 75,000 at t0) that
-/// lands 101 DAA after its t0 (propagation, a busy mempool, or a party paying to fill blocks for 10 s) is void: the part
-/// is restored and the claim's whole bond, 200 KAS, goes to the loser it was right about, who keeps its position. The
-/// same claim at 100 DAA settles. With the default 6,000 it settles at 101 too. The contract cannot tell an honest
-/// delay from a chosen one: lateness is P - t0 alone.
+/// R11-F3, fixed. With lateDaa 100 (10 s) an honest, true liquidation (the feed 75,000 at t0 and at P) landing 100, 101
+/// or 6,000 DAA after its t0 settles: lateness voids nothing. One signed 50 DAA before the last valid landing of the term
+/// and delayed 100 DAA (across it) is void, and its bond comes back to the underwriter (before: 200 KAS to the loser it
+/// was right about). A liquidation from a pair UTXO accepted after the last valid landing is refused at the proposal, so
+/// a void claim cannot be repeated for free: a frozen part is frozen once, for W.
 #[test]
-fn r11_bounded_a_late_honest_claim_at_late_daa_100_pays_its_bond_to_the_loser() {
-    for (late, settles) in [(100i64, false), (6_000, true)] {
-        let m = gold_market(late);
-        let (step, w_) = (m.bond.step, m.p.challenge_daa);
-        let t0: i64 = 30_000_000;
-        let x_ = ((t0 + 200 + w_ + step) / step + 1) * step;
-        let p = gold_pair(&m, x_, 0);
-        let lp = genesis_pair(p.clone(), p.floor() as u64, 0x62, (t0 - 1_000_000) as u64);
-        for (land, ok) in [(t0 + 100, true), (t0 + 101, settles)] {
-            let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: 7_500_000_000_000, t0, lock: t0 as u64 }, land as u64);
-            let (ft, s) = finalize_tx(&lw, land, w_ as u64);
-            must("finalize", &ft);
-            match (&s, ok) {
-                (Settlement::Forfeit { .. }, true) => {}
-                (Settlement::Restore { defender, .. }, false) => {
-                    assert_eq!(*defender, lw.s.bond);
-                    println!("lateDaa {late}: the true claim landing {} DAA after t0 is void; the loser keeps its side and gets the bond, {} KAS", land - t0, kas(*defender));
-                }
-                _ => panic!("lateDaa {late}, landing {}: {s:?}", land - t0),
-            }
-        }
+fn r11_holds_a_late_honest_claim_settles_and_one_delayed_past_its_last_landing_keeps_its_bond() {
+    let m = gold_market(100);
+    let (step, w_) = (m.bond.step, m.p.challenge_daa);
+    let t0: i64 = 30_000_000;
+    let x_ = ((t0 + 10_000 + w_ + step) / step + 1) * step;
+    let p = gold_pair(&m, x_, 0);
+    let lp = genesis_pair(p.clone(), p.floor() as u64, 0x62, (t0 - 1_000_000) as u64);
+    for land in [t0 + 100, t0 + 101, t0 + 6_000] {
+        let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: 7_500_000_000_000, t0, lock: t0 as u64 }, land as u64);
+        let (ft, s) = finalize_tx(&lw, land, w_ as u64);
+        must("finalize", &ft);
+        assert!(matches!(s, Settlement::Forfeit { .. }), "landing {} DAA after t0: {s:?}", land - t0);
     }
+    let last = OPending::last_valid_landing(&m, x_);
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: 7_500_000_000_000, t0: last - 50, lock: (last - 50) as u64 }, (last + 50) as u64);
+    let (ft, s) = finalize_tx(&lw, last + 50, w_ as u64);
+    must("finalize the claim delayed across its last valid landing", &ft);
+    let Settlement::Restore { defender, proposer, .. } = s else { panic!("{s:?}") };
+    assert_eq!((defender, proposer), (0, lw.s.bond));
+    println!("delayed across the last valid landing: void, the bond {} KAS back to the underwriter, the defender 0", kas(proposer));
+    let young = Live { daa: (last + 1) as u64, ..lp.clone() };
+    refused("a liquidation from a pair UTXO accepted after the last valid landing", &propose_tx(&young, &ClaimSpec { kind: LIQ, side: L, n: p.size, p: 7_500_000_000_000, t0: last + 1, lock: (last + 1) as u64 }, &uw_kp(), None).0, 0);
 }
 
-// ---------------------------------------------------------------- lead 2: I-exit against an underwriter that renews
+// ---------------------------------------------------------------- lead 2: a party's own exit (R11-F1)
 
-/// Lead 2 (28.6 item 1), measured on the gold pair with the testnet defaults and a premium of 10 % of the cover a year
-/// (153.42 KAS an ounce a term, 15.34 KAS a term for the pair): an underwriter that renews on time and vouches nothing
-/// renews the pair 52 times (52 terms of 28 days, almost four years) before the premiums have narrowed the range to the
-/// maintenance bands; meanwhile each side pays 398.9 KAS of its 800 KAS margin in premiums, and the lapse settle that
-/// finally comes pays each side at the entry. No party entry can stop a renewal (r10_holds_a_party_respending_...), no
-/// party can write a "do not renew" state (an amend with a negative minimum, the only free field, is refused), so a party
-/// whose counterparty and taker are absent and whose underwriter refuses to vouch its close is held for the whole time.
-/// At 2 % a year the count is 260 terms (19.9 years); at a premium of 0, for ever.
+/// R11-F1, fixed (29.3). The review's hold: an underwriter that renews on time and vouches nothing renewed the gold pair
+/// 52 times (3.99 years), each side paying 398.90 KAS of its 800 KAS margin, before the bands stopped it. The renewals
+/// still work, but they hold nobody: after the first renewal and after the 26th, the long closes its own side at the
+/// feed with its own bond and its own signature only (no underwriter input, no counterparty), and the close settles W
+/// later at the feed moved by g against it. A party pays premiums only for the terms it chooses to stay. (After the 52nd
+/// the long stands within g of its maintenance band at the feed: its close needs a top-up first, within its share.)
 #[test]
-fn r11_bounded_an_underwriter_renewing_on_time_holds_a_party_for_52_terms() {
-    let m = gold_market(6_000);
-    let (step, term) = (m.bond.step, m.bond.term);
+fn r11_holds_a_party_leaves_by_its_own_close_while_its_underwriter_renews() {
+    let m = gold_market(100);
+    let (step, term, w_) = (m.bond.step, m.bond.term, m.p.challenge_daa);
     let prem = premium_10pct(&m, 2_000_000_000_000);
     let x0 = 10 * step;
     let p = gold_pair(&m, x0, prem);
     let mut lp = genesis_pair(p.clone(), p.floor() as u64, 0x63, (x0 - term) as u64);
     let mut sl = gold_slot(&m, 10_000 * KAS as u64);
-    let (mut n, mut paid_l, mut paid_s) = (0i64, 0i64, 0i64);
+    let mut n = 0i64;
+    let own_close = |lp: &LPair, at: u64| {
+        let (t, w) = self_close_tx(lp, L, lp.s.size, E, at as i64, at, &long_kp());
+        must("the long's own close (no underwriter input)", &t);
+        let lw = live(&t, 0, at, &w);
+        let (ft, s) = finalize_tx(&lw, at as i64, w_ as u64);
+        must("its finalize W later", &ft);
+        let Settlement::Close { long, .. } = s else { panic!("{s:?}") };
+        long - lw.s.refund
+    };
     while lp.s.renewed().is_some() {
         let lock = (lp.s.b.expiry - step) as u64;
         let (t, r2, b2) = renew_at(&lp, &sl, lock, advance_to(&sl.s, lp.s.b.expiry + term), m.bond.rate as u64);
         must(&format!("renewal {}", n + 1), &t);
-        let (l0, s0) = lp.s.lapse_out(lp.value);
-        let (l1, s1) = r2.lapse_out(t.0.outputs[0].value);
-        paid_l += l0 - l1;
-        paid_s += s0 - s1;
         lp = live(&t, 0, lock, &r2);
         sl = live(&t, 1, lock, &b2);
         n += 1;
-    }
-    let lock = (lp.s.b.expiry - step) as u64;
-    refused("the renewal after the bands are reached", &renew_at(&lp, &sl, lock, advance_to(&sl.s, lp.s.b.expiry + term), m.bond.rate as u64).0, 0);
-    println!(
-        "premium {} KAS an ounce a term: {n} renewals ({:.2} years); the long paid {} KAS, the short {} KAS of their 800 KAS margins; the lapse settle comes at DAA {} ({:.2} years after the first expiry)",
-        kas(prem),
-        n as f64 * 28.0 / 365.0,
-        kas(paid_l),
-        kas(paid_s),
-        lp.s.lapse_from(),
-        (lp.s.lapse_from() as f64 - x0 as f64) / 315_360_000.0
-    );
-    assert_eq!(n, 52);
-    // No opt-out: the listing window is the only field a party writes alone, and a negative minimum is refused.
-    let mut c = OPair { mk: Makers::default(), ..lp.s.clone() };
-    c.long_min = -1;
-    let ins = vec![pair_in(&lp, "amend", vec![Arg::Sig(long_kp()), iv(L), iv(0), iv(-1), iv(0)]), exec_in(222)];
-    let outs = vec![out(lp.value, pair_spk(&c), bind(0, lp.id.unwrap())), change(90_000_000_000)];
-    refused("a 'do not renew' flag written by the long", &build_ext(&ins, outs, 0, &[m.p.quiet_daa as u64, 0]), 0);
-    // The model's count at 2 % a year.
-    let mut q2 = OPair { b: OBinding { premium: prem / 5, ..p.b }, ..p.clone() };
-    let mut n2 = 0;
-    while let Some((r, _)) = q2.renewed() {
-        q2 = r;
-        n2 += 1;
-    }
-    println!("at 2 % a year: {n2} renewals ({:.1} years)", n2 as f64 * 28.0 / 365.0);
-}
-
-// ---------------------------------------------------------------- lead 5: the slot's rate limit against `advance`
-
-/// Lead 5, `KpfBond.advance` (anyone, no signature, no age) against the owner's rate limit (`bind` needs the slot UTXO
-/// `rateDaa` old, CSV). An outsider advances the slot once per step, at each bucket end, which restarts the slot UTXO's
-/// age; consensus accepts the owner's bind only from `slot DAA + rateDaa`. The market bounds accept any `rateDaa` below
-/// 2^32 and the wallet does not warn: on a market with `rateDaa >= stepDaa` (the fixture with rate 150, step 100) the
-/// outsider's next advance always lands no later than the owner's first usable DAA, so the owner never binds again: no
-/// renewal of any pair of the slot, no open, no take. Every pair of the slot then lapses at its expiry and settles at its
-/// entry: a party that loses against the entry escapes its loss at the first expiry, the winner loses its gain. The
-/// script half is run here (each advance accepted with no signature; the bind with a sequence below the rate refused; the
-/// bind with the rate as its sequence accepted by the script, which consensus admits only from slot DAA + rate). On the
-/// testnet defaults (rate 600, step 3,024,000) the owner keeps all but 60 s of every step.
-#[test]
-fn r11_exploit_on_a_market_with_rate_at_least_step_anyone_stops_every_renewal_by_advancing_the_slot() {
-    let m = omarket_with(kpf_protocol::bond::BondParams { rho_bps: 10_000, step: 100, term: 800, tail: 200, rate: 150, unbond: 50 });
-    assert!(m.check().is_ok(), "the market bounds accept rate 150 with step 100");
-    assert!(market_warnings(&m, 10).iter().all(|w| !w.contains("rate")), "and the wallet does not warn");
-    let (step, tail, rate, term) = (m.bond.step, m.bond.tail, m.bond.rate, m.bond.term);
-    let (lp0, _, _) = opened();
-    let p = OPair { m, mk: Makers::default(), b: OBinding { uw_id: [SLOT_TAG; 32], ..lp0.s.b }, ..lp0.s.clone() };
-    let lp = genesis_pair(p.clone(), p.floor() as u64, 0x64, 300);
-    let mut sl = Live { op: uop(SLOT_TAG, 1), value: K, daa: 0, id: Some(Hash::from_bytes([SLOT_TAG; 32])), s: Bond::new(x(&uw_kp()), m.bond_market(), 0) };
-    let x_ = p.b.expiry;
-    let mut blocked = 0;
-    let mut at = 0i64;
-    while at <= x_ {
-        // The outsider's advance at the next bucket end (by the calendar alone, no key).
-        let d = 1i64;
-        at = (sl.s.j0 + d) * step + tail;
-        let ctx = Ctx { lock: at, seq: 0, v_in: sl.value as i64, cov_in: 1, cov_out: 1, signed: false, has_id: true };
-        let b2 = sl.s.advance(&ctx, d, sl.value as i64).expect("the model's advance");
-        let ins = vec![slot_in(&sl, "advance", vec![b8(d)]), key_in(uop(0x65, at as u32), 10 * KAS as u64, 0, &keypair(88))];
-        let t = build_ext(&ins, vec![out(sl.value, bond_spk(&b2), bind(0, sl.id.unwrap())), out(9 * KAS as u64, p2pk_spk(&keypair(88)), None)], at as u64, &[0, 0]);
-        must(&format!("an outsider's advance at {at}"), &t);
-        sl = live(&t, 0, at as u64, &b2);
-        // The owner's renewal in the window [X - step, X]: usable only from the slot's DAA + rate, after the next advance.
-        let next = (sl.s.j0 + 1) * step + tail;
-        if at >= x_ - step - step {
-            let lock = (at.max(x_ - step)) as u64;
-            refused("a bind whose sequence is below the rate", &renew_at(&lp, &sl, lock, advance_to(&sl.s, x_ + term), (rate - 1) as u64).0, 1);
-            let ok = renew_at(&lp, &sl, lock, advance_to(&sl.s, x_ + term), rate as u64).0;
-            assert!(verdicts(&ok)[1], "the script accepts the bind with the rate as its sequence");
-            assert!(sl.daa as i64 + rate >= next, "consensus admits it from {} but the next advance lands at {next}", sl.daa as i64 + rate);
-            blocked += 1;
+        if n == 1 || n == 26 {
+            let paid = own_close(&lp, lock + m.p.quiet_daa as u64);
+            println!("after renewal {n}: the long closes its own side at the feed and is paid {} KAS (its value at the feed {} KAS)", kas(paid), kas(lp.s.long_at(E)));
         }
     }
-    assert!(blocked >= 2);
-    println!("rate {rate} >= step {step}: every renewal of the pair (X {x_}) is beaten by the next advance; the pair lapses and settles at its entry from {}", lp.s.lapse_from());
-    must("the lapse settle at the entry", &lapse_tx(&lp, lp.s.lapse_from(), 0));
+    assert_eq!(n, 52, "the underwriter may still renew 52 times; it holds nobody");
 }
 
-// ---------------------------------------------------------------- lead 3 / lead 4: the payout floor per lineage
+// ---------------------------------------------------------------- lead 5: the slot's rate limit against `advance` (R11-F4)
+
+/// R11-F4, fixed (29.3): the market bounds require `2 rateDaa <= stepDaa` (all five templates' checkBond and the
+/// library's). The review's market (rate 150, step 100) is refused by the library and by the slot itself: the outsider's
+/// advance fails `checkBond`, so no slot, pair or order of that market can exist. At rate 50 (half a step) the advance
+/// runs, and the owner's bind is usable from the slot's DAA + 50, before the next advance (one step later).
+#[test]
+fn r11_holds_a_market_whose_rate_limit_exceeds_half_a_step_is_refused() {
+    for (rate, ok) in [(150i64, false), (100, false), (50, true)] {
+        let m = omarket_with(kpf_protocol::bond::BondParams { rho_bps: 10_000, step: 100, term: 800, tail: 200, rate, unbond: 50 });
+        assert_eq!(m.check().is_ok(), ok, "rate {rate}");
+        let sl = Live { op: uop(SLOT_TAG, 1), value: K, daa: 0, id: Some(Hash::from_bytes([SLOT_TAG; 32])), s: Bond::new(x(&uw_kp()), m.bond_market(), 0) };
+        let at = (sl.s.j0 + 1) * m.bond.step + m.bond.tail;
+        let ctx = Ctx { lock: at, seq: 0, v_in: sl.value as i64, cov_in: 1, cov_out: 1, signed: false, has_id: true };
+        let b2 = sl.s.advance(&ctx, 1, sl.value as i64).unwrap_or_else(|_| Bond { j0: sl.s.j0 + 1, ..sl.s.clone() });
+        let ins = vec![slot_in(&sl, "advance", vec![b8(1)]), key_in(uop(0x65, at as u32), 10 * KAS as u64, 0, &keypair(88))];
+        let t = build_ext(&ins, vec![out(sl.value, bond_spk(&b2), bind(0, sl.id.unwrap())), out(9 * KAS as u64, p2pk_spk(&keypair(88)), None)], at as u64, &[0, 0]);
+        if ok {
+            must("an outsider's advance on a market with rate 50, step 100", &t);
+            assert!(rate < m.bond.step, "the owner's bind is usable from the slot's DAA + {rate}, before the next advance");
+        } else {
+            refused(&format!("any entry of a slot of a market with rate {rate}, step 100"), &t, 0);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- lead 3 / lead 4: the part floor of a pair (R11-F7)
 
 /// A partial transfer of `n` units of the listed short side of `lp` to the signing taker `ek` at price `xp`, keeping the
 /// short's bound: in 0 the pair, 1 the taker's funding; out 0 the taker's change, 1 the part (fresh id), 2 the remainder
-/// (the pair's id). The leaver's payout is below the payout floor here and stays in the remainder.
+/// (the pair's id). The leaver's payout below the payout floor stays in the remainder.
 fn shred_once(lp: &LPair, n: i64, xp: i64, ek: &Keypair, fop: TransactionOutpoint) -> (T, OPair, OPair) {
     let p = &lp.s;
     let mut part = p.rest_of(n);
@@ -354,29 +333,29 @@ fn shred_once(lp: &LPair, n: i64, xp: i64, ek: &Keypair, fop: TransactionOutpoin
     part.mk.parent = maker_of(&lp.op);
     let rest = p.rest_of(p.size - n);
     let pay = kpf_protocol::payoff::owed(n, p.bs - xp, p.short_tip, p.m.p.scale);
-    assert!(pay < DUST);
-    let keep = lp.value as i64 - p.range_of(n) + pay;
-    let fv = 10 * KAS;
+    let keep = lp.value as i64 - p.range_of(n) + if pay < DUST { pay } else { 0 };
+    let fv = 1_000 * KAS;
     let pv = part.range_of(n) + p.m.p.carrier;
     let args = vec![iv(S), iv(n), iv(xp), iv(p.bs), bv(&x(ek)), bv(&[0; 32]), iv(1)];
     let ins = vec![pair_in(lp, "transfer", args), key_in(fop, fv as u64, 0, ek)];
-    let mut outs = vec![out((fv - pv - 1_000_000) as u64, p2pk_spk(ek), None), out(pv as u64, pair_spk(&part), None), out(keep as u64, pair_spk(&rest), bind(0, lp.id.unwrap()))];
+    let paid = if pay >= DUST { pay } else { 0 };
+    let first = if paid > 0 { out(paid as u64, key_spk(&p.short_key), None) } else { out((fv - pv - 1_000_000) as u64, p2pk_spk(ek), None) };
+    let mut outs = vec![first, out(pv as u64, pair_spk(&part), None), out(keep as u64, pair_spk(&rest), bind(0, lp.id.unwrap()))];
+    if paid > 0 {
+        outs.push(out((fv - pv - paid - 1_000_000) as u64, p2pk_spk(ek), None));
+    }
     seal(&mut outs, 1, 0, lp.op);
     (build_ext(&ins, outs, 0, &[p.m.p.quiet_daa as u64, 0]), part, rest)
 }
 
-/// Lead 3 and lead 4 (I-party's "the payout floor D at the lapse settle, once per lineage end"). The part floor of review
-/// 10 lives in the order only; a pair's hand-overs (`transfer`, `closeHost`, `closeDonor`) split it into parts of the
-/// market's minimum size and need only the leaver's listing. A short that lists its side and takes it in small parts with
-/// a second key splits the passive long into lineages whose long margin lies below the payout floor, and the lapse
-/// settle pays each such long nothing. On a 1-unit pair at 1 KAS a unit, 10x (the long's margin 0.1 KAS), testnet
-/// defaults: five takes of 0.19 unit and the remainder of 0.05 unit leave the long 0.019 KAS and 0.005 KAS of lapse
-/// value in each, all below 0.02 KAS: it loses its whole margin, which the attacker's short keys collect. I-party
-/// allows it (six lineage ends, six floors). The attacker pays six transfer fees (about 0.03 KAS each), more than it takes:
-/// griefing at a loss, possible only where a minimum-size part holds less than 0.02 KAS of a side's margin.
+/// R11-F7, fixed (29.3): `checkPart` gives each side with value at the entry at least the part floor (0.2 KAS) of it in
+/// each piece of every split (transfer, closeHost, closeDonor, mutualClose, propose). The review's attack on the 1-unit
+/// pair at 1 KAS a unit, 10x (the passive long's whole margin 0.1 KAS) is refused at its first take: no split of that
+/// pair leaves the long 0.2 KAS in each piece. The long keeps its 0.1 KAS at the lapse settle. On the gold pair a split
+/// of 0.01 oz (8 KAS of each side's value) is accepted.
 #[test]
-fn r11_bounded_hand_overs_split_a_passive_long_into_parts_below_the_payout_floor() {
-    let m = gold_market(6_000);
+fn r11_holds_hand_overs_cannot_split_a_passive_side_below_the_part_floor() {
+    let m = gold_market(100);
     let sc = m.p.scale;
     let p0 = OPair {
         m,
@@ -395,28 +374,21 @@ fn r11_bounded_hand_overs_split_a_passive_long_into_parts_below_the_payout_floor
         short_tip: 0,
         mk: Makers::default(),
     };
-    let mut lp = genesis_pair(p0.clone(), p0.floor() as u64, 0x66, 1_000);
+    let lp = genesis_pair(p0.clone(), p0.floor() as u64, 0x66, 1_000);
     let (l_before, _) = p0.lapse_out(lp.value);
     assert_eq!(l_before, 10_000_000, "the long's 0.1 KAS is paid at the lapse settle of the whole pair");
     let ek = keypair(77);
-    let mut parts = vec![];
-    let mut daa = 1_000u64;
-    for i in 0..5 {
-        let (t, part, rest) = shred_once(&lp, 19_000_000, 100_000_000, &ek, uop(0x67, i));
-        must(&format!("take {i} of 0.19 unit of the short side"), &t);
-        daa += m.p.quiet_daa as u64;
-        parts.push(live(&t, 1, daa, &part));
-        lp = live(&t, 2, daa, &rest);
+    for n in [19_000_000i64, 50_000_000] {
+        assert!(!p0.split_ok(n));
+        refused(&format!("a take of {n} base units of the short side, leaving the long less than 0.2 KAS in a piece"), &shred_once(&lp, n, 100_000_000, &ek, uop(0x67, n as u32)).0, 0);
     }
-    parts.push(lp);
-    let mut long_back = 0;
-    for pp in &parts {
-        let (l, _) = pp.s.lapse_out(pp.value);
-        assert_eq!(l, 0, "each piece pays the long nothing (below 0.02 KAS)");
-        must("its lapse settle", &lapse_tx(pp, pp.s.lapse_from(), 0));
-        long_back += l;
-    }
-    println!("the passive long's lapse payout: {} KAS before, {} KAS after six lineages (each below the payout floor)", kas(l_before), kas(long_back));
+    must("the long's lapse settle of the whole pair", &lapse_tx(&lp, lp.s.lapse_from(), 0));
+    // The gold pair (800 KAS a side at 0.1 oz): a split of 0.01 oz leaves each side 80 KAS in the smaller piece.
+    let mut g = gold_pair(&m, 10 * m.bond.step, 0);
+    g.short_bid = E;
+    let lg = genesis_pair(g.clone(), g.floor() as u64, 0x6a, 1_000);
+    assert!(g.split_ok(1_000_000));
+    must("a take of 0.01 oz of the gold pair's short side", &shred_once(&lg, 1_000_000, E, &ek, uop(0x6b, 0)).0);
 }
 
 /// Lead 3: the carrier an order pays with the part that empties it, when that part is a take of a whole pair. The pair's
@@ -442,14 +414,18 @@ fn r11_bounded_the_carrier_of_an_emptying_take_of_a_whole_pair_is_the_executors(
     assert_eq!(paid - need, o.m.p.carrier);
 }
 
-/// Lead 1 / lead 5 (the vouch, 16 "The vouched claim"). The evidence of a claim is any P2PK input of `uwKey` signed
-/// SIGHASH_ALL in the same transaction; its value may go anywhere. Every premium, every bond repaid and every keeper fee
-/// lands on `uwKey` as a plain P2PK output, so every later spend of one of them is a vouch for every `propose` input the
-/// transaction carries. A transaction in which the underwriter's input pays a merchant 1 KAS, built by that merchant
-/// (a signing request of a web wallet), and that also spends the fixture pair by `propose` with a false price, is
-/// accepted: the underwriter signed "the whole transaction", not "this price". The bond is funded by the builder and
-/// comes back to the underwriter if nobody contests within W; the long loses its whole side (1,000 KAS). Contested in
-/// time, the builder loses the bond. Nothing in a vouch says it is one.
+/// Lead 1 / lead 5 (the vouch, 16 "The vouched claim"), R11-F6: bounded, the bound at the feed asserted. The evidence of
+/// a liquidation is any P2PK input of `uwKey` signed SIGHASH_ALL in the same transaction; its value may go anywhere. A
+/// transaction in which the underwriter's input pays a merchant 1 KAS, built by that merchant (a signing request of a web
+/// wallet), and that also spends the fixture pair by `propose` with a false price, is accepted by the scripts. What it
+/// can take: the long's value at the feed (the feed 10 KAS: 1,000 KAS) if nobody contests within W; the price (5 KAS)
+/// is false at t0 and at P, so a watcher's contest refutes it and the merchant's bond goes to the long and the disputer.
+/// Since review 11 a close carries no vouch at all, so only a liquidation can be smuggled this way, and the tool refuses
+/// to sign with an underwriter key any transaction holding a proposal beside a close or that it did not build as the
+/// vouched liquidation (`OBuilt::vouch_guard`, exercised in the honest life); the documentation tells underwriters to keep
+/// vouching funds on a key of their own. A contract-level binding (the vouch naming the claim) is not worth its size:
+/// it needs a tagged script or a data signature and one more output per claim, and protects only an underwriter that
+/// signs others' transactions with its slot key, which the tool never asks it to.
 #[test]
 fn r11_bounded_any_sighash_all_spend_of_an_underwriter_utxo_vouches_the_claims_beside_it() {
     let (lp, _, _) = opened();
@@ -475,6 +451,12 @@ fn r11_bounded_any_sighash_all_spend_of_an_underwriter_utxo_vouches_the_claims_b
     let (ft, s) = finalize_tx(&lw, 400, 200);
     must("uncontested, it settles", &ft);
     assert!(matches!(s, Settlement::Forfeit { .. }));
+    // The bound at the feed (10 KAS): the long's whole value there, unless contested within W; contested, refuted.
+    let lost = lp.s.long_at(1_000_000_000);
+    assert_eq!(lost, 100_000_000_000, "1,000 KAS: the long's value at the feed");
+    let refuted = lw.s.contested(400, x(&keypair(70))).decided(false, 401);
+    let Settlement::Restore { defender, disputer, .. } = refuted.settlement(lw.value, 400) else { panic!() };
+    assert_eq!(defender + disputer, lw.s.bond);
 }
 
 // ---------------------------------------------------------------- lead 6: the honest life, with the tool's builders
@@ -492,7 +474,7 @@ mod life {
 
     pub struct Chain {
         n: u32,
-        keys: KeySet,
+        pub keys: KeySet,
         pub fees: Vec<(String, u64)>,
     }
 
@@ -635,6 +617,21 @@ mod life {
         let (bb, cured) = cure(&pend, &[f], &lk, r).unwrap();
         let sg = c.sign("B: the long's cure", Ok(bb));
         let b_ = nth(&sg, 1, cured, 10_000_100);
+        // Review 11 (R11-F1): B's long closes its own side at the feed (80,000), its own bond, no underwriter input.
+        // R11-F6: the same close funded from the underwriter's key is refused at signing (it would vouch it).
+        let f = c.mint(uk, 300 * KAS);
+        let bad = propose_close(&b_, LONG, b_.s.size, super::E, 10_001_000, &[f], &uk, r).unwrap().0;
+        let e = bad.sign(&c.keys).unwrap_err().to_string();
+        assert!(e.contains("R11-F6"), "{e}");
+        let f = c.mint(lk, 300 * KAS);
+        let (bb, w) = propose_close(&b_, LONG, b_.s.size, super::E, 10_001_000, &[f], &lk, r).unwrap();
+        let sg = c.sign("B: the long closes its own side at the feed", Ok(bb));
+        let pend = nth(&sg, 0, w, 10_001_000);
+        let f = c.mint(ek, 10 * KAS);
+        let (bb, s) = finalize(&pend, &[f], &ek, r).unwrap();
+        let Settlement::Close { long, .. } = s else { panic!("{s:?}") };
+        assert_eq!(long - pend.s.refund, kpf_protocol::payoff::q(b_.s.size, pend.s.close_price() - b_.s.bl, sc, 0));
+        c.sign("B: finalize its own close, W later", Ok(bb));
         // Pair C: a true liquidation of the long, forfeited after W.
         let vouch = c.mint(uk, 300 * KAS);
         let f = c.mint(ek, 10 * KAS);
@@ -681,7 +678,7 @@ mod life {
         let won = nth(&sg, 1, Js::free(stk, jm), 30_432_400);
         let _ = c.sign("A: close the pool", pool_close(&nth(&sg, 0, p2, 30_432_400), &ek, r));
         // The lapse settles: B (cured, not renewed) and C (forfeited) after X, A after X + term.
-        for (name, p) in [("B: lapse settle at the entry", &b_), ("C: lapse settle of the forfeited part", &cpair), ("A: lapse settle after its renewed expiry", &a)] {
+        for (name, p) in [("C: lapse settle of the forfeited part", &cpair), ("A: lapse settle after its renewed expiry", &a)] {
             assert!(p.s.lapse_from() <= p.s.b.expiry as u64 + tail + idle);
             let f = c.mint(ek, 10 * KAS);
             c.sign(name, lapse_settle(p, &[f], &ek, r));

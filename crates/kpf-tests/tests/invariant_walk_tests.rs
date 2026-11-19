@@ -999,7 +999,7 @@ impl Walk {
                     self.count(if mode == 1 { "upheld by YES, pool with a loser closed" } else { "late contest ignored, pool closed" });
                 }
                 (_, Settlement::Restore { defender, disputer, .. }) => {
-                    assert_eq!((*defender, *disputer), (pw.bond, 0), "an upheld but void claim's bond goes to the defender");
+                    assert_eq!((*defender, *disputer), (0, 0), "an upheld but void claim's bond goes back to its proposer (review 11)");
                     self.count("upheld but void, restored");
                 }
                 (_, Settlement::Close { .. }) => panic!("a liquidation settled as a close"),
@@ -1066,7 +1066,7 @@ impl Walk {
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }
             Settlement::Restore { part, defender, .. } => {
-                assert_eq!(defender, pw.bond, "a void claim's bond goes to the defender");
+                assert_eq!(defender, 0, "a void claim's bond goes back to its proposer (review 11)");
                 self.count("void claim restored");
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }

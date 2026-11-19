@@ -98,6 +98,10 @@ contract KpfBond(
     // after the ring is advanced to the present its last bucket expires at most 7 steps ahead, while a renewal in the
     // last step needs an expiry Lambda + 1 step ahead and the old bucket must stay until X + T_tail. Here the ring has
     // RING buckets and a market needs termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa.
+    // DESIGN: review 11 (R11-F4): advance (anyone, once per step) restarts this UTXO's age, and an owner entry needs it
+    // rateDaa old; with rateDaa >= stepDaa an outsider advancing at every bucket end kept the owner from ever binding (no
+    // renewal, open or take for any pair of the slot). A market needs 2 * rateDaa <= stepDaa: the owner has at least
+    // half of every step.
     // BEGIN bond bounds
     function checkBond() {
         require(rhoBps >= BPS);
@@ -111,6 +115,7 @@ contract KpfBond(
         require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
         require(rateDaa >= 0);
         require(rateDaa < CSV_LIMIT);
+        require(2 * rateDaa <= stepDaa);
         require(unbondDaa >= 0);
         require(unbondDaa < CSV_LIMIT);
     }

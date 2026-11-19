@@ -22,10 +22,11 @@ pragma silverscript ^0.1.0;
 //   upheld     finalize()        anyone, at once: settle, or restore when the claim is void
 //   refuted    finalize()        anyone, at once: restore; the bond goes to the defender, the disputer's share to it
 //
-// The claim is valid (it may settle) only if P + challengeDaa + stepDaa <= expiry (its whole window lies inside the
-// cover and ends at least one step before it), expiry <= P + termDaa + stepDaa (the bound of slice A: a pair a genesis
-// made can rely on a slot it never bound for at most one period), and P - t0 <= lateDaa (a vouched claim landed later
-// than the market allows is void). P is this UTXO's own DAA score while pending, the recorded one once contested.
+// A liquidation is valid (it may settle) only if P + challengeDaa + stepDaa <= expiry (its whole window lies inside the
+// cover and ends at least one step before it) and expiry <= P + termDaa + stepDaa (the bound of slice A: a pair a
+// genesis made can rely on a slot it never bound for at most one period). A close is always valid (review 11: a
+// party's own exit does not depend on the cover). Lateness voids nothing (review 11): the feed definition judges a
+// claim at t0 and at P. P is this UTXO's own DAA score while pending, the recorded one once contested.
 // DESIGN: review 10 (R10-F2): with P + challengeDaa <= expiry a valid claim could still be pending at the expiry, where
 // no renewal reads it, and the loser's cure landing after the expiry wrote a pair state no renewal accepts (review 9):
 // the cover lapsed and the pair settled at its entry, the liquidation undone by one block of ordering. A valid claim is
@@ -35,8 +36,9 @@ pragma silverscript ^0.1.0;
 // stepDaa of an unrenewed term; an on-time underwriter renews from X - stepDaa and claims against the next expiry
 // (docs/DESIGN-ORACLE-IMPL.md 28).
 // DESIGN: the note (1.5) judges a late claim at tau = P instead of voiding it, and lets a claim be accepted up to the
-// expiry X; here a late claim is void and a claim must land at least challengeDaa + stepDaa before X, so no valid claim
-// is ever pending beyond its cover and an honest underwriter is never judged at a price it did not sign.
+// expiry X. Review 11: a late claim is no longer void; the feed definition judges every claim at t0 and at P (true only
+// within g of the feed at both moments), and a liquidation must still land at least challengeDaa + stepDaa before X, so
+// no valid liquidation is ever pending beyond its cover.
 // DESIGN: the note's live dispute has no deadline the covenant can enforce (time has only lower bounds); here the
 // deadline is enforced after the fact: the contested part's own DAA score (the contest's acceptance, exact when decide
 // reads it) must be below P + challengeDaa, or the verdict is ignored and the claim settles as if uncontested. A timely
@@ -44,20 +46,21 @@ pragma silverscript ^0.1.0;
 //
 // Bond, refund and fee (DESIGN 4.5d, the slash of DESIGN-ORACLE-2.md 1.7):
 //   - the bond B (max(bondMin, 0.02 KAS, q(n, coverRate * sigmaBps / 10^4))) is in this part, posted by the claim's
-//     proposer: the underwriter for a liquidation (kind 2), the closer for a close (kind 1, which the closer signs and
-//     the underwriter co-signs); refund = B, plus the carrier the proposer funded when n < s;
+//     proposer: the underwriter for a liquidation (kind 2), the closer for a close (kind 1, which the closer alone signs
+//     and prices, review 11); refund = B, plus the carrier the proposer funded when n < s;
 //   - uncontested or upheld and valid: the proposer gets its refund (a liquidation: B + fee to the underwriter);
 //   - refuted: the part is restored (value >= v - B), the disputer (the opening staker) gets floor(B * betaBps / 10^4) at
 //     output M - 1 - i, the defender (the party the claim would have wronged) the rest at output i;
-//   - void (and not refuted): the part is restored, the defender gets B: a claim that cannot settle costs its proposer
-//     its bond, so a proposer cannot freeze a pair with void claims for free.
+//   - void (a liquidation delayed past its last valid landing): the part is restored, the proposer gets B back. A
+//     proposer cannot freeze a pair with void claims for free: KpfPairO.propose refuses a liquidation from a pair UTXO
+//     accepted too late to be valid, and the restored part is such a UTXO, so each part can be frozen once per term.
 // DESIGN: the note has no proposer bond ("the slot is liable") and no rule for a void claim; here every claim carries a
-// bond, a close's is posted by the closer (who signs the claim; the underwriter co-signs the price), and a void claim's
-// bond goes to the defender.
+// bond, a close's is posted by the closer, and a void claim's bond goes back to its proposer (review 11; before, to the
+// defender, which made an honest claim delayed by others cost its proposer the bond).
 // DESIGN: closed markets (the note's 4): the covenant cannot read a calendar (DAA is not wall time, time has only lower
-// bounds). It enforces t0 <= tx.daa at the proposal and P - t0 <= lateDaa here, so no claim prices the future and none
-// lands long after the moment it prices; whether t0 lies in a closed session is the feed definition's, and a claim
-// about a closed session is false by definition: the judge refutes it when contested.
+// bounds). It enforces t0 <= tx.daa at the proposal, so no claim prices the future; whether t0 or P lies in a closed
+// session is the feed definition's, and a claim about a closed session is false by definition: the judge refutes it
+// when contested.
 // DESIGN: the note slashes sigma x c from the underwriter's slot by a reservation at the opening of the dispute (1.7).
 // A reservation needs the slot to authenticate the contested claim, which it cannot: a genesis can create a look-alike
 // pending part naming any slot, so a reservation entry that accepts it lets anyone slash honest slots, and pinning this
@@ -382,6 +385,7 @@ contract KpfPendingO(
         require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
         require(rateDaa >= 0);
         require(rateDaa < CSV_LIMIT);
+        require(2 * rateDaa <= stepDaa);
         require(slotUnbondDaa >= 0);
         require(slotUnbondDaa < CSV_LIMIT);
     }
@@ -554,10 +558,15 @@ contract KpfPendingO(
         return k;
     }
 
-    // A claim that does not settle: the part returns to the restore state with this UTXO's value less the bond; the bond
-    // goes to the defender at output i, less the disputer's share floor(B * betaBps / 10^4) at output M - 1 - i (at
-    // least the input count) when refuted. A share below dust is not created (the defender gets it); a defender's
-    // remainder below dust goes to the disputer.
+    // A claim that does not settle: the part returns to the restore state with this UTXO's value less the bond. Refuted:
+    // the bond goes to the defender at output i, less the disputer's share floor(B * betaBps / 10^4) at output M - 1 - i
+    // (at least the input count); a share below dust is not created (the defender gets it), a defender's remainder below
+    // dust goes to the disputer. Void (only a liquidation can be void, review 11): the bond goes back to its proposer,
+    // the underwriter, at output i.
+    // DESIGN: review 11 (R11-F3): a void claim paid its bond to the defender, so an honest, true claim delayed past the
+    // lateness limit or the last valid landing paid the loser it was right about. Lateness no longer voids (the judge
+    // reads the feed at t0 and at P), and propose refuses a liquidation that is certainly void (KpfPairO), so a void
+    // claim is one delayed across the boundary of its expiry window: at most one per part per term, a freeze of at most W.
     function restorePaying(int refuted) {
         int self = this.activeInputIndex;
         only(restoreHash, tx.inputs[self].value - bond);
@@ -571,7 +580,9 @@ contract KpfPendingO(
             share = bond;
             rest = 0;
         }
-        payTo(self, defender(), rest);
+        pubkey to = defender();
+        if (refuted == 0) { to = uwKey; }
+        payTo(self, to, rest);
         if (share > 0) {
             int j = tx.outputs.length - 1 - self;
             require(j >= tx.inputs.length);
@@ -637,9 +648,10 @@ contract KpfPendingO(
             restorePaying(1);
         } else {
             int valid = 1;
-            if (p + challengeDaa + stepDaa > expiry) { valid = 0; }
-            if (expiry > p + termDaa + stepDaa) { valid = 0; }
-            if (p - t0 > lateDaa) { valid = 0; }
+            if (kind != KIND_CLOSE) {
+                if (p + challengeDaa + stepDaa > expiry) { valid = 0; }
+                if (expiry > p + termDaa + stepDaa) { valid = 0; }
+            }
             if (valid == 1) {
                 settle();
             } else {

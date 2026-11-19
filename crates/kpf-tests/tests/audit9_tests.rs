@@ -341,8 +341,8 @@ fn r9_bounded_a_partial_liquidations_carrier_returns_to_the_underwriter_only_on_
     let lv = proposed(&lp, &ClaimSpec { t0: 1_100, lock: 1_100, ..spec }, 1_100);
     let (vt, s) = finalize_tx(&lv, 1_100, 200);
     must("the void claim restores", &vt);
-    let Settlement::Restore { part, value, defender, .. } = s else { panic!("{s:?}") };
-    assert_eq!(defender, lv.s.bond, "void: the bond to the defender");
+    let Settlement::Restore { part, value, defender, proposer, .. } = s else { panic!("{s:?}") };
+    assert_eq!((defender, proposer), (0, lv.s.bond), "void: the bond back to the underwriter (review 11)");
     assert_eq!(value - part.range_of(n), c, "void: the carrier stays in the restored part");
     // A refuted claim.
     let st = stake(70, 10 * UNIT as u64, 0, 0xc0);
@@ -354,7 +354,7 @@ fn r9_bounded_a_partial_liquidations_carrier_returns_to_the_underwriter_only_on_
     let ldw = live(&dt, 1, 620, &dw);
     let (rt, s) = finalize_tx(&ldw, 520, 0);
     must("finalize the refuted part", &rt);
-    let Settlement::Restore { part, value, defender, disputer } = s else { panic!("{s:?}") };
+    let Settlement::Restore { part, value, defender, disputer, .. } = s else { panic!("{s:?}") };
     assert_eq!(defender + disputer, lw.s.bond, "refuted: the bond to the defender and the disputer");
     assert_eq!(value - part.range_of(n), c, "refuted: the carrier stays in the restored part");
 }
@@ -1457,7 +1457,7 @@ impl Walk {
                     self.count(if mode == 1 { "upheld by YES, pool with a loser closed" } else { "late contest ignored, pool closed" });
                 }
                 (_, Settlement::Restore { defender, disputer, .. }) => {
-                    assert_eq!((*defender, *disputer), (pw.bond, 0), "an upheld but void claim's bond goes to the defender");
+                    assert_eq!((*defender, *disputer), (0, 0), "an upheld but void claim's bond goes back to its proposer (review 11)");
                     self.count("upheld but void, restored");
                 }
                 (_, Settlement::Close { .. }) => panic!("a liquidation settled as a close"),
@@ -1510,7 +1510,7 @@ impl Walk {
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }
             Settlement::Restore { part, defender, .. } => {
-                assert_eq!(defender, pw.bond, "a void claim's bond goes to the defender");
+                assert_eq!(defender, 0, "a void claim's bond goes back to its proposer (review 11)");
                 self.count("void claim restored");
                 self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             }
@@ -1678,7 +1678,10 @@ fn r9_holds_the_seeded_walk_over_every_entry_point() {
     let upheld_yes = total.steps.get("contest won by YES, a pool with a losing receipt settled").copied().unwrap_or(0);
     let late = total.steps.get("late contest ignored, pool closed").copied().unwrap_or(0);
     let void_upheld = total.steps.get("upheld but void, restored").copied().unwrap_or(0);
-    assert!(upheld_yes > 0 && late > 0 && void_upheld > 0, "the walk never ran a contest won by YES, a late contest or an upheld void claim");
+    // Review 11: lateness voids nothing and a liquidation that cannot be valid is refused at the proposal, so an upheld void
+    // claim (one delayed past its last valid landing) is rare here; it is counted, not required.
+    println!("upheld but void claims: {void_upheld}");
+    assert!(upheld_yes > 0 && late > 0, "the walk never ran a contest won by YES or a late contest");
     assert!(total.hostile_refused > 50);
     assert!(violations.is_empty(), "violations recorded: {violations:?}");
 }
@@ -1720,6 +1723,9 @@ fn r9_bounded_a_take_without_a_pair_sets_the_shares_by_the_entry_it_writes() {
     let (t, part, _) = take_alone(&lo, &sl, &keypair(77), 1_000_000_000, i64::MAX / 2, 1_220_000_000, 1_200, 600_000_000, o.prem_max, now);
     must("the take with an extreme entry", &t);
     let lp = live(&t, 1, now, &part);
+    // Review 11: a liquidation needs a pair UTXO that can carry a valid claim; this part (expiry 1,200) is shown as accepted
+    // at 300, which leaves the share arithmetic of the propose exercised with the extreme entry.
+    let lp = Live { daa: 300, ..lp };
     let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p: 900_000_000, t0: now as i64, lock: now }, now);
     assert_eq!(lw.s.cure_hash, [0; 32]);
 }

@@ -160,7 +160,7 @@ fn lifecycle_contested_refuted_restores_and_pays_the_wronged_party() {
     assert_eq!(dw.s.status, REFUTED);
     let (t, s) = finalize_tx(&dw, 500, 0);
     must("restore", &t);
-    let Settlement::Restore { part, value, defender, disputer } = s else { panic!("a restore") };
+    let Settlement::Restore { part, value, defender, disputer, .. } = s else { panic!("a restore") };
     assert_eq!(part, lp.s.restore_state(lp.s.size));
     assert_eq!(value, lw.value as i64 - lw.s.bond);
     assert_eq!((disputer, defender), (12_000_000_000, 48_000_000_000), "20 % of 600 KAS to the disputer, the rest to the long");
@@ -316,9 +316,9 @@ fn a_claim_reused_on_another_part_or_after_the_part_changed_is_refused() {
 
 // ---------------------------------------------------------------- the cover's expiry and lateness
 
-/// A claim whose window and one step do not fit inside the cover (P + W + step > X, review 10), or that lands too late
-/// after its t0, or whose expiry lies beyond P + term + step, is void: finalize restores the part and pays the bond to the
-/// defender. The boundaries are exact.
+/// A claim whose window and one step do not fit inside the cover (P + W + step > X, review 10), or whose expiry lies
+/// beyond P + term + step, is void: finalize restores the part and returns the bond to its proposer (review 11; lateness
+/// voids nothing since review 11). The boundaries are exact.
 #[test]
 fn cover_expired_or_expiring_inside_the_window_voids_the_claim() {
     let (lp, _, _) = opened();
@@ -330,11 +330,12 @@ fn cover_expired_or_expiring_inside_the_window_voids_the_claim() {
         assert_eq!(matches!(s, Settlement::Forfeit { .. }), valid, "P = {pp}");
         if !valid {
             let Settlement::Restore { defender, disputer, .. } = s else { panic!() };
-            assert_eq!((defender, disputer), (lw.s.bond, 0), "a void claim's bond goes to the defender");
+            let Settlement::Restore { proposer, .. } = lw.s.settlement(lw.value, pp as i64) else { panic!() };
+            assert_eq!((defender, disputer, proposer), (0, 0, lw.s.bond), "a void claim's bond goes back to its proposer (review 11)");
         }
     }
-    // Lateness: P - t0 = 100 valid, 101 void.
-    for (t0, valid) in [(400i64, true), (399, false)] {
+    // Lateness voids nothing (review 11): P - t0 = 100 and 101 are both valid.
+    for (t0, valid) in [(400i64, true), (399, true), (0, true)] {
         let lw = proposed(&lp, &liq_long(FALSE_P, t0), 500);
         let (t, s) = finalize_tx(&lw, 500, 200);
         must("finalize", &t);
@@ -344,13 +345,11 @@ fn cover_expired_or_expiring_inside_the_window_voids_the_claim() {
     let mut c = liq_long(FALSE_P, 600);
     c.lock = 599;
     refused("t0 ahead of the lock time", &propose_tx(&lp, &c, &uw_kp(), None).0, 0);
-    // A pair (written by a genesis) whose expiry lies beyond P + term + step: void.
+    // A pair (written by a genesis) whose expiry lies beyond its UTXO's DAA + term + step: no claim on it can be valid,
+    // so since review 11 the liquidation is refused at the proposal (before: proposed, and void at finalize).
     let mut far = lp.clone();
     far.s.b.expiry = 2_000;
-    let lw = proposed(&far, &liq_long(FALSE_P, 450), 500);
-    let (t, s) = finalize_tx(&lw, 500, 200);
-    must("finalize", &t);
-    assert!(matches!(s, Settlement::Restore { .. }), "X = 2,000 > 500 + 900: uncounted cover is never relied on");
+    refused("X = 2,000 > 300 + 900: uncounted cover is never relied on", &propose_tx(&far, &liq_long(FALSE_P, 450), &uw_kp(), None).0, 0);
 }
 
 /// The engine refuses a finalize that settles a void claim (the model's restore is the only valid branch), and one

@@ -72,6 +72,7 @@ contract KpfOpenStub(
         require(termDaa + tailDaa + 2 * stepDaa <= RING * stepDaa);
         require(rateDaa >= 0);
         require(rateDaa < CSV_LIMIT);
+        require(2 * rateDaa <= stepDaa);
         require(unbondDaa >= 0);
         require(unbondDaa < CSV_LIMIT);
     }

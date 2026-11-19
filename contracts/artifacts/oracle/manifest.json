@@ -3,47 +3,47 @@
   "contracts": {
     "KpfBond": {
       "artifact": "KpfBond.json",
-      "artifact_sha256": "3de9fc18b24d343ae22c01127cc463306e32e4d02f510329177d1de5cabaf9a0",
+      "artifact_sha256": "369e823555ca39195f38c362c441e8e0a0b8db5f92cccefd432374e8be855c24",
       "prefix_len": 1,
       "source": "contracts/KpfBond.sil",
-      "source_sha256": "2d151f238e2a66f040c5036b7ed8b6a0948f0362b1f4267de90e8a00d954a036",
+      "source_sha256": "87f6e417cdeff87ed26ed3c11e18919b4e9351b66624e92437a4aff503b002c7",
       "state_len": 236,
-      "suffix_len": 4216,
-      "template_hash": "50802318ea123347403c01c786a6daa998ff2dcc046de9d4d56d11b8f9f330f6"
+      "suffix_len": 4256,
+      "template_hash": "4ffd63f5ec4c053320dbb81f01af70866bd35554407f42c7571d16537acecf29"
     },
     "KpfOpenO": {
       "artifact": "KpfOpenO.json",
-      "artifact_sha256": "1c000c84d4d26d8a472e6b497fcca87c8431208b15a1aa061f36450229ccb0ad",
+      "artifact_sha256": "054c33fceabfd53a4193e0aae38bdea312b0d75e8baa59242288a5423f2052ec",
       "prefix_len": 1,
       "source": "contracts/KpfOpenO.sil",
-      "source_sha256": "c9dc67310af18d05cd95cae3ab63ba4278daaa31fc0c9f78024096b21ca4d131",
+      "source_sha256": "b5ee57f7b09fd354354f846721cb606923a1f5136208b7cc52e38572010c6d6e",
       "state_len": 465,
-      "suffix_len": 6050,
-      "template_hash": "5c22918b6858b0e1c7b644b5ee7ce24aaf865033e3879078b72e68a68dcd173b"
+      "suffix_len": 6070,
+      "template_hash": "91ce8afab0dafd84076a18c439b9cfaca43753382b0cd31bcd46ec50d68e4203"
     },
     "KpfPairO": {
       "artifact": "KpfPairO.json",
-      "artifact_sha256": "5b7f462edbfa0bb40050864d473eceac85bb1cff8393b0069d9ac59989b5159c",
+      "artifact_sha256": "9f425a59d17a0b573bb5364413f0d4e07a5695adccfe24da66bab4ee0dfbbd06",
       "prefix_len": 1,
       "source": "contracts/KpfPairO.sil",
-      "source_sha256": "402fb0b0409d767a0c004d1d1ee66888e7f768a9bf07795302f87ecded744bbf",
+      "source_sha256": "9b641fe25751cf7c3a40cfa5bad706cf2a7608ef4ebaa02682b480fcb845b98a",
       "state_len": 723,
-      "suffix_len": 14318,
-      "template_hash": "137d00c8a47063f01667e37c43e1931412884497b2e1c8124add43b58c123da2"
+      "suffix_len": 15425,
+      "template_hash": "2693f0f6ae0b3df14a9578c64ae4d085bfdc3e0bb559523a194fbf0db7b1c71a"
     },
     "KpfPendingO": {
       "artifact": "KpfPendingO.json",
-      "artifact_sha256": "7a6d9c2cd7f6dc2a3e494af9ff96e0fb3c0787c6369b0a576408897afcc76fd1",
+      "artifact_sha256": "6ed4edc8fc1afc34a448ccb7258187f7e86a77c0a9e4e8a893552c56089621ca",
       "prefix_len": 1,
       "source": "contracts/KpfPendingO.sil",
-      "source_sha256": "cb3ee756304669932076f69a3a9db8808d9e189a15e71e2b2b523c9ab86cee3b",
+      "source_sha256": "c67a763c681983d0f7ac87f6e6b5b81c6ce0a50f83c98278fd47f883b09c26b8",
       "state_len": 813,
-      "suffix_len": 3585,
-      "template_hash": "dad6a1b24bbca75aaadc89d1c6bd05c7f19524d61412cafee307859895ec1259"
+      "suffix_len": 3613,
+      "template_hash": "a59cd776fb1522c5792608e8dc58903ac4790053818139f6de19a7595e6c29e2"
     },
     "KpfStake": {
       "artifact": "KpfStake.json",
-      "artifact_sha256": "9b69f466837873c1c2a50b9b641a585a5ceb4b2cbff0499cf16162c0ae1af3aa",
+      "artifact_sha256": "b99ea336a183fc4139dc6b64d173f45bf5494da99fae35a7631a71d79a2b1093",
       "prefix_len": 1,
       "source": "contracts/KpfStake.sil",
       "source_sha256": "fc5c1f2cca4675f72c243611d6825a390e26d723bb702d209baf16fd58faa711",

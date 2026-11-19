@@ -11,7 +11,7 @@ use kpf_protocol::judge::{Js, JudgeParams, NO, STATUS_FREE, STATUS_UNBONDING, YE
 use kpf_protocol::network::{p2pk_address, p2sh_address, Network};
 use kpf_protocol::oracle::*;
 use kpf_protocol::oracle_build::*;
-use kpf_protocol::state::{KIND_CLOSE, KIND_LIQ, LONG, SHORT};
+use kpf_protocol::state::{KIND_LIQ, LONG, SHORT};
 use kpf_protocol::tx::{rpc_json, KeySet, KeyUtxo, MIN_FEE_RATE};
 use kpf_protocol::verify::verify;
 use serde_json::{json, Value};
@@ -74,7 +74,15 @@ fn opt(a: &Args, name: &str, d: i64) -> R<i64> {
 /// `oracle-market`: a market block from a feed definition (testnet defaults, each overridable), with its id and the
 /// worst-case figures of an example pair.
 pub fn market_cmd(a: &Args) -> R<()> {
-    a.only(&["feed", "out", "rho-bps", "step-daa", "term-daa", "tail-daa", "rate-daa", "slot-unbond-daa", "mu-bps", "stake-age-daa", "stake-unbond-daa", "round-daa", "burn-bps", "min-stake", "scale", "price-max", "mmr-bps", "g-bps", "liq-fee-bps", "keeper-fee-min", "min-size", "carrier", "idle-daa", "window-daa", "late-daa", "quiet-daa", "sigma-bps", "beta-bps", "bond-min", "json"])?;
+    a.only(&["feed", "out", "rho-bps", "step-daa", "term-daa", "tail-daa", "rate-daa", "slot-unbond-daa", "mu-bps", "stake-age-daa", "stake-unbond-daa", "round-daa", "burn-bps", "min-stake", "scale", "price-max", "mmr-bps", "g-bps", "liq-fee-bps", "keeper-fee-min", "min-size", "carrier", "idle-daa", "window-daa", "late-daa", "quiet-daa", "sigma-bps", "beta-bps", "bond-min", "json", "feed-template"])?;
+    // Review 11: the template of a feed definition, with the judge's two-moment rule in its `time:` and `disagreement:`
+    // lines (edit the quantity, the sources and the sessions; the rule is part of every market).
+    if let Some(t) = a.get("feed-template") {
+        std::fs::write(t, FEED_TEMPLATE).map_err(|x| format!("--feed-template {t}: {x}"))?;
+        println!("written     {t} (a feed definition template: edit quantity, unit, sources and sessions; keep the time and disagreement lines, the judge's rule)");
+        print!("{FEED_TEMPLATE}");
+        return Ok(());
+    }
     let feed = std::fs::read(a.need("feed")?).map_err(|x| format!("--feed: {x}"))?;
     let d = OMarket::testnet(feed_hash_of(&feed));
     let m = OMarket {
@@ -130,7 +138,9 @@ fn words(m: &OMarket, pair: Option<(i64, i64, i64, i64, i64, i64)>) -> String {
     let p = &m.p;
     let mut s = String::new();
     s += &format!("This market prices an underlying in KAS (sompi per whole unit of {} base units). It is not approved, listed or verified by anyone: anyone can create a market.\n", p.scale);
-    s += &format!("Prices come only from each pair's underwriter: whoever vouches a price can move margin from one party to the other. A false price stands unless someone contests it within {} ({} DAA) of the claim landing.\n", h(p.challenge_daa), p.challenge_daa);
+    let dur = |d: i64| if d < 3_600 * DAA_PER_SECOND { format!("{:.1} min", d as f64 / DAA_PER_SECOND as f64 / 60.0) } else { h(d) };
+    s += &format!("Liquidation prices come only from each pair's underwriter: whoever vouches a price can move margin from one party to the other. A false price stands unless someone contests it within {} ({} DAA) of the claim landing; with a window that short only an automated watcher can contest, so run one (kpf oracle-watch --feed-price, your own or a service).\n", dur(p.challenge_daa), p.challenge_daa);
+    s += &format!("{}\n", two_moment_rule(m));
     let j = &m.judge;
     s += &format!(
         "A contest is judged by aged bonded KAS (the judge): each stake is at least {} KAS; the side committing at least {} times the other's takes the lead, and the leader wins once a round of {} passes without a change; stake counts only if it was bonded {} before the claim; a stake takes {} to leave; {} % of the losers' stake is burned and the rest goes to the winners. If colluders control that stake, false prices stand.\n",
@@ -144,11 +154,11 @@ fn words(m: &OMarket, pair: Option<(i64, i64, i64, i64, i64, i64)>) -> String {
     s += &format!("A new market has no judge for its first {}: no stake can count before it is that old, so a claim made earlier cannot be contested.\n", h(j.age));
     s += &format!("A contest that lands after the window is ignored for the verdict, but the part still waits for the dispute (at least {}): a late contest delays a claim for the price of its fees.\n", h(j.round));
     s += &format!("An underwriter may underwrite up to {} times its bond. Its bond is never paid to you in this version: a refuted claim costs its proposer the claim's bond ({} % of the cover, at least {} KAS), {} % of it to the disputer and the rest to the wronged party.\n", m.bond.rho_bps as f64 / 1e4, p.sigma_bps as f64 / 100.0, k(p.bond_min), p.beta_bps as f64 / 100.0);
-    s += &format!("A side is liquidated (it forfeits its whole margin to the other side) when a vouched price, moved {} % in its favour, is past its trigger at {} % maintenance. A close by a party is paid at the vouched price moved {} % against the closer.\n", p.g_bps as f64 / 100.0, p.mmr_bps as f64 / 100.0, p.g_bps as f64 / 100.0);
-    s += &format!("The cover runs for a term of {} and is renewed by the underwriter at the agreed premium, taken half from each side's margin. If the underwriter stops, the pair can be closed or transferred without any price; once {} has passed after its cover's expiry (the lapse after {}, then {} more by the calendar; amending the pair does not postpone it), anyone settles it at its entry price.\n", h(m.bond.term), h(m.bond.tail + p.idle_daa), h(m.bond.tail), h(p.idle_daa));
+    s += &format!("A side is liquidated (it forfeits its whole margin to the other side) when a vouched price, moved {} % in its favour, is past its trigger at {} % maintenance. Each party may close its own side (or part of it) at any time at the price it states for the present, posting its own bond, with no underwriter and no counterparty (kpf oracle-close): it settles {} after it lands at that price moved {} % against the closer, unless contested and refuted; a party below its maintenance at its own price cannot close (it adds margin first, or is liquidated).\n", p.g_bps as f64 / 100.0, p.mmr_bps as f64 / 100.0, dur(p.challenge_daa), p.g_bps as f64 / 100.0);
+    s += &format!("The cover runs for a term of {} and is renewed by the underwriter at the agreed premium, taken half from each side's margin. If the underwriter stops, each party still closes its own side at the feed; once {} has passed after its cover's expiry (the lapse after {}, then {} more by the calendar; amending the pair does not postpone it), anyone settles it at its entry price, which pays the side the feed favours less than its own close would.\n", h(m.bond.term), h(m.bond.tail + p.idle_daa), h(m.bond.tail), h(p.idle_daa));
     s += &format!("Until a party acts on the pair after its cover's expiry, the underwriter can still renew it late, even once the settle is due: each late renewal charges a full premium for a term that has partly or wholly passed and moves the settle date one term ({}) later; a renewal landing more than a term after the expiry it renews is the last. Any party entry after the expiry (an amend is enough) makes the pair unrenewable and fixes the settle date. A pair handed over, restored or cured after its expiry is never renewed.\n", h(m.bond.term));
     s += "Each side may add margin, and be cured, up to its own half of the cover rate from the entry price (the short up to half above it, rounded down, the long the rest below it), whatever the other side or a newcomer does; a side opened beyond its half keeps its bound but cannot widen it.\n";
-    s += &format!("A claim must land within {} of the time it prices, and at least the contest window before the cover expires, or it is void. Each party entry waits {} after the last change of the pair.\n", h(p.late_daa), h(p.quiet_daa));
+    s += &format!("A liquidation must land at least the contest window and one step before the cover expires, or it is void (the part is restored and the bond goes back to the underwriter); a close is valid at any time. The tools price the present: a claim's t0 is at most {} old when it is sent. Each party entry, a close included, waits {} after the last change of the pair.\n", dur(p.late_daa), dur(p.quiet_daa));
     s += "The winner of a pair bears every move beyond the loser's margin (gaps, a silent underwriter). The underwriter is never a party to its own pairs by key; a second key of the same owner cannot be detected.\n";
     if let Some((size, x, rl, rs, cr, prem)) = pair {
         let w = m.worst_case(size, rl, rs, cr, prem);
@@ -353,6 +363,11 @@ pub fn lock_verdict(from: u64, why: &str, now: Option<u64>, submit: bool) -> R<S
 
 /// Signs, verifies, prints, writes the transaction and the objects it creates, submits if asked.
 fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &mut Option<Node<WsTransport>>) -> R<()> {
+    finish_with(a, title, b, keys, net, node, a.has("submit"))
+}
+
+/// `finish` with the submission decided by the caller (`vouch` and `oracle-close` sign and submit in one step).
+fn finish_with(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &mut Option<Node<WsTransport>>, submit: bool) -> R<()> {
     let sg = b.sign(keys).map_err(e)?;
     let v = verify(&sg.tx, &sg.entries);
     println!("== {title}");
@@ -377,7 +392,7 @@ fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: 
             Some(n) => Some(n.check_network()?),
             None => None,
         };
-        println!("{}", lock_verdict(from, &why, now, a.has("submit"))?);
+        println!("{}", lock_verdict(from, &why, now, submit)?);
     }
     let save = |dry: bool| -> R<()> {
         let dir = out_dir(a, dry);
@@ -396,7 +411,7 @@ fn finish(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: 
         println!("written: {}", p.display());
         Ok(())
     };
-    if a.has("submit") {
+    if submit {
         let n = node.as_mut().ok_or("--submit needs --node <ws-url>")?;
         // Files at the top level of the out-dir are those of submitted transactions only: a refused submission leaves its
         // files under `dry-run/`.
@@ -645,22 +660,51 @@ pub fn open_cmd(a: &Args) -> R<()> {
 
 // ---------------------------------------------------------------- claims
 
-/// `vouch`: the underwriter vouches a price and proposes a claim (a liquidation; or a close, which the closing party
-/// signs too). `--vouch` is the underwriter's own UTXO (a funding file of one P2PK UTXO of its key). A liquidation's
-/// proposer is the underwriter: the vouch UTXO funds what the claim adds to the contract outputs (the bond, and the
-/// carrier of the new part when `--n` is below the pair's size) and what is left of it goes back to the underwriter. A
-/// close's bond is the closer's: the vouch value goes back in full and the funder (expected to be the closer) pays the
-/// bond (and that carrier). The funder always pays the network fee.
+/// The judge's rule every claim of the family is held to (review 11; the feed definition's `time:` and `disagreement:`
+/// lines say it for each market): a claim is true only if its price lies within g of the feed both at t0 and at P, the
+/// DAA it landed at. Printed by `vouch`, `oracle-close`, `contest`, `deposit` and `oracle-market`.
+pub fn two_moment_rule(m: &OMarket) -> String {
+    format!(
+        "A claim is true only if its price lies within {} % of the feed both at its t0 (the DAA it names) and at P (the DAA of the block that accepted it), each mapped to that block's timestamp, and neither moment falls in a closed session; the judge (and every staker voting) decides by this rule. A delay between t0 and P costs nothing unless the feed moved by more than g meanwhile.",
+        m.p.g_bps as f64 / 100.0
+    )
+}
+
+/// The staleness rule of `vouch` and `oracle-close` (review 11, R11-N2): `t0` is the node's DAA when the claim is built
+/// (or `--t0`, which must not lie in the future nor more than lateDaa back), and the claim is signed and submitted in the
+/// same step when a node is given.
+fn fresh_t0(a: &Args, m: &OMarket, now: u64) -> R<i64> {
+    let t0 = int_or(a, "t0", now as i64)?;
+    if t0 > now as i64 {
+        return Err(format!("REFUSED: --t0 {t0} lies after the present DAA {now}: a claim cannot price the future"));
+    }
+    if now as i64 - t0 > m.p.late_daa {
+        return Err(format!(
+            "REFUSED: t0 {t0} is {} DAA old, more than the market's lateDaa {} ({:.1} s): price the present (omit --t0) so that the claim is still within g of the feed when it lands",
+            now as i64 - t0,
+            m.p.late_daa,
+            m.p.late_daa as f64 / DAA_PER_SECOND as f64
+        ));
+    }
+    Ok(t0)
+}
+
+/// `vouch`: the underwriter vouches a liquidation and proposes it. `--vouch` is the underwriter's own UTXO (a funding file
+/// of one P2PK UTXO of its key): it funds what the claim adds to the contract outputs (the bond, and the carrier of the
+/// new part when `--n` is below the pair's size) and what is left of it goes back to the underwriter; the funder pays the
+/// network fee. A close is no longer vouched (review 11): it is the party's own (`oracle-close`). `t0` is the node's DAA
+/// (a `--t0` older than lateDaa is refused), and with `--node` the claim is signed and submitted in one step (`--dry-run`
+/// writes it without sending).
 pub fn vouch_cmd(a: &Args) -> R<()> {
-    only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch", "void-ok"])?;
+    only(a, &["pair", "kind", "side", "price", "t0", "n", "vouch", "void-ok", "dry-run"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let lp = pair_of(a, "pair", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let kind = match a.need("kind")? {
         "liquidate" | "liquidation" => KIND_LIQ,
-        "close" => KIND_CLOSE,
-        k => return Err(format!("--kind liquidate|close, not `{k}`")),
+        "close" => return Err("a close is the party's own since review 11 and carries no underwriter input: kpf oracle-close --pair P.json --side long|short --price P --key PARTY".into()),
+        k => return Err(format!("--kind liquidate, not `{k}`")),
     };
     let sd = side(a.need("side")?)?;
     let v = parse_utxos(&read_json(a.need("vouch")?)?)?;
@@ -670,48 +714,83 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
     // is also the underwriter must not list it twice.
     let fu: Vec<KeyUtxo> = fu.into_iter().filter(|u| u.outpoint != vouch.outpoint).collect();
     if fu.is_empty() {
-        return Err("no funding left once the vouch UTXO is set aside: the funder pays the network fee (and, for a close, the bond), so give another plain UTXO of the funder".into());
+        return Err("no funding left once the vouch UTXO is set aside: the funder pays the network fee, so give another plain UTXO of the funder".into());
     }
     let t = now(a, &mut node)?;
-    let t0 = int_or(a, "t0", t as i64)?;
+    let t0 = fresh_t0(a, &lp.s.m, t)?;
     let n = if a.has("n") { parse_amount(a.need("n")?, lp.s.m.p.scale)? } else { lp.s.size };
     let c = ClaimTerms { kind, side: sd, n, price: price(a, "price")?, t0 };
     let (b, w) = propose(&lp, &c, vouch, &fu, &fk, rate(a)?).map_err(e)?;
-    // Review 10 (R10-F2): a claim is valid only if it lands challengeDaa + stepDaa before the expiry; one that cannot
-    // costs its proposer the bond (to the defender), so it is refused here unless --void-ok says it is meant.
+    // Review 10 (R10-F2), review 11: a liquidation is valid only if it lands the window and a step before the expiry; one
+    // that lands later is void (the part is restored and the bond comes back to the underwriter, review 11). It is
+    // refused here unless --void-ok says it is meant.
     let last = OPending::last_valid_landing(&w.m, w.b.expiry);
     if (t as i64) > last && !a.has("void-ok") {
         return Err(format!(
-            "REFUSED: a claim landing now (DAA {t}) or later is void: a claim must land at least the window and one step ({} DAA) before the cover's expiry {}, i.e. by DAA {last} (review 10). Renew first (the renewal opens at DAA {}), then claim against the next expiry; a void claim restores the part and pays its bond to the defender. Pass --void-ok to send it anyway",
+            "REFUSED: a claim landing now (DAA {t}) or later is void: a liquidation must land at least the window and one step ({} DAA) before the cover's expiry {}, i.e. by DAA {last} (review 10). Renew first (the renewal opens at DAA {}), then claim against the next expiry; a void claim restores the part and returns the bond to the underwriter, and freezes the pair for the window. Pass --void-ok to send it anyway",
             w.m.p.challenge_daa + w.m.bond.step,
             w.b.expiry,
             w.b.expiry - w.m.bond.step
         ));
     }
     println!(
-        "claim: {} of the {} at {} KAS (t0 {t0}); bond {} KAS. It may be contested until P + {} (P: the DAA it lands at) and is void if it lands after DAA {last} or more than {} DAA after t0. Finalize it from P + {} and before the cover's expiry DAA {}: a cure landing after the expiry undoes a liquidation (the cured pair settles at its entry).",
-        if kind == KIND_LIQ { "liquidation" } else { "close" },
+        "claim: liquidation of the {} at {} KAS (t0 {t0}); bond {} KAS. It may be contested until P + {} (P: the DAA it lands at) and is void if it lands after DAA {last}. Finalize it from P + {} and before the cover's expiry DAA {}: a cure landing after the expiry undoes a liquidation (the cured pair settles at its entry).",
         if sd == LONG { "long" } else { "short" },
         fmt_kas(c.price as i128),
         fmt_kas(w.bond as i128),
         w.m.p.challenge_daa - 1,
-        w.m.p.late_daa,
         w.m.p.challenge_daa,
         w.b.expiry
     );
+    println!("{}", two_moment_rule(&w.m));
     let adds = funded_by_proposer(&lp, &w);
     let what = if n < lp.s.size { format!("the claim's bond {} KAS and the carrier of the new part {} KAS", fmt_kas(w.bond as i128), fmt_kas((adds - w.bond) as i128)) } else { format!("the claim's bond {} KAS", fmt_kas(w.bond as i128)) };
-    if kind == KIND_LIQ {
-        let back = if n < lp.s.size {
-            format!("a cure refunds the {} KAS to the underwriter; a valid settlement pays it the bond and the keeper fee and leaves the carrier in the forfeited part (the winner's); a void or refuted claim leaves the carrier in the restored part and pays the bond to the defender (and the disputer)", fmt_kas(adds as i128))
-        } else {
-            "a cure refunds the bond to the underwriter, a valid settlement pays it the bond and the keeper fee, a void or refuted claim pays the bond to the defender (and the disputer)".to_string()
-        };
-        println!("The vouch input ({} KAS) funds {what} and the rest goes back to the underwriter ({back}); the funder pays only the network fee.", fmt_kas(vouch.amount as i128));
+    let back = if n < lp.s.size {
+        format!("a cure refunds the {} KAS to the underwriter; a valid settlement pays it the bond and the keeper fee and leaves the carrier in the forfeited part (the winner's); a void claim returns the bond to it and leaves the carrier in the restored part; a refuted one leaves the carrier there and pays the bond to the defender and the disputer", fmt_kas(adds as i128))
     } else {
-        println!("The vouch input's {} KAS go back to the underwriter in full. The closer posts {what}: the funder is expected to be the closer, and pays it and the fee.", fmt_kas(vouch.amount as i128));
-    }
-    finish(a, "vouch: a price claim", &b, &keys, net, &mut node)
+        "a cure refunds the bond to the underwriter, a valid settlement pays it the bond and the keeper fee, a void claim returns the bond to it, a refuted one pays the bond to the defender (and the disputer)".to_string()
+    };
+    println!("The vouch input ({} KAS) funds {what} and the rest goes back to the underwriter ({back}); the funder pays only the network fee. Keep the vouching funds on a key of their own: any transaction that spends a UTXO of this key vouches every claim beside it (R11-F6).", fmt_kas(vouch.amount as i128));
+    let submit = node.is_some() && !a.has("dry-run");
+    finish_with(a, "vouch: a liquidation claim", &b, &keys, net, &mut node, submit)
+}
+
+/// `oracle-close` (review 11, R11-F1): a party closes its own side (or `--n` of it) at the price it states for the
+/// present, posting its own bond; no underwriter and no counterparty sign. It settles W after it lands at that price
+/// moved by g against the closer, unless it is contested and refuted (the bond then goes to the other party and the
+/// disputer). Refused when the closer is below its maintenance at that price (it must add margin first). `t0` is the
+/// node's DAA (a `--t0` older than lateDaa is refused); with `--node` it is signed and submitted in one step.
+pub fn oracle_close_cmd(a: &Args) -> R<()> {
+    only(a, &["pair", "side", "price", "t0", "n", "dry-run"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let lp = pair_of(a, "pair", &mut node, net)?;
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    let sd = side(a.need("side")?)?;
+    let t = now(a, &mut node)?;
+    let t0 = fresh_t0(a, &lp.s.m, t)?;
+    let n = if a.has("n") { parse_amount(a.need("n")?, lp.s.m.p.scale)? } else { lp.s.size };
+    let px = price(a, "price")?;
+    let quiet_from = lp.daa + lp.s.m.p.quiet_daa as u64;
+    let (b, w) = propose_close(&lp, sd, n, px, t0, &fu, &fk, rate(a)?).map_err(e)?;
+    let m = &w.m;
+    println!(
+        "your own close of the {} ({} units) at {} KAS (t0 {t0}): you post the bond {} KAS{}; it lands from DAA {quiet_from} (the pair must be quiet {} DAA), may be contested for {} DAA after it lands, and settles at {} KAS (the price moved {} % against you) from P + {}: {} KAS to you besides your bond back. No underwriter signs; its cover does not matter.",
+        if sd == LONG { "long" } else { "short" },
+        fmt_units(n as i128, m.p.scale as i128),
+        fmt_kas(px as i128),
+        fmt_kas(w.bond as i128),
+        if n < lp.s.size { format!(" and the new part's carrier {} KAS", fmt_kas(m.p.carrier as i128)) } else { String::new() },
+        m.p.quiet_daa,
+        m.p.challenge_daa,
+        fmt_kas(w.close_price() as i128),
+        m.p.g_bps as f64 / 100.0,
+        m.p.challenge_daa,
+        fmt_kas(if sd == LONG { kpf_protocol::payoff::q(n, w.close_price() - w.bl, m.p.scale, 0) } else { kpf_protocol::payoff::q(n, w.bs - w.close_price(), m.p.scale, 0) } as i128)
+    );
+    println!("{} A close at a price that is not true at both moments is refuted when contested and costs you the bond.", two_moment_rule(m));
+    let submit = node.is_some() && !a.has("dry-run");
+    finish_with(a, "oracle-close: a party's own close", &b, &keys, net, &mut node, submit)
 }
 
 /// A transaction body file: a `kpf-tx/1` file this tool wrote (`transaction`), a node's `rpc` object, or the bare
@@ -778,6 +857,7 @@ pub fn contest_cmd(a: &Args) -> R<()> {
         None => Trust::Untraced,
     };
     let (b, _, _) = contest(&w, &st, base, &fu, &fk, rate(a)?, &trust).map_err(e)?;
+    println!("{} Contest only a claim that fails it: a true claim upheld costs the contest stake.", two_moment_rule(&w.s.m));
     finish(a, "contest", &b, &keys, net, &mut node)
 }
 
@@ -814,6 +894,7 @@ pub fn deposit_cmd(a: &Args) -> R<()> {
     };
     let (b, n) = deposit(&d, sd, &stakes, &fu, &fk, rate(a)?, &trust).map_err(e)?;
     println!("after the deposit: {} leads, YES {} KAS, NO {} KAS", if n.side == YES { "YES" } else { "NO" }, fmt_kas(n.yes as i128), fmt_kas(n.no as i128));
+    println!("Vote YES only for a claim whose price lies within the market's g of the feed both at its t0 and at P (the DAA it landed at), neither in a closed session; NO otherwise (the feed definition's rule, review 11).");
     finish(a, "deposit", &b, &keys, net, &mut node)
 }
 
@@ -1135,7 +1216,7 @@ pub fn inspect_oracle(a: &Args, o: &OObj, rs: &[u8], file: Option<&ObjFile>, net
 /// With `--node` every object's DAA score and value are read from the node; without it a DAA read from a file is shown
 /// as unchecked (review 6).
 pub fn watch_cmd(a: &Args) -> R<()> {
-    a.only(&["me", "object", "scan", "daa", "node", "json"])?;
+    a.only(&["me", "object", "scan", "daa", "node", "json", "feed-price", "feed-at-t0"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let me = keys::party(a.need("me")?, net)?;
@@ -1150,6 +1231,13 @@ pub fn watch_cmd(a: &Args) -> R<()> {
         }
     }
     let mut rows = vec![];
+    // Review 11: with W of minutes a claim is contestable only by an automated watcher; given the feed (`--feed-price`, the
+    // feed now, which is the feed at P for a claim that has just landed, and optionally `--feed-at-t0`), every pending
+    // claim within its window that is not within g of the feed at both moments is marked CONTEST NOW with its deadline.
+    let feed_now = if a.has("feed-price") { Some(price(a, "feed-price")?) } else { None };
+    let feed_t0 = if a.has("feed-at-t0") { Some(price(a, "feed-at-t0")?) } else { feed_now };
+    let mut urgent: Vec<(String, i64)> = vec![];
+    let within = |q: i64, f: i64, g: i64| (f as i128) * 10_000 >= q as i128 * (10_000 - g) as i128 && (f as i128) * 10_000 <= q as i128 * (10_000 + g) as i128;
     for f in files {
         let Ok(mut of) = ObjFile::load(&f) else { continue };
         let Ok(obj) = OObj::decode(&of.redeem) else { continue };
@@ -1187,12 +1275,25 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                         } else {
                             String::new()
                         };
+                        // Review 11: the watcher's verdict at the feed it was given (the two-moment rule).
+                        let verdict = match (feed_now, feed_t0) {
+                            (Some(fp), Some(f0)) if t <= until => {
+                                let g = w.m.p.g_bps;
+                                if within(w.quote, f0, g) && within(w.quote, fp, g) {
+                                    format!("; within {} % of the feed at both moments: true, do not contest", g as f64 / 100.0)
+                                } else {
+                                    urgent.push((f.clone(), until));
+                                    format!("; CONTEST NOW (by DAA {until}): the price is not within {} % of the feed ({} KAS at t0, {} KAS now)", g as f64 / 100.0, fmt_kas(f0 as i128), fmt_kas(fp as i128))
+                                }
+                            }
+                            _ => String::new(),
+                        };
                         format!(
-                            "{} {what} of the {} at {} KAS{}; {}; finalizable from DAA {}{hurry}",
+                            "{} {what} of the {} at {} KAS{}; {}; finalizable from DAA {}{hurry}{verdict}",
                             if against { "A CLAIM AGAINST YOU:" } else { "a claim on your pair:" },
                             if w.side == LONG { "long" } else { "short" },
                             fmt_kas(w.quote as i128),
-                            if valid { "" } else { " (void: it will restore and pay you the bond)" },
+                            if valid { "" } else { " (void: it will restore the part; the bond goes back to the underwriter)" },
                             if t <= until { format!("contest until DAA {until} ({} DAA left): kpf contest --pending {f} --stake <your aged stake>", until - t) } else { "the contest window has ended".into() },
                             p + w.m.p.challenge_daa
                         )
@@ -1235,7 +1336,9 @@ pub fn watch_cmd(a: &Args) -> R<()> {
                 } else {
                     format!("THE COVER HAS LAPSED: anyone may settle the pair at its entry price now (kpf lapse-settle --pair {f}); a price-free exit (transfer, mutual or cooperative close) is open meanwhile")
                 };
-                rows.push((f.clone(), msg));
+                // Review 11 (R11-F1): a party always has its own exit at the feed, whatever the underwriter does.
+                let own = if p.long_key == me || p.short_key == me { format!("; you can close your own side at the feed at any time, with your own bond and no other signature (kpf oracle-close --pair {f} --side long|short --price <the feed>), settled {} DAA after it lands; a lapse at the entry pays the side the feed favours less than the feed", p.m.p.challenge_daa) } else { String::new() };
+                rows.push((f.clone(), msg + &own));
             }
             OObj::Stake(s) if s.owner == me || s.status == kpf_protocol::judge::STATUS_DISPUTE => {
                 let msg = match s.status {
@@ -1263,7 +1366,14 @@ pub fn watch_cmd(a: &Args) -> R<()> {
         }
     }
     if a.has("json") {
-        println!("{}", serde_json::to_string_pretty(&json!(rows.iter().map(|(f, m)| json!({"file": f, "status": m})).collect::<Vec<_>>())).expect("json"));
+        let v: Vec<Value> = rows
+            .iter()
+            .map(|(f, m)| {
+                let u = urgent.iter().find(|(uf, _)| uf == f);
+                json!({"file": f, "status": m, "contestNow": u.is_some(), "contestUntil": u.map(|(_, d)| *d)})
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json!(v)).expect("json"));
     } else if rows.is_empty() {
         println!("nothing of {} among the objects given", to_hex(&me));
     } else {
@@ -1272,8 +1382,15 @@ pub fn watch_cmd(a: &Args) -> R<()> {
         }
     }
     let _ = (Path::new("."), SHORT);
+    // Review 11: a watcher's check ends with an error (exit code 3, `main`) when a claim must be contested now.
+    if let Some((f, d)) = urgent.iter().min_by_key(|(_, d)| *d) {
+        return Err(format!("{CONTEST_NOW}: {} claim(s) to contest; the first deadline is DAA {d} ({f})", urgent.len()));
+    }
     Ok(())
 }
+
+/// The prefix of the error `oracle-watch` ends with when a claim must be contested now (`main` exits with code 3).
+pub const CONTEST_NOW: &str = "CONTEST NOW";
 
 #[cfg(test)]
 mod tests {
