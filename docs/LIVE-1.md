@@ -81,8 +81,7 @@ sends from the funder to the role keys.
 
 ## Not exercised
 
-Cure; renewal; lapse settle, unbond and withdrawal of the slot (they need the cover to expire, about an hour after the
-open; run separately and appended below); a chained submission on an unaccepted parent; two transactions spending one
+Cure; renewal; a chained submission on an unaccepted parent; two transactions spending one
 UTXO; anything at `ρ > 1`; the book-market family (not sent in this run).
 
 ## Balances after step 21
@@ -91,3 +90,33 @@ alice (long) 63.57 KAS + 0.8; bob (short) 35.78; staker 20.20 (its 20 KAS stake 
 underwriter 1.1 + 1.1 plain, 40 KAS in the slot, 48 KAS in judge stake; executor about 82 KAS (it received the
 underwriter's 70 KAS through defect 1 and paid every fee). Still in covenants: two one-unit pairs (3.1 KAS each, both
 sides the short's key after the forfeits), the 40 KAS slot, 48 KAS of judge stake.
+
+## Clean-up after the cover lapsed (same day, DAA 627120794 onward)
+
+Run by `run/live-1/cleanup.sh` about an hour after the open, once the cover had expired (expiry DAA 627114000, lapse
+settle allowed from 627118200). Four more transactions, all accepted on the first attempt; 25 in total.
+
+| # | Step | Transaction | Fee (KAS) | Bytes |
+|---|---|---|---|---|
+| 22 | lapse settle of the first one-unit pair: long 0.9, short 2.2 | `9da26928…cdb8` | 0.0304 | 15,217 |
+| 23 | lapse settle of the second one-unit pair: long 0.9, short 2.2 | `461f8670…32b2` | 0.0304 | 15,217 |
+| 24 | unbond the 40 KAS slot | `6ec41a95…8ef6` | 0.0101 | 5,063 |
+| 25 | withdraw the slot after the unbonding delay: 39.990546 KAS (it pays its own fee) | `5159930d…be88` | 0.0095 | 4,727 |
+
+- Lapse settle, unbond and withdrawal behave on the network as in the engine; the unbonding delay (600 DAA here) was
+  enforced on the slot's on-chain score.
+- **Defect 1 happened a second time:** the vouch for claim 3 spent the underwriter's 1.1 KAS UTXO returned by claim 1,
+  and its value again went to the executor's change. In this run the underwriter lost 71.1 KAS to the executor this way.
+
+### Final balances
+
+| Key | KAS |
+|---|---|
+| long (alice, also the funder of the role keys) | 63.569765 |
+| short (bob) | 41.977917 |
+| underwriter | 41.090546 plain + 48 in judge stake (no unbond command yet, defect 4) |
+| staker | 20.197951 |
+| executor | 82.534328 |
+
+Sum 297.37 KAS of the 300 received: 2 KAS burned by the pool close of step 21, about 0.63 KAS of fees. Nothing else
+is left in a covenant.
