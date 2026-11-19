@@ -146,6 +146,8 @@ fn words(m: &OMarket, pair: Option<(i64, i64, i64, i64, i64, i64)>) -> String {
     s += &format!("An underwriter may underwrite up to {} times its bond. Its bond is never paid to you in this version: a refuted claim costs its proposer the claim's bond ({} % of the cover, at least {} KAS), {} % of it to the disputer and the rest to the wronged party.\n", m.bond.rho_bps as f64 / 1e4, p.sigma_bps as f64 / 100.0, k(p.bond_min), p.beta_bps as f64 / 100.0);
     s += &format!("A side is liquidated (it forfeits its whole margin to the other side) when a vouched price, moved {} % in its favour, is past its trigger at {} % maintenance. A close by a party is paid at the vouched price moved {} % against the closer.\n", p.g_bps as f64 / 100.0, p.mmr_bps as f64 / 100.0, p.g_bps as f64 / 100.0);
     s += &format!("The cover runs for a term of {} and is renewed by the underwriter at the agreed premium, taken half from each side's margin. If the underwriter stops, the pair can be closed or transferred without any price; once {} has passed after its cover's expiry (the lapse after {}, then {} more by the calendar; amending the pair does not postpone it), anyone settles it at its entry price.\n", h(m.bond.term), h(m.bond.tail + p.idle_daa), h(m.bond.tail), h(p.idle_daa));
+    s += &format!("Until a party acts on the pair after its cover's expiry, the underwriter can still renew it late, even once the settle is due: each late renewal charges a full premium for a term that has partly or wholly passed and moves the settle date one term ({}) later; a renewal landing more than a term after the expiry it renews is the last. Any party entry after the expiry (an amend is enough) makes the pair unrenewable and fixes the settle date. A pair handed over, restored or cured after its expiry is never renewed.\n", h(m.bond.term));
+    s += "Each side may add margin, and be cured, up to its own half of the cover rate from the entry price (the short up to half above it, rounded down, the long the rest below it), whatever the other side or a newcomer does; a side opened beyond its half keeps its bound but cannot widen it.\n";
     s += &format!("A claim must land within {} of the time it prices, and at least the contest window before the cover expires, or it is void. Each party entry waits {} after the last change of the pair.\n", h(p.late_daa), h(p.quiet_daa));
     s += "The winner of a pair bears every move beyond the loser's margin (gaps, a silent underwriter). The underwriter is never a party to its own pairs by key; a second key of the same owner cannot be detected.\n";
     if let Some((size, x, rl, rs, cr, prem)) = pair {
@@ -161,6 +163,11 @@ fn words(m: &OMarket, pair: Option<(i64, i64, i64, i64, i64, i64)>) -> String {
             k(w.defender_share),
             k(w.term_premium)
         );
+        for x in payout_warnings(m, size, rl, rs, cr, prem) {
+            s += &format!("WARNING: {x}\n");
+        }
+    } else if m.p.bond_min.max(kpf_protocol::state::PLAIN_DUST) < VIABLE_OUTPUT_MIN as i64 {
+        s += &format!("WARNING: a claim's bond may be as small as {} KAS on a small pair: a contract pays it (at a cure or a settlement) in an output of its own, and an output below about {} KAS cannot be mined (KIP-9 storage mass); the tools top it up from the funder\n", k(m.p.bond_min.max(kpf_protocol::state::PLAIN_DUST)), k(VIABLE_OUTPUT_MIN as i64));
     }
     for w in market_warnings(m, DAA_PER_SECOND) {
         s += &format!("WARNING: {w}\n");
@@ -505,9 +512,42 @@ pub fn stake_cmd(a: &Args) -> R<()> {
 
 // ---------------------------------------------------------------- orders and the open
 
+/// What an order risks beyond its margin (review 9, R9-F1): the consequence of `--any-slot`, and what a fill of an order
+/// that rested longer than one term can cost (the cover's expiry may then lie in the past).
+pub fn order_risk_lines(o: &OOpen) -> Vec<String> {
+    let sc = o.m.p.scale;
+    let half = o.premium_half(o.prem_max);
+    let prem = kpf_protocol::payoff::q(o.size_left, half, sc, 0);
+    let worst = kpf_protocol::payoff::q(o.size_left, o.tip + half, sc, 0) + o.m.p.carrier;
+    let mut v = vec![];
+    if o.uw_accept == [0; 32] {
+        v.push(format!(
+            "--any-slot: any underwriting slot of this market can fill this order and choose the cover rate (at least the range), the cover's expiry and the premium up to --prem-max {} KAS per unit and term; your half of the first premium (up to {} KAS on a full fill) goes to that underwriter.",
+            fmt_kas(o.prem_max as i128),
+            fmt_kas(prem as i128)
+        ));
+    }
+    v.push(format!(
+        "An order resting longer than one term ({} DAA) can be filled with a cover expiry already in the past (a contract proves only that the expiry is a term after the order was accepted). Such a pair is never renewed and settles at its entry price once its lapse time has passed: you get your margin back and lose your tip, the carrier and your half of the first premium (at most {} KAS on a full fill). Cancel or replace an order that is not filled within a term.",
+        o.m.bond.term,
+        fmt_kas(worst as i128)
+    ));
+    v
+}
+
 /// `oracle-order`: an order of one side, escrowing its margin, its tip, its half of the first premium and a carrier.
 pub fn order_cmd(a: &Args) -> R<()> {
-    only(a, &["market", "side", "size", "limit", "rate", "expiry", "owner", "min-counter-rate", "min-fill", "tip", "active-from", "underwriter", "prem-max", "escrow"])?;
+    only(a, &["market", "side", "size", "limit", "rate", "expiry", "owner", "min-counter-rate", "min-fill", "tip", "active-from", "slot", "underwriter", "any-slot", "prem-max", "escrow"])?;
+    // Review 9 (R9-F1): accepting any slot is a choice the user makes explicitly, with its consequence printed.
+    let slot_arg = a.get("slot").or_else(|| a.get("underwriter"));
+    let uw_accept = match (slot_arg, a.has("any-slot")) {
+        (Some(_), true) => return Err("give either --slot SLOT_ID or --any-slot, not both".into()),
+        (Some(h), false) => hex32(h)?,
+        (None, true) => [0; 32],
+        (None, false) => {
+            return Err("oracle-order needs --slot SLOT_ID (the one underwriting slot this order accepts) or --any-slot (any slot of the market may fill it and set its cover's terms within your --prem-max)".into())
+        }
+    };
     let net = network(a)?;
     let mut node = connect(a)?;
     let m = market_from(a.need("market")?)?;
@@ -531,22 +571,31 @@ pub fn order_cmd(a: &Args) -> R<()> {
         tip: price_or(a, "tip", 0)?,
         active_from: int_or(a, "active-from", 0)?,
         expiry_daa: int(a, "expiry")?,
-        uw_accept: match a.get("underwriter") {
-            Some(h) => hex32(h)?,
-            None => [0; 32],
-        },
+        uw_accept,
         prem_max: price_or(a, "prem-max", 0)?,
     };
     let need = o.fill_spend(size, o.prem_max) as u64 + 100_000_000;
     let esc = if a.has("escrow") { kas(a.need("escrow")?)? as u64 } else { need };
     let b = create_order(&o, esc, &fu, &fk, rate(a)?).map_err(e)?;
     println!("escrow {} KAS (a full fill takes at most {} KAS of it)", fmt_kas(esc as i128), fmt_kas(o.fill_spend(size, o.prem_max) as i128));
+    for l in order_risk_lines(&o) {
+        println!("{l}");
+    }
     finish(a, "oracle-order", &b, &keys, net, &mut node)
+}
+
+/// `--uw-utxo FILE`: one plain UTXO of the slot owner (a funding file; the first entry of that key) that joins the
+/// premium in one output, for a premium too small for an output of its own when the funder is not the underwriter.
+fn uw_utxo(a: &Args, owner: &[u8; 32]) -> R<Option<KeyUtxo>> {
+    let Some(p) = a.get("uw-utxo") else { return Ok(None) };
+    let v = parse_utxos(&read_json(p)?)?;
+    let u = funding_utxos(&v, owner).into_iter().next().ok_or("--uw-utxo lists no plain UTXO of the slot owner's key")?;
+    Ok(Some(u))
 }
 
 /// `oracle-open`: two orders and the underwriter's slot open a pair (the underwriter's key signs the bind).
 pub fn open_cmd(a: &Args) -> R<()> {
-    only(a, &["long", "short", "slot", "n", "x", "cover-rate", "premium", "expiry"])?;
+    only(a, &["long", "short", "slot", "n", "x", "cover-rate", "premium", "expiry", "uw-utxo"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (lo, so, sl) = (order_of(a, "long", &mut node, net)?, order_of(a, "short", &mut node, net)?, slot_of(a, "slot", &mut node, net)?);
@@ -557,7 +606,9 @@ pub fn open_cmd(a: &Args) -> R<()> {
     let earliest = lo.daa.max(so.daa) as i64 + lo.s.m.bond.term;
     let xe = if a.has("expiry") { int(a, "expiry")? } else { (earliest + step - 1) / step * step };
     let terms = OpenTerms { n: parse_amount(a.need("n")?, sc)?, x: price(a, "x")?, cover_rate: price(a, "cover-rate")?, premium: price_or(a, "premium", 0)?, expiry: xe, lock: t };
-    let (b, p) = open(&lo, &so, &sl, &terms, &fu, &fk, rate(a)?).map_err(e)?;
+    let extra = uw_utxo(a, &sl.s.owner)?;
+    let fu: Vec<KeyUtxo> = fu.into_iter().filter(|u| extra.as_ref().is_none_or(|x| x.outpoint != u.outpoint)).collect();
+    let (b, p) = open_with(&lo, &so, &sl, &terms, &fu, &fk, rate(a)?, extra.as_ref()).map_err(e)?;
     println!("pair [{} .. {}] KAS of {} units, cover {} KAS until DAA {xe}", fmt_kas(p.bl as i128), fmt_kas(p.bs as i128), fmt_units(p.size as i128, sc as i128), fmt_kas(p.cover_of(p.size) as i128));
     finish(a, "oracle-open", &b, &keys, net, &mut node)
 }
@@ -609,7 +660,12 @@ pub fn vouch_cmd(a: &Args) -> R<()> {
     let adds = funded_by_proposer(&lp, &w);
     let what = if n < lp.s.size { format!("the claim's bond {} KAS and the carrier of the new part {} KAS", fmt_kas(w.bond as i128), fmt_kas((adds - w.bond) as i128)) } else { format!("the claim's bond {} KAS", fmt_kas(w.bond as i128)) };
     if kind == KIND_LIQ {
-        println!("The vouch input ({} KAS) funds {what} and the rest goes back to the underwriter (a cure or a valid settlement refunds those {} KAS to the underwriter); the funder pays only the network fee.", fmt_kas(vouch.amount as i128), fmt_kas(adds as i128));
+        let back = if n < lp.s.size {
+            format!("a cure refunds the {} KAS to the underwriter; a valid settlement pays it the bond and the keeper fee and leaves the carrier in the forfeited part (the winner's); a void or refuted claim leaves the carrier in the restored part and pays the bond to the defender (and the disputer)", fmt_kas(adds as i128))
+        } else {
+            "a cure refunds the bond to the underwriter, a valid settlement pays it the bond and the keeper fee, a void or refuted claim pays the bond to the defender (and the disputer)".to_string()
+        };
+        println!("The vouch input ({} KAS) funds {what} and the rest goes back to the underwriter ({back}); the funder pays only the network fee.", fmt_kas(vouch.amount as i128));
     } else {
         println!("The vouch input's {} KAS go back to the underwriter in full. The closer posts {what}: the funder is expected to be the closer, and pays it and the fee.", fmt_kas(vouch.amount as i128));
     }
@@ -756,7 +812,7 @@ pub fn finalize_cmd(a: &Args) -> R<()> {
 
 /// `renew`: the underwriter renews up to 7 pairs of its slot in one bind (its key signs).
 pub fn renew_cmd(a: &Args) -> R<()> {
-    only(a, &["pair", "slot"])?;
+    only(a, &["pair", "slot", "uw-utxo"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let mut pairs = vec![];
@@ -770,7 +826,9 @@ pub fn renew_cmd(a: &Args) -> R<()> {
     let sl = slot_of(a, "slot", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let t = now(a, &mut node)?;
-    finish(a, "renew", &renew(&pairs, &sl, t, &fu, &fk, rate(a)?).map_err(e)?.0, &keys, net, &mut node)
+    let extra = uw_utxo(a, &sl.s.owner)?;
+    let fu: Vec<KeyUtxo> = fu.into_iter().filter(|u| extra.as_ref().is_none_or(|x| x.outpoint != u.outpoint)).collect();
+    finish(a, "renew", &renew_with(&pairs, &sl, t, &fu, &fk, rate(a)?, extra.as_ref()).map_err(e)?.0, &keys, net, &mut node)
 }
 
 /// `lapse-settle`: a pair whose cover lapsed and that is idle settles at its entry price (anyone).

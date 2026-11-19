@@ -96,8 +96,12 @@ gives the present the lock time proves)
   withdraw-bond --slot S.json --key OWNER [--to ADDR]                an unbonding slot, U old
   stake         --market M.json --value KAS [--owner KEY|HEX|ADDR]   a judge stake (counts on claims made M_age later)
   oracle-order  --market M.json --side long|short --size T --limit P --rate P --expiry DAA [--prem-max P]
-                [--underwriter SLOT_ID] [--min-counter-rate P] [--min-fill T] [--tip P] [--active-from DAA] [--escrow KAS]
+                (--slot SLOT_ID | --any-slot) [--min-counter-rate P] [--min-fill T] [--tip P] [--active-from DAA] [--escrow KAS]
+                --any-slot lets any slot of the market fill it (prints the consequence); an order resting longer than a
+                term can be filled into a lapsed cover (margin back at the entry, tip, carrier and premium half lost)
   oracle-open   --long O.json --short O.json --slot S.json --n T --x P --cover-rate P [--premium P] [--expiry DAA] --key UW
+                [--uw-utxo UTXO.json]   the premium joins the funder's change when the funder is the underwriter, else one
+                output with that underwriter UTXO; a premium too small for an output of its own is refused otherwise
   vouch         --pair P.json --kind liquidate|close --side long|short --price P [--t0 DAA] [--n T] --vouch UTXO.json --key UW
                 [--key CLOSER]   the underwriter's price claim (a close is signed by the closer too); for a
                 liquidation the vouch UTXO funds the bond (and the new part's carrier when --n < size)
@@ -109,7 +113,8 @@ gives the present the lock time proves)
   resolve       --dispute D.json --pending W.json                    after the round: the verdict reaches the part
   oracle-cure   --pending W.json --key LOSER                         the loser clears a pending liquidation
   oracle-finalize --pending W.json                                   settle, or restore a refuted or void claim
-  renew         --pair P.json... --slot S.json --key UW              up to 7 pairs, from one step before expiry
+  renew         --pair P.json... --slot S.json --key UW [--uw-utxo UTXO.json]   up to 7 pairs, from one step before expiry; only
+                a pair UTXO accepted no later than its expiry (a pair a party touched after it lapses)
   lapse-settle  --pair P.json                                        a lapsed, idle pair at its entry price
   settle-pool   --pool D.json [--receipt R.json]...                  pay the winners (no receipt: close the pool)
                 forfeits the losers: give the loser's receipt together with the winner's
@@ -119,7 +124,7 @@ gives the present the lock time proves)
             list (or unlist) a side for a hand-over; the pair's UTXO must be quietDaa old
   oracle-transfer --pair P.json --side long|short --x P --nb P [--entrant KEY|HEX|ADDR]   a listed side changes hands
             (the whole side, at x within its listing; the entrant, default the funder, posts the bound nb: a long's at
-             most the leaver's bl, a short's at least its bs, healthy at x, within the cover rate; checked before building)
+             most the leaver's bl, a short's at least its bs, healthy at x, within the cover rate, leaving the stayer its half of the cover from the entry; checked before building)
   oracle-mutual-close --pair P.json --x P                            both sides listed and crossing: anyone closes at x
   oracle-coop-close --pair P.json --long-pay KAS --key LONG --key SHORT   both owners sign; the short's output pays the fee
   (a dry run writes its files under OUT-DIR/dry-run/; only submitted transactions write at the top of OUT-DIR.

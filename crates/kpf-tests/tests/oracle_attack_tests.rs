@@ -291,25 +291,21 @@ fn exploit_a_silent_underwriter_turns_a_due_liquidation_into_a_settlement_at_the
 
 /// An underwriter renews a lapsed pair after the fact: the slot's window only bounds X from above (x <= t + term +
 /// step), so a renewal at DAA 2,500 of a pair whose cover lapsed at 1,200 moves X to 2,000 (still in the past) and
-/// charges a premium for a term in which no claim was valid; a second renewal to 2,800 charges another. The parties pay
-/// at most one premium per term of calendar time (X never runs ahead of the present by more than term + step): 20 KAS a
-/// term on the fixture pair, 0.67 % of the range.
+/// charges a premium for a term in which no claim was valid. Before review 9 a second renewal to 2,800 followed at
+/// once; since review 9 (R9-F2) the renewal's continuation, accepted at 2,500, after its new expiry 2,000, is never
+/// renewed again: one premium (20 KAS on the fixture pair, 0.67 % of the range) for the lapsed term, and the lapse
+/// settle is due at 3,200.
 #[test]
-fn exploit_a_back_dated_renewal_charges_the_premium_for_a_lapsed_term() {
+fn exploit_a_back_dated_renewal_charges_one_premium_for_a_lapsed_term() {
     let (lp, sl, _) = opened();
     let (t, r, b2) = renew_tx(&lp, &sl, 2_500, 12);
     must("renewal to X = 2,000 at DAA 2,500", &t);
     assert_eq!(r.b.expiry, 2_000);
+    assert_eq!(lp.value - t.0.outputs[0].value, 2_000_000_000, "one premium of 20 KAS");
     let lp2 = live(&t, 0, 2_500, &r);
     let sl2 = live(&t, 1, 2_500, &b2);
-    let (t2, r2, b3) = renew_tx(&lp2, &sl2, 2_500, 4);
-    must("and again to 2,800", &t2);
-    assert_eq!(r2.b.expiry, 2_800);
-    assert_eq!(lp.value - t2.0.outputs[0].value, 4_000_000_000, "two premiums of 20 KAS");
-    // A third is refused: 3,600 > 2,500 + 900.
-    let lp3 = live(&t2, 0, 2_500, &r2);
-    let sl3 = live(&t2, 1, 2_500, &b3);
-    refused("X ahead of the present by more than term + step", &renew_tx(&lp3, &sl3, 2_500, 4).0, 1);
+    refused("review 9: a renewal of a UTXO accepted after its expiry", &renew_tx(&lp2, &sl2, 2_500, 4).0, 0);
+    assert_eq!(lp2.s.lapse_from(), 3_200);
 }
 
 /// Extortion for renewal: the premium is fixed at open; a renewal that takes one sompi more is refused, and nobody but

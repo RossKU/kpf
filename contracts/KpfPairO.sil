@@ -48,7 +48,9 @@ pragma silverscript ^0.1.0;
 // kept only for a pair whose cover has lapsed, idleDaa after the lapse by the calendar (tx.daa >= X + tailDaa +
 // idleDaa): while an underwriter renews, X moves on and the settle is never due; once the underwriter is silent it is
 // the one exit of a pair whose counterparty is gone that needs nobody (the price-free exits below need a taker or both
-// parties), and it pays each side at a price both consented to. No party can postpone it (review 6, R6-F3).
+// parties), and it pays each side at a price both consented to. No party can postpone it (review 6, R6-F3); the
+// underwriter can, by a renewal, only while the pair UTXO is no younger than its expiry (review 9: any party entry after
+// the expiry fixes the date).
 // DESIGN: the book market's hand-over limit (tx.daa >= S + 4R, an evidence clock) has no evidence to protect here. What
 // needs protecting is the underwriter's signed claim, which commits to this pair's outpoint: a party that respent its
 // side every block (amend, transfer) would void every claim before it landed. So every party entry needs the pair
@@ -304,6 +306,35 @@ contract KpfPairO(
     function quiet() {
         require(this.ageDaa >= quietDaa);
     }
+
+    // BEGIN shares
+    // Review 9 (R9-F3): each side's share of the cover rate, fixed for the lineage by the entry and the cover rate (no
+    // price-free entry moves either): the short's is floor(coverRate / 2) above the entry, the long's the rest below it.
+    // A side's bound grows outward (a top-up, an entrant's bound, a cure) only as far as the other side's reach allows:
+    // the other side's bound, or the end of its share if that lies further out. So what one side or an entrant does
+    // never takes room the other side has not used of its own share. A side whose bound already lies beyond its share
+    // (as opened) keeps it, but cannot grow further.
+    // The entry the shares are measured from, clamped to [0, priceMax]: a take without a pair may write any entry in
+    // its order's favour, and an unclamped one near the 64-bit edge would make every share check overflow (and fail).
+    function shareAnchor() : int {
+        int e = entryPrice;
+        if (e < 0) { e = 0; }
+        if (e > priceMax) { e = priceMax; }
+        return e;
+    }
+    // The outermost short bound the long must leave room for.
+    function shortReach() : int {
+        int r = shareAnchor() + coverRate / 2;
+        if (r < bs) { r = bs; }
+        return r;
+    }
+    // The outermost long bound the short must leave room for.
+    function longReach() : int {
+        int r = shareAnchor() - (coverRate - coverRate / 2);
+        if (r > bl) { r = bl; }
+        return r;
+    }
+    // END shares
 
     // P2SH of this script with bl, bs and the two listing windows replaced and every maker zero.
     function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
@@ -588,10 +619,12 @@ contract KpfPairO(
         if (side == SIDE_LONG) {
             signedBy(s, longKey);
             nbl = bl - delta;
+            require(shortReach() - nbl <= coverRate);
         } else {
             require(side == SIDE_SHORT);
             signedBy(s, shortKey);
             nbs = bs + delta;
+            require(nbs - longReach() <= coverRate);
         }
         require(nbl >= 0);
         require(nbl < nbs);
@@ -651,6 +684,7 @@ contract KpfPairO(
             require(nb >= 0);
             require(nb <= bl);
             require(hp * (BPS - mmrBps) >= nb * BPS);
+            require(nb == bl || shortReach() - nb <= coverRate);
             b0 = nb;
             lk = ek;
             lw = byte[](NO_LIST);
@@ -659,6 +693,7 @@ contract KpfPairO(
             require(nb >= bs);
             require(nb <= priceMax);
             require(nb * BPS >= hp * (BPS + mmrBps));
+            require(nb == bs || nb - longReach() <= coverRate);
             b1 = nb;
             sk = ek;
             sw = byte[](NO_LIST);
@@ -697,9 +732,10 @@ contract KpfPairO(
         require(n >= longMin || n == size);
         require(bl3 >= 0);
         require(bl3 <= bl);
-        require(e3 <= entryPrice);
+        require(e3 == entryPrice);
         require(lk3 != byte[32](uwKey));
         require(bs - bl3 <= coverRate);
+        require(bl3 == bl || shortReach() - bl3 <= coverRate);
         byte[] rs = ownRs();
         int pay = owed(n, x - bl, longTip);
         int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
@@ -724,6 +760,9 @@ contract KpfPairO(
     // short alone moved its long into a P3 whose cover had already lapsed (settled at once at the entry price), that no
     // lapse settle could ever reach, or that no claim or renewal could afford. A party entry never rewrites a binding
     // (docs/DESIGN-ORACLE-IMPL.md 26).
+    // DESIGN: review 9 (R9-F3): P3's entry e3 must equal each pair's entry (KpfPair: e3 >= the donor's E, e3 <= the
+    // host's E), so no party entry moves the entry: the sides' shares of the cover are measured from it, and an entrant
+    // that moved it shifted the passive side's share (docs/DESIGN-ORACLE-IMPL.md 27).
     entry closeDonor(int n, int x, int e3, int c, int bs3, byte[32] sk3, int sa3, int sm3, int st3, byte[32] hm) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -738,9 +777,10 @@ contract KpfPairO(
         require(n >= shortMin || n == size);
         require(bs3 >= bs);
         require(bs3 <= priceMax);
-        require(e3 >= entryPrice);
+        require(e3 == entryPrice);
         require(sk3 != byte[32](uwKey));
         require(bs3 - bl <= coverRate);
+        require(bs3 == bs || bs3 - longReach() <= coverRate);
         byte[] rs = ownRs();
         // DESIGN: review 6 (R6-F1): P3 starts a fresh lineage that this script checks, whatever the host is (a pair, a
         // look-alike, a plain key carrying an id): the donor's long never enters an id another UTXO holds.
@@ -831,7 +871,8 @@ contract KpfPairO(
     // KpfPair.idleSettle).
     // DESIGN: review 6 (R6-F3): the idle time was the age of this UTXO (CSV), which a party restarted by amending once
     // per idleDaa, blocking the one exit that needs nobody for ever. It is measured from the recorded expiry instead,
-    // which no party can move (every price-free entry copies the binding; only the underwriter's renewal moves it).
+    // which no party can move (every price-free entry copies the binding; only the underwriter's renewal moves it, and since
+// review 9 only from a UTXO accepted no later than the expiry).
     entry lapseSettle() {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -880,13 +921,22 @@ contract KpfPairO(
     // margins: the long's bound rises by premium - floor(premium / 2), the short's falls by floor(premium / 2); the pair's
     // value may fall by exactly what its range floor falls, which the underwriter's signed bind sends where it chooses.
     // The range must stay wider than both maintenance bands; otherwise the pair cannot be renewed and its cover lapses.
-    // No party signs: the premium was agreed at open. The slot's window (x <= t + termDaa + stepDaa) allows a renewal
-    // only from one step before the expiry, so the premium is paid at most once per term of calendar time.
+    // No party signs: the premium was agreed at open. The slot's window (x <= t + termDaa + stepDaa, tx.daa >= t) proves
+    // only that the present is at least X - stepDaa: a lock time is a lower bound on the present, never the present.
+    // DESIGN: review 9 (R9-F1, R9-F2): with the window alone a pair whose X lay k terms in the past (a take or a fill
+    // written into the past, or a silent underwriter) was renewed k times at one DAA, one premium each, until its margins
+    // were gone. The one exact time a covenant can read is the DAA score of the UTXO it spends, so this UTXO must have
+    // been accepted no later than its own expiry: a part written after its expiry is never renewed, a renewal's own
+    // continuation (accepted at the present) is renewable again only if the present was not past the new expiry, and
+    // any party entry after X fixes the lapse date (docs/DESIGN-ORACLE-IMPL.md 27).
     entry renew(int u, int k) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         require(OpCovOutputCount(selfId) == 1);
+        int born = OpTxInputDaaScore(self);
+        require(born >= 0);
+        require(born <= expiry);
         checkPair();
         checkMarket();
         int x2 = expiry + termDaa;
@@ -1017,8 +1067,17 @@ contract KpfPairO(
             require(f1 - f0 == bs - bl || quoteOf(n, f1 - f0 + 1, 0) + fee > part);
             fh = pairHash(rs, n, f0, f1, wk, wk, unlisted);
             // DESIGN: a cure that would widen the range beyond the cover rate is not offered (the cover counted for the
-            // pair would no longer bound what a claim can move).
-            if (u1 <= priceMax && u1 - u0 <= coverRate) {
+            // pair would no longer bound what a claim can move). Review 9 (R9-F3): nor one that takes room of the
+            // winner's share: the cured bound is measured against the winner's reach, not its bound, so whether a cure
+            // is offered does not depend on what the winner (or an entrant on its side) did.
+            int r0 = u0;
+            int r1 = u1;
+            if (side == SIDE_LONG) {
+                r1 = shortReach();
+            } else {
+                r0 = longReach();
+            }
+            if (u1 <= priceMax && r1 - r0 <= coverRate) {
                 ch = pairHash(rs, n, u0, u1, lk, sk, unlisted);
             } else {
                 cb = 0;

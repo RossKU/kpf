@@ -684,8 +684,29 @@ impl OPair {
             let cb = (pg * (b + m) + b - 1) / b;
             (cb, cb - self.bl as i128)
         };
-        let ok = (side == LONG || cb <= self.m.p.price_max as i128) && range <= self.b.cover_rate as i128;
+        // Review 9 (R9-F3): measured against the winner's reach, not its bound.
+        let reach = if side == LONG { self.short_reach() as i128 - cb } else { cb - self.long_reach() as i128 };
+        let ok = (side == LONG || cb <= self.m.p.price_max as i128) && range <= self.b.cover_rate as i128 && reach <= self.b.cover_rate as i128;
         ok.then_some(cb as i64)
+    }
+    /// Review 9 (R9-F3, `KpfPairO.shortReach`): the outermost short bound the long must leave room for: the short's bound,
+    /// or the end of its share `entry + floor(coverRate / 2)` if that is higher.
+    pub fn short_reach(&self) -> i64 {
+        (self.entry.clamp(0, self.m.p.price_max) + self.b.cover_rate / 2).max(self.bs)
+    }
+    /// `KpfPairO.longReach`: the long's bound, or the end of its share `entry - (coverRate - floor(coverRate / 2))` if
+    /// that is lower.
+    pub fn long_reach(&self) -> i64 {
+        (self.entry.clamp(0, self.m.p.price_max) - (self.b.cover_rate - self.b.cover_rate / 2)).min(self.bl)
+    }
+    /// The furthest a side's bound may grow by a price-free entry (`addMargin`, an entrant's bound, P3's entering side):
+    /// the long's lowest bound and the short's highest, within the range rule, the other side's reach and priceMax.
+    pub fn growth_limit(&self, side: i64) -> i64 {
+        if side == LONG {
+            (self.short_reach() - self.b.cover_rate).max(0)
+        } else {
+            (self.long_reach() + self.b.cover_rate).min(self.m.p.price_max)
+        }
     }
     /// The forfeit bound (as KpfPair): the loser's bound moved inward to the nearest bound at which the narrowed range
     /// plus the fee still fits the part.
@@ -726,6 +747,19 @@ impl OPair {
         }
         let pay = self.range_of(self.size) - r.range_of(self.size);
         Some((r, pay))
+    }
+    /// Review 9 (R9-F1, `KpfPairO.renew`): a pair UTXO accepted at `utxo_daa` can be renewed only if that is no later
+    /// than its expiry (a lock time is only a lower bound on the present; the UTXO's DAA score is exact). The refusal
+    /// text when it cannot, `None` when it can.
+    pub fn unrenewable_why(&self, utxo_daa: u64) -> Option<String> {
+        if utxo_daa as i128 <= self.b.expiry as i128 {
+            return None;
+        }
+        Some(format!(
+            "the pair UTXO was accepted at DAA {utxo_daa}, after its cover's expiry {}: the contract renews only a pair UTXO accepted no later than its expiry (review 9), so a pair a party touched after the expiry, or one written after it, is never renewed again. Its cover has lapsed; anyone can settle it at its entry price from DAA {}",
+            self.b.expiry,
+            self.lapse_from()
+        ))
     }
     /// The first DAA at which a lapsed pair can be settled at its entry (`lapseSettle`): idleDaa after the cover's
     /// liability ended, by the calendar (review 6, R6-F3: no longer the UTXO's age, which an amend restarted).
@@ -1149,6 +1183,35 @@ impl OMarket {
             term_premium: q(size, premium, sc, 0),
         }
     }
+}
+
+/// The smallest value at which a plain output can stand in a typical transaction of the family: its own storage mass
+/// (`10^12 / value` grams, KIP-9) leaves a fifth of the block's storage limit (500,000) to the rest of the transaction.
+/// The contracts' own floor for a payout is 0.02 KAS (`PLAIN_DUST`), whose storage mass alone is the whole limit.
+pub const VIABLE_OUTPUT_MIN: u64 = 2_500_000;
+
+/// What the KIP-9 storage mass means for a pair of `size` units at entry `x` with rates `rl`, `rs`, cover rate `cr` and
+/// `premium` per term: the payouts a contract puts in an output of their own (each side's margin at a lapse or mutual
+/// settle, a claim's bond at a cure or a settlement, the disputer's and the defender's shares of a refuted bond), and the
+/// premium, which the tools fold into the underwriter's change. A payout below 0.02 KAS goes to the other party
+/// (contract rule); one below `VIABLE_OUTPUT_MIN` is topped up by the funder (the tools); a premium below it needs the
+/// underwriter as funder or one of its UTXOs.
+pub fn payout_warnings(m: &OMarket, size: i64, rl: i64, rs: i64, cr: i64, premium: i64) -> Vec<String> {
+    let w = m.worst_case(size, rl, rs, cr, premium);
+    let kas = |v: i64| v as f64 / 1e8;
+    let viable = VIABLE_OUTPUT_MIN as i64;
+    let mut out = vec![];
+    for (what, v) in [("the long's margin", w.long_margin), ("the short's margin", w.short_margin), ("a claim's bond", w.bond), ("the disputer's share of a refuted bond", w.disputer_share), ("the defender's share of a refuted bond", w.defender_share)] {
+        if v > 0 && v < PLAIN_DUST {
+            out.push(format!("{what} is {:.8} KAS, below 0.02 KAS: a contract pays a sum that small to the other party (or keeps it in the pair), so it is lost to its owner", kas(v)));
+        } else if v >= PLAIN_DUST && v < viable {
+            out.push(format!("{what} is {:.8} KAS: a contract pays it in an output of its own, and an output below about {:.3} KAS cannot be mined (KIP-9 storage mass); the tools top it up from the funder (at most {:.3} KAS)", kas(v), kas(viable), kas(viable - PLAIN_DUST)));
+        }
+    }
+    if w.term_premium > 0 && w.term_premium < viable {
+        out.push(format!("the premium of a term is {:.8} KAS, too small for an output of its own (about {:.3} KAS at least, KIP-9 storage mass): the open and every renewal must be funded from the underwriter's key (the premium joins its change) or carry one of its UTXOs (--uw-utxo)", kas(w.term_premium), kas(viable)));
+    }
+    out
 }
 
 /// What a wallet must say about a market whose parameters pass the bounds but leave a party exposed. The contracts

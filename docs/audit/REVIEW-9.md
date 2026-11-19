@@ -197,3 +197,30 @@ pay `refund + fee` and require the forfeited part to hold its floor.
 - The race of R9-F1's burst against an honest lapse settle on a real node (mempool and block ordering) was not run; the
   harness runs every renewal at one lock time.
 - `KpfStake` deposits racing a stake's unbond, beyond reading (one UTXO, one of the two transactions fails).
+
+## Fix status
+
+Fixed after this review (docs/DESIGN-ORACLE-IMPL.md 27; the tests of `audit9_tests` are now 16 `r9_holds_` and 7
+`r9_bounded_`, none `r9_exploit_`).
+
+- **R9-F1, R9-F2:** `KpfPairO.renew` requires the pair UTXO's own DAA score to be no later than its expiry (the
+  review's smallest fix). A part written after its expiry (a take or a fill into the past) is never renewed; a burst
+  stops after one renewal, two at one DAA only when the first lands in `[X + term - step, X + term]`, and then the pair
+  stands where an on-time underwriter leaves it; any party entry after the expiry fixes the lapse date. Residuals,
+  bounded and tested: a take into the past costs the order its tip and carrier, a fill of aged orders each order its tip
+  and premium half (and the long's order the carrier); a renewal after the due settle postpones it once by one term on
+  markets with `tail + idleDaa > term`, and resumes the cover on markets without (the testnet defaults). `fill` and
+  `take` are unchanged (a lower bound by the order's DAA cannot shrink that residual). `oracle-order` needs `--slot` or
+  `--any-slot` and prints the consequence; `renew` refuses such a pair locally; the market text says what is true.
+- **R9-F3:** each side's share of the cover rate is measured from the entry (the short `floor(coverRate / 2)` above it,
+  the long the rest below); `addMargin`, an entrant's bound (`transfer`, `take` through it, `closeHost`, `closeDonor`)
+  and a cure may widen a side only within the other side's reach; close-versus-close keeps the entry. Cost: a side's
+  margin and cure reach at most half the cover rate from the entry (the fixture: 7 and 13 instead of 6 and 15). Residual:
+  a take without a pair lets the counterparty choose the new lineage's entry, and with it the order's share (27.4).
+- **R9-N1:** documentation corrected (26.4, `oracle_build::propose`, `kpf vouch`, TESTNET.md 9.5): the underwriter
+  gets a split's carrier back only on a cure; a valid settlement leaves it with the winner, a void or refuted claim in
+  the restored part. The contract is unchanged.
+- The seeded walk runs clean on its seeds (no violation) and now covers takes with a pair, claims on half a pair, contests
+  won by YES with a losing receipt in the pool, late contests and upheld void claims.
+- Not addressed by a contract change: the storage-mass note of live run 2 (27.5): the contracts' payout floor of 0.02 KAS
+  is the block's storage limit for one output; the tools top such payouts up and fold the premium.

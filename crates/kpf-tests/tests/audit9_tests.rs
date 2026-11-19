@@ -1,8 +1,17 @@
 //! Review 9 (docs/audit/REVIEW-9.md): the oracle-market family at commit `7d9024e` (after the fix of review 8). Every
 //! transaction here runs every input in the real script engine with the covenant context (`common::run`).
-//! `r9_exploit_` tests execute an attack that the contracts accept; `r9_holds_` tests assert that an attack is refused
-//! (or that a shape keeps the rule it is meant to keep). Worked numbers use the fixture market of `oraclekit` (term 800,
-//! step 100, tail 200, idle 1,000, W 200, quiet 20, mmr 5 %, g 2 %, a claim's bond 10 % of the cover, carrier 0.2 KAS).
+//! Since the fix of review 9 (docs/DESIGN-ORACLE-IMPL.md 27) every former `r9_exploit_` test is an `r9_holds_` test that
+//! builds the same attack and asserts that it is refused, or, for a residual kept by design, an `r9_bounded_` test that
+//! measures it and asserts its bound. `r9_holds_` tests assert that an attack is refused (or that a shape keeps the rule
+//! it is meant to keep). Worked numbers use the fixture market of `oraclekit` (term 800, step 100, tail 200, idle 1,000,
+//! W 200, quiet 20, mmr 5 %, g 2 %, a claim's bond 10 % of the cover, carrier 0.2 KAS).
+//!
+//! The fix: `KpfPairO.renew` requires the pair UTXO's own DAA score (exact) to be no later than its expiry; every
+//! price-free entry that grows a side's bound (`addMargin`, an entrant's bound in `transfer` and `take`, P3's entering
+//! side in `closeHost` and `closeDonor`) and every cure leaves the other side room up to its share of the cover rate
+//! (the short `floor(coverRate / 2)` above the entry, the long the rest below it); close-versus-close keeps the entry.
+//!
+//! What the review found at commit `7d9024e`:
 //!
 //! R9-F1: `KpfPairO.renew` relates the expiry to the slot's window only (`x2 = X + term <= t + term + step`, a lower
 //! bound on the present), never to the present itself, so a pair whose expiry lies in the past is renewed back to
@@ -110,38 +119,35 @@ fn take_alone(lo: &LOrder, sl: &LSlot, ck: &Keypair, xp: i64, e: i64, bound: i64
 }
 
 /// The underwriter renews `lp` as often as the contracts let it, every renewal at the same lock time `lock` (no
-/// calendar time passes between them), advancing its ring just enough each time. Returns the last pair, the slot and
-/// what each renewal took from the pair (`q(s, bs - bl) - q(s, new range)`, sent where the underwriter's bind says).
-fn renew_burst(mut lp: LPair, mut sl: LSlot, lock: u64) -> (LPair, LSlot, Vec<i64>) {
+/// calendar time passes between them), advancing its ring just enough each time. Returns the last pair, the slot, what
+/// each accepted renewal took from the pair, and the refused attempt that ended the burst.
+fn renew_burst(mut lp: LPair, mut sl: LSlot, lock: u64) -> (LPair, LSlot, Vec<i64>, T) {
     let mut pays = vec![];
-    while let Some((_, pay)) = lp.s.renewed() {
+    loop {
+        let Some((_, pay)) = lp.s.renewed() else { panic!("the range is too narrow to renew") };
         let x2 = lp.s.b.expiry + lp.s.m.bond.term;
         let d = (x2 / lp.s.m.bond.step - 12 - sl.s.j0).max(0);
         let (t, r, b2) = renew_tx(&lp, &sl, lock, d);
-        must(&format!("renewal {} (X {} -> {x2}) at DAA {lock}", pays.len() + 1, lp.s.b.expiry), &t);
+        if !accepted(&t) {
+            return (lp, sl, pays, t);
+        }
         pays.push(pay);
         lp = live(&t, 0, lock, &r);
         sl = live(&t, 1, lock, &b2);
     }
-    let x2 = lp.s.b.expiry + lp.s.m.bond.term;
-    let d = (x2 / lp.s.m.bond.step - 12 - sl.s.j0).max(0);
-    refused("the renewal after the last (the range no longer wider than both bands)", &renew_tx(&lp, &sl, lock, d).0, 0);
-    (lp, sl, pays)
 }
 
 // ---------------------------------------------------------------- R9-F1: renewals of a pair whose expiry lies in the past
 
-/// R9-F1, the drain of an order through a take with no pair. An order rests (long, 2,000 units, limit 10.50, margin rate
-/// 1 KAS, premium accepted up to 0.10 KAS per unit and term, any slot). At DAA 30,000 the attacker, holding a slot whose
-/// ring was never advanced (it holds the expiries 100 .. 1,200) and a second key as the counterparty, takes the order at
-/// 10.00 into a part with expiry 1,200 (more than 28,000 DAA in the past), short bound 12.20, entry 10.00, cover rate
-/// 3.20 (the range) and the order's maximal premium. Then, still at DAA 30,000, its slot renews the part 21 times in a
-/// row: every renewal moves the expiry by one term (1,200 -> 18,000), the long's bound up by 0.05 and takes 200 KAS out
-/// of the pair to the underwriter. After the 21st the long's bound (10.05) is above the entry and the lapse settle pays
-/// the order's owner nothing: it paid 2,000.2 KAS and leaves with 0. The design's claim (DESIGN-ORACLE-IMPL 16, the
-/// renewal row; KpfPairO.renew's comment) is "the premium is paid at most once per term of calendar time".
+/// R9-F1, the drain of an order through a take with no pair (the same transaction as at `7d9024e`). An order rests
+/// (long, 2,000 units, limit 10.50, margin rate 1 KAS, premium up to 0.10 KAS per unit and term, any slot). At DAA
+/// 30,000 the attacker, holding a slot whose ring was never advanced and a second key as the counterparty, takes the
+/// order at 10.00 into a part with expiry 1,200, short bound 12.20, cover rate 3.20 and the order's maximal premium; the
+/// take is still accepted (it binds only the order, within its terms). Then its slot renews: the part was accepted at
+/// 30,000, after its expiry, so the very first renewal is refused by the pair. Before the fix: 21 renewals, 2,000.2 KAS
+/// taken, the order's whole margin.
 #[test]
-fn r9_exploit_a_take_without_a_pair_and_back_to_back_renewals_drain_the_orders_margin() {
+fn r9_holds_a_take_without_a_pair_into_the_past_is_never_renewed() {
     let now = 30_000u64;
     let lo = order(L, &long_kp(), 0x71, now - 100);
     let o = lo.s.clone();
@@ -152,37 +158,48 @@ fn r9_exploit_a_take_without_a_pair_and_back_to_back_renewals_drain_the_orders_m
     let att = keypair(77);
     let (t, part, b2) = take_alone(&lo, &sl, &att, 1_000_000_000, 1_000_000_000, 1_220_000_000, 1_200, 320_000_000, o.prem_max, now);
     must("the take with no pair, expiry 1,200 at DAA 30,000", &t);
-    let paid_in = o.take_spend(n);
-    assert_eq!(paid_in, 200_020_000_000, "the order pays 2,000 KAS of margin and a carrier");
     let lp = live(&t, 1, now, &part);
     let sl = live(&t, 2, now, &b2);
-    // Without the renewals the part lapses at once and the order gets its margin back (review 8, note 1).
+    let (lp2, _, pays, last) = renew_burst(lp.clone(), sl, now);
+    assert!(pays.is_empty(), "no renewal of a part accepted after its expiry");
+    refused("the first renewal of the part (accepted at 30,000, expiry 1,200)", &last, 0);
+    assert!(verdicts(&last)[1], "the slot's bind itself is satisfied: only the pair's new rule refuses");
+    assert_eq!(lp2.s.b.expiry, 1_200);
+    // The order's margin comes back at the immediate lapse settle.
     assert!(lp.s.lapse_from() <= now);
-    assert_eq!(lp.s.lapse_out(lp.value).0, q(n, o.my_rate, sc), "control: the immediate lapse settle pays back the margin");
-    let (lp2, _, pays) = renew_burst(lp, sl, now);
-    assert_eq!(pays.len(), 21, "21 renewals at one DAA");
-    assert_eq!(lp2.s.b.expiry, 1_200 + 21 * 800);
-    let taken: i64 = pays.iter().sum();
-    assert_eq!(taken, 21 * 200 * KAS, "4,200 KAS of premiums, half of each from the order's side");
-    assert_eq!((lp2.s.bl, lp2.s.bs), (1_005_000_000, 1_115_000_000));
-    let (l, s) = lp2.s.lapse_out(lp2.value);
-    assert_eq!(l, 0, "the order's owner gets nothing at the lapse settle");
-    must("the lapse settle of the drained part", &lapse_tx(&lp2, now, 0));
-    // The attacker's books: it funded the part's short side and the slot's KAS (returned); it receives the premiums and
-    // the short's lapse payout. Its gain is the order's loss.
-    let funded = part.floor() - paid_in;
-    let gain = taken + s - funded;
-    assert_eq!(gain, paid_in, "the attacker gains exactly what the order paid in: {gain}");
+    assert_eq!(lp.s.lapse_out(lp.value).0, q(n, o.my_rate, sc));
+    must("the lapse settle of the part", &lapse_tx(&lp, now, 0));
 }
 
-/// R9-F1 without any colluding party: the underwriter alone. Two honest resting orders (a long and a short of the
-/// fixture, both accepted at DAA 0, any slot) are filled at DAA 30,000 by an outsider's slot with expiry 800 (the fill's
-/// only bound, `xe >= the order's DAA + term`, holds: 0 + 800) and the orders' maximal premium. The slot then renews
-/// the pair 19 times at DAA 30,000. The long's equity at the entry falls from 1,000 to 50 KAS, the short's from 2,000 to
-/// 1,050 KAS: the underwriter takes 1,900 KAS (plus the 100 KAS first premium) in no calendar time, and nothing a
-/// party signs or can contest is involved.
+/// R9-F1's residual for a take with no pair: what a past expiry still costs the order. The part is not renewable, so it
+/// settles at its entry at once; the order gets its margin back (at the entry `e >= x` its long is owed at least its
+/// rate) and loses what it put in beyond it: its tip and the part's carrier, both bounded by its own terms. A take pays
+/// no premium. Measured with a tip of 0.01 KAS per unit: 2,000 units lose 20 KAS + 0.2 KAS.
 #[test]
-fn r9_exploit_an_underwriter_alone_fills_two_aged_orders_into_a_past_expiry_and_renews_them_dry() {
+fn r9_bounded_a_take_into_the_past_costs_the_order_only_its_tip_and_the_carrier() {
+    let now = 30_000u64;
+    let lo0 = order(L, &long_kp(), 0x71, now - 100);
+    let lo = Live { s: OOpen { tip: 1_000_000, ..lo0.s.clone() }, ..lo0.clone() };
+    let o = lo.s.clone();
+    let n = o.size_left;
+    let sc = o.m.p.scale;
+    let (t, part, _) = take_alone(&lo, &slot(K), &keypair(77), 1_000_000_000, 1_000_000_000, 1_220_000_000, 1_200, 320_000_000, o.prem_max, now);
+    must("the take with no pair into the past", &t);
+    let lp = live(&t, 1, now, &part);
+    let paid = o.take_spend(n);
+    let (back, _) = lp.s.lapse_out(lp.value);
+    must("the immediate lapse settle", &lapse_tx(&lp, now, 0));
+    let loss = paid - back;
+    assert_eq!(loss, q(n, o.tip, sc) + o.m.p.carrier, "the order loses its tip and the carrier");
+    assert_eq!(loss, 2_020_000_000);
+}
+
+/// R9-F1 without any colluding party (the same transaction as at `7d9024e`): two honest resting orders (accepted at DAA
+/// 0, any slot) are filled at DAA 30,000 by an outsider's slot with expiry 800 (`xe >= the order's DAA + term` holds).
+/// Before the fix the slot renewed the pair 19 times at DAA 30,000 and took 1,900 KAS. Since the fix the pair, accepted
+/// at 30,000 after its expiry 800, is never renewed.
+#[test]
+fn r9_holds_an_underwriter_alone_cannot_renew_a_fill_into_a_past_expiry() {
     let now = 30_000u64;
     let (lo, so, sl) = (order(L, &long_kp(), 0x71, 0), order(S, &short_kp(), 0x72, 0), slot(K));
     let sp = OpenSpec { n: 1_000_000_000, x: 1_000_000_000, cover_rate: 600_000_000, premium: lo.s.prem_max, xe: 800, lock: now, advance: 0 };
@@ -190,74 +207,158 @@ fn r9_exploit_an_underwriter_alone_fills_two_aged_orders_into_a_past_expiry_and_
     must("the fill of two aged orders with expiry 800 at DAA 30,000", &t);
     let lp = live(&t, 2, now, &p);
     let sl = live(&t, 3, now, &b2);
-    let (l0, s0) = lp.s.lapse_out(lp.value);
-    assert_eq!((l0, s0 - p.m.p.carrier), (1_000 * KAS, 2_000 * KAS), "control: at the open, long 1,000 KAS, short 2,000 KAS at the entry");
-    let (lp2, _, pays) = renew_burst(lp, sl, now);
-    assert_eq!(pays.len(), 19, "19 renewals at one DAA");
-    let taken: i64 = pays.iter().sum();
-    assert_eq!(taken, 1_900 * KAS);
-    let (l, s) = lp2.s.lapse_out(lp2.value);
-    assert_eq!((l, s - p.m.p.carrier), (50 * KAS, 1_050 * KAS), "after the burst: long 50 KAS, short 1,050 KAS at the entry");
-    must("the lapse settle after the burst", &lapse_tx(&lp2, now, 0));
+    let (_, _, pays, last) = renew_burst(lp.clone(), sl, now);
+    assert!(pays.is_empty());
+    refused("the first renewal of a pair accepted after its expiry", &last, 0);
+    let (l, s) = lp.s.lapse_out(lp.value);
+    assert_eq!((l, s - p.m.p.carrier), (1_000 * KAS, 2_000 * KAS), "the lapse settle pays both margins back at the entry");
+    must("the immediate lapse settle", &lapse_tx(&lp, now, 0));
 }
 
-/// R9-F2, the bounded form on an honest pair: an underwriter silent past the expiry renews late, twice in a row, just
-/// before the lapse settle is due. The fixture pair (opened at 300, X = 1,200, lapse settle due at 2,400) is renewed
-/// at DAA 2,300 to 2,000 and again to 2,800: two premiums at one DAA, the first for the term [1,200, 2,000] in which no
-/// claim on the pair could be valid (a claim needs P + W <= X).
+/// The residual of a fill into the past: each aged order loses what it paid beyond its margin, its tip and its half of
+/// the first premium (and the long, whose order paid the pair's carrier, that carrier; the short gets it at the lapse
+/// settle). Bounded by the order's own terms: `q(n, tip + premMax / 2) + carrier`. On the fixture (1,000 units, premium
+/// 0.10 KAS, no tip): the long 50.2 KAS, the short 50 KAS, 100 KAS to the underwriter for a cover that had already
+/// lapsed. An order that rests less than one term is never exposed: `fill` requires `xe >= its DAA + term`.
 #[test]
-fn r9_exploit_a_silent_underwriter_charges_the_lapsed_term_by_a_late_double_renewal() {
+fn r9_bounded_a_fill_of_aged_orders_into_the_past_costs_each_its_tip_and_half_the_first_premium() {
+    let now = 30_000u64;
+    let (lo, so, sl) = (order(L, &long_kp(), 0x71, 0), order(S, &short_kp(), 0x72, 0), slot(K));
+    let prem = lo.s.prem_max;
+    let n = 1_000_000_000;
+    let sp = OpenSpec { n, x: 1_000_000_000, cover_rate: 600_000_000, premium: prem, xe: 800, lock: now, advance: 0 };
+    let (t, p, _) = open_tx(&lo, &so, &sl, &sp, &|_, _| {});
+    must("the fill into the past", &t);
+    let lp = live(&t, 2, now, &p);
+    let (l, s) = lp.s.lapse_out(lp.value);
+    let sc = p.m.p.scale;
+    let long_loss = lo.s.fill_spend(n, prem) - l;
+    let short_loss = so.s.fill_spend(n, prem) - s;
+    assert_eq!(long_loss, q(n, lo.s.tip + prem - prem / 2, sc) + p.m.p.carrier);
+    assert_eq!(short_loss, q(n, so.s.tip + prem / 2, sc));
+    assert_eq!((long_loss, short_loss), (5_020_000_000, 5_000_000_000));
+}
+
+/// R9-F2 (the same transactions as at `7d9024e`): the fixture pair (opened at 300, X = 1,200, lapse settle due at 2,400)
+/// renewed by a silent underwriter at DAA 2,300: the first renewal (to 2,000) is still accepted, the second (to 2,800) at
+/// the same DAA is refused, because the first one's continuation was accepted at 2,300, after its new expiry 2,000. What
+/// remains: a renewal that lands in the last step of the following term, [X + term - step, X + term] = [1,900, 2,000],
+/// may be followed by a second at once (the continuation, accepted by 2,000, is not past its new expiry): two premiums
+/// at one DAA, the first for a term already over. The pair then stands exactly where an on-time underwriter (renewing
+/// at 1,150 and 1,950) would have left it: a late underwriter catches up with the calendar, never runs ahead of it.
+#[test]
+fn r9_bounded_a_late_renewal_charges_no_more_than_the_on_time_schedule() {
     let (lp, sl, _) = opened();
-    let lock = 2_300u64;
-    assert!(lp.s.lapse_from() > lock, "the lapse settle is not yet due at 2,300");
-    let (t1, r1, b1) = renew_tx(&lp, &sl, lock, 8);
+    let (t1, r1, b1) = renew_tx(&lp, &sl, 2_300, 8);
     must("the late renewal 1,200 -> 2,000 at 2,300", &t1);
-    let (l1, s1) = (live(&t1, 0, lock, &r1), live(&t1, 1, lock, &b1));
-    let (t2, r2, _) = renew_tx(&l1, &s1, lock, 8);
-    must("the second renewal 2,000 -> 2,800 at the same DAA", &t2);
-    assert_eq!(r2.b.expiry, 2_800);
-    assert_eq!(r2.bl - lp.s.bl, 2 * (lp.s.b.premium - lp.s.b.premium / 2), "the long paid two premium halves at DAA 2,300");
+    let (l1, s1) = (live(&t1, 0, 2_300, &r1), live(&t1, 1, 2_300, &b1));
+    refused("the second renewal 2,000 -> 2,800 at 2,300", &renew_tx(&l1, &s1, 2_300, 8).0, 0);
+    // The residual: the double renewal at 1,950.
+    let (t1, r1, b1) = renew_tx(&lp, &sl, 1_950, 8);
+    must("the late renewal 1,200 -> 2,000 at 1,950", &t1);
+    let (l1, s1) = (live(&t1, 0, 1_950, &r1), live(&t1, 1, 1_950, &b1));
+    let (t2, r2, b2) = renew_tx(&l1, &s1, 1_950, 8);
+    must("and 2,000 -> 2,800 at once (the residual)", &t2);
+    let (l2, s2) = (live(&t2, 0, 1_950, &r2), live(&t2, 1, 1_950, &b2));
+    refused("a third at 1,950: the slot's window (3,600 > 1,950 + 900)", &renew_tx(&l2, &s2, 1_950, 8).0, 1);
+    assert_eq!(r2.bl - lp.s.bl, 2 * (lp.s.b.premium - lp.s.b.premium / 2), "two premium halves from the long");
+    assert_eq!(lp.value - t2.0.outputs[0].value, 2 * 2_000_000_000, "two premiums of 20 KAS");
+    // The on-time schedule reaches the same state by the same DAA.
+    let (o1, q1, c1) = renew_tx(&lp, &sl, 1_150, 8);
+    must("on time: 1,200 -> 2,000 at 1,150", &o1);
+    let (ol, os) = (live(&o1, 0, 1_150, &q1), live(&o1, 1, 1_150, &c1));
+    let (o2, q2, _) = renew_tx(&ol, &os, 1_950, 8);
+    must("on time: 2,000 -> 2,800 at 1,950", &o2);
+    assert_eq!(q2, r2, "the late underwriter's pair equals the on-time one");
 }
 
-/// R9-F2, the exit "nobody can postpone" (DESIGN-ORACLE-IMPL 22, R6-F3): once the lapse settle is due (2,400 for the
-/// fixture pair) the underwriter can still renew, at any later DAA, and the settle is no longer due. At 2,500 the
-/// lapse settle and a renewal of the same pair conflict: whichever the miner lands decides whether the parties are
-/// settled at the entry or kept in the pair (for one more premium, then again).
+/// R9-F2, a renewal after the lapse settle became due (the same transactions as at `7d9024e`). At 2,500 the settle due at
+/// 2,400 and a renewal of the same pair still conflict (the pair UTXO was accepted at 300, before its expiry 1,200): one
+/// renewal remains possible and postpones the settle by one term, to 3,200, for one premium buying a cover that is
+/// already over (X = 2,000 < 2,500). The renewal's continuation, accepted at 2,500, after 2,000, is never renewed again:
+/// the settle is due at 3,200 whatever the underwriter does. Before the fix the underwriter renewed again at once (to
+/// 2,800, settle at 4,000), and again every term. This shape needs `tailDaa + idleDaa > termDaa` (the fixture: 1,200 >
+/// 800); otherwise a renewal landing between the due settle and X + term resumes the cover (section 27).
 #[test]
-fn r9_exploit_a_renewal_after_the_lapse_settle_is_due_cancels_it() {
+fn r9_bounded_a_renewal_after_the_lapse_settle_is_due_postpones_it_once_by_one_term() {
     let (lp, sl, _) = opened();
     let lock = 2_500u64;
     assert!(lp.s.lapse_from() <= lock);
     must("the lapse settle is due at 2,500", &lapse_tx(&lp, lock, 0));
     let (t1, r1, b1) = renew_tx(&lp, &sl, lock, 8);
-    must("a renewal of the same pair at 2,500 (it conflicts with the settle)", &t1);
+    must("one renewal of the same pair at 2,500 (it conflicts with the settle)", &t1);
     let (l1, s1) = (live(&t1, 0, lock, &r1), live(&t1, 1, lock, &b1));
-    let (t2, r2, _) = renew_tx(&l1, &s1, lock, 8);
-    must("and a second at once", &t2);
-    let l2 = live(&t2, 0, lock, &r2);
-    assert_eq!(l2.s.lapse_from(), 2_800 + 1_200);
-    refused("the lapse settle is no longer due", &lapse_tx(&l2, lock, 0), 0);
+    refused("a second renewal: its UTXO was accepted after its expiry", &renew_tx(&l1, &s1, lock, 8).0, 0);
+    refused("later too", &renew_tx(&l1, &s1, 2_800, 8).0, 0);
+    assert_eq!(l1.s.lapse_from(), 3_200, "postponed by one term");
+    refused("the settle one DAA early", &lapse_tx(&l1, 3_199, 0), 0);
+    must("the settle at 3,200", &lapse_tx(&l1, 3_200, 0));
 }
 
-/// R9-N1, a note on DESIGN-ORACLE-IMPL 26.4 ("the pending part's refund, which a cure or a valid settlement pays back to the
-/// underwriter"): a valid partial liquidation pays the underwriter `B + fee`, not its refund `B + carrier`; the carrier
-/// the underwriter's vouch funded stays in the forfeited part (the winner's). 0.2 KAS per partial liquidation.
+/// R9-F2, the parties' defence: any party entry accepted after the expiry (an amend costs nothing but its fee) makes the
+/// pair unrenewable, so its lapse date is fixed. Control: an amend before the expiry does not stop an on-time renewal.
 #[test]
-fn r9_exploit_a_partial_liquidations_carrier_goes_to_the_winner_not_back_to_the_underwriter() {
+fn r9_holds_a_party_entry_after_the_expiry_fixes_the_lapse_date() {
+    let (lp, sl, _) = opened();
+    let (at, a) = amend_tx(&lp, L, &long_kp(), 1_000_000_000, 20);
+    must("the long lists after the expiry", &at);
+    let la = live(&at, 0, 1_250, &a);
+    refused("a renewal at 1,250 of the amended pair", &renew_tx(&la, &sl, 1_250, 8).0, 0);
+    refused("a renewal at 2,500 of the amended pair", &renew_tx(&la, &sl, 2_500, 8).0, 0);
+    assert_eq!(la.s.lapse_from(), 2_400);
+    must("the settle at 2,400", &lapse_tx(&la, 2_400, 0));
+    // Control: amended at 1,150 (before X), renewed at 1,180.
+    let lb = live(&at, 0, 1_150, &a);
+    must("an on-time renewal after an amend before the expiry", &renew_tx(&lb, &sl, 1_180, 8).0);
+}
+
+/// R9-N1 (a note; the contract is unchanged, the documentation corrected): the carrier of the new part of a partial
+/// liquidation, which the underwriter's vouch funds (the pending part's `refund` is `B + carrier`), comes back to the
+/// underwriter only on a cure. A valid settlement pays it `B + fee` and the carrier stays in the forfeited part (the
+/// winner's); a void claim and a refuted one restore the part with the carrier in it (the parties'), the bond going to
+/// the defender (and the disputer). 0.2 KAS per partial liquidation.
+#[test]
+fn r9_bounded_a_partial_liquidations_carrier_returns_to_the_underwriter_only_on_a_cure() {
     let (lp, _, _) = opened();
     let n = lp.s.size / 2;
-    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n, p: 920_000_000, t0: 450, lock: 450 }, 500);
-    assert_eq!(lw.s.refund, lw.s.bond + lp.s.m.p.carrier);
+    let c = lp.s.m.p.carrier;
+    let spec = ClaimSpec { kind: LIQ, side: L, n, p: 920_000_000, t0: 450, lock: 450 };
+    let lw = proposed(&lp, &spec, 500);
+    assert_eq!(lw.s.refund, lw.s.bond + c);
+    // A valid settlement.
     let (ft, s) = finalize_tx(&lw, 500, 200);
     must("the partial liquidation finalizes", &ft);
     let Settlement::Forfeit { uw, value, part } = s else { panic!("{s:?}") };
-    assert_eq!(uw, lw.s.bond + lw.s.fee, "the underwriter gets B + fee");
-    assert!(uw < lw.s.refund + lw.s.fee, "not its refund B + carrier");
+    assert_eq!(uw, lw.s.bond + lw.s.fee, "valid: the underwriter gets B + fee");
     assert_eq!(value, lw.value as i64 - lw.s.bond - lw.s.fee);
-    assert!(value >= part.floor(), "the carrier stays in the forfeited part (the winner's)");
+    assert!(value >= part.floor(), "valid: the carrier stays in the forfeited part (the winner's)");
+    // A cure.
+    let (ct, _) = cure_tx(&lw, &long_kp());
+    must("the cure", &ct);
+    assert_eq!(ct.0.outputs[0].value as i64, lw.s.bond + c, "cure: the underwriter gets B + carrier");
+    // A void claim (landed at 1,100: P + W > X).
+    let lv = proposed(&lp, &ClaimSpec { t0: 1_100, lock: 1_100, ..spec }, 1_100);
+    let (vt, s) = finalize_tx(&lv, 1_100, 200);
+    must("the void claim restores", &vt);
+    let Settlement::Restore { part, value, defender, .. } = s else { panic!("{s:?}") };
+    assert_eq!(defender, lv.s.bond, "void: the bond to the defender");
+    assert_eq!(value - part.range_of(n), c, "void: the carrier stays in the restored part");
+    // A refuted claim.
+    let st = stake(70, 10 * UNIT as u64, 0, 0xc0);
+    let (ctx, w2, _, dj) = contest_tx(&lw, &st, 70, 520);
+    must("contest", &ctx);
+    let (cw, ld) = (live(&ctx, 0, 520, &w2), live(&ctx, 2, 520, &dj));
+    let (dt, _, dw) = decide_tx(&ld, &cw, 620);
+    must("resolve and decide (refuted)", &dt);
+    let ldw = live(&dt, 1, 620, &dw);
+    let (rt, s) = finalize_tx(&ldw, 520, 0);
+    must("finalize the refuted part", &rt);
+    let Settlement::Restore { part, value, defender, disputer } = s else { panic!("{s:?}") };
+    assert_eq!(defender + disputer, lw.s.bond, "refuted: the bond to the defender and the disputer");
+    assert_eq!(value - part.range_of(n), c, "refuted: the carrier stays in the restored part");
 }
 
-// ---------------------------------------------------------------- R9-F3: shared headroom
+// ---------------------------------------------------------------- R9-F3: each side's share of the headroom
 
 /// `addMargin` of `side` by `kp` by `delta`: in 0 the pair (sequence quiet), 1 the signer's funding; out 0 the
 /// continuation, 1 change.
@@ -275,51 +376,145 @@ fn add_margin_tx(lp: &LPair, side: i64, kp: &Keypair, delta: i64) -> (T, OPair) 
     (build_ext(&ins, outs, 0, &[seq_quiet(lp), 0]), c)
 }
 
-/// R9-F3. The fixture pair has 3 KAS of headroom (range 3, cover rate 6). The short adds 3 KAS of margin (its own
-/// funds, refundable): the range is the cover rate. The long can then add no margin at all, and when the price falls
-/// to 9.20 the underwriter's (true) liquidation of the long carries no cure (the cured range 15 - 8.56 exceeds the cover
-/// rate): the long's 200 KAS of equity is forfeited to the short. Control: without the short's top-up the same claim
-/// offers a cure and the long keeps its position. An entrant does the same through a transfer of the short side
-/// (`nb = bl + coverRate`).
+/// `closeDonor` with no host on the listed short of `ll` at its bid: the entering short `sk3` posts `bs3`, P3's entry
+/// `e3`.
+fn donor_try(ll: &LPair, e3: i64, bs3: i64) -> T {
+    let d = &ll.s;
+    let sk3 = x(&keypair(46));
+    let mut p3 = d.rest_of(d.size);
+    (p3.short_key, p3.bs, p3.entry) = (sk3, bs3, e3);
+    (p3.short_bid, p3.short_min, p3.short_tip) = (0, 0, 0);
+    p3.mk = Makers { donor: maker_of(&ll.op), ..Makers::default() };
+    let xp = d.short_bid;
+    let mut spay = kpf_protocol::payoff::owed(d.size, d.bs - xp, d.short_tip, d.m.p.scale) + ll.value as i64 - d.range_of(d.size);
+    if spay < DUST {
+        spay = 0;
+    }
+    Walk::donor_custom(ll, xp, e3, bs3, sk3, &p3, spay)
+}
+
+/// `closeHost` with no donor on the listed long of `ll` at its ask: the entering long posts `bl3`, P3's entry `e3`.
+fn host_try(ll: &LPair, e3: i64, bl3: i64) -> T {
+    let h = &ll.s;
+    let lk3 = x(&keypair(45));
+    let mut p3 = h.rest_of(h.size);
+    (p3.long_key, p3.bl, p3.entry) = (lk3, bl3, e3);
+    (p3.long_ask, p3.long_min, p3.long_tip) = (0, 0, 0);
+    p3.mk = Makers { host: maker_of(&ll.op), ..Makers::default() };
+    let lpay = kpf_protocol::payoff::owed(h.size, h.long_ask - h.bl, h.long_tip, h.m.p.scale);
+    Walk::host_custom(ll, h.long_ask, e3, bl3, lk3, &p3, lpay)
+}
+
+/// R9-F3 (the same transactions as at `7d9024e`). The fixture pair: entry 10, long bound 9, short bound 12, cover rate 6,
+/// so the short's share reaches 13 and the long's 7. The short's top-up of 3 KAS (to the cover rate) is refused; one of
+/// 1 KAS (to its share) is accepted, after which the long can still add 2 KAS (to 7, one sompi more refused), and a
+/// true liquidation of the long at 9.20 still offers the cure (to 8.56), which the long takes. An entrant on the short
+/// side may post at most 13 (`transfer`, `closeDonor` without a host), and an entrant on the long side at least 7
+/// (`closeHost` without a donor); close-versus-close keeps the entry (an entrant's `e3 = E + 1` is refused). Before the
+/// fix the short's top-up to 15 left the long no top-up and no cure, and its 200 KAS of equity at 9.20 were forfeited.
 #[test]
-fn r9_exploit_the_short_takes_the_shared_headroom_and_strips_the_longs_cure() {
+fn r9_holds_neither_side_nor_an_entrant_takes_the_other_sides_share_of_the_headroom() {
     let (lp, _, _) = opened();
+    let (e, cr) = (lp.s.entry, lp.s.b.cover_rate);
+    assert_eq!((lp.s.short_reach(), lp.s.long_reach()), (1_300_000_000, 700_000_000));
     let p = 920_000_000i64;
-    assert!(lp.s.long_liquidatable(p));
-    // Control: the claim at 9.20 on the untouched pair offers a cure, which the long takes.
-    let lw0 = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 450, lock: 450 }, 500);
-    assert_ne!(lw0.s.cure_hash, [0; 32], "control: a cure is offered");
-    must("control: the long cures", &cure_tx(&lw0, &long_kp()).0);
-    // The short's top-up to the cover rate.
-    let (t, c) = add_margin_tx(&lp, S, &short_kp(), 300_000_000);
-    must("the short adds 3 KAS of margin: the range is the cover rate", &t);
+    refused("the short's top-up of 3 KAS (the whole headroom)", &add_margin_tx(&lp, S, &short_kp(), 300_000_000).0, 0);
+    refused("the short's top-up one sompi past its share", &add_margin_tx(&lp, S, &short_kp(), 100_000_001).0, 0);
+    let (t, c) = add_margin_tx(&lp, S, &short_kp(), 100_000_000);
+    must("the short's top-up of 1 KAS, to its share", &t);
     let lp2 = live(&t, 0, 400, &c);
-    assert_eq!(lp2.s.bs - lp2.s.bl, lp2.s.b.cover_rate);
-    refused("the long's addMargin of one sompi per unit", &add_margin_tx(&lp2, L, &long_kp(), 1).0, 0);
+    must("the long's top-up of 2 KAS after it, to its share", &add_margin_tx(&lp2, L, &long_kp(), 200_000_000).0);
+    refused("the long's top-up one sompi past its share", &add_margin_tx(&lp2, L, &long_kp(), 200_000_001).0, 0);
     let lw = proposed(&lp2, &ClaimSpec { kind: LIQ, side: L, n: lp2.s.size, p, t0: 450, lock: 450 }, 500);
-    assert_eq!(lw.s.cure_hash, [0; 32], "no cure is offered");
-    // The cure the long would have taken is refused.
-    let (cure0, v0) = lw0.s.cure(lw0.value).unwrap();
-    let cure_try = build_ext(
-        &[pend_in(&lw, "cure", vec![Arg::Sig(long_kp())]), key_in(outpoint(0x93), 500_000_000_000, 0, &long_kp())],
-        vec![out(lw.s.refund as u64, key_spk(&lw.s.b.uw_key), None), out(v0 as u64, pair_spk(&cure0), bind(0, lw.id.unwrap())), change(1_000_000_000)],
-        0,
-        &[0, 0],
-    );
-    refused("the long's cure", &cure_try, 0);
-    let (ft, s) = finalize_tx(&lw, 500, 200);
-    must("the liquidation finalizes", &ft);
-    let Settlement::Forfeit { part, .. } = s else { panic!("{s:?}") };
-    assert_eq!((part.long_key, part.short_key), (lp.s.short_key, lp.s.short_key), "the long's side is forfeited to the short");
-    assert_eq!(lp2.s.long_at(p), 200 * KAS, "the long's equity at 9.20 that it could have kept by a cure");
-    // The entrant's form: a taker of the short side posting nb = bl + coverRate.
+    assert_ne!(lw.s.cure_hash, [0; 32], "a cure is offered after the short used its share");
+    let (ct, cured) = cure_tx(&lw, &long_kp());
+    must("the long cures", &ct);
+    assert_eq!(cured.bl, 856_520_000);
+    assert!(cured.bl >= e - (cr - cr / 2), "the cure stays in the long's share");
+    // Entrants on the short side.
     let (at, ls) = amend_tx(&lp, S, &short_kp(), 1_200_000_000, 20);
     must("the short lists", &at);
     let ll = live(&at, 0, 400, &ls);
-    let (tt, part) = transfer_tx(&ll, S, 1_200_000_000, ll.s.bl + ll.s.b.cover_rate, &keypair(46), 20);
-    must("a taker of the short posts the whole headroom", &tt);
+    refused("a taker of the short posting bl + coverRate (15)", &transfer_tx(&ll, S, 1_200_000_000, ll.s.bl + cr, &keypair(46), 20).0, 0);
+    refused("a taker of the short one sompi past the share", &transfer_tx(&ll, S, 1_200_000_000, 1_300_000_001, &keypair(46), 20).0, 0);
+    let (tt, part) = transfer_tx(&ll, S, 1_200_000_000, 1_300_000_000, &keypair(46), 20);
+    must("a taker of the short posting its share's end (13)", &tt);
     let lt = live(&tt, 1, 450, &part);
-    refused("the stayer's addMargin after the entrant took the headroom", &add_margin_tx(&lt, L, &long_kp(), 1).0, 0);
+    must("the stayer's top-up of 2 KAS after the entrant", &add_margin_tx(&lt, L, &long_kp(), 200_000_000).0);
+    refused("closeDonor alone: the entering short at 15", &donor_try(&ll, e, ll.s.bl + cr), 0);
+    refused("closeDonor alone: one sompi past the share", &donor_try(&ll, e, 1_300_000_001), 0);
+    refused("closeDonor alone: P3's entry moved up by one sompi", &donor_try(&ll, e + 1, 1_300_000_000), 0);
+    must("closeDonor alone: the entry kept, the short at 13", &donor_try(&ll, e, 1_300_000_000));
+    // Entrants on the long side.
+    let (at, ls) = amend_tx(&lp, L, &long_kp(), 1_000_000_000, 20);
+    must("the long lists", &at);
+    let ll = live(&at, 0, 400, &ls);
+    refused("closeHost alone: the entering long one sompi past the share", &host_try(&ll, e, 699_999_999), 0);
+    refused("closeHost alone: P3's entry moved down by one sompi", &host_try(&ll, e - 1, 700_000_000), 0);
+    must("closeHost alone: the entry kept, the long at 7", &host_try(&ll, e, 700_000_000));
+    refused("a taker of the long one sompi past the share", &transfer_tx(&ll, L, 1_000_000_000, 699_999_999, &keypair(45), 20).0, 0);
+    must("a taker of the long at 7", &transfer_tx(&ll, L, 1_000_000_000, 700_000_000, &keypair(45), 20).0);
+    // An order taking the long with a pair (T2): its rate sets the entering bound.
+    let sl = opened().1;
+    let lo = order(L, &keypair(45), 0x75, 0);
+    let with_rate = |r: i64| Live { s: OOpen { my_rate: r, ..lo.s.clone() }, ..lo.clone() };
+    refused("an order taking the long with a rate one sompi past the share", &take_tx(&ll, &with_rate(300_000_001), &sl, 1_000_000_000, 450, true).0, 0);
+    must("an order taking the long at the share's end", &take_tx(&ll, &with_rate(300_000_000), &sl, 1_000_000_000, 450, true).0);
+}
+
+/// R9-F3, the short side's cure: on the fixture pair (the long's share ends at 7, so the short may be cured up to 13) a
+/// true liquidation of the short at 11.70 has the cure bound 12.5307, within its share: the cure is offered and taken.
+/// At 12.40 the bound 13.2804 is beyond it: no cure, although the range rule alone (13.2804 - 9 <= 6) would offer it.
+#[test]
+fn r9_holds_a_short_cure_is_offered_only_within_the_shorts_share() {
+    let (lp, _, _) = opened();
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: S, n: lp.s.size, p: 1_170_000_000, t0: 450, lock: 450 }, 500);
+    assert_eq!(lw.s.cure_bound, 1_253_070_000);
+    let (ct, c) = cure_tx(&lw, &short_kp());
+    must("the short cures within its share", &ct);
+    assert!(c.bs <= lp.s.growth_limit(S));
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: S, n: lp.s.size, p: 1_240_000_000, t0: 450, lock: 450 }, 500);
+    assert_eq!(lw.s.cure_hash, [0; 32], "no cure beyond the short's share");
+    assert!(1_328_040_000 - lp.s.bl <= lp.s.b.cover_rate, "the range rule alone would offer it");
+}
+
+/// R9-F3, a side opened beyond its share: the long's bound 6.50 lies 3.50 below the entry (its share is 3), the short's
+/// 11 lies 1 above it. The long keeps its bound but can grow no further (a top-up, or a taker posting below 6.50, is
+/// refused; a taker keeping 6.50 is accepted); the short can grow to 12.50, the range rule's limit and below its share's
+/// end (13), and no further.
+#[test]
+fn r9_holds_a_side_beyond_its_share_keeps_its_bound_but_cannot_grow() {
+    let (lp, _, _) = opened();
+    let gp = genesis_pair(OPair { bl: 650_000_000, bs: 1_100_000_000, mk: Makers::default(), ..lp.s.clone() }, 0, 0x84, 400);
+    let gp = Live { value: gp.s.floor() as u64, ..gp };
+    refused("the long's top-up of one sompi per unit", &add_margin_tx(&gp, L, &long_kp(), 1).0, 0);
+    must("the short's top-up to 12.50", &add_margin_tx(&gp, S, &short_kp(), 150_000_000).0);
+    refused("the short's top-up one sompi further", &add_margin_tx(&gp, S, &short_kp(), 150_000_001).0, 0);
+    let (at, ls) = amend_tx(&gp, L, &long_kp(), 1_000_000_000, 20);
+    must("the long lists", &at);
+    let ll = live(&at, 0, 450, &ls);
+    must("a taker of the long keeping 6.50", &transfer_tx(&ll, L, 1_000_000_000, 650_000_000, &keypair(45), 20).0);
+    refused("a taker of the long one sompi lower", &transfer_tx(&ll, L, 1_000_000_000, 649_999_999, &keypair(45), 20).0, 0);
+}
+
+/// R9-F3, what the share rule costs: a cure is offered only within the loser's own share. On the untouched fixture pair a
+/// liquidation of the long at 6.98 (a gap far below its trigger) has the cure bound 6.498: the range rule alone would
+/// offer it (12 - 6.498 <= 6), but it lies below the long's share (7), so no cure is offered (the short's share up to 13
+/// is kept for it). The long's reach for a cure falls from `bs - coverRate` (6) to `entry - ceil(coverRate / 2)` (7).
+#[test]
+fn r9_bounded_the_share_rule_offers_a_cure_only_within_the_losers_share() {
+    let (lp, _, _) = opened();
+    let p = 698_000_000i64;
+    assert!(lp.s.long_liquidatable(p));
+    let (g, m) = (lp.s.m.p.g_bps as i128, lp.s.m.p.mmr_bps as i128);
+    let pg = (p as i128 * (10_000 - g) + 9_999) / 10_000;
+    let cb = (pg * (10_000 - m) / 10_000) as i64;
+    assert_eq!(cb, 649_838_000);
+    assert!(lp.s.bs - cb <= lp.s.b.cover_rate, "the range rule alone would offer the cure");
+    assert!(lp.s.short_reach() - cb > lp.s.b.cover_rate, "the cure would take the short's share");
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p, t0: 450, lock: 450 }, 500);
+    assert_eq!(lw.s.cure_hash, [0; 32], "no cure is offered");
+    must("the liquidation finalizes", &finalize_tx(&lw, 500, 200).0);
 }
 
 // ---------------------------------------------------------------- lead 1: the identical-binding join and its cover
@@ -657,6 +852,8 @@ struct WP {
     truth: i64,
     b0: OBinding,
     renewals: Vec<u64>,
+    /// The DAA the lineage was opened at (the calendar bound on its premiums).
+    born: u64,
     /// The underwriter never renews this lineage (its cover lapses; the lapse settle is due at X + tail + idle).
     silent: bool,
 }
@@ -768,7 +965,7 @@ impl Walk {
         self.slot = live(&t, 3, self.now, &b2);
         let truth = 1_000_000_000;
         let silent = self.rng.chance(25);
-        self.pairs.push(WP { lp, truth, b0: p.b, renewals: vec![], silent });
+        self.pairs.push(WP { lp, truth, b0: p.b, renewals: vec![], born: self.now, silent });
     }
 
     fn tick(&mut self) {
@@ -829,7 +1026,9 @@ impl Walk {
         let delta = 1 + self.rng.below((2 * head).max(2) as u64) as i64;
         let kp = self.key(if side == L { &p.long_key } else { &p.short_key });
         let (t, c) = add_margin_tx(&w.lp, side, &kp, delta);
-        let legal = c.bl >= 0 && c.bl < c.bs && c.bs <= p.m.p.price_max && c.bs - c.bl <= p.b.cover_rate;
+        // Review 9 (R9-F3): the growing side leaves the other its reach (its bound or its share's end).
+        let share_ok = if side == L { c.bl >= p.growth_limit(L) } else { c.bs <= p.growth_limit(S) };
+        let legal = c.bl >= 0 && c.bl < c.bs && c.bs <= p.m.p.price_max && c.bs - c.bl <= p.b.cover_rate && share_ok;
         assert_eq!(accepted(&t), legal, "seed {} step {}: addMargin delta {delta} head {head}", self.seed, self.step);
         if legal {
             self.count("addMargin");
@@ -837,6 +1036,33 @@ impl Walk {
         } else {
             self.books.refused_as_ruled += 1;
         }
+    }
+
+    /// The stated rule of `KpfPairO.transfer` (`handOver`) for a whole hand-over of `side` at `xp` to `ek` posting `nb`:
+    /// the listing, the no-downgrade rule, health at `xp`, the range within the cover rate and (review 9, R9-F3) the
+    /// stayer's reach kept unless the entrant keeps the leaver's bound.
+    fn hand_over_rule(p: &OPair, side: i64, xp: i64, nb: i64, ek: &[u8; 32]) -> bool {
+        let mm = p.m.p.mmr_bps;
+        xp >= 0
+            && xp <= p.m.p.price_max
+            && *ek != p.b.uw_key
+            && if side == L {
+                p.long_ask > 0
+                    && xp >= p.long_ask
+                    && nb >= 0
+                    && nb <= p.bl
+                    && (xp as i128) * (10_000 - mm) as i128 >= (nb as i128) * 10_000
+                    && p.bs - nb <= p.b.cover_rate
+                    && (nb == p.bl || nb >= p.growth_limit(L))
+            } else {
+                p.short_bid > 0
+                    && xp <= p.short_bid
+                    && nb >= p.bs
+                    && nb <= p.m.p.price_max
+                    && (nb as i128) * 10_000 >= (xp as i128) * (10_000 + mm) as i128
+                    && nb - p.bl <= p.b.cover_rate
+                    && (nb == p.bs || nb <= p.growth_limit(S))
+            }
     }
 
     /// A whole transfer of `side` at `xp` to `ek` posting `nb`, with the part `part` and the leaver's payout `pay` as
@@ -884,14 +1110,8 @@ impl Walk {
             part.short_key = x(&ek);
             (part.short_bid, part.short_min, part.short_tip) = (0, 0, 0);
         }
-        let legal = xp >= 0
-            && xp <= p.m.p.price_max
-            && x(&ek) != p.b.uw_key
-            && if side == L {
-                xp >= p.long_ask && nb >= 0 && nb <= p.bl && (xp as i128) * (10_000 - mm) as i128 >= (nb as i128) * 10_000 && p.bs - nb <= p.b.cover_rate
-            } else {
-                xp <= p.short_bid && nb >= p.bs && nb <= p.m.p.price_max && (nb as i128) * 10_000 >= (xp as i128) * (10_000 + mm) as i128 && nb - p.bl <= p.b.cover_rate
-            };
+        let _ = mm;
+        let legal = Self::hand_over_rule(&p, side, xp, nb, &x(&ek));
         let t = Self::transfer_custom(&w.lp, side, xp, nb, &ek, &part, pay);
         assert_eq!(accepted(&t), legal, "seed {} step {}: transfer side {side} x {xp} nb {nb}", self.seed, self.step);
         if !legal {
@@ -958,7 +1178,7 @@ impl Walk {
         let xp = self.rng.around(d.short_bid, 20_000_000).max(0);
         let off = self.rng.below(3) as i64 * 50_000_000;
         let bs3 = self.rng.around(d.bs + off, 30_000_000);
-        let e3 = self.rng.around(d.entry + 10_000_000, 15_000_000);
+        let e3 = if self.rng.chance(70) { d.entry } else { self.rng.around(d.entry + 10_000_000, 15_000_000) };
         let mut p3 = d.rest_of(d.size);
         p3.short_key = sk3;
         p3.bs = bs3;
@@ -970,7 +1190,7 @@ impl Walk {
         if spay < DUST {
             spay = 0;
         }
-        let legal = xp >= 0 && xp <= d.m.p.price_max && xp <= d.short_bid && bs3 >= d.bs && bs3 <= d.m.p.price_max && e3 >= d.entry && sk3 != d.b.uw_key && bs3 - d.bl <= d.b.cover_rate;
+        let legal = xp >= 0 && xp <= d.m.p.price_max && xp <= d.short_bid && bs3 >= d.bs && bs3 <= d.m.p.price_max && e3 == d.entry && sk3 != d.b.uw_key && bs3 - d.bl <= d.b.cover_rate && (bs3 == d.bs || bs3 <= d.growth_limit(S));
         let t = Self::donor_custom(&w.lp, xp, e3, bs3, sk3, &p3, spay);
         assert_eq!(accepted(&t), legal, "seed {} step {}: closeDonor alone x {xp} bs3 {bs3} e3 {e3}", self.seed, self.step);
         if !legal {
@@ -1024,7 +1244,7 @@ impl Walk {
         let xp = self.rng.around(h.long_ask, 20_000_000).max(0);
         let off = self.rng.below(3) as i64 * 50_000_000;
         let bl3 = self.rng.around(h.bl - off, 30_000_000);
-        let e3 = self.rng.around(h.entry - 10_000_000, 15_000_000);
+        let e3 = if self.rng.chance(70) { h.entry } else { self.rng.around(h.entry - 10_000_000, 15_000_000) };
         let mut p3 = h.rest_of(h.size);
         p3.long_key = lk3;
         p3.bl = bl3;
@@ -1032,7 +1252,7 @@ impl Walk {
         (p3.long_ask, p3.long_min, p3.long_tip) = (0, 0, 0);
         p3.mk = Makers { host: maker_of(&w.lp.op), ..Makers::default() };
         let lpay = kpf_protocol::payoff::owed(h.size, xp - h.bl, h.long_tip, h.m.p.scale);
-        let legal = xp >= 0 && xp <= h.m.p.price_max && xp >= h.long_ask && bl3 >= 0 && bl3 <= h.bl && e3 <= h.entry && lk3 != h.b.uw_key && h.bs - bl3 <= h.b.cover_rate;
+        let legal = xp >= 0 && xp <= h.m.p.price_max && xp >= h.long_ask && bl3 >= 0 && bl3 <= h.bl && e3 == h.entry && lk3 != h.b.uw_key && h.bs - bl3 <= h.b.cover_rate && (bl3 == h.bl || bl3 >= h.growth_limit(L));
         let t = Self::host_custom(&w.lp, xp, e3, bl3, lk3, &p3, lpay);
         assert_eq!(accepted(&t), legal, "seed {} step {}: closeHost alone x {xp} bl3 {bl3} e3 {e3}", self.seed, self.step);
         if !legal {
@@ -1069,7 +1289,7 @@ impl Walk {
         let i = self.rng.below(n as u64) as usize;
         let Some(j) = (0..n).find(|&j| j != i && self.pairs[j].lp.s.b == self.pairs[i].lp.s.b) else { return };
         let (a, b) = (self.pairs[i].clone(), self.pairs[j].clone());
-        if a.lp.s.b != b.lp.s.b || a.lp.s.size != b.lp.s.size || !self.quiet_ok(&a.lp) || !self.quiet_ok(&b.lp) || b.lp.s.entry > a.lp.s.entry {
+        if a.lp.s.b != b.lp.s.b || a.lp.s.size != b.lp.s.size || !self.quiet_ok(&a.lp) || !self.quiet_ok(&b.lp) || b.lp.s.entry != a.lp.s.entry {
             return;
         }
         let xp = a.lp.s.entry;
@@ -1083,20 +1303,31 @@ impl Walk {
         if host.s.bs - donor.s.bl > host.s.b.cover_rate || xp < host.s.bl || xp > donor.s.bs || donor.s.bl > host.s.bl || host.s.bs < donor.s.bs {
             return;
         }
+        // Review 9 (R9-F3): each passive side keeps its reach (P3's entering bound kept or within the share).
+        let host_ok = donor.s.bl == host.s.bl || donor.s.bl >= host.s.growth_limit(L);
+        let donor_ok = host.s.bs == donor.s.bs || host.s.bs <= donor.s.growth_limit(S);
+        if !host_ok || !donor_ok {
+            let (t, _) = cvc(&host, &donor, xp, xp, host.s.b);
+            assert!(!accepted(&t), "seed {} step {}: close-versus-close taking a passive side's share", self.seed, self.step);
+            self.books.refused_as_ruled += 1;
+            return;
+        }
         let (t, p3) = cvc(&host, &donor, xp, xp, host.s.b);
         must(&format!("seed {} step {}: close-versus-close", self.seed, self.step), &t);
         self.count("close-versus-close");
         let (lo, hi) = (i.min(j), i.max(j));
-        let w = WP { lp: live(&t, 2, self.now + 20, &p3), truth: a.truth, b0: a.b0, renewals: a.renewals.clone(), silent: a.silent };
+        let w = WP { lp: live(&t, 2, self.now + 20, &p3), truth: a.truth, b0: a.b0, renewals: a.renewals.clone(), born: a.born, silent: a.silent };
         self.pairs.remove(hi);
         self.pairs.remove(lo);
         self.pairs.push(w);
     }
 
-    /// The underwriter's renewal, from one step before the expiry; a silent underwriter (no renewal on some steps)
-    /// renews late, and as often in a row as the contracts allow. A renewal that follows the lineage's previous one
-    /// by less than half a term of calendar time is recorded as a violation of "the premium is paid at most once per
-    /// term of calendar time" (R9-F2).
+    /// The underwriter's renewal, from one step before the expiry; a late underwriter (no renewal on some steps) renews
+    /// late, and as often in a row as the contracts allow. The pair's verdict is compared with the rule of review 9 (the
+    /// pair UTXO accepted no later than its expiry); every accepted renewal is checked against the calendar bound of
+    /// section 27: a lineage opened at `born` has paid at most `1 + (now + step - born) / term` premiums (the open's
+    /// included), the most an on-time underwriter charges by then. A catch-up renewal (less than half a term after the
+    /// previous one: the residual of R9-F2) is counted, not a violation.
     fn renew(&mut self, i: usize) {
         loop {
             let w = self.pairs[i].clone();
@@ -1109,8 +1340,13 @@ impl Walk {
             let x2 = p.b.expiry + p.m.bond.term;
             let d = (x2 / p.m.bond.step - 12 - self.slot.s.j0).max(0);
             let (t, r2, b2) = renew_tx(&w.lp, &self.slot, self.now, d);
+            let rule = w.lp.daa as i64 <= p.b.expiry;
+            assert_eq!(verdicts(&t)[0], rule, "seed {} step {}: renewal of a UTXO accepted at {} with expiry {}", self.seed, self.step, w.lp.daa, p.b.expiry);
             if !accepted(&t) {
                 self.books.refused_as_ruled += 1;
+                if !rule {
+                    self.count("renewal refused: the UTXO is younger than its expiry");
+                }
                 return;
             }
             assert_eq!(r2, r);
@@ -1122,25 +1358,35 @@ impl Walk {
             self.books.hostile_refused += 1;
             if let Some(&prev) = w.renewals.last() {
                 if self.now - prev < (p.m.bond.term / 2) as u64 {
-                    self.violation(format!("R9-F2: renewal of X {} at DAA {} only {} DAA after the previous one (premium {pay})", p.b.expiry, self.now, self.now - prev));
+                    self.count("renew: a catch-up of a late renewal");
                 }
             }
             self.count("renew");
             self.slot = live(&t, 1, self.now, &b2);
             self.pairs[i].lp = live(&t, 0, self.now, &r2);
             self.pairs[i].renewals.push(self.now);
+            let paid = 1 + self.pairs[i].renewals.len() as i64;
+            let most = 1 + (self.now as i64 + step as i64 - w.born as i64) / p.m.bond.term;
+            if paid > most {
+                self.violation(format!("premiums ahead of the calendar: {paid} by DAA {} for a lineage opened at {} (premium {pay})", self.now, w.born));
+            }
         }
     }
 
-    /// A claim on a whole pair, then (W later, the other pairs' clocks moving too) its finalize: a close by either
-    /// party at the true price, a true liquidation (cured half the time), or a false liquidation contested in time,
-    /// refuted, the pool settled and closed. A claim landing too close to the expiry is void and restores the part.
+    /// A claim on the whole pair or on half of it, then (W later, the other pairs' clocks moving too) its finalize: a
+    /// close by either party at the true price, a true liquidation (cured half the time), or a false liquidation that
+    /// is contested: in time and refuted by an honest judge, in time and upheld because the colluders' YES stake leads
+    /// (the pool then has a losing receipt), or after the window (the verdict ignored). Every pool is settled and
+    /// closed. A claim landing too close to the expiry is void and restores the part; the remainder of a partial claim
+    /// continues the lineage.
     fn claim(&mut self, i: usize) {
         let w = self.pairs[i].clone();
         let p = w.lp.s.clone();
         if p.long_key == p.short_key {
             return;
         }
+        let ms = p.m.p.min_size;
+        let n = if self.rng.chance(30) && p.size / 2 >= ms && p.size - p.size / 2 >= ms { p.size / 2 } else { p.size };
         let liq_side = if p.long_liquidatable(w.truth) { Some(L) } else if p.short_liquidatable(w.truth) { Some(S) } else { None };
         let t0 = self.now as i64;
         let kind;
@@ -1160,7 +1406,7 @@ impl Walk {
             (kind, side, price) = (CLOSE, if self.rng.chance(50) { L } else { S }, w.truth);
         }
         let closer = if kind == CLOSE { Some(self.key(if side == L { &p.long_key } else { &p.short_key })) } else { None };
-        let (pt, pw) = propose_tx(&w.lp, &ClaimSpec { kind, side, n: p.size, p: price, t0, lock: self.now }, &uw_kp(), closer.as_ref());
+        let (pt, pw) = propose_tx(&w.lp, &ClaimSpec { kind, side, n, p: price, t0, lock: self.now }, &uw_kp(), closer.as_ref());
         if !accepted(&pt) {
             self.books.refused_as_ruled += 1;
             return;
@@ -1169,28 +1415,65 @@ impl Walk {
         let lw = live(&pt, 0, self.now, &pw);
         let pdaa = self.now as i64;
         self.pairs.remove(i);
+        if n < p.size {
+            self.count("partial claim");
+            self.pairs.push(WP { lp: live(&pt, 1, self.now, &p.rest_of(p.size - n)), ..w.clone() });
+        }
         if false_claim {
-            // An honest watcher contests in time with aged stake; the judge is honest (NO leads).
+            let mode = self.rng.below(3);
             let st = stake(70, 10 * UNIT as u64, 0, 0xc0);
-            let (ct, w2, rc, dj) = contest_tx(&lw, &st, 70, self.now + 10);
+            // Mode 2: the contest lands at P + W, after the window.
+            let c_daa = if mode == 2 { self.now + p.m.p.challenge_daa as u64 } else { self.now + 10 };
+            let (ct, w2, rc, dj) = contest_tx(&lw, &st, 70, c_daa);
             must("contest", &ct);
-            let c_daa = self.now + 10;
             let (cw, r, ld) = (live(&ct, 0, c_daa, &w2), live(&ct, 1, c_daa, &rc), live(&ct, 2, c_daa, &dj));
-            let (dt, pool, dw) = decide_tx(&ld, &cw, c_daa + 100);
-            must("resolve, refuted", &dt);
-            let (lpool, ldw) = (live(&dt, 0, c_daa + 100, &pool), live(&dt, 1, c_daa + 100, &dw));
+            let mut receipts = vec![r];
+            let (ld, d_daa) = if mode == 1 {
+                // Colluders outvote the opener: 13 units on YES against its 10 on NO (mu 1.25).
+                let s3 = stake(71, 13 * UNIT as u64, 0, 0xc1);
+                let (dt, d2, rs) = deposit_tx(&ld, YES, &[(s3, 71)], c_daa + 10);
+                must("deposit on YES", &dt);
+                receipts.push(live(&dt, 1, c_daa + 10, &rs[0]));
+                (live(&dt, 0, c_daa + 10, &d2), c_daa + 10)
+            } else {
+                (ld, c_daa)
+            };
+            let r_daa = d_daa + p.m.judge.round as u64;
+            let (dt, pool, dw) = decide_tx(&ld, &cw, r_daa);
+            must("resolve and decide", &dt);
+            let (lpool, ldw) = (live(&dt, 0, r_daa, &pool), live(&dt, 1, r_daa, &dw));
             let (ft, s) = finalize_tx(&ldw, ldw.s.clock, 0);
-            must("finalize refuted", &ft);
-            let Settlement::Restore { part, defender, disputer, .. } = s else { panic!("seed {}: a refuted claim did not restore", self.seed) };
-            assert_eq!(part, p.restore_state(p.size), "the refuted part is restored exactly");
-            assert_eq!(defender + disputer, pw.bond, "the bond to the defender and the disputer");
-            let (stx, p2, _) = settle_tx(&lpool, &[r], c_daa + 110);
-            must("settle the opener's receipt", &stx);
-            let lp2 = live(&stx, 0, c_daa + 110, &p2);
+            must("finalize the decided part", &ft);
+            match (mode, &s) {
+                (0, Settlement::Restore { part, defender, disputer, .. }) => {
+                    assert_eq!(*part, p.restore_state(n), "the refuted part is restored exactly");
+                    assert_eq!(defender + disputer, pw.bond, "the bond to the defender and the disputer");
+                    self.count("refuted, pool closed");
+                }
+                (0, _) => panic!("seed {} step {}: a refuted claim did not restore: {s:?}", self.seed, self.step),
+                (_, Settlement::Forfeit { part, .. }) => {
+                    assert_eq!((part.long_key, part.short_key), (p.short_key, p.short_key), "the upheld false claim forfeits the long");
+                    self.count(if mode == 1 { "upheld by YES, pool with a loser closed" } else { "late contest ignored, pool closed" });
+                }
+                (_, Settlement::Restore { defender, disputer, .. }) => {
+                    assert_eq!((*defender, *disputer), (pw.bond, 0), "an upheld but void claim's bond goes to the defender");
+                    self.count("upheld but void, restored");
+                }
+                (_, Settlement::Close { .. }) => panic!("a liquidation settled as a close"),
+            }
+            assert_eq!(pool.side, if mode == 1 { YES } else { NO });
+            let (stx, p2, pays) = settle_tx(&lpool, &receipts, r_daa + 10);
+            must("settle the receipts", &stx);
+            if mode == 1 {
+                assert_eq!(pays[0], 0, "the opener's NO receipt lost");
+                assert!(pays[1] > receipts[1].value, "the YES receipt won a share of the loser's stake");
+                self.count("contest won by YES, a pool with a losing receipt settled");
+            }
+            let lp2 = live(&stx, 0, r_daa + 10, &p2);
             let (ctx, _) = pool_close_tx(&lp2);
             must("close the pool", &ctx);
-            self.count("refuted, pool closed");
-            self.now = self.now.max(c_daa + 110);
+            self.now = self.now.max(r_daa + 10);
+            let (Settlement::Restore { part, .. } | Settlement::Forfeit { part, .. }) = s else { unreachable!() };
             self.pairs.push(WP { lp: live(&ft, 1, self.now, &part), ..w });
             return;
         }
@@ -1199,6 +1482,12 @@ impl Walk {
             let (ct, c) = cure_tx(&lw, &loser);
             must("cure", &ct);
             self.count("cure");
+            // Review 9 (R9-F3): the cure stays within the loser's share.
+            if side == L {
+                assert!(c.bl >= p.growth_limit(L), "seed {} step {}: a cure took the short's share", self.seed, self.step);
+            } else {
+                assert!(c.bs <= p.growth_limit(S), "seed {} step {}: a cure took the long's share", self.seed, self.step);
+            }
             self.pairs.push(WP { lp: live(&ct, 1, self.now, &c), ..w });
             return;
         }
@@ -1209,7 +1498,7 @@ impl Walk {
             Settlement::Close { long, short } => {
                 // The other party gets at least its payoff at the close price moved by g against the closer.
                 let c = pw.close_price();
-                let (lo_, so_) = (q(p.size, c - p.bl, p.m.p.scale), q(p.size, p.bs - c, p.m.p.scale));
+                let (lo_, so_) = (q(n, c - p.bl, p.m.p.scale), q(n, p.bs - c, p.m.p.scale));
                 assert!(if side == L { short >= so_ || short == 0 } else { long >= lo_ || long == 0 }, "the non-closer underpaid");
                 self.count("close settled");
             }
@@ -1238,7 +1527,42 @@ impl Walk {
         self.pairs.remove(i);
     }
 
-    /// The shape of R9-F1: a take with no pair into an expiry in the past, then the renewals the contracts allow.
+    /// T2 with a pair: an order of the listed side takes it whole (`take_tx`: the pair's transfer to the order, the
+    /// order's take, the slot's bind of the part at the pair's expiry). The pair's verdict is compared with the
+    /// hand-over rule (review 9's share rule included); an accepted take also kept the order's own terms.
+    fn take_pair(&mut self, i: usize) {
+        let ls = if self.rng.chance(50) { L } else { S };
+        self.ensure_listed(i, ls);
+        let w = self.pairs[i].clone();
+        let p = w.lp.s.clone();
+        if !self.quiet_ok(&w.lp) || (ls == L && p.long_ask == 0) || (ls == S && p.short_bid == 0) {
+            return;
+        }
+        let ek = self.entrant();
+        let rate = [50_000_000i64, 100_000_000, 200_000_000, 300_000_000][self.rng.below(4) as usize];
+        let xp = if ls == L { self.rng.around(p.long_ask, 20_000_000) } else { self.rng.around(p.short_bid, 20_000_000) }.max(0);
+        let (op, id) = self.fresh_op();
+        let o = OOpen { size_left: p.size, min_fill: p.size, my_rate: rate, limit: xp, min_counter_rate: 0, ..sample_order(&p.m, ls, x(&ek)) };
+        let lo = Live { op, value: 2_000_000_000_000u64, daa: self.now, id: Some(id), s: o };
+        let (t, part) = take_tx(&w.lp, &lo, &self.slot, xp, self.now, true);
+        let nb = if ls == L { xp - rate } else { xp + rate };
+        let rule = Self::hand_over_rule(&p, ls, xp, nb, &x(&ek));
+        assert_eq!(verdicts(&t)[0], rule, "seed {} step {}: take with a pair, side {ls} x {xp} nb {nb}", self.seed, self.step);
+        if !accepted(&t) {
+            self.books.refused_as_ruled += 1;
+            return;
+        }
+        assert!(if ls == L { p.entry >= xp } else { p.entry <= xp }, "the order took an entry against it");
+        assert!(part.range_ok() && part.b.cover_rate >= part.bs - part.bl && part.b == p.b);
+        let a = BindArgs::new(self.now as i64, p.b.expiry, 0, &[Claim::output(2, p.cover_of(p.size))]);
+        let b2 = self.slot.s.bind(&slot_ctx(&self.slot, self.now), &a, self.slot.value as i64).expect("the slot's bind");
+        self.slot = live(&t, 3, self.now, &b2);
+        self.count("take with a pair");
+        self.keys.insert(x(&ek), ek);
+        self.pairs[i].lp = live(&t, 2, self.now, &part);
+    }
+
+    /// The shape of R9-F1: a take with no pair into an expiry in the past, then a renewal, which the pair refuses.
     fn hostile_take(&mut self) {
         if self.now < 4_000 {
             return;
@@ -1249,24 +1573,16 @@ impl Walk {
         let xe = 1_200;
         let (t, part, b2) = take_alone(&lo, &sl, &keypair(77), 1_000_000_000, 1_000_000_000, 1_220_000_000, xe, 320_000_000, lo.s.prem_max, self.now);
         must("the hostile take", &t);
-        let mut lp = live(&t, 1, self.now, &part);
-        let mut s2 = live(&t, 2, self.now, &b2);
-        let mut last: Option<u64> = None;
-        while lp.s.renewed().is_some() && lp.s.b.expiry as u64 <= self.now + 100 {
-            let x2 = lp.s.b.expiry + lp.s.m.bond.term;
-            let d = (x2 / lp.s.m.bond.step - 12 - s2.s.j0).max(0);
-            let (rt, r, b) = renew_tx(&lp, &s2, self.now, d);
-            must("a renewal of the taken part", &rt);
-            if let Some(prev) = last {
-                if self.now - prev < 400 {
-                    self.violation(format!("R9-F1: take with expiry {xe} at DAA {}: renewal of X {} {} DAA after the previous one", self.now, lp.s.b.expiry, self.now - prev));
-                }
-            }
-            last = Some(self.now);
-            lp = live(&rt, 0, self.now, &r);
-            s2 = live(&rt, 1, self.now, &b);
+        let lp = live(&t, 1, self.now, &part);
+        let s2 = live(&t, 2, self.now, &b2);
+        let x2 = lp.s.b.expiry + lp.s.m.bond.term;
+        let d = (x2 / lp.s.m.bond.step - 12 - s2.s.j0).max(0);
+        let (rt, _, _) = renew_tx(&lp, &s2, self.now, d);
+        if verdicts(&rt)[0] {
+            self.violation(format!("R9-F1: a part taken at DAA {} with expiry {xe} was renewed", self.now));
         }
-        self.count("hostile take and renewals");
+        self.books.hostile_refused += 1;
+        self.count("hostile take, renewal refused");
     }
 
     fn play(&mut self, steps: usize) {
@@ -1294,6 +1610,7 @@ impl Walk {
                 63..=72 => self.claim(i),
                 73..=76 => self.lapse(i),
                 77..=79 if self.hostile_takes => self.hostile_take(),
+                80..=87 => self.take_pair(i),
                 _ => {}
             }
             // The underwriter renews each pair in its window most of the time; sometimes it is silent.
@@ -1308,17 +1625,19 @@ impl Walk {
 }
 
 /// Lead 5. Seeded walks over every entry point of the five contracts: opens on one slot, amends, margin top-ups (legal
-/// and beyond the headroom), whole transfers to signing takers with free arguments drawn wide (each compared with the
-/// stated rule, and a hostile variant moving the stayer, its listing, the entry or the binding, or underpaying the
-/// leaver), `closeDonor` with no host and `closeHost` with no donor (the same), close-versus-close of two pairs of one
-/// binding, renewals in the window or late (a silent underwriter), claims of every outcome (a close, a true
-/// liquidation cured or forfeited, a void claim, a false liquidation contested in time, refuted, its pool settled and
-/// closed), and lapse settles. After every step every live pair keeps its lineage's binding (only the renewals move
-/// the expiry, by one term each), its floor and its range within the cover rate. A rule the contracts accept beyond
-/// the stated rule panics with the seed and step; the one statement the walk records instead, "at most one premium per
-/// term of calendar time", is violated (R9-F2, the late double renewal) on the seeds and steps printed.
+/// and beyond the headroom or a side's share), whole transfers to signing takers with free arguments drawn wide (each
+/// compared with the stated rule, and a hostile variant moving the stayer, its listing, the entry or the binding, or
+/// underpaying the leaver), takes by an order with a pair (the pair's verdict compared with the same rule),
+/// `closeDonor` with no host and `closeHost` with no donor (the same), close-versus-close of two pairs of one binding
+/// and entry, renewals in the window or late (a late underwriter; the pair's verdict compared with review 9's rule),
+/// claims on the whole pair or half of it of every outcome (a close, a true liquidation cured or forfeited, a void
+/// claim, a false liquidation contested in time and refuted, upheld by a colluding YES stake with a losing receipt in
+/// its pool, or contested late and ignored; every pool settled and closed), and lapse settles. After every step every
+/// live pair keeps its lineage's binding (only the renewals move the expiry, by one term each), its floor and its range
+/// within the cover rate; every lineage has paid no more premiums than an on-time underwriter would have charged by
+/// then. Since the fix of review 9 the walk records no violation.
 #[test]
-fn r9_holds_the_seeded_walk_over_every_entry_point_but_records_renewal_bursts() {
+fn r9_holds_the_seeded_walk_over_every_entry_point() {
     let mut total = WBooks::default();
     let mut violations = vec![];
     for seed in 1..=6u64 {
@@ -1336,24 +1655,70 @@ fn r9_holds_the_seeded_walk_over_every_entry_point_but_records_renewal_bursts() 
     for (s, st, v) in &violations {
         println!("seed {s} step {st}: {v}");
     }
-    for k in ["open", "amend", "addMargin", "transfer", "closeDonor alone", "closeHost alone", "renew", "propose close", "lapse settle", "close-versus-close", "refuted, pool closed", "void claim restored", "liquidation settled"] {
+    for k in [
+        "open",
+        "amend",
+        "addMargin",
+        "transfer",
+        "take with a pair",
+        "closeDonor alone",
+        "closeHost alone",
+        "renew",
+        "propose close",
+        "partial claim",
+        "lapse settle",
+        "close-versus-close",
+        "refuted, pool closed",
+        "void claim restored",
+        "liquidation settled",
+    ] {
         assert!(total.steps.get(k).copied().unwrap_or(0) > 0, "the walk never ran {k}");
     }
+    let upheld_yes = total.steps.get("contest won by YES, a pool with a losing receipt settled").copied().unwrap_or(0);
+    let late = total.steps.get("late contest ignored, pool closed").copied().unwrap_or(0);
+    let void_upheld = total.steps.get("upheld but void, restored").copied().unwrap_or(0);
+    assert!(upheld_yes > 0 && late > 0 && void_upheld > 0, "the walk never ran a contest won by YES, a late contest or an upheld void claim");
     assert!(total.hostile_refused > 50);
-    assert!(violations.iter().all(|(_, _, v)| v.starts_with("R9-F2")), "only renewal bursts are recorded");
+    assert!(violations.is_empty(), "violations recorded: {violations:?}");
 }
 
-/// R9-F1 in the walk: with the hostile take enabled, every seed that reaches it records a burst of renewals at one DAA.
+/// R9-F1 in the walk (the same shape as at `7d9024e`, where every seed found a burst): with the hostile take enabled,
+/// a part taken into a past expiry is never renewed.
 #[test]
-fn r9_exploit_the_seeded_walk_finds_the_renewal_burst_of_a_take_into_the_past() {
-    let mut found = vec![];
+fn r9_holds_the_seeded_walk_with_takes_into_the_past_finds_no_renewal() {
+    let mut takes = 0;
+    let mut violations = vec![];
     for seed in 1..=4u64 {
         let mut w = Walk::new(seed, true);
         w.play(120);
-        found.extend(w.violations.into_iter().filter(|(_, _, v)| v.contains("take with expiry")));
+        takes += w.books.steps.get("hostile take, renewal refused").copied().unwrap_or(0);
+        violations.extend(w.violations);
     }
-    for (s, st, v) in found.iter().take(4) {
-        println!("seed {s} step {st}: {v}");
-    }
-    assert!(!found.is_empty(), "the walk did not reach the hostile take");
+    assert!(takes > 0, "the walk did not reach the hostile take");
+    assert!(violations.is_empty(), "violations recorded: {violations:?}");
+}
+
+/// R9-F3's residual through a take without a pair: the counterparty, which writes the new lineage, chooses its entry
+/// within the order's terms (a long order: any `e >= x`), and the shares are measured from it. At `e` = 12.20 on a cover
+/// rate of 6 the long order (bound 9) lies beyond its share (floor 9.20): it cannot add margin, while the short may grow
+/// to 15; in exchange the order's lapse payout is the whole range at that entry (2,000 units x 3.20 KAS). An entry near
+/// the 64-bit edge is clamped to `priceMax` for the shares, so no share check overflows: a liquidation of the long still
+/// proposes (no cure offered).
+#[test]
+fn r9_bounded_a_take_without_a_pair_sets_the_shares_by_the_entry_it_writes() {
+    let now = 30_000u64;
+    let lo = order(L, &long_kp(), 0x71, now - 100);
+    let o = lo.s.clone();
+    let sl = slot(K);
+    let (t, part, _) = take_alone(&lo, &sl, &keypair(77), 1_000_000_000, 1_220_000_000, 1_220_000_000, 1_200, 600_000_000, o.prem_max, now);
+    must("the take with the entry at the short's bound", &t);
+    let lp = live(&t, 1, now, &part);
+    assert_eq!(lp.s.growth_limit(L), 920_000_000);
+    refused("the order's top-up", &add_margin_tx(&lp, L, &long_kp(), 1).0, 0);
+    assert_eq!(lp.s.lapse_out(lp.value).0, q(o.size_left, 320_000_000, o.m.p.scale), "the lapse pays the long the whole range");
+    let (t, part, _) = take_alone(&lo, &sl, &keypair(77), 1_000_000_000, i64::MAX / 2, 1_220_000_000, 1_200, 600_000_000, o.prem_max, now);
+    must("the take with an extreme entry", &t);
+    let lp = live(&t, 1, now, &part);
+    let lw = proposed(&lp, &ClaimSpec { kind: LIQ, side: L, n: lp.s.size, p: 900_000_000, t0: now as i64, lock: now }, now);
+    assert_eq!(lw.s.cure_hash, [0; 32]);
 }

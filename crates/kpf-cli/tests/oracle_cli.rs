@@ -136,9 +136,9 @@ fn oracle_market_lifecycle_from_the_command_line() {
     let f = h.funding(1_010);
     let stake = h.step(&["stake", "--market", &market, "--value", "100", "--funder", &st, "--funding", &f], "judge stake", 0);
     let f = h.funding(3_100);
-    let lo = h.step(&["oracle-order", "--market", &market, "--side", "long", "--size", "2000", "--limit", "10.5", "--rate", "1", "--min-counter-rate", "1.5", "--expiry", "1000000000", "--prem-max", "0.1", "--escrow", "3000", "--funder", &lk, "--funding", &f], "oracle order", 1_000_000);
+    let lo = h.step(&["oracle-order", "--market", &market, "--side", "long", "--size", "2000", "--limit", "10.5", "--rate", "1", "--min-counter-rate", "1.5", "--expiry", "1000000000", "--prem-max", "0.1", "--any-slot", "--escrow", "3000", "--funder", &lk, "--funding", &f], "oracle order", 1_000_000);
     let f = h.funding(5_100);
-    let so = h.step(&["oracle-order", "--market", &market, "--side", "short", "--size", "2000", "--limit", "9.5", "--rate", "2", "--min-counter-rate", "0.5", "--expiry", "1000000000", "--prem-max", "0.1", "--escrow", "5000", "--funder", &sk, "--funding", &f], "oracle order", 1_000_000);
+    let so = h.step(&["oracle-order", "--market", &market, "--side", "short", "--size", "2000", "--limit", "9.5", "--rate", "2", "--min-counter-rate", "0.5", "--expiry", "1000000000", "--prem-max", "0.1", "--any-slot", "--escrow", "5000", "--funder", &sk, "--funding", &f], "oracle order", 1_000_000);
     let f = h.funding(10);
     let pair = h.step(&["oracle-open", "--long", &lo, "--short", &so, "--slot", &slot, "--n", "1000", "--x", "10", "--cover-rate", "6", "--premium", "0.02", "--key", &uw, "--funder", &ex, "--funding", &f, "--daa", "7000000"], "oracle pair", 7_000_000);
     let out = h.ok(&["oracle-watch", "--me", &lkk, "--object", &pair, "--daa", "7100000"]);

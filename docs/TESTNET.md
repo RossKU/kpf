@@ -499,14 +499,19 @@ kpf stake --market market.json --value 130 --funder $UW  --node $NODE --out-dir 
 
 ```sh
 kpf oracle-order --market market.json --side long  --size 10 --limit 10.5 --rate 1 --min-counter-rate 1.5 \
-    --expiry $EXPIRY --prem-max 0.1 --funder $A --node $NODE --out-dir out/lo
+    --expiry $EXPIRY --prem-max 0.1 --any-slot --funder $A --node $NODE --out-dir out/lo
 kpf oracle-order --market market.json --side short --size 10 --limit 9.5  --rate 2 --min-counter-rate 0.5 \
-    --expiry $EXPIRY --prem-max 0.1 --funder $B --node $NODE --out-dir out/so
+    --expiry $EXPIRY --prem-max 0.1 --any-slot --funder $B --node $NODE --out-dir out/so
 kpf oracle-open --long out/lo/*-oracle-order.json --short out/so/*-oracle-order.json --slot out/bond/*-underwriting-slot.json \
     --n 10 --x 10 --cover-rate 6 --premium 0.02 --key $UW --funder $EX --node $NODE --out-dir out/open
 ```
 
-Each order names the slots it accepts (`--underwriter SLOT_ID`, any by default) and the highest premium it pays; the open
+Each order names the slot it accepts (`--slot SLOT_ID`) or accepts any slot of the market (`--any-slot`; one of the two
+is required since review 9, and the command prints what `--any-slot` lets an underwriter choose). An order that rests
+longer than one term can be filled with a cover expiry already in the past (no contract can prove the present): that
+pair is never renewed and settles at its entry once its lapse time has passed, so the order gets its margin back and
+loses its tip, the carrier and its half of the first premium (the command prints the most). Cancel or replace an order
+that is not filled within a term. Each order also names the highest premium it pays; the open
 requires the slot to count the pair's cover (`q(n, coverRate)`) at its expiry, refuses an underwriter that is a party,
 and refuses a second output of the new pair's id. The expiry defaults to the first ring boundary one term after the
 orders. The underwriter receives the first term's premium, half from each order's escrow.
@@ -521,8 +526,10 @@ does, so an executor that builds the transaction cannot keep anything the signat
 
 - **Liquidation:** the underwriter is the proposer and funds everything the claim adds to the contract outputs: the
   bond, and when `--n` is less than the pair's size also the carrier of the new part (together the pending part's
-  refund, which a cure or a valid settlement pays back to the underwriter: live run 1 had the funder pay the 0.2 KAS
-  carrier and the cure refund bond + carrier, 1.2 KAS, to the underwriter). So the vouch UTXO funds that sum and the rest
+  refund). The underwriter pays the carrier of every split it proposes and gets it back only on a cure (live run 1: the
+  cure refunded bond + carrier, 1.2 KAS); a valid settlement pays it the bond and the keeper fee and leaves the carrier
+  in the forfeited part (the winner's), and a void or refuted claim leaves the carrier in the restored part and pays the
+  bond to the defender (and the disputer) (review 9, R9-N1). So the vouch UTXO funds that sum and the rest
   goes back to the underwriter in an explicit output (`underwriter: the vouch input's remainder back`; none if it is
   exactly zero). The vouch UTXO must therefore hold at least that sum (and a remainder of at least 0.02 KAS, or exactly
   nothing); `kpf` refuses otherwise and names the sum. The funder pays only the network fee.
@@ -581,7 +588,11 @@ kpf withdraw-bond --slot <unbonding slot file> --key $UW --node $NODE
 
 If the underwriter goes silent, the parties leave without any price: `oracle-amend` and `oracle-transfer` to a taker who
 signs, a mutual close, a cooperative close, or the lapse settle once `idleDaa` has passed after the cover lapsed (by the
-calendar: no party can postpone it). Each party entry needs the pair's UTXO to be `quietDaa` old.
+calendar: no party entry postpones it). The underwriter can still renew late as long as the pair's UTXO was accepted no
+later than its expiry (review 9): a late renewal charges a full premium and moves the lapse date one term later, and the
+pair is renewable again only if that renewal landed by the new expiry. Any party entry after the expiry (an amend is
+enough) makes the pair unrenewable and fixes the lapse date; `kpf renew` refuses such a pair locally and names the
+DAA from which it can be settled. Each party entry needs the pair's UTXO to be `quietDaa` old.
 
 Every oracle command whose transaction has a relative lock (an input that must be some DAA old: the slot's rate limit
 at an open, a bind or an unbond; `quietDaa` at an amend, transfer or mutual close; `W` at a finalize; the unbonding delay
@@ -592,7 +603,9 @@ conditions was not met" is not reached; a dry run says `NOT YET USABLE`.
 
 `oracle-transfer` checks the rules of `KpfPairO.transfer` before it builds anything: the listing (`--x` within it), and
 for the entrant's bound `--nb` the no-downgrade rule (a long's bound at most the leaver's `bl`, a short's at least its
-`bs`), health at `--x` (the maintenance band) and the range within the cover rate. A refusal names the rule and the
+`bs`), health at `--x` (the maintenance band), the range within the cover rate and (review 9) the stayer's half of the
+cover rate from the entry (the entrant's bound may widen its side only to the end of its own half, unless it keeps
+the leaver's bound). A refusal names the rule and the
 allowed range of `--nb` instead of building a transaction that fails verification.
 
 ```sh
@@ -625,5 +638,6 @@ a defence 0.0400, the resolution 0.0291, settling and closing the pool 0.0793: a
 - **A request to a silent underwriter, rebind, the lock path, a retrospective dispute**: not in this slice.
 - **Commands for the other price-free entries of an oracle pair**: add margin and close-versus-close (`KpfPairO.addMargin`,
   `closeHost`, `closeDonor`) have no builder or command yet. Since review 8 close-versus-close joins only two pairs with
-  identical bindings (one slot, cover rate, expiry and premium: P3 keeps the binding of each side's own pair). A transfer to an order (`KpfOpenO.take`) and a partial
+  identical bindings (one slot, cover rate, expiry and premium: P3 keeps the binding of each side's own pair), and since
+  review 9 with one entry price (P3 keeps it). A transfer to an order (`KpfOpenO.take`) and a partial
   transfer or mutual close (`--n`) are not built either: the commands above move whole pairs.

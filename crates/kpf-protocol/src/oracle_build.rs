@@ -24,7 +24,7 @@ use crate::judge::{Js, NO, STATUS_RESOLVED, UNIT, YES};
 use crate::oracle::*;
 use crate::oracle_artifacts as pinned;
 use crate::payoff::q;
-use crate::state::{sm8, KIND_CLOSE, LONG, PLAIN_DUST};
+use crate::state::{sm8, KIND_CLOSE, LONG, PLAIN_DUST, SHORT};
 use crate::tx::{budget_for_units, masses, p2pk_spk, push_data, sighash, target_fee, Arg, FeeMode, KeySet, KeyUtxo, MassReport, DUST_OUTPUT_MIN, TX_VERSION};
 
 /// Which template an input runs.
@@ -340,7 +340,15 @@ impl ODraft {
         while self.outs.len() < self.ins.len() {
             self.plain(100_000_000, filler_to, "filler");
         }
-        self.plain(value, key, label)
+        self.payout(value, key, label)
+    }
+    /// A payout a contract fixes to an output of its own (`payTo`: at least `value` to `key` at a given index), which no
+    /// builder can fold into another output. Below `VIABLE_OUTPUT_MIN` (a value the contracts allow down to 0.02 KAS,
+    /// whose storage mass alone is the whole block limit) the funder tops it up to that size, which the contracts accept
+    /// (they bound a payout from below only): at most 0.005 KAS more for the payee, instead of a transaction that can
+    /// never be mined.
+    fn payout(&mut self, value: i64, key: &[u8; 32], label: &str) -> usize {
+        self.out(value.max(VIABLE_OUTPUT_MIN as i64) as u64, p2pk_spk(key), None, label, None)
     }
     /// Adds the funder's inputs and the change output (which absorbs the fee).
     fn fund(&mut self, funder: &[KeyUtxo], change_to: &[u8; 32]) -> usize {
@@ -350,6 +358,28 @@ impl ODraft {
         let c = self.out(0, p2pk_spk(change_to), None, "change", None);
         self.change = Some(c);
         c
+    }
+
+    /// A payment to the underwriter that no contract fixes to an output of its own (the premium of an open or a
+    /// renewal: the slot owner's signed bind decides where it goes). An output of its own costs `10^12 / value` grams of
+    /// storage mass (KIP-9), so a small one can never be mined (0.02 KAS alone is the whole block limit). It is folded:
+    /// into the funder's change when that goes to the underwriter's key (the change absorbs whatever no other output
+    /// takes), or into one output with the underwriter's own plain input `extra`; only otherwise is it written alone,
+    /// and the storage check of `finish` refuses it if it cannot be mined.
+    fn pay_underwriter(&mut self, owner: &[u8; 32], v: i64, change_to: &[u8; 32], extra: Option<&KeyUtxo>, label: &str) -> Result<()> {
+        if v <= 0 || change_to == owner {
+            return Ok(());
+        }
+        if let Some(u) = extra {
+            if u.key != *owner {
+                return invalid("the extra underwriter input must be a plain UTXO of the slot owner's key");
+            }
+            self.key(u, "the underwriter's own input");
+            self.plain(u.amount as i64 + v, owner, &format!("underwriter: its own input and the {label}"));
+            return Ok(());
+        }
+        self.plain(v, owner, label);
+        Ok(())
     }
 
     pub fn finish(self) -> Result<OBuilt> {
@@ -381,8 +411,59 @@ impl ODraft {
             mode: self.mode,
         };
         b.set_change(0)?;
+        if let Some(m) = storage_refusal(&b.tx, &b.entries, &b.output_labels) {
+            return invalid(m);
+        }
         Ok(b)
     }
+}
+
+/// A storage refusal of the premium's own output, with what to do instead.
+fn premium_advice(e: Error, prem: i64) -> Error {
+    match e {
+        Error::Invalid(m) if m.contains("(premium,") => Error::Invalid(format!(
+            "{m}. The premium ({} KAS) need not have an output of its own: fund the transaction from the underwriter's key (its change then carries the premium) or give one plain UTXO of the underwriter (`--uw-utxo`), which one output returns with the premium",
+            crate::error::kas_str(prem as i128)
+        )),
+        e => e,
+    }
+}
+
+
+/// The storage mass (KIP-9) of a draft before signing, and when it is above the block limit the reason in words: the
+/// output whose share is largest and the least value at which it would fit, the rest of the transaction unchanged.
+/// `None` when the transaction fits. KIP-9 charges `C * p^2 / value` per output (`C` = 10^12, `p` its 100-byte storage
+/// units) less a term of the inputs only, so an output's share is the mass it adds over the same transaction with that
+/// output made very large.
+pub fn storage_refusal(tx: &Transaction, entries: &[UtxoEntry], labels: &[String]) -> Option<String> {
+    use crate::tx::BLOCK_STORAGE_LIMIT;
+    let total = masses(tx, entries).storage;
+    if total <= BLOCK_STORAGE_LIMIT {
+        return None;
+    }
+    let mut worst: Option<(usize, u64, u64)> = None;
+    for i in 0..tx.outputs.len() {
+        let mut t2 = tx.clone();
+        t2.outputs[i].value = 1_000_000_000_000_000_000;
+        let rest = masses(&t2, entries).storage;
+        let share = total.saturating_sub(rest);
+        if worst.map_or(true, |(_, s, _)| share > s) {
+            worst = Some((i, share, rest));
+        }
+    }
+    let (i, share, rest) = worst?;
+    let v = tx.outputs[i].value;
+    let label = labels.get(i).map(String::as_str).unwrap_or("output");
+    let kas = |x: u128| crate::error::kas_str(x as i128);
+    if rest >= BLOCK_STORAGE_LIMIT {
+        return Some(format!("the transaction's storage mass is {total} grams, above the block limit {BLOCK_STORAGE_LIMIT}, and stays above it whatever output {i} ({label}, {} KAS) holds: its outputs are too small for the inputs (KIP-9)", kas(v as u128)));
+    }
+    let need = (share as u128 * v as u128).div_ceil((BLOCK_STORAGE_LIMIT - rest) as u128);
+    Some(format!(
+        "output {i} ({label}, {} KAS) is too small to be mined: at least {} KAS (its storage mass is {share} grams and the rest of the transaction's {rest}, above the block limit {BLOCK_STORAGE_LIMIT}; KIP-9 charges 10^12 / value per output)",
+        kas(v as u128),
+        kas(need)
+    ))
 }
 
 impl OBuilt {
@@ -448,6 +529,9 @@ impl OBuilt {
         tx.set_storage_mass(rep.storage);
         tx.finalize();
         let mass = masses(&tx, &b.entries);
+        if let Some(m) = storage_refusal(&tx, &b.entries, &b.output_labels) {
+            return invalid(m);
+        }
         let total_in: u64 = b.entries.iter().map(|e| e.amount).sum();
         let total_out: u64 = tx.outputs.iter().map(|o| o.value).sum();
         let units = crate::verify::run_inputs(&tx, &b.entries, crate::verify::Meter::Unlimited).into_iter().map(|r| r.unwrap_or(0)).collect();
@@ -543,6 +627,12 @@ pub struct OpenTerms {
 /// T1': in 0 the long order, 1 the short order, 2 the slot (bind), then the funding; out 0 / 1 the orders' rest, 2 the
 /// pair (a genesis authored by the first funding input), 3 the slot, 4 the premium to the underwriter, then change.
 pub fn open(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &OpenTerms, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, OPair)> {
+    open_with(long, short, slot, t, funder, change_to, rate, None)
+}
+
+/// `open` with an optional plain UTXO of the underwriter that joins the premium in one output (see `renew_with`).
+#[allow(clippy::too_many_arguments)]
+pub fn open_with(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &OpenTerms, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64, uw_extra: Option<&KeyUtxo>) -> Result<(OBuilt, OPair)> {
     let k = pinned::kit();
     let (lo, so) = (&long.s, &short.s);
     if lo.side != LONG || so.side == LONG {
@@ -602,24 +692,27 @@ pub fn open(long: &OLive<OOpen>, short: &OLive<OOpen>, slot: &OLive<Bond>, t: &O
         if left > 0 {
             d.obj(OObj::Order(OOpen { size_left: left, ..o.s.clone() }), o.value - spend, o.id.map(|id| (i as u16, id)), "order rest");
         } else {
-            d.plain((o.value - spend) as i64, &o.s.owner, "order refund");
+            d.payout((o.value - spend) as i64, &o.s.owner, "order refund");
         }
     }
     d.genesis(OObj::Pair(p.clone()), p.floor() as u64, 3, "pair");
     d.obj(OObj::Slot(b2), slot.value, slot.id.map(|id| (2, id)), "slot");
-    d.plain(q(t.n, t.premium, m.p.scale, 0), &slot.s.owner, "premium");
+    let prem = q(t.n, t.premium, m.p.scale, 0);
+    d.pay_underwriter(&slot.s.owner, prem, change_to, uw_extra, "premium")?;
     d.fund(funder, change_to);
     if funder.is_empty() {
         return invalid("an open needs a funding input (it authors the pair's genesis)");
     }
-    Ok((d.finish()?, p))
+    Ok((d.finish().map_err(|e| premium_advice(e, prem))?, p))
 }
 
 // ---------------------------------------------------------------- claims
 
 /// What a claim's proposer funds: what the pending part and the remainder (n < s) hold beyond the pair's own value. That
 /// is the bond for a whole-pair claim, and the bond plus the carrier of the new part otherwise (the pending part's
-/// `refund`); a cure or a valid settlement of a liquidation pays exactly it back to the underwriter.
+/// `refund`). Of a liquidation's, only a cure pays it all back to the underwriter; a valid settlement pays the bond and
+/// the keeper fee and leaves the carrier in the forfeited part (the winner's); a void or refuted claim leaves the
+/// carrier in the restored part and pays the bond to the defender (and the disputer) (review 9, R9-N1).
 pub fn funded_by_proposer(pair: &OLive<OPair>, w: &OPending) -> i64 {
     let p = &pair.s;
     let rest = if w.n < p.size { p.rest_value(pair.value, w.n) } else { 0 };
@@ -642,8 +735,10 @@ pub struct ClaimTerms {
 /// its value goes, so the builder always pays what is left of it to the underwriter in an explicit output.
 /// * Liquidation: the proposer is the underwriter and funds everything the claim adds to the contract outputs,
 ///   `funded_by_proposer` = pending part + remainder - the pair's value: the bond, plus the carrier of the new part when
-///   n < s (the pending part's `refund`, which a cure or a valid settlement pays back to the underwriter, and which a
-///   void or refuted claim leaves in the restored part). So the vouch input funds that sum and `vouch.amount - sum`
+///   n < s (the pending part's `refund`, which only a cure pays back to the underwriter: a valid settlement pays it the
+///   bond and the keeper fee and leaves the carrier in the forfeited part, the winner's; a void or refuted claim leaves
+///   the carrier in the restored part and the bond goes to the defender, review 9 R9-N1). So the underwriter pays the
+///   carrier of every split it proposes and gets it back only on a cure. The vouch input funds that sum and `vouch.amount - sum`
 ///   goes back to the underwriter (no output if it is exactly zero; refused if the vouch holds less, or if the rest is
 ///   above zero but below the plain-output dust). The funder pays only the network fee.
 /// * Close: the closer posts the bond (and the carrier when n < s); the vouch value goes back in full and the funder,
@@ -675,10 +770,16 @@ pub fn propose(pair: &OLive<OPair>, c: &ClaimTerms, vouch: &KeyUtxo, funder: &[K
     if back < 0 {
         return invalid(format!("the vouch UTXO holds {} sompi, less than the {adds} sompi the claim adds to the contract outputs ({what}): a liquidation's proposer is the underwriter, whose vouch input funds them", vouch.amount));
     }
-    if back > 0 && back < PLAIN_DUST {
-        return invalid(format!("the vouch UTXO would leave {back} sompi for the underwriter, below the plain-output minimum {PLAIN_DUST}: vouch with a UTXO of exactly {adds} sompi ({what}) or at least {} sompi", adds + PLAIN_DUST));
+    // A remainder too small for an output of its own (KIP-9 storage mass) joins the funder's change when that goes to
+    // the underwriter's key; otherwise the vouch must leave nothing or at least VIABLE_OUTPUT_MIN.
+    let folded = back > 0 && (back as u64) < VIABLE_OUTPUT_MIN && *change_to == vouch.key;
+    if back > 0 && (back as u64) < VIABLE_OUTPUT_MIN && !folded {
+        return invalid(format!(
+            "the vouch UTXO would leave {back} sompi for the underwriter, too small for an output of its own (at least {VIABLE_OUTPUT_MIN} sompi to be mined): vouch with a UTXO of exactly {adds} sompi ({what}) or at least {} sompi, or fund the claim from the underwriter's key (the remainder then joins its change)",
+            adds + VIABLE_OUTPUT_MIN as i64
+        ));
     }
-    if back > 0 {
+    if back > 0 && !folded {
         d.plain(back, &vouch.key, "underwriter: the vouch input's remainder back");
     }
     d.fund(funder, change_to);
@@ -960,19 +1061,19 @@ pub fn finalize(pending: &OLive<OPending>, funder: &[KeyUtxo], change_to: &[u8; 
     match &s {
         Settlement::Close { long, short } => {
             if *long > 0 {
-                d.plain(*long, &w.long_key, "long");
+                d.payout(*long, &w.long_key, "long");
             }
             if *short > 0 {
                 last = Some((*short, w.short_key, "short"));
             }
         }
         Settlement::Forfeit { part, value, uw } => {
-            d.plain(*uw, &w.b.uw_key, "underwriter: bond and fee");
+            d.payout(*uw, &w.b.uw_key, "underwriter: bond and fee");
             d.obj(OObj::Pair(part.clone()), *value as u64, Some((0, id)), "forfeited part");
         }
         Settlement::Restore { part, value, defender, disputer } => {
             if *defender > 0 {
-                d.plain(*defender, &w.defender(), "defender: the bond");
+                d.payout(*defender, &w.defender(), "defender: the bond");
             }
             d.obj(OObj::Pair(part.clone()), *value as u64, Some((0, id)), "restored part");
             if *disputer > 0 {
@@ -1000,7 +1101,7 @@ pub fn cure(pending: &OLive<OPending>, funder: &[KeyUtxo], change_to: &[u8; 32],
     let loser = if w.side == LONG { w.long_key } else { w.short_key };
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.contract(pending, OWhich::Pending, w.redeem(k), "cure", vec![Arg::Sig(loser)], "pending part", 0);
-    d.plain(w.refund, &w.b.uw_key, "underwriter: refund");
+    d.payout(w.refund, &w.b.uw_key, "underwriter: refund");
     d.obj(OObj::Pair(c.clone()), v as u64, Some((0, id)), "cured part");
     d.fund(funder, change_to);
     Ok((d.finish()?, c))
@@ -1011,6 +1112,12 @@ pub fn cure(pending: &OLive<OPending>, funder: &[KeyUtxo], change_to: &[u8; 32],
 /// A renewal of up to 7 pairs of one slot in one bind at lock time `lock`: in 0..k the pairs, k the slot, then the
 /// funding; out 0..k the renewed pairs, k the slot, k+1 the premiums to the underwriter, then change.
 pub fn renew(pairs: &[OLive<OPair>], slot: &OLive<Bond>, lock: u64, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<(OBuilt, Vec<OPair>)> {
+    renew_with(pairs, slot, lock, funder, change_to, rate, None)
+}
+
+/// `renew` with an optional plain UTXO of the underwriter that joins the premium in one output (when the funder's change
+/// does not go to the underwriter, a premium below the viable output size could not be paid on its own).
+pub fn renew_with(pairs: &[OLive<OPair>], slot: &OLive<Bond>, lock: u64, funder: &[KeyUtxo], change_to: &[u8; 32], rate: u64, uw_extra: Option<&KeyUtxo>) -> Result<(OBuilt, Vec<OPair>)> {
     let k = pinned::kit();
     if pairs.is_empty() || pairs.len() > 7 {
         return invalid("one bind renews 1 to 7 pairs");
@@ -1022,6 +1129,9 @@ pub fn renew(pairs: &[OLive<OPair>], slot: &OLive<Bond>, lock: u64, funder: &[Ke
     for (i, lp) in pairs.iter().enumerate() {
         if lp.s.b.expiry + lp.s.m.bond.term != x2 || lp.s.b.uw_id != slot.idb() {
             return invalid("one bind renews pairs of its own slot with one expiry");
+        }
+        if let Some(why) = lp.s.unrenewable_why(lp.daa) {
+            return invalid(why);
         }
         let (r, pay) = lp.s.renewed().ok_or_else(|| Error::Invalid("the premium would leave the range no wider than both maintenance bands: the pair cannot be renewed".into()))?;
         claims.push(Claim::input(i, lp.s.cover_of(lp.s.size)));
@@ -1042,9 +1152,9 @@ pub fn renew(pairs: &[OLive<OPair>], slot: &OLive<Bond>, lock: u64, funder: &[Ke
         d.obj(OObj::Pair(r.clone()), lp.value - pay as u64, lp.id.map(|id| (i as u16, id)), "renewed pair");
     }
     d.obj(OObj::Slot(b2), slot.value, slot.id.map(|id| (kk as u16, id)), "slot");
-    d.plain(prem, &slot.s.owner, "premium");
+    d.pay_underwriter(&slot.s.owner, prem, change_to, uw_extra, "premium")?;
     d.fund(funder, change_to);
-    Ok((d.finish()?, renewed))
+    Ok((d.finish().map_err(|e| premium_advice(e, prem))?, renewed))
 }
 
 /// A lapse settle (anyone): in 0 the pair, then the funding; out 0 the long, change, the short last.
@@ -1056,7 +1166,7 @@ pub fn lapse_settle(pair: &OLive<OPair>, funder: &[KeyUtxo], change_to: &[u8; 32
     d.lock(p.lapse_from());
     d.contract(pair, OWhich::Pair, p.redeem(k), "lapseSettle", vec![], "pair", 0);
     if l > 0 {
-        d.plain(l, &p.long_key, "long");
+        d.payout(l, &p.long_key, "long");
     }
     d.fund(funder, change_to);
     if s > 0 {
@@ -1120,15 +1230,17 @@ pub fn transfer_bounds(p: &OPair, side: i64, x: i64, nb: i64) -> Result<(i64, i6
         }
         // nb <= bl (no-downgrade: the stayer's counterparty bound may not rise), healthy at x
         // (x * (10^4 - mmr) >= nb * 10^4), nb >= 0, and the new range within the cover rate (bs - nb <= coverRate).
+        // Review 9 (R9-F3): below bl only as far as the short's reach leaves room (`shortReach() - nb <= coverRate`);
+        // the leaver's own bound is always allowed.
         let healthy = ((x as i128) * (bps - mp.mmr_bps as i128) / bps) as i64;
-        let lo = 0i64.max(p.bs - p.b.cover_rate);
+        let lo = p.growth_limit(LONG).min(p.bl);
         let hi = p.bl.min(healthy);
         let rule = if nb > p.bl {
             format!("no-downgrade: the entrant's long bound may not be above the leaver's bankruptcy price bl {} KAS", kas(p.bl))
         } else if nb > healthy {
             format!("the entrant's long must be healthy at {} KAS: its bound at most {} KAS ({} % maintenance)", kas(x), kas(healthy), mp.mmr_bps as f64 / 100.0)
         } else if nb < lo {
-            format!("the new range {} .. {} KAS would exceed the cover rate {} KAS per unit", kas(nb), kas(p.bs), kas(p.b.cover_rate))
+            format!("the entrant's long bound may be at least {} KAS: the range within the cover rate {} KAS per unit, leaving the short its share up to {} KAS (review 9: each side's half of the cover from the entry)", kas(lo), kas(p.b.cover_rate), kas(p.short_reach()))
         } else {
             String::new()
         };
@@ -1141,13 +1253,13 @@ pub fn transfer_bounds(p: &OPair, side: i64, x: i64, nb: i64) -> Result<(i64, i6
         // cover rate (nb - bl <= coverRate).
         let healthy = (((x as i128) * (bps + mp.mmr_bps as i128) + bps - 1) / bps) as i64;
         let lo = p.bs.max(healthy);
-        let hi = mp.price_max.min(p.bl + p.b.cover_rate);
+        let hi = p.growth_limit(SHORT).max(p.bs);
         let rule = if nb < p.bs {
             format!("no-downgrade: the entrant's short bound may not be below the leaver's bankruptcy price bs {} KAS", kas(p.bs))
         } else if nb < healthy {
             format!("the entrant's short must be healthy at {} KAS: its bound at least {} KAS ({} % maintenance)", kas(x), kas(healthy), mp.mmr_bps as f64 / 100.0)
         } else if nb > hi {
-            format!("the new range {} .. {} KAS would exceed the cover rate {} KAS per unit (or priceMax {} KAS)", kas(p.bl), kas(nb), kas(p.b.cover_rate), kas(mp.price_max))
+            format!("the entrant's short bound may be at most {} KAS: the range within the cover rate {} KAS per unit, leaving the long its share down to {} KAS (review 9: each side's half of the cover from the entry), and priceMax {} KAS", kas(hi), kas(p.b.cover_rate), kas(p.long_reach()), kas(mp.price_max))
         } else {
             String::new()
         };
@@ -1191,7 +1303,7 @@ pub fn transfer(pair: &OLive<OPair>, side: i64, x: i64, nb: i64, entrant: [u8; 3
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.contract(pair, OWhich::Pair, p.redeem(k), "transfer", vec![iv(side), iv(p.size), iv(x), iv(nb), bv(&entrant), bv(&[0; 32]), iv(if pay >= PLAIN_DUST { 1 } else { 0 })], "pair", p.m.p.quiet_daa as u64);
     if pay >= PLAIN_DUST {
-        d.plain(pay, &leaver, "leaver");
+        d.payout(pay, &leaver, "leaver");
     }
     // Review 6: the entrant's pair starts a fresh covenant id (a genesis authored by the pair input), which transfer checks.
     d.genesis(OObj::Pair(part.clone()), (part.range_of(p.size) + keep + if pay < PLAIN_DUST { pay } else { 0 }) as u64, 0, "pair");
@@ -1217,7 +1329,7 @@ pub fn mutual_close(pair: &OLive<OPair>, x: i64, funder: &[KeyUtxo], change_to: 
     let mut d = ODraft::new(rate, FeeMode::Relay);
     d.contract(pair, OWhich::Pair, p.redeem(k), "mutualClose", vec![iv(p.size), iv(x)], "pair", p.m.p.quiet_daa as u64);
     if lp > 0 {
-        d.plain(lp, &p.long_key, "long");
+        d.payout(lp, &p.long_key, "long");
     }
     d.fund(funder, change_to);
     if sp > 0 {
@@ -1366,7 +1478,8 @@ pub fn pool_close(pool: &OLive<Js>, change_to: &[u8; 32], rate: u64) -> Result<O
     let c = d.out(0, p2pk_spk(change_to), None, "the pool's base (absorbs the fee)", None);
     d.change = Some(c);
     if b >= crate::judge::BURN_DUST {
-        d.out(b as u64, crate::lock::burn_spk(), None, "burn", None);
+        // A burn the contract fixes at its own output (at least b): below VIABLE_OUTPUT_MIN the closer's base tops it up.
+        d.out((b as u64).max(VIABLE_OUTPUT_MIN), crate::lock::burn_spk(), None, "burn", None);
     }
     d.finish()
 }
