@@ -4,6 +4,24 @@ Decentralized derivatives on Kaspa.
 
 Research prototype. Testnet only.
 
+## Status — read this first
+
+- **Not audited. Not for mainnet.** Nothing here is deployed on mainnet, and the tools refuse mainnet. Do not put real
+  funds behind these contracts.
+- **Known open findings.** The contracts are still under adversarial review (`docs/audit/`). The latest review of the
+  oracle-market family reports unfixed findings, including one that makes a false price claim profitable when nobody
+  contests it. The review reports describe attacks in detail; they are published so that the design can be checked, not
+  because the flaws are fixed.
+- **No operator.** There is no hosted service, no admin key and no upgrade path. The author runs no executor,
+  underwriter or judge stake. Anything on testnet-10 is a test.
+- **Moving target.** Contract templates, parameters and transaction shapes change between commits; objects created by
+  one commit are not guaranteed to be usable with the next.
+- **No warranty.** See `LICENSE`.
+
+Where to start: `docs/DESIGN.md` (the pair as a price range, book-evidence markets), `docs/DESIGN-ORACLE-2.md` and
+`docs/DESIGN-ORACLE-IMPL.md` (markets with no on-chain book), `docs/THREAT_MODEL.md`, `docs/TESTNET.md` (runbook),
+`docs/LIVE-1.md` and `docs/LIVE-2.md` (what ran on testnet-10).
+
 ## Building
 
 KPF reuses KOB's covenant toolchain by path, from a pinned clone that is not committed:
