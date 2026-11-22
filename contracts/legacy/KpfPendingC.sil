@@ -1,0 +1,259 @@
+pragma silverscript ^0.1.0;
+
+// KpfPendingC: a part of a committee-market pair (KpfPairC) against which a claim at an attested price is pending
+// (docs/DESIGN-COMMITTEE.md 3). KpfPairC.propose writes it under a fresh covenant id that it checks and names itself
+// as its maker, after reading the price from an epoch table of the market's committee (KpfEpochTable.attest) in the same
+// transaction. The price needs no contest and no verdict: the committee's signatures are the price. What is still
+// open when the claim lands is time: a data signature has no age a script can read and a transaction proves only that
+// the present is at least its lock time, so a signed price signed long ago could be used when it suits. The one exact time a
+// covenant reads is the DAA score of a UTXO it spends: this part's own, P.
+//
+// A claim is valid iff P - t0 <= lateDaa. Entries:
+//   cure(s)      kind 2 only, the loser's signature, any time before finalize: the loser's bound moves to cureBound,
+//                the proposer is repaid its refund (the carrier it funded for a part of a pair)
+//   finalize()   anyone; a valid liquidation only once this part is graceDaa old (CSV), the loser's time to cure; a
+//                close, and a void claim of either kind, at once. Valid: settle. kind 1: the closer is paid at the attested price moved by g against it (a long at
+//                floor(p (10^4 - g) / 10^4), a short at ceil(p (10^4 + g) / 10^4), clamped to [bl, bs]) plus its
+//                refund, the other party the rest. kind 2 (forfeit and keep): the forfeited part with this UTXO's
+//                value less the fee, the fee to the proposer. kind 3 (trim): the pair with the side's bound at
+//                cureBound (cureHash), what the narrower range frees to the side's owner. Void: the part is restored
+//                with this UTXO's whole value.
+// Every branch ends in a KpfPairC state precomputed by propose (restore, cure, forfeit; P2SH hashes, makers zero;
+// cure and forfeit unlisted, restore with the pair's listings) or in plain outputs, and finalize needs no key and no evidence: no part is locked.
+// DESIGN: a void claim keeps the carrier its proposer funded (the restored part needs one beside its remainder), so a
+// claim landed late on purpose costs its proposer that carrier and a fee; a whole pair has none to lose, and is frozen
+// by a void claim for one block (review C1, C1-F3: a void liquidation waited graceDaa before).
+// DESIGN: no bond. A bond paid a party wronged by a false price when a contest refuted it; here nobody states a price
+// and nothing is contested. What a false price costs is the signers' stake (stage 2 of the note).
+contract KpfPendingC(
+    byte[32] init_market,
+    byte[32] init_committeeId,
+    byte[32] init_feedHash,
+    int init_termDaa,
+    int init_scale,
+    int init_priceMax,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_graceDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    int init_kind,
+    int init_side,
+    int init_n,
+    int init_bl,
+    int init_bs,
+    int init_quote,
+    int init_t0,
+    int init_cureBound,
+    int init_fee,
+    int init_refund,
+    pubkey init_proposerKey,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    int init_expiry,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    byte[32] init_restoreHash,
+    byte[32] init_cureHash,
+    byte[32] init_forfeitHash,
+    byte[32] init_mkParent
+) {
+    // The committee market block (state [0..216)), byte for byte the pair's (KpfPairC describes every field).
+    byte[32] market = init_market;
+    byte[32] committeeId = init_committeeId;
+    byte[32] feedHash = init_feedHash;
+    int termDaa = init_termDaa;
+    int scale = init_scale;
+    int priceMax = init_priceMax;
+    int mmrBps = init_mmrBps;
+    int gBps = init_gBps;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int graceDaa = init_graceDaa;
+    int lateDaa = init_lateDaa;
+    int quietDaa = init_quietDaa;
+    // The claim (state [216..339)).
+    int kind = init_kind;                // 1 close, 2 liquidation, 3 trim
+    int side = init_side;                // kind 1: the closer; kind 2: the loser; kind 3: the side trimmed
+    int n = init_n;
+    int bl = init_bl;
+    int bs = init_bs;
+    int quote = init_quote;              // p, the attested price (sompi per whole unit)
+    int t0 = init_t0;                    // the signed price's DAA
+    int cureBound = init_cureBound;      // kind 2: the loser's bound after a cure (0: no cure); kind 3: the bound asked for
+    int fee = init_fee;                  // kind 2: the proposer's fee at settlement
+    int refund = init_refund;            // the carrier the proposer funded when n < s (0 for a whole pair)
+    pubkey proposerKey = init_proposerKey; // kind 2: who built the claim; kind 1: the closer; kind 3: the side's owner
+    // The pair's entry, keys, lease and listings when the claim was proposed (state [339..477)), then the pair states
+    // this part may become (state [477..576)).
+    int entryPrice = init_entryPrice;
+    pubkey longKey = init_longKey;
+    pubkey shortKey = init_shortKey;
+    int expiry = init_expiry;
+    int longAsk = init_longAsk;
+    int longMin = init_longMin;
+    int longTip = init_longTip;
+    int shortBid = init_shortBid;
+    int shortMin = init_shortMin;
+    int shortTip = init_shortTip;
+    byte[32] restoreHash = init_restoreHash;
+    byte[32] cureHash = init_cureHash;
+    byte[32] forfeitHash = init_forfeitHash;
+    // The maker (state [576..609)): the outpoint commitment of the pair input whose propose wrote this part
+    // (KpfPairC.me), so two pairs that would write one pending state never both accept one output.
+    byte[32] mkParent = init_mkParent;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant KIND_LIQ = 2;
+    int constant KIND_TRIM = 3;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+
+    // As KpfPair.quoteOf.
+    function quoteOf(int x, int r, int c) : int {
+        int m = x % scale;
+        int q = x / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    function clampP(int p) : int {
+        int c = p;
+        if (c < bl) { c = bl; }
+        if (c > bs) { c = bs; }
+        return c;
+    }
+
+    // The single output of this id: the P2SH of the hash h, holding at least v.
+    function only(byte[32] h, int v) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovOutputCount(selfId) == 1);
+        int o = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SH(h)));
+        require(tx.outputs[o].value >= v);
+    }
+
+    // Cure (DESIGN 4.5d), kind 2 only. The loser's owner moves its bound exactly to cureBound and repays the proposer
+    // its refund at output i; the cured part holds its range floor and this UTXO's value less the refund plus
+    // ceil(q(n, moved distance)), as KpfPending.cure.
+    entry cure(sig s) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        // A liquidation only: a trim's cureBound is the bound it asks for, which only a valid claim gives (finalize).
+        require(kind == KIND_LIQ);
+        byte[] z8 = byte[](0 as byte[8]);
+        require(cureHash != byte[32](z8 + z8 + z8 + z8));
+        int b0 = bl;
+        int b1 = bs;
+        int add = 0;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            b0 = cureBound;
+            add = quoteOf(n, bl - cureBound, scale - 1);
+        } else {
+            signedBy(s, shortKey);
+            b1 = cureBound;
+            add = quoteOf(n, cureBound - bs, scale - 1);
+        }
+        only(cureHash, quoteOf(n, b1 - b0, 0) + carrier);
+        int o = OpCovOutputIdx(OpInputCovenantId(self), 0);
+        require(tx.outputs[o].value - tx.inputs[self].value + refund >= add);
+        payTo(self, proposerKey, refund);
+    }
+
+    // The settlement of a valid claim. kind 1: the closer is paid at the attested price moved by g against it plus its
+    // refund at output i (long) or M - 1 - i (short), the other party the rest; no output of the id; a payout of the
+    // other party below dust goes to the closer. kind 2 (forfeit and keep): the forfeited part (forfeitHash) with this
+    // UTXO's value less the fee, the fee to the proposer at output i. kind 3: the trimmed pair, the freed margin to the
+    // side's owner at output i.
+    function settle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        int v = tx.inputs[self].value;
+        if (kind == KIND_CLOSE) {
+            require(OpCovOutputCount(selfId) == 0);
+            int pc = quote * (BPS - gBps) / BPS;
+            if (side == SIDE_SHORT) { pc = (quote * (BPS + gBps) + BPS - 1) / BPS; }
+            int c = clampP(pc);
+            int owe = quoteOf(n, c - bl, 0);
+            if (side == SIDE_SHORT) { owe = quoteOf(n, bs - c, 0); }
+            int me = owe + refund;
+            int other = v - me;
+            if (other < PLAIN_DUST) {
+                me = v;
+                other = 0;
+            }
+            int lp = me;
+            int sp = other;
+            if (side == SIDE_SHORT) {
+                lp = other;
+                sp = me;
+            }
+            payTo(self, longKey, lp);
+            if (sp > 0) {
+                int j = tx.outputs.length - 1 - self;
+                require(j >= tx.inputs.length);
+                payTo(j, shortKey, sp);
+            }
+        } else {
+            if (kind == KIND_TRIM) {
+                // The side's bound moves inward to cureBound (cureHash is that pair state); what the narrower range
+                // frees goes to its owner (proposerKey) at output i, the rest of this UTXO's value stays in the pair.
+                int kept = bs - cureBound;
+                if (side == SIDE_SHORT) { kept = cureBound - bl; }
+                int take = quoteOf(n, bs - bl, 0) - quoteOf(n, kept, 0);
+                only(cureHash, v - take);
+                payTo(self, proposerKey, take);
+            } else {
+                only(forfeitHash, v - fee);
+                payTo(self, proposerKey, fee);
+            }
+        }
+    }
+
+    // Finalize: anyone. P is this UTXO's own DAA score (refused while unknown); the claim is valid iff it landed within
+    // lateDaa of its time. A valid liquidation waits graceDaa (the loser's time to cure); a close and a void claim do not.
+    entry finalize() {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        if (p - t0 <= lateDaa) {
+            if (kind == KIND_LIQ) {
+                require(this.ageDaa >= graceDaa);
+            }
+            settle();
+        } else {
+            only(restoreHash, tx.inputs[self].value);
+        }
+    }
+}

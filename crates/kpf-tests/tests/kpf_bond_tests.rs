@@ -1,5 +1,5 @@
 //! `KpfBond` (docs/DESIGN-ORACLE-IMPL.md) in the script engine: every path positive and negative, with the stand-in
-//! pair and order of `contracts/stubs/`. Boundaries are tested at the boundary and one either side. Every verdict is
+//! pair and order of `contracts/legacy/stubs/`. Boundaries are tested at the boundary and one either side. Every verdict is
 //! also the model's (`kpf_protocol::bond`): `agree` fails the test if the engine and the model differ.
 //!
 //! Fixture market (`bondkit::params`): step 100 DAA, term 800 (8 steps), tail 200, `a` = 10, `U` = 50, rho 1. A slot

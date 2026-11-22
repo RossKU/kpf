@@ -1,0 +1,195 @@
+pragma silverscript ^0.1.0;
+
+// KpfTExitRefute: the end of a "no price" claim by the prices it denies.
+//   refute(who, ageb, slotLen, st, moving, side, since, bond, t1, a1, t2, a2, rkey)   anyone: an epoch table of each leg's
+//       committee is spent by its attest for a signed price at or after `since` (who: the claim and the epoch tables; the signed prices may
+//       differ a leg). The position again; the bond shared by `rkey` and the party the claim was made against.
+//
+// When the committee stops signing a market, no claim on a position in it can be proved and none can be trusted. The
+// way out is declared too: a party states "no price since the DAA `since`" and posts the bond. If nobody shows a
+// signed price of each of the position's markets signed for a DAA at or after `since` within the position's exit time, the
+// position is settled at its entries (each party its margin). Whoever shows them ends the claim and shares the bond
+// with the other party. A claim whose `since` is after the DAA it landed at is ended by anyone the same way.
+contract KpfTExitRefute(byte[32] EPOCH_TABLE_TPL, int EPOCH_TABLE_PRE, int EPOCH_TABLE_SUF, byte[4] ATTEST_TAG, int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant BPS = 10000;
+    int constant STATE_AT = 2;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant AKEY_AT = 1;
+    int constant BKEY_AT = 34;
+    int constant AMARGIN_AT = 67;
+    int constant BMARGIN_AT = 76;
+    // The time a "no price" claim waits (the position's `expiry` field, which the thin family reads as a duration).
+    int constant QUIET_AT = 85;
+    int constant LATE_AT = 94;
+    int constant DISPUTE_AT = 103;
+    int constant BOND_AT = 112;
+
+    // The epoch table (KpfEpochTable) and the signature script of its attest, as KpfCrossC reads them.
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant SPREAD_MARGIN = 4;
+    int constant ATTEST_T0_AT = 33;
+    int constant ATTEST_P_AT = 42;
+    int constant ATTEST_BITS_AT = 51;
+    int constant ATTEST_PRICES_AT = 60;
+    int constant ATTEST_SIGS_AT = 182;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+    int constant LEG1_AT = 90;
+    int constant LEG2_AT = 201;
+    int constant G_AT = 19;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // A "no price" claim's state hash: the position, the side that made it, the DAA since which it says the committee
+    // signed nothing for one of the position's markets, and the bond.
+    function exitHash(byte[32] position, int side, int since, int bond) : byte[32] {
+        return blake2b(i9(2) + p33(position) + i9(side) + i9(since) + i9(bond));
+    }
+
+    // Input u is an epoch table of the committee `rid` spent by its `attest` for the market `mkt` and the time t0, attesting the
+    // price a (KpfCrossC.priced, word for word: the epoch table's script is the pinned template, its signature script shows
+    // the entry's arguments, and its own script checks the members' signatures and that it goes on): the price counted,
+    // at most pm. The committee's spread leaves the position's tolerance g a margin.
+    function seenPrice(int u, int t0, byte[32] mkt, byte[32] rid, int a, int pm, int g) : int {
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        byte[] z8 = byte[](0 as byte[8]);
+        require(rid != byte[32](z8 + z8 + z8 + z8));
+        require(OpInputCovenantId(u) == rid);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        int spread = int(byte[8](trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN - 8, EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN)));
+        require(spread >= 0);
+        require(spread * SPREAD_MARGIN <= g);
+        require(OpTxInputScriptSigSubstr(u, 0, ATTEST_T0_AT) == p33(mkt));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_T0_AT, ATTEST_P_AT) == i9(t0));
+        require(a >= 0);
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_BITS_AT) == i9(a));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_BITS_AT, ATTEST_BITS_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_PRICES_AT, ATTEST_PRICES_AT + 2) == byte[](0x4c78));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_SIGS_AT, ATTEST_SIGS_AT + 3) == byte[](0x4dc003));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+        int p = a;
+        if (p > pm) { p = pm; }
+        return p;
+    }
+
+    entry refute(byte[24] who, byte[8] ageb, int slotLen, byte[312] st, byte[138] moving, int side, int since, int bond, int t1, int a1, int t2, int a2, byte[32] rkey) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] sb0 = byte[](st);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(blake2b(sb0)) + mv);
+        require(exitHash(position, side, since, bond) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int g = int(byte[8](sb0.slice(G_AT, G_AT + 8)));
+        // The committee signed each market of the position for a DAA at or after `since`.
+        require(t1 >= since);
+        int p1 = seenPrice(int(byte[8](who.slice(8, 16))), t1, byte[32](sb0.slice(LEG1_AT + 1, LEG1_AT + 1 + 32)), byte[32](sb0.slice(LEG1_AT + 34, LEG1_AT + 34 + 32)), a1, a1, g);
+        require(p1 >= 0);
+        if (int(byte[8](sb0.slice(LEG2_AT + 85, LEG2_AT + 85 + 8))) > 0) {
+            require(who.slice(8, 16) != who.slice(16, 24));
+            require(t2 >= since);
+            int p2 = seenPrice(int(byte[8](who.slice(16, 24))), t2, byte[32](sb0.slice(LEG2_AT + 1, LEG2_AT + 1 + 32)), byte[32](sb0.slice(LEG2_AT + 34, LEG2_AT + 34 + 32)), a2, a2, g);
+            require(p2 >= 0);
+        } else {
+            // With one leg the third place names the first epoch table.
+            require(who.slice(16, 24) == who.slice(8, 16));
+        }
+        int v = tx.inputs[j].value;
+        require(bond >= 0);
+        require(v >= bond);
+        becomes(j, rs, slotLen, position, v - bond);
+        // Half of the claimer's bond to who ended the claim, at the mirror of the claim's index; the other half to the
+        // party the claim was made against, the output before it.
+        int half = bond / 2;
+        int m = tx.outputs.length - 1 - 2 * j;
+        require(m - 1 >= tx.inputs.length);
+        if (bond - half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= bond - half);
+        }
+        pubkey other = pubkey(byte[32](mv.slice(AKEY_AT, AKEY_AT + 32)));
+        if (side == SIDE_A) {
+            other = pubkey(byte[32](mv.slice(BKEY_AT, BKEY_AT + 32)));
+        }
+        if (half > 0) {
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(other)));
+            require(tx.outputs[m - 1].value >= half);
+        }
+        require(int(ageb) >= 0);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

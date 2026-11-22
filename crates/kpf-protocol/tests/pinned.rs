@@ -26,19 +26,19 @@ fn source(name: &str) -> String {
 fn manifest_matches_sources_and_embedded_artifacts() {
     let m = manifest();
     assert_eq!(m.format, "kpf-artifacts/1");
-    assert_eq!(m.kpf_pair.source_sha256, sha(source("KpfPair.sil").as_bytes()), "contracts/KpfPair.sil changed: regenerate the artifacts");
-    assert_eq!(m.kpf_open.source_sha256, sha(source("KpfOpen.sil").as_bytes()), "contracts/KpfOpen.sil changed: regenerate the artifacts");
+    assert_eq!(m.kpf_pair.source_sha256, sha(source("legacy/KpfPair.sil").as_bytes()), "contracts/legacy/KpfPair.sil changed: regenerate the artifacts");
+    assert_eq!(m.kpf_open.source_sha256, sha(source("legacy/KpfOpen.sil").as_bytes()), "contracts/legacy/KpfOpen.sil changed: regenerate the artifacts");
     assert_eq!(m.kpf_pair.artifact_sha256, sha(norm(pair_artifact_text()).as_bytes()));
     assert_eq!(m.kpf_open.artifact_sha256, sha(norm(open_artifact_text()).as_bytes()));
-    assert_eq!(m.kpf_pending.source_sha256, sha(source("KpfPending.sil").as_bytes()), "contracts/KpfPending.sil changed: regenerate the artifacts");
+    assert_eq!(m.kpf_pending.source_sha256, sha(source("legacy/KpfPending.sil").as_bytes()), "contracts/legacy/KpfPending.sil changed: regenerate the artifacts");
     assert_eq!(m.kpf_pending.artifact_sha256, sha(norm(pending_artifact_text()).as_bytes()));
-    assert_eq!(m.kpf_lock.source_sha256, sha(source("KpfLock.sil").as_bytes()), "contracts/KpfLock.sil changed: regenerate the artifacts");
+    assert_eq!(m.kpf_lock.source_sha256, sha(source("legacy/KpfLock.sil").as_bytes()), "contracts/legacy/KpfLock.sil changed: regenerate the artifacts");
     assert_eq!(m.kpf_lock.artifact_sha256, sha(norm(lock_artifact_text()).as_bytes()));
 }
 
 #[test]
 fn sha256sums_cover_every_pinned_file() {
-    let sums = std::fs::read_to_string(contracts().join("artifacts/SHA256SUMS")).unwrap();
+    let sums = std::fs::read_to_string(contracts().join("legacy/artifacts/SHA256SUMS")).unwrap();
     let mut seen = 0;
     for line in sums.lines() {
         let (h, path) = line.split_once("  ").expect("sha256sum line");
@@ -46,7 +46,7 @@ fn sha256sums_cover_every_pinned_file() {
         assert_eq!(h, sha(text.as_bytes()), "{path}");
         seen += 1;
     }
-    assert_eq!(seen, 9, "KpfPair.sil, KpfOpen.sil, KpfPending.sil, KpfLock.sil, the four artifacts and the manifest");
+    assert_eq!(seen, 9, "legacy/KpfPair.sil, KpfOpen.sil, KpfPending.sil, KpfLock.sil, the four artifacts and the manifest");
     assert!(sums.contains("artifacts/manifest.json"));
 }
 

@@ -1,0 +1,156 @@
+pragma silverscript ^0.1.0;
+
+// T3Claim (probe): the common path of a declared claim on an account that carries no logic (T3Slot). Nothing is
+// computed here: the claimer states what it is owed and posts a bond; if nobody disputes within the window, the
+// statement is paid. The arithmetic (T2Close, with the price notes) runs only when a claim is disputed.
+//
+// An account's state is two parts, hashed as blake2b(push(hash of the fixed part) + the moving part): the fixed part
+// is the terms and the legs (shown only to the script that computes); the moving part is 120 bytes: the two keys, the
+// two margins, the lease, lateDaa, the dispute window and the bond rate. A claim's state is the account's hash and
+// what was declared.
+//   declare(who, ageb, slotLen, fixed, moving, side, t0, a1, a2, amount, s)
+//       the owner of `side` signs: "at the prices a1 and a2 of the tick t0 I am owed `amount`". The account becomes
+//       a claim holding the account's value and a bond of bondBps of the pot.
+//   settle(who, ageb, slotLen, acct, moving, side, t0, a1, a2, amount, bond)
+//       anyone, once the claim is disputeDaa old and if it landed within lateDaa of its tick: the claimer is paid
+//       the amount and its bond, the other party the rest.
+// Not here (their size is the heavy script's or a settlement's): the dispute (a counter-bond, the claim marked), the
+// proof, a claim nobody proved, a claim that landed late, the liquidation and its cure.
+contract T3Claim(int init_version) {
+    int version = init_version;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant BPS = 10000;
+    int constant STATE_AT = 2;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    // Offsets of the values in the moving part.
+    int constant AKEY_AT = 1;
+    int constant BKEY_AT = 34;
+    int constant AMARGIN_AT = 67;
+    int constant BMARGIN_AT = 76;
+    int constant LATE_AT = 94;
+    int constant WINDOW_AT = 103;
+    int constant BOND_AT = 112;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    // The redeem script of the object at input j (its signature script's last push), checked against the input.
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // The claim's state hash: the account it is on and what was declared.
+    function claimHash(byte[32] acct, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(acct) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    entry declare(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[138] moving, int side, int t0, int a1, int a2, int amount, sig s) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        // The places this script does not read name the object it does: an object named at a place nobody reads would
+        // be spent under no rule.
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] acct = blake2b(p33(fixed) + mv);
+        require(acct == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int pot = iAt(mv, AMARGIN_AT) + iAt(mv, BMARGIN_AT);
+        require(amount >= 0);
+        require(amount <= pot);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        require(a1 >= 0);
+        require(a2 >= 0);
+        pubkey k = pubkey(byte[32](mv.slice(AKEY_AT, AKEY_AT + 32)));
+        if (side != SIDE_A) {
+            require(side == SIDE_B);
+            k = pubkey(byte[32](mv.slice(BKEY_AT, BKEY_AT + 32)));
+        }
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+        int bond = (pot / BPS) * iAt(mv, BOND_AT) + ((pot % BPS) * iAt(mv, BOND_AT)) / BPS;
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](claimHash(acct, side, t0, a1, a2, amount, bond)) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value + bond);
+        require(int(ageb) >= 0);
+        goesOn();
+    }
+
+    entry settle(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[138] moving, int side, int t0, int a1, int a2, int amount, int bond) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        // The places this script does not read name the object it does: an object named at a place nobody reads would
+        // be spent under no rule.
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] acct = blake2b(p33(fixed) + mv);
+        require(claimHash(acct, side, t0, a1, a2, amount, bond) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The dispute window has passed (the claim proves the age this script asks of it), and the claim landed
+        // within lateDaa of its tick.
+        require(int(ageb) >= iAt(mv, WINDOW_AT));
+        int landed = OpTxInputDaaScore(j);
+        require(landed >= 0);
+        require(landed - t0 <= iAt(mv, LATE_AT));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 0);
+        int v = tx.inputs[j].value;
+        int mine = amount + bond;
+        if (mine > v) { mine = v; }
+        int other = v - mine;
+        pubkey ka = pubkey(byte[32](mv.slice(AKEY_AT, AKEY_AT + 32)));
+        pubkey kb = pubkey(byte[32](mv.slice(BKEY_AT, BKEY_AT + 32)));
+        int pa = mine;
+        int pb = other;
+        if (side != SIDE_A) {
+            pa = other;
+            pb = mine;
+        }
+        // A at the claim's index, B at its mirror.
+        if (pa > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(ka)));
+            require(tx.outputs[j].value >= pa);
+        }
+        if (pb > 0) {
+            int m = tx.outputs.length - 1 - j;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(kb)));
+            require(tx.outputs[m].value >= pb);
+        }
+        goesOn();
+    }
+}

@@ -1,0 +1,108 @@
+{
+  "compiler": "silverscript-lang (vendor/kob @ ed16148, SilverScript v1.0.0), CompileOptions::default(); 0.1.0",
+  "contracts": {
+    "KpfCharge": {
+      "artifact": "KpfCharge.json",
+      "artifact_sha256": "e32b2875bd061feb5c35de84b5793c3432bdf22b3c1c21e73a105faba2849b5a",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfCharge.sil",
+      "source_sha256": "c9363598a8feaeded72dd83d3b068ec85bb1ebdb823698391ada6edaedf37bec",
+      "state_len": 284,
+      "suffix_len": 1534,
+      "template_hash": "1a74c3050d171a2fe074e0ac6de87fa3f20be56fd3b5d751e4d60cda6f18747c"
+    },
+    "KpfCommittee": {
+      "artifact": "KpfCommittee.json",
+      "artifact_sha256": "9815bcca50b566e1641a561d2ecc1481e2fe0ed98ed7e32715a5016d18a3a9f8",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfCommittee.sil",
+      "source_sha256": "c1807d9838592e91532c62f7cc8da59b8e2bb3d744c99350cb1aaf06cb93b4fc",
+      "state_len": 1274,
+      "suffix_len": 16142,
+      "template_hash": "4be7e7988db50e3b6182a276cab223df1bb444da1d734ed8733565c22bf78d98"
+    },
+    "KpfCrossC": {
+      "artifact": "KpfCrossC.json",
+      "artifact_sha256": "e07c4db9153e29bab3adf54c0c785f1c33c921096ed222e8b3e4903f4ab6028b",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfCrossC.sil",
+      "source_sha256": "fd4a3d223c8aca2bb3c50cd153360a471fafa4c0e3708241b7d0857865008d3c",
+      "state_len": 405,
+      "suffix_len": 6639,
+      "template_hash": "241da7f876605164030f86c62286e2da494ebc6fd399ef068244ad9a03e4ca88"
+    },
+    "KpfEpochTable": {
+      "artifact": "KpfEpochTable.json",
+      "artifact_sha256": "13c76e766d4cba48120ac848bd575061f0825a52595b647837095211661263ed",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfEpochTable.sil",
+      "source_sha256": "42a0eab369b2c24d2603486ed341e1698e46d3ca0edc9e6bd538d2a59fb8f953",
+      "state_len": 648,
+      "suffix_len": 2494,
+      "template_hash": "a9f78799641c29af0a208bbd120a8458ec774e63917c7351fddf8feb7b82db4c"
+    },
+    "KpfExit": {
+      "artifact": "KpfExit.json",
+      "artifact_sha256": "72435401dbf0ae105ac6e7b63862deb3f4bfd331e3ba85e4f423247de8876c58",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfExit.sil",
+      "source_sha256": "19089c46aac681f659b542f3da37134f5c72a756433526186dd59ab7e6e9f174",
+      "state_len": 191,
+      "suffix_len": 4447,
+      "template_hash": "7bb285e578c1dadd7323fa9f52219ef7073d79450c417aca553d84be62412fe1"
+    },
+    "KpfOpenC": {
+      "artifact": "KpfOpenC.json",
+      "artifact_sha256": "1e69c0e0b19f4070a7d014048b3f2659ce989ead7f29f9a113adf0e4b6b1f8dd",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfOpenC.sil",
+      "source_sha256": "de9db4fab336d3dfa055a0717a688ef7bc73bf2f88785ded31c8e5ad19d5dc2a",
+      "state_len": 330,
+      "suffix_len": 3899,
+      "template_hash": "4c8da09087672b20b02ac965c01ef1e6f57346bc0650fd99bf77ed67a7d38c61"
+    },
+    "KpfPairC": {
+      "artifact": "KpfPairC.json",
+      "artifact_sha256": "d1ad90471e194e8d7b0310301c6dd8873c550f05fe9f8ef7a66b3c11d30327fa",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfPairC.sil",
+      "source_sha256": "5c663da35d3fbb6734aafbfa7ba0240bd5fa79103320b1e597da8255a2746268",
+      "state_len": 546,
+      "suffix_len": 12790,
+      "template_hash": "754cf2ad2b61784b67e59d7bae5e62a98aa4342636e04a89a63a2e13194c0c2c"
+    },
+    "KpfPendingC": {
+      "artifact": "KpfPendingC.json",
+      "artifact_sha256": "06d53718e0f265c2b2efddd949919eaac5d69a0992f4ed7fb7ed3ac6ed549f33",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfPendingC.sil",
+      "source_sha256": "8ca686f32a77674a6dacf8436205f4ae334eb4a808d101576f99aff739963197",
+      "state_len": 609,
+      "suffix_len": 1338,
+      "template_hash": "e38a13163b17b77a47ce16a9be578851f5f655e4b7644c355cab4b850104d499"
+    },
+    "KpfPendingX": {
+      "artifact": "KpfPendingX.json",
+      "artifact_sha256": "51bf2863b9c4fb67b5c42d24dcf4369ea77a99de854c35e2ab728f6346a5aaf5",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfPendingX.sil",
+      "source_sha256": "5713e2430e30bb7405dc98c938a94c4119e918ae832776ce3264a4a24436c1bc",
+      "state_len": 669,
+      "suffix_len": 676,
+      "template_hash": "bc7b97932d382cecc65055ba291eb98c2964770eb37abe5d2cb31c3714d3dcff"
+    }
+  },
+  "format": "kpf-artifacts/committee-1",
+  "lengths": {
+    "committee": 17417,
+    "exit": 4639
+  },
+  "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
+  "tags": {
+    "attest": "c0db4275",
+    "committee_clear": "51bf7708",
+    "committee_slash": "6142d943",
+    "exit_clear": "51bf7708",
+    "exit_slash": "6142d943"
+  }
+}

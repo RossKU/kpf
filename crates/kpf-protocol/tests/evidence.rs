@@ -990,7 +990,7 @@ fn a_guaranteed_close_is_released_after_the_window() {
 }
 
 /// The builders refuse what the contracts refuse: an offer above the bond less 0.02 KAS; a guarantee of a part accepted
-/// after its evidence died; a dispute one tick short of the margin.
+/// after its evidence died; a dispute one time short of the margin.
 #[test]
 fn guarantee_builders_refuse_what_the_contracts_refuse() {
     let mut w = W::new();

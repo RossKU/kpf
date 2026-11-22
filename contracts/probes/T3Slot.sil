@@ -1,0 +1,31 @@
+pragma silverscript ^0.1.0;
+
+// T3Slot (probe): the one script of every object of the declared-claim form: an account, a claim on it. It holds the
+// hash of its state and the hashes of the four scripts allowed to move it. The logic beside it names the objects it
+// serves (a list of three 8-byte input indices, the first push of its signature script) and states the age it needs
+// of them (its second push, 8 bytes): a relative age is the spent input's own to prove, so the object proves the age
+// its logic asks for, and the logic asks for what the operation needs (the dispute window before a settlement).
+//   go(l, k)   input l is one of the allowed scripts, names this input at place k, and this input is as old as that
+//              script's signature script says
+contract T3Slot(byte[32] LOGIC_A, byte[32] LOGIC_B, byte[32] LOGIC_C, byte[32] LOGIC_D, byte[32] init_stateHash) {
+    byte[32] stateHash = init_stateHash;
+
+    entry go(int l, int k) {
+        int self = this.activeInputIndex;
+        require(l >= 0);
+        require(l < tx.inputs.length);
+        require(l != self);
+        require(k >= 0);
+        require(k <= 2);
+        byte[] spk = tx.inputs[l].scriptPubKey;
+        require(spk == byte[](new ScriptPubKeyP2SH(LOGIC_A)) || spk == byte[](new ScriptPubKeyP2SH(LOGIC_B))
+            || spk == byte[](new ScriptPubKeyP2SH(LOGIC_C)) || spk == byte[](new ScriptPubKeyP2SH(LOGIC_D)));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+        require(OpTxInputScriptSigSubstr(l, 25, 26) == byte[](0x08));
+        int age = int(byte[8](OpTxInputScriptSigSubstr(l, 26, 34)));
+        require(age >= 0);
+        require(this.ageDaa >= age);
+        require(byte[](stateHash).length == 32);
+    }
+}

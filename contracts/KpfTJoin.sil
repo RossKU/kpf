@@ -1,0 +1,170 @@
+pragma silverscript ^0.1.0;
+
+// KpfTJoin: two positions of the same two users in two markets become one position of two legs, as a script under the
+// library's id. Its two parties' margins are one pot for both markets, and it is closed and liquidated on the whole
+// (the claims and their proofs read two legs).
+//   join(who, ageb, slotLen, st, moving, leg, turned, a2, b2, aq2, bq2, sa, sb)
+//       the two users sign (review T1b, F15: the position of two legs is read by no merge, novation or join, so a
+//       join ends each user's way out by a sale, for both markets; that is theirs to choose, not a third key's).
+//       who: the first position and the second, of one id (the library's registry: each is there by its parties'
+//       signatures). The first is shown whole (st, moving) and has one leg. The second has the same terms and the
+//       same two keys, in the same places or (turned = 1) the other way round, and its own leg (111 bytes: market,
+//       committee, scale, price limit, size, long for its A, entry), its two margins and asks, which are given. The
+//       position written has the first's leg, and the second's as its second leg: as it was, or short for A when the
+//       keys were the other way round (what the second's A held long, the first's A holds short). Each party's
+//       margins and asks are put together. No price is shown: each leg keeps its size and its entry, so at every pair
+//       of prices each party is owed what the two positions owed it, before the caps. Whoever sends the transaction
+//       keeps JOIN_TIP of what the two held (half from each party's margin).
+contract KpfTJoin(int JOIN_TIP, int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    int constant STATE_AT = 2;
+    int constant LATE_AT = 94;
+    int constant DISPUTE_AT = 103;
+    // In the fixed part: the first leg [90, 201) (its market first), the second [201, 312) (its size an int at 286).
+    int constant LEG_AT = 90;
+    int constant LEG2_AT = 201;
+    int constant LEG2_SIZE_AT = 286;
+    int constant KEYS_END = 66;
+    int constant TAIL_AT = 84;
+    int constant ASK_AT = 120;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry join(byte[24] who, byte[8] ageb, int slotLen, byte[312] st, byte[138] moving, byte[111] leg, int turned, int a2, int b2, int aq2, int bq2, sig sa, sig sb) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j1 = int(byte[8](who.slice(0, 8)));
+        int j2 = int(byte[8](who.slice(8, 16)));
+        // The third place names the second object: an object named at a place nobody reads would be spent under no rule.
+        require(who.slice(16, 24) == who.slice(8, 16));
+        require(j1 != j2);
+        byte[] r1 = slotOf(j1, slotLen);
+        byte[] r2 = slotOf(j2, slotLen);
+        byte[] t = byte[](st);
+        byte[] mv = byte[](moving);
+        require(blake2b(p33(blake2b(t)) + mv) == byte[32](r1.slice(STATE_AT, STATE_AT + 32)));
+        byte[] ba = byte[](sa);
+        require(ba.length == 65);
+        require(ba[64] == SIGHASH_ALL);
+        require(checkSig(sa, pubkey(byte[32](mv.slice(1, 33)))));
+        byte[] bb = byte[](sb);
+        require(bb.length == 65);
+        require(bb[64] == SIGHASH_ALL);
+        require(checkSig(sb, pubkey(byte[32](mv.slice(34, 66)))));
+        // The first has one leg.
+        require(int(byte[8](t.slice(LEG2_SIZE_AT, LEG2_SIZE_AT + 8))) == 0);
+        byte[] lg = byte[](leg);
+        // The second's leg: another market, a size, long for its A.
+        require(lg.slice(0, 33) != t.slice(LEG_AT, LEG_AT + 33));
+        require(int(byte[8](lg.slice(85, 93))) > 0);
+        require(int(byte[8](lg.slice(94, 102))) == DIR_LONG);
+        require(turned == 0 || turned == 1);
+        require(a2 > 0);
+        require(b2 > 0);
+        require(aq2 >= 0);
+        require(bq2 >= 0);
+        byte[] tail = mv.slice(TAIL_AT, ASK_AT);
+        byte[] keys2 = mv.slice(0, KEYS_END);
+        if (turned == 1) { keys2 = mv.slice(33, 66) + mv.slice(0, 33); }
+        // The second position: the first's terms and no second leg, with its own leg, keys' places, margins and asks.
+        require(blake2b(p33(blake2b(t.slice(0, LEG_AT) + lg + t.slice(LEG2_AT, 312))) + keys2 + i9(a2) + i9(b2) + tail + i9(aq2) + i9(bq2)) == byte[32](r2.slice(STATE_AT, STATE_AT + 32)));
+        // What the first's A and B have in the second.
+        int ja = a2;
+        int jb = b2;
+        int jaq = aq2;
+        int jbq = bq2;
+        int dir = DIR_LONG;
+        if (turned == 1) {
+            ja = b2;
+            jb = a2;
+            jaq = bq2;
+            jbq = aq2;
+            dir = DIR_SHORT;
+        }
+        int half = JOIN_TIP / 2;
+        int am = int(byte[8](mv.slice(KEYS_END + 1, KEYS_END + 9))) + ja - half;
+        int bm = int(byte[8](mv.slice(KEYS_END + 10, KEYS_END + 18))) + jb - (JOIN_TIP - half);
+        require(am > 0);
+        require(bm > 0);
+        int aq = int(byte[8](mv.slice(ASK_AT + 1, ASK_AT + 9))) + jaq;
+        int bq = int(byte[8](mv.slice(ASK_AT + 10, ASK_AT + 18))) + jbq;
+        byte[] nt = t.slice(0, LEG2_AT) + lg.slice(0, 93) + i9(dir) + lg.slice(102, 111);
+        byte[] nm = mv.slice(0, KEYS_END) + i9(am) + i9(bm) + tail + i9(aq) + i9(bq);
+        // The two are of one id, and one position goes on under it.
+        byte[32] id = OpInputCovenantId(j1);
+        require(OpInputCovenantId(j2) == id);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 1);
+        int o = OpCovOutputIdx(id, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(r1.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(nt)) + nm)) + r1.slice(STATE_AT + 32, slotLen))));
+        require(tx.inputs[j1].value + tx.inputs[j2].value >= JOIN_TIP);
+        require(tx.outputs[o].value >= tx.inputs[j1].value + tx.inputs[j2].value - JOIN_TIP);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

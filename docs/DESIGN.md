@@ -575,8 +575,8 @@ owner at any later time (review 3, F1). What a covenant can do is tie the eviden
 ### 4.5d Rules changed by the two-step evidence mechanism (these override 3.3, 3.6, 4.3 P5-P7, 4.5 T4, T6, T7 and 4.5b-4.5c where they differ)
 
 Source: the design note `DESIGN-TWO-STEP.md` (cited `note §n`), with the resolutions below. Code:
-`contracts/KpfPair.sil` (`propose`), `contracts/KpfPending.sil`, `contracts/KpfOpen.sil` (`checkMarket`), library
-`crates/kpf-protocol/src/pending.rs`, `evidence.rs`.
+`contracts/legacy/KpfPair.sil` (`propose`), `contracts/legacy/KpfPending.sil`, `contracts/legacy/KpfOpen.sil` (`checkMarket`), library
+`crates/kpf-protocol/src/legacy/pending.rs`, `evidence.rs`.
 
 **What it replaces.** No evidence path settles in the evidence transaction. P5 (unilateral close) and P6
 (liquidation) become a **proposal**: `KpfPair.propose` (it replaces `onEvidence`) checks what the one-step entry
@@ -830,7 +830,7 @@ Boundaries that depended on `restEnd` move by `L`; the `R = 124,999,999,999` edg
 - Accepted, documented: anyone who relays a proposal or a challenge can copy it with their own payout key and their
   own funds; these actions are permissionless by design.
 
-**How the rules above are implemented** (`contracts/KpfPair.sil` `propose`, `contracts/KpfOpen.sil` `checkMarket`,
+**How the rules above are implemented** (`contracts/legacy/KpfPair.sil` `propose`, `contracts/legacy/KpfOpen.sil` `checkMarket`,
 `crates/kpf-protocol` `pending.rs`, `evidence.rs`, `kob.rs`, `state.rs`; tests `audit4_tests`, `audit4_tooling`,
 `audit4_cli`, X6; `docs/audit/REVIEW-4.md`, "Status after fixes").
 - One owner: `require(longKey != shortKey)` in `propose` kind 2, on the pair's two keys as they are when the claim is
@@ -858,9 +858,9 @@ Boundaries that depended on `restEnd` move by `L`; the `R = 124,999,999,999` edg
 
 Source: the design note `DESIGN-ORACLE.md` (cited `O§n`), its book-backed part (3a) and its "build first" recommendation
 (O§6), shaped as the first status of the shared bond template of `DESIGN-ORACLE-2.md` §7, with the resolutions and
-deviations below. Code: `contracts/KpfLock.sil`, `contracts/KpfPending.sil` (`guarantee`), `contracts/KpfPair.sil`
-(`propose` writes `visibleUntil` and the offer), `contracts/KpfOpen.sil` (`checkMarket`), library
-`crates/kpf-protocol/src/lock.rs`, `evidence.rs` (`guarantee`, `dispute`, `release`), command line `kpf guarantee`,
+deviations below. Code: `contracts/legacy/KpfLock.sil`, `contracts/legacy/KpfPending.sil` (`guarantee`), `contracts/legacy/KpfPair.sil`
+(`propose` writes `visibleUntil` and the offer), `contracts/legacy/KpfOpen.sil` (`checkMarket`), library
+`crates/kpf-protocol/src/legacy/lock.rs`, `evidence.rs` (`guarantee`, `dispute`, `release`), command line `kpf guarantee`,
 `dispute`, `release`, `watch`, `quote`.
 
 **What it is.** A pending claim (4.5d: a close or a liquidation, proposed with a bond) may be settled at once, without

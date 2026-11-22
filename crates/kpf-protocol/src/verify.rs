@@ -95,6 +95,48 @@ impl Verification {
     }
 }
 
+/// The data-signature opcodes (`OpCheckSigFromStack` 0xd7, its ECDSA form 0xd8) of the last push of a signature
+/// script, the redeem script of a P2SH input; 0 when the signature script has no such push.
+pub fn data_sig_ops(signature_script: &[u8]) -> u32 {
+    fn pushes(s: &[u8]) -> Option<Vec<&[u8]>> {
+        let (mut i, mut v) = (0usize, vec![]);
+        while i < s.len() {
+            let op = s[i];
+            let (len, head) = match op {
+                0x01..=0x4b => (op as usize, 1),
+                0x4c => (*s.get(i + 1)? as usize, 2),
+                0x4d => (u16::from_le_bytes([*s.get(i + 1)?, *s.get(i + 2)?]) as usize, 3),
+                0x4e => (u32::from_le_bytes([*s.get(i + 1)?, *s.get(i + 2)?, *s.get(i + 3)?, *s.get(i + 4)?]) as usize, 5),
+                _ => (0, 1),
+            };
+            let data = s.get(i + head..i + head + len)?;
+            if (0x01..=0x4e).contains(&op) {
+                v.push(data);
+            }
+            i += head + len;
+        }
+        Some(v)
+    }
+    let Some(redeem) = pushes(signature_script).and_then(|v| v.last().copied()) else { return 0 };
+    // Walk the redeem script's opcodes, skipping push data.
+    let (mut i, mut n) = (0usize, 0u32);
+    while i < redeem.len() {
+        let op = redeem[i];
+        let skip = match op {
+            0x01..=0x4b => 1 + op as usize,
+            0x4c => 2 + redeem.get(i + 1).copied().unwrap_or(0) as usize,
+            0x4d => 3 + redeem.get(i + 1..i + 3).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize).unwrap_or(0),
+            0x4e => 5 + redeem.get(i + 1..i + 5).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).unwrap_or(0),
+            _ => 1,
+        };
+        if op == 0xd7 || op == 0xd8 {
+            n += 1;
+        }
+        i += skip;
+    }
+    n
+}
+
 /// Full validation of a signed transaction with its UTXO entries.
 pub fn verify(tx: &Transaction, entries: &[UtxoEntry]) -> Verification {
     let inputs = run_inputs(tx, entries, Meter::Consensus);
@@ -109,8 +151,11 @@ pub fn verify(tx: &Transaction, entries: &[UtxoEntry]) -> Verification {
                 &input.signature_script,
                 &entries[i].script_public_key,
             ) as u32;
+            // Live run 3: a testnet-10 node also counts every data signature (`OpCheckSigFromStack`) of the input's
+            // redeem script, whatever entry runs, which the v2.1.0 function above does not.
+            let so = so + data_sig_ops(&input.signature_script);
             if so > 15 {
-                tx_errors.push(format!("input {i}: static sig-op bound {so} > 15"));
+                tx_errors.push(format!("input {i}: {so} signature operations in its script, more than the 15 a node admits"));
             }
         }
     }

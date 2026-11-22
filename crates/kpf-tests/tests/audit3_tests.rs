@@ -738,7 +738,7 @@ fn holds_r3_f3_check_binds_the_sale_of_a_forfeited_side() {
 
 /// R3-F4 after the fix. The fixture long order (limit 10.5, rate 1) filled at its limit is healthy at its own entry
 /// price (bl 9.5, trigger 10.0 < 10.5), so KpfOpen accepts it. The review's immediate liquidation used an ask that
-/// rested before the pair existed: refused by the clock. What 4.5c leaves possible (documented; the order ticket of
+/// rested before the pair existed: refused by the clock. What 4.5c leaves possible (documented; the order epoch table of
 /// `kpf create-order` warns): if the market really is below the trigger for R after the open, a live ask liquidates the
 /// long and it forfeits its margin (limit slippage under forfeiture). An order whose own rate is below the maintenance
 /// of its limit (0.5 KAS at 10.5) is refused at its limit and accepted at a lower price.
@@ -769,7 +769,7 @@ fn holds_order_filled_at_its_limit_is_healthy_at_entry() {
     accept(&open_draft(&thin, &so2, N, 1_000_000_000, &fk(), 14));
 }
 
-// ---------------------------------------------------------------- health at entry, one tick each side and path
+// ---------------------------------------------------------------- health at entry, one time each side and path
 
 /// An entrant unhealthy at entry by one sompi is refused, each side and each path; at the boundary it is accepted.
 /// T1 (both orders check the whole new pair): long rate 0.49999999 / 0.5 and short rate 0.49999999 / 0.5 at x = 10.
@@ -777,7 +777,7 @@ fn holds_order_filled_at_its_limit_is_healthy_at_entry() {
 /// signing taker with bound 8.93000001 / 8.93 and 12.07499999 / 12.075. (T7 is gone, DESIGN 4.5d; the sale of a
 /// forfeited side is a T2: `holds_r3_f3_check_binds_the_sale_of_a_forfeited_side`.)
 #[test]
-fn holds_entrant_unhealthy_by_one_tick_is_refused() {
+fn holds_entrant_unhealthy_by_one_price_is_refused() {
     // T1.
     for side in [LONG, SHORT] {
         for (rate, ok) in [(49_999_999, false), (50_000_000, true)] {

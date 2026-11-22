@@ -32,7 +32,7 @@ fn holds_refutation_bound_is_where_the_contract_rule_flips() {
 /// The cure bound is the nearest bound at which no quote within the margin g of the claim's own quote liquidates the
 /// side (premise changed by DESIGN 4.5e: before review 4 it was the nearest bound at which the claim's own quote no longer
 /// did), and the forfeit bound is the nearest inward bound at which the narrowed range and the fee fit the part (unique,
-/// one tick wider does not fit).
+/// one time wider does not fit).
 #[test]
 fn holds_cure_and_forfeit_bounds_match_the_contract_rules() {
     let p = pair(pubkey(21), pubkey(22));
@@ -45,7 +45,7 @@ fn holds_cure_and_forfeit_bounds_match_the_contract_rules() {
     assert!(long_liquidatable(&p, 940_000_000) && !long_liquidatable(&c, 940_000_000) && !long_liquidatable(&c, reach));
     assert!(long_liquidatable(&c, reach - 1), "a quote beyond g of the claim still liquidates the cured part");
     c.bl = cb + 1;
-    assert!(long_liquidatable(&c, reach), "one tick less margin and the quote at the reach liquidates again");
+    assert!(long_liquidatable(&c, reach), "one time less margin and the quote at the reach liquidates again");
     // Short at 11.50: the reach 11.73; the cure bound 12.3165.
     let reach = kpf_protocol::pending::cure_reach_of(&p.m, SHORT, 1_150_000_000);
     let cb = cure_bound_of(&p.m, SHORT, 1_150_000_000).unwrap();

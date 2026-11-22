@@ -1,0 +1,62 @@
+{
+  "compiler": "silverscript-lang (vendor/kob @ ed16148, SilverScript v1.0.0), CompileOptions::default(); 0.1.0",
+  "contracts": {
+    "KpfBond": {
+      "artifact": "KpfBond.json",
+      "artifact_sha256": "369e823555ca39195f38c362c441e8e0a0b8db5f92cccefd432374e8be855c24",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfBond.sil",
+      "source_sha256": "87f6e417cdeff87ed26ed3c11e18919b4e9351b66624e92437a4aff503b002c7",
+      "state_len": 236,
+      "suffix_len": 4256,
+      "template_hash": "4ffd63f5ec4c053320dbb81f01af70866bd35554407f42c7571d16537acecf29"
+    },
+    "KpfOpenO": {
+      "artifact": "KpfOpenO.json",
+      "artifact_sha256": "054c33fceabfd53a4193e0aae38bdea312b0d75e8baa59242288a5423f2052ec",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfOpenO.sil",
+      "source_sha256": "b5ee57f7b09fd354354f846721cb606923a1f5136208b7cc52e38572010c6d6e",
+      "state_len": 465,
+      "suffix_len": 6070,
+      "template_hash": "91ce8afab0dafd84076a18c439b9cfaca43753382b0cd31bcd46ec50d68e4203"
+    },
+    "KpfPairO": {
+      "artifact": "KpfPairO.json",
+      "artifact_sha256": "9f425a59d17a0b573bb5364413f0d4e07a5695adccfe24da66bab4ee0dfbbd06",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfPairO.sil",
+      "source_sha256": "9b641fe25751cf7c3a40cfa5bad706cf2a7608ef4ebaa02682b480fcb845b98a",
+      "state_len": 723,
+      "suffix_len": 15425,
+      "template_hash": "2693f0f6ae0b3df14a9578c64ae4d085bfdc3e0bb559523a194fbf0db7b1c71a"
+    },
+    "KpfPendingO": {
+      "artifact": "KpfPendingO.json",
+      "artifact_sha256": "6ed4edc8fc1afc34a448ccb7258187f7e86a77c0a9e4e8a893552c56089621ca",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfPendingO.sil",
+      "source_sha256": "c67a763c681983d0f7ac87f6e6b5b81c6ce0a50f83c98278fd47f883b09c26b8",
+      "state_len": 813,
+      "suffix_len": 3613,
+      "template_hash": "a59cd776fb1522c5792608e8dc58903ac4790053818139f6de19a7595e6c29e2"
+    },
+    "KpfStake": {
+      "artifact": "KpfStake.json",
+      "artifact_sha256": "b99ea336a183fc4139dc6b64d173f45bf5494da99fae35a7631a71d79a2b1093",
+      "prefix_len": 1,
+      "source": "contracts/legacy/KpfStake.sil",
+      "source_sha256": "fc5c1f2cca4675f72c243611d6825a390e26d723bb702d209baf16fd58faa711",
+      "state_len": 270,
+      "suffix_len": 9394,
+      "template_hash": "f9e31c42f48622d75e11ed6e6fbde9e2f22c5b8b98bcefe46457afa81532254a"
+    }
+  },
+  "format": "kpf-artifacts/oracle-1",
+  "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
+  "tags": {
+    "bind": "20e58f6f",
+    "open": "9942257d",
+    "resolve": "0c090273"
+  }
+}

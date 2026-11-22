@@ -1,0 +1,138 @@
+pragma silverscript ^0.1.0;
+
+// KpfTPay: the library's fee pool is paid to the members of its committee, each by its weight, as a script under the
+// library's id. This and the three proofs (KpfTProve, KpfTLiqProve, KpfTExitRefute) are the scripts that know where
+// prices come from.
+//   pay(who, ageb, slotLen, rid, floor, payer)
+//       anyone. The transaction is the fee pool (input 0), this script (1), an epoch table (2) and one coin of the key
+//       `payer` (3), and nothing else. who: the fee pool, for the committee `rid`. Input 2 is an epoch table of that committee spent by its `attest` (read
+//       as the proofs read one: the pinned template, under the committee's id); its member table is who is paid. What the
+//       fee pool holds above its `floor`, less one part in CUT that is the sender's, is shared by weight in units of 0.01 KAS:
+//       each member with a weight has an output to its key, in the table's order from output 3. What the
+//       rounding leaves stays in the fee pool.
+// DESIGN: the fees are paid in arrears, to the table of an epoch that has ended. Paid by the table of the present,
+// a large stake that took a member when the pool was full was paid for the work of those before it and left; in an
+// ended epoch's table are the members that served it. The fees of several unpaid epochs go to the epoch whose epoch table
+// is shown: anyone pays, for a part of what it pays.
+// DESIGN: every member is paid in one transaction or none is. An output is not writable below some value (its storage
+// mass), so the fee pool is paid when the smallest member's share can be written, and a large member cannot be paid ahead
+// of a small one.
+// DESIGN: a member is paid for its weight, not for having signed the signed price shown. Whoever sends chooses which
+// signatures the epoch table is shown (a quorum's), and would leave the others out to be paid their part.
+// DESIGN: the table is that of an epoch table that still stands: an epoch's epoch table stands until somebody retires it.
+// DESIGN: a payment is alone in its transaction (review T1b, F22). Each member's output is held to a key and an
+// amount, and an output that another script of the same transaction asked for the same key would answer both: two
+// libraries with one committee were paid by one set of outputs, and the sender kept the smaller fee pool. The four inputs
+// are fixed, and the fourth is a coin of a key, which asks nothing of the outputs.
+contract KpfTPay(byte[32] EPOCH_TABLE_TPL, int EPOCH_TABLE_PRE, int EPOCH_TABLE_SUF, byte[4] ATTEST_TAG, int init_version) {
+    int version = init_version;
+
+    int constant STATE_AT = 2;
+    int constant KIND_FEE_POOL = 8;
+    int constant CUT = 20;
+    int constant N = 15;
+    int constant UNIT = 1000000;
+    // The most one payment shares, 300,000 KAS: units x a member's weight in units stays below 2^63.
+    int constant POT_MAX = 30000000000000;
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // This script's own copy goes on. It takes no oracle fees: it is what collects them.
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // Input j is the library's fee pool: under the library's id, its state the committee `rid` its oracle fees are for and
+    // `floor`, what a copy of a script and the fee pool itself go on holding (what the genesis gave each).
+    function feePool(int j, int slotLen, byte[32] rid, int floor) {
+        byte[] rs = slotOf(j, slotLen);
+        require(OpInputCovenantId(j) == OpInputCovenantId(this.activeInputIndex));
+        require(floor > 0);
+        require(blake2b(i9(KIND_FEE_POOL) + p33(rid) + i9(floor)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+    }
+
+    entry pay(byte[24] who, byte[8] ageb, int slotLen, byte[32] rid, int floor, byte[32] payer) {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        feePool(j, slotLen, rid, floor);
+        // The fee pool and this script are all that is under the library's id here (no sweep beside a payment).
+        require(OpCovInputCount(lib) == 2);
+        require(tx.inputs.length == 4);
+        require(j == 0);
+        require(self == 1);
+        int u = 2;
+        require(tx.inputs[3].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(payer))));
+        require(OpInputCovenantId(u) == rid);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+        // The epoch table's state: the members in one push of 600 bytes (3 bytes before them), then the sum of the weights.
+        byte[] members = trs.slice(EPOCH_TABLE_PRE + 3, EPOCH_TABLE_PRE + 603);
+        // The epoch of the table has ended (the epoch table's `until`, after the sum and `from`): the members paid are those
+        // that served a whole epoch with their stake at risk. A member taken when the pool is full is in no ended
+        // epoch's table yet.
+        int until = int(byte[8](trs.slice(EPOCH_TABLE_PRE + 622, EPOCH_TABLE_PRE + 630)));
+        require(until >= 0);
+        require(until < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= until);
+        int tu = int(byte[8](trs.slice(EPOCH_TABLE_PRE + 604, EPOCH_TABLE_PRE + 612))) / UNIT;
+        require(tu > 0);
+        int pot = tx.inputs[j].value - floor;
+        if (pot > POT_MAX) { pot = POT_MAX; }
+        int du = (pot - pot / CUT) / UNIT;
+        require(du > 0);
+        int o = 3;
+        int paid = 0;
+        for (i, 0, N, N) {
+            int w = int(byte[8](members.slice(40 * i + 32, 40 * i + 40))) / UNIT;
+            if (w > 0) {
+                require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(members.slice(40 * i, 40 * i + 32)))));
+                int share = (du * w / tu) * UNIT;
+                require(tx.outputs[o].value >= share);
+                paid = paid + share;
+                o = o + 1;
+            }
+        }
+        require(tx.outputs[j].scriptPubKey == tx.inputs[j].scriptPubKey);
+        require(OpOutputCovenantId(j) == lib);
+        // The fee pool keeps what was not shared: the sender has its twentieth and no more (review T1b, F23).
+        require(tx.outputs[j].value >= tx.inputs[j].value - paid - pot / CUT);
+        goesOn();
+    }
+}

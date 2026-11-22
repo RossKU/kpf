@@ -1,5 +1,5 @@
-//! Fixtures and transaction builders for `KpfBond` and its stand-in pair and order (`contracts/KpfBond.sil`,
-//! `contracts/stubs/`), on the model types of `kpf_protocol::bond`. The contracts are compiled from source once per
+//! Fixtures and transaction builders for `KpfBond` and its stand-in pair and order (`contracts/legacy/KpfBond.sil`,
+//! `contracts/legacy/stubs/`), on the model types of `kpf_protocol::bond`. The contracts are compiled from source once per
 //! test binary (they are not pinned artifacts in this slice).
 #![allow(dead_code)]
 
@@ -48,7 +48,7 @@ pub fn kit() -> &'static Kit {
     static K: OnceLock<Kit> = OnceLock::new();
     K.get_or_init(|| {
         let sample = Bond::new(xkey(&keypair(31)), market(), 0);
-        let bond = compile("KpfBond.sil", &sample.ctor());
+        let bond = compile("legacy/KpfBond.sil", &sample.ctor());
         let bond_t = Template::of("KpfBond", &bond);
         let entry = &bond.contracts.values().next().unwrap().entries["bind"];
         let tag: [u8; 4] = *entry.dispatch_tag.as_bytes();
@@ -59,12 +59,12 @@ pub fn kit() -> &'static Kit {
             ArtifactValue::Bytes(tag.to_vec()),
         ];
         let sp = StubPair { m: market(), uw_id: [1; 32], uw_key: [2; 32], owner: [3; 32], cover: 1, expiry: 800 };
-        let pair = compile("stubs/KpfPairStub.sil", &[consts.clone(), sp.ctor_state()].concat());
+        let pair = compile("legacy/stubs/KpfPairStub.sil", &[consts.clone(), sp.ctor_state()].concat());
         let pair_t = Template::of("KpfPairStub", &pair);
         let so = StubOpen { m: market(), uw_accept: [0; 32], owner: [3; 32], cover: 1 };
         let mut oc = vec![ArtifactValue::Bytes(pair_t.hash.to_vec())];
         oc.extend(consts);
-        let open = compile("stubs/KpfOpenStub.sil", &[oc, so.ctor_state()].concat());
+        let open = compile("legacy/stubs/KpfOpenStub.sil", &[oc, so.ctor_state()].concat());
         let open_t = Template::of("KpfOpenStub", &open);
         Kit { bond, bond_t, pair, pair_t, open, open_t, tag }
     })

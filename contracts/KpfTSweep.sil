@@ -1,0 +1,93 @@
+pragma silverscript ^0.1.0;
+
+// KpfTSweep: what gathered in a copy of a script of the library moves to the library's fee pool, as a script under the
+// library's id. Every operation leaves ORACLE_FEE in the copy it used; nothing else takes value out of a copy.
+//   sweep(who, ageb, slotLen, rid, floor)
+//       anyone. who: the fee pool (KpfFeePool, under the library's id, for the committee `rid`) and a copy of a script, which
+//       runs its `release` naming this script. The copy goes on holding `floor` exactly (the fee pool's state names
+//       it: what the library's genesis gave each copy); what it held above that, at
+//       least SWEEP_MIN, is the fee pool's, less one part in CUT that is the sender's (its fee, and why it sweeps).
+// DESIGN: a sweep is alone with the fee pool and its copy in its transaction (three inputs under the library's id).
+// Each sweep holds the fee pool to having grown by what its own copy gave, so two in one transaction would be answered
+// by one growth.
+// DESIGN: a copy is one UTXO that every use of its script spends. A sweep takes it for a block, so a sweep moves a
+// least amount: keeping a copy busy by sweeps costs SWEEP_MIN given to the fee pool each time.
+contract KpfTSweep(int init_version) {
+    int version = init_version;
+
+    int constant STATE_AT = 2;
+    int constant KIND_FEE_POOL = 8;
+    int constant SWEEP_MIN = 20000000;
+    int constant CUT = 20;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // This script's own copy goes on. It takes no oracle fees: it is what collects them.
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // Input j is the library's fee pool: under the library's id, its state the committee `rid` its oracle fees are for and
+    // `floor`, what a copy of a script and the fee pool itself go on holding (what the genesis gave each).
+    function feePool(int j, int slotLen, byte[32] rid, int floor) {
+        byte[] rs = slotOf(j, slotLen);
+        require(OpInputCovenantId(j) == OpInputCovenantId(this.activeInputIndex));
+        require(floor > 0);
+        require(blake2b(i9(KIND_FEE_POOL) + p33(rid) + i9(floor)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+    }
+
+    entry sweep(byte[24] who, byte[8] ageb, int slotLen, byte[32] rid, int floor) {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        int c = int(byte[8](who.slice(8, 16)));
+        // The third place names the copy: what is named at a place nobody reads would be spent under no rule.
+        require(who.slice(16, 24) == who.slice(8, 16));
+        feePool(j, slotLen, rid, floor);
+        // The fee pool, this script and the copy are all that is under the library's id here: a second sweep beside
+        // this one would ask the fee pool for a growth that this one's already answers, and its copy's oracle fees would be
+        // the sender's whole.
+        require(OpCovInputCount(lib) == 3);
+        require(c >= 0);
+        require(c < tx.inputs.length);
+        require(c != self);
+        require(c != j);
+        require(OpInputCovenantId(c) == lib);
+        require(tx.outputs[c].scriptPubKey == tx.inputs[c].scriptPubKey);
+        require(OpOutputCovenantId(c) == lib);
+        // The copy goes on at its floor, no more: a sweep takes all that gathered (review T1b, F24: a copy left
+        // above its floor was swept again and again, each time for the sender's part and a block of the copy's).
+        require(tx.outputs[c].value == floor);
+        int moved = tx.inputs[c].value - floor;
+        require(moved >= SWEEP_MIN);
+        require(tx.outputs[j].scriptPubKey == tx.inputs[j].scriptPubKey);
+        require(OpOutputCovenantId(j) == lib);
+        require(tx.outputs[j].value >= tx.inputs[j].value + moved - moved / CUT);
+        goesOn();
+    }
+}

@@ -120,7 +120,7 @@ impl World {
         self.family.insert(Hash::from_bytes(b));
         (TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes(b), index: self.next_id }, Hash::from_bytes(b))
     }
-    fn tick(&mut self, n: u64) {
+    fn signed_price(&mut self, n: u64) {
         self.now += n;
     }
     fn count(&mut self, what: &'static str) {
@@ -249,7 +249,7 @@ impl World {
         self.ok("list for a hand-over", &at);
         let ll = live(&at, 0, self.now, &listed);
         self.pairs[i] = (ll.clone(), truth);
-        self.tick(q);
+        self.signed_price(q);
         let (tt, part) = transfer_tx(&ll, L, ask, ll.s.bl, &long_kp(), q);
         if !accepted(&tt) {
             return;
@@ -349,7 +349,7 @@ impl World {
         self.receipt_claim.insert(con.receipts[0].op, c.w.id.unwrap());
         // The underwriter defends a true claim with aged stake (1.25 x the opener's takes the lead).
         if !c.false_claim {
-            self.tick(1);
+            self.signed_price(1);
             let (op, _) = self.id();
             let ys = Live { op, value: 20 * UNIT as u64, daa: 0, id: None, s: kpf_protocol::judge::Js::free(x(&uw_kp()), omarket().judge_market()) };
             let (t, d2, rs) = deposit_tx(&con.dispute, YES, &[(ys.clone(), 31)], self.now);
@@ -564,7 +564,7 @@ fn play(seed: u64, steps: usize) -> Books {
     };
     for _ in 0..steps {
         let dt = 1 + w.rng.below(40);
-        w.tick(dt);
+        w.signed_price(dt);
         match w.rng.below(10) {
             0 | 1 => w.open(),
             2 | 3 => w.propose(),
@@ -583,7 +583,7 @@ fn play(seed: u64, steps: usize) -> Books {
     }
     // Drain: every claim, contest and decided part ends.
     for _ in 0..40 {
-        w.tick(100);
+        w.signed_price(100);
         w.decide();
         w.finalize_claims();
         w.settle_pools();

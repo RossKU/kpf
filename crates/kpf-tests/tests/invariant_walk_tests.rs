@@ -451,7 +451,7 @@ impl Walk {
         self.pairs.push(WP { lp, truth: 1_000_000_000, b0: p.b, renewals: vec![], born: self.now, silent });
     }
 
-    fn tick(&mut self) {
+    fn signed_price(&mut self) {
         self.now += 10 + self.rng.below(140);
         for w in self.pairs.iter_mut() {
             let d = (self.rng.below(5) as i64 - 2) * 10_000_000;
@@ -1425,7 +1425,7 @@ impl Walk {
     fn play(&mut self, steps: usize) {
         for s in 0..steps {
             self.step = s;
-            self.tick();
+            self.signed_price();
             if self.pairs.len() < 4 && self.rng.chance(40) {
                 self.guarded("open", |w| w.open());
                 if self.rng.chance(50) {

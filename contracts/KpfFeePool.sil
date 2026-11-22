@@ -1,0 +1,25 @@
+pragma silverscript ^0.1.0;
+
+// KpfFeePool: where a library's oracle fees gather, an object under the library's own id. A library's genesis writes one, and
+// nothing can be written under the id after it (each script asks for as many outputs under the id as inputs). Its
+// state names who the oracle fees are for and what a copy keeps when it is swept: blake2b(push(8) + push(committee id) +
+// push(floor)), which KpfTSweep and KpfTPay hold it to.
+// It is KpfSlot with the id it carries in the place of the library's: an object of a library cannot be written at
+// the library's genesis, because its script would hold the id the genesis makes.
+//   go(l, k)   input l carries this input's id and names this input at place k
+contract KpfFeePool(byte[32] init_stateHash) {
+    byte[32] stateHash = init_stateHash;
+
+    entry go(int l, int k) {
+        int self = this.activeInputIndex;
+        require(l >= 0);
+        require(l < tx.inputs.length);
+        require(l != self);
+        require(k >= 0);
+        require(k <= 2);
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+        require(byte[](stateHash).length == 32);
+    }
+}

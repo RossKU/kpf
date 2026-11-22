@@ -3,7 +3,10 @@
 //! Everything that encodes, builds, signs or checks a transaction of the four KPF contracts, shared by the
 //! command line (`kpf-cli`) and the engine tests (`kpf-tests`).
 //!
-//! - [`artifacts`]: the pinned compiled contracts (`contracts/artifacts/`), templates, template hashes.
+//! The family being built is the thin one: [`thin`] (the model of its objects) and [`thin_artifacts`] (its pinned
+//! scripts, `contracts/artifacts/`). Everything below is the three earlier families, in [`legacy`].
+//!
+//! - [`artifacts`]: the pinned compiled contracts (`contracts/legacy/artifacts/`), templates, template hashes.
 //! - [`state`]: state structs and codecs of `KpfPair`, `KpfOpen`, `KpfPending` and `KpfLock`, validation against the contracts' bounds.
 //! - [`payoff`]: the pure payoff math (DESIGN 3.1, 4.5, 5): `q`, payouts, trigger prices, fees, floor values.
 //! - [`network`]: testnet-10 addresses (mainnet is refused).
@@ -37,23 +40,33 @@
 //! GTC and TWAP/DCA-interval orders at a fixed quote (IOC/FOK only in a market whose evidence life L is below 600); see `docs/TESTNET.md` for what is not.
 //!
 
-pub mod artifacts;
-pub mod bond;
-pub mod build;
+pub mod legacy;
+pub use legacy::artifacts;
+pub use legacy::bond;
+pub use legacy::build;
+pub use legacy::cmarket;
+pub use legacy::committee;
+pub use legacy::committee_artifacts;
+pub use legacy::committee_build;
+pub use legacy::cross;
+pub use legacy::evidence;
+pub use legacy::fixtures;
+pub use legacy::judge;
+pub use legacy::kob;
+pub use legacy::lock;
+pub use legacy::oracle;
+pub use legacy::oracle_artifacts;
+pub use legacy::oracle_build;
+pub use legacy::payoff;
+pub use legacy::pending;
+pub use legacy::sim;
+pub use legacy::state;
 pub mod error;
-pub mod evidence;
-pub mod fixtures;
-pub mod judge;
-pub mod kob;
-pub mod lock;
 pub mod network;
-pub mod oracle;
-pub mod oracle_artifacts;
-pub mod oracle_build;
-pub mod payoff;
-pub mod pending;
-pub mod sim;
-pub mod state;
+pub mod thin;
+pub mod thin_artifacts;
+pub mod thin_build;
+pub mod thin_read;
 pub mod tx;
 pub mod verify;
 

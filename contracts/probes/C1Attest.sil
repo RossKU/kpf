@@ -1,0 +1,76 @@
+pragma silverscript ^0.1.0;
+
+// Probe C1 (docs/DESIGN-COMMITTEE.md, experiments): can one input verify a committee's price for one tick, each seat
+// signing its own price, and accept a claimed price only if it is a weighted median of the signed prices of seats
+// holding at least quorumBps of the total weight?
+//
+// State: 15 seats of (x-only key, weight) in one 600-byte blob, the total weight, the tick window [from, until), the
+// quorum. The entry's arguments are fixed-width pushes, so a claimant can read (market, t0, p) from this input's
+// signature script at fixed offsets (as the bind proof of the oracle family reads KpfBond.bind's arguments):
+//   market 32 bytes at [0..33), t0 at [33..42), p at [42..51), bits at [51..60), prices (15 x 8) and sigs (15 x 64).
+// Fifteen seats, not the sixteen first measured: a node admits at most 15 signature operations in an input's script
+// and counts every data signature of the unrolled loop (live run 3). The probe keeps the first price rule, a weighted
+// median of the included prices, which review C1 broke (C1-F1); KpfTicket requires every included price near p.
+// A seat i signs blake2b("kpf-tick-1" || roster id || market || t0 || price_i) as a data signature (64 bytes): the
+// digest names this roster (its covenant id), so a signature is of no use to any other roster.
+// The input continues itself: the same script, value and covenant id at its own output index.
+contract C1Attest(
+    byte[600] init_seats,
+    int init_total,
+    int init_from,
+    int init_until,
+    int init_quorumBps
+) {
+    byte[600] seats = init_seats;
+    int total = init_total;
+    int from = init_from;
+    int until = init_until;
+    int quorumBps = init_quorumBps;
+
+    int constant N = 15;
+    int constant BPS = 10000;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant WEIGHT_MAX = 4000000000000000000;
+
+    entry attest(byte[32] market, byte[8] t0b, byte[8] pb, byte[8] bitsb, byte[120] prices, byte[960] sigs) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(OpCovOutputCount(rid) == 1);
+        int t0 = int(t0b);
+        int p = int(pb);
+        require(t0 >= from);
+        require(t0 < until);
+        require(p >= 0);
+        require(total > 0);
+        require(total <= WEIGHT_MAX);
+        byte[] head = byte[](0x6b70662d7469636b2d31) + byte[](rid) + byte[](market) + byte[](t0b);
+        int b = int(bitsb);
+        require(b >= 0);
+        int w = 0;
+        int lo = 0;
+        int hi = 0;
+        for (i, 0, N, N) {
+            if (b % 2 == 1) {
+                int wi = int(byte[8](seats.slice(40 * i + 32, 40 * i + 40)));
+                require(wi > 0);
+                byte[8] pi = byte[8](prices.slice(8 * i, 8 * i + 8));
+                require(checkMsgSig(datasig(sigs.slice(64 * i, 64 * i + 64)), blake2b(head + byte[](pi)), pubkey(seats.slice(40 * i, 40 * i + 32))));
+                w = w + wi;
+                require(w <= total);
+                if (int(pi) <= p) { lo = lo + wi; }
+                if (int(pi) >= p) { hi = hi + wi; }
+            }
+            b = b / 2;
+        }
+        require(b == 0);
+        // w >= ceil(total * quorumBps / 10^4), in the split form (total * 10^4 would overflow).
+        require(w >= (total / BPS) * quorumBps + ((total % BPS) * quorumBps + BPS - 1) / BPS);
+        // p is a weighted median of the signed prices: at least half of the signed weight at or below, and at or above.
+        require(2 * lo >= w);
+        require(2 * hi >= w);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == rid);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+}

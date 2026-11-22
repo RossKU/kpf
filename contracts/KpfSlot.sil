@@ -1,0 +1,28 @@
+pragma silverscript ^0.1.0;
+
+// KpfSlot: the one script of every object of the thin family, the allowed scripts named by one covenant id. Every script of the family is a UTXO under
+// the library's id, written at the library's genesis and going on unchanged ever after, so "an input that carries the
+// library's id" is "a script of the family": one comparison, whatever the number of operations, and a new operation
+// or a corrected one is a new library that a position moves to by both parties' signature.
+//   go(l, k)   input l carries the library's id, names this input at place k, and this input is as old as that
+//              script's signature script says
+contract KpfSlot(byte[32] LIB, byte[32] init_stateHash) {
+    byte[32] stateHash = init_stateHash;
+
+    entry go(int l, int k) {
+        int self = this.activeInputIndex;
+        require(l >= 0);
+        require(l < tx.inputs.length);
+        require(l != self);
+        require(k >= 0);
+        require(k <= 2);
+        require(OpInputCovenantId(l) == LIB);
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+        require(OpTxInputScriptSigSubstr(l, 25, 26) == byte[](0x08));
+        int age = int(byte[8](OpTxInputScriptSigSubstr(l, 26, 34)));
+        require(age >= 0);
+        require(this.ageDaa >= age);
+        require(byte[](stateHash).length == 32);
+    }
+}

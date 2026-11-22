@@ -3,3 +3,5 @@
 /kpf-out/
 /brand/shot.mjs
 /run/
+/brand/video/*.wav
+/brand/video/*.mp4

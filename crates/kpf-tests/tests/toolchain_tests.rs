@@ -1,4 +1,4 @@
-//! Toolchain proof: compile `contracts/Trivial.sil` with the vendored SilverScript compiler and execute a hand-built
+//! Toolchain proof: compile `contracts/legacy/Trivial.sil` with the vendored SilverScript compiler and execute a hand-built
 //! transaction spending it in the rusty-kaspa v2.1.0 script engine.
 
 mod common;
@@ -6,7 +6,7 @@ mod common;
 use common::*;
 
 fn trivial() -> silverscript_abi::SilAbiArtifact {
-    compile("Trivial.sil", &[int(42)])
+    compile("legacy/Trivial.sil", &[int(42)])
 }
 
 fn spend(x: i64) -> (kaspa_consensus_core::tx::Transaction, Vec<kaspa_consensus_core::tx::UtxoEntry>) {

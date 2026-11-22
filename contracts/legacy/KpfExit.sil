@@ -1,0 +1,325 @@
+pragma silverscript ^0.1.0;
+
+// KpfExit: the stake of a member that left its committee or was outbid, on its way out (docs/DESIGN-COMMITTEE.md 2, 5a).
+// It is written by KpfCommittee (leave, join over a taken member) under the committee's covenant id and holds the stake
+// itself. `release` is the end of the epoch the member last signed in plus the committee's exit time: the time in which a
+// signed price the key signed can still be charged. A stake that is charged keeps its holds wherever it goes, and is not
+// withdrawn while it has one.
+//
+// Entries:
+//   withdraw()   anyone, once tx.daa >= release and no charge is held: `amount` to the key at this input's output
+//                index; no output of the id
+//   forfeit(market, t0, p1, s1, p2, s2)   anyone, any time before the withdrawal: the key signed two different prices
+//                for one time of one market (as KpfCommittee.forfeit). No output of the id; a tenth of the amount is the
+//                sender's, the rest is burned at this input's mirror index M - 1 - i. A held exit continues with
+//                the tenth (at least 1 KAS) under its holds instead, and the sender gets nothing
+//   charge(market, t0, p, s, payKey, k, cPre, cSuf)   anyone, with the bond: the key signed that time; a KpfCharge is
+//                written at output k under a fresh id, which joins this stake's holds (as KpfCommittee.charge)
+//   slash(c, 0, a, later)   the charge at input c is one of the holds and was refuted: the stake loses up to the
+//                total the judge's NO side had at risk (what is left continues with its other holds); a tenth of
+//                that and the charge's bond to the charge's payKey at output c, the rest burned
+//   clear(c, 0, a, later)   the charge at input c is one of the holds and was upheld (its bond to the key at output
+//                c), or lapsed (its bond burned at output c): the hold ends
+// DESIGN: an exit is a UTXO of its own, not an entry of a queue inside the committee: a queue of fixed length could be
+// kept full by whoever wanted to stop members from leaving or from being outbid.
+// The holds are one hash: zero for none, blake2b(holds || id) for each charge added. A charge is shown to be among
+// them, and taken out, with the value before it (`a`) and the ids added after it (`later`, at most eight).
+contract KpfExit(
+    byte[32] CHARGE_TPL,
+    int CHARGE_PRE,
+    int CHARGE_SUF,
+    pubkey init_ownerKey,
+    int init_amount,
+    int init_release,
+    byte[32] init_hold,
+    byte[87] init_judge,
+    int init_chargeBond,
+    int init_chargeDaa
+) {
+    pubkey ownerKey = init_ownerKey;
+    int amount = init_amount;
+    int release = init_release;
+    byte[32] hold = init_hold;           // * the charges this stake is held for
+    byte[87] judge = init_judge;         // the committee's judge block and charge parameters, as the committee's
+    int chargeBond = init_chargeBond;
+    int chargeDaa = init_chargeDaa;
+
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant CSV_LIMIT = 4294967296;
+    int constant KAS = 100000000;
+    int constant BOND_MAX = 250000000000000000;
+    int constant REWARD_DIV = 10;
+    int constant BURN_DUST = 2000000;
+    byte[32] constant BURN = byte[32](0xd379e50f3e2203f9a92584916335bb7cd014b237ceaa8b36f1d3d80d0cc88b32);
+    int constant MAX_OUTPUTS = 8;
+    int constant DEPTH = 8;
+    // Redeem offsets: the payload of the amount [35..43), of the holds [53..85), the judge block and the charge
+    // parameters [85..192).
+    int constant AMOUNT_AT = 35;
+    int constant HOLD_AT = 53;
+    int constant JUDGE_AT = 85;
+    int constant STATE_END = 192;
+    // KpfCharge: its state length, the statuses, and offsets within its state (redeem offset - 1).
+    int constant CHARGE_STATE_LEN = 284;
+    int constant CHARGE_NO_AT = 10;
+    int constant CHARGE_ATSTAKE_AT = 169;
+    int constant CHARGE_PENDING = 1;
+    int constant CHARGE_UPHELD = 3;
+    int constant CHARGE_REFUTED = 4;
+    int constant CHARGE_LAPSED = 5;
+    int constant CHARGE_STAKEKEY_AT = 52;
+    int constant CHARGE_PAYKEY_AT = 85;
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    // As KpfPair.tplState.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // As KpfPairO.fresh: the output `out` starts a new lineage.
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+        return id;
+    }
+
+    // The holds h with the ids of `later` added in order (a zero id is none).
+    function fold(byte[32] h, byte[256] later) : byte[32] {
+        byte[32] x = h;
+        for (j, 0, DEPTH, DEPTH) {
+            byte[] id = later.slice(32 * j, 32 * j + 32);
+            if (id != byte[](zero32())) {
+                x = blake2b(byte[](x) + id);
+            }
+        }
+        return x;
+    }
+
+    // This exit's continuation with the holds h: the one output of the id, holding at least what it held.
+    function cont(byte[32] h) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovOutputCount(rid) == 1);
+        byte[] rs = ownRs();
+        int o = OpCovOutputIdx(rid, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, HOLD_AT) + byte[](h)
+            + rs.slice(HOLD_AT + 32, this.bytecodeSize))));
+        require(tx.outputs[o].value >= tx.inputs[self].value);
+    }
+
+    // What a refuted charge takes of a stake w (review C5, C5-F1): at most the NO total of its verdict. When less than
+    // 1 KAS would be left: all of w if this is the stake's last hold, and all but 1 KAS while it has others (`rest`).
+    // DESIGN: review C6 (C6-F1): a slash that took a stake whole left its other charges nothing to settle against (their
+    // bonds locked for ever), and a member arranged that by charging and contesting itself with a stake of its own size.
+    // 1 KAS stays under the other holds, and the last charge takes it.
+    function takeOf(int w, byte[] st, byte[32] rest) : int {
+        int no = int(byte[8](st.slice(CHARGE_NO_AT, CHARGE_NO_AT + 8)));
+        require(no > 0);
+        int s = w;
+        if (no < w) {
+            s = no;
+        }
+        if (w - s < KAS) {
+            s = w;
+            if (rest != zero32()) {
+                s = w - KAS;
+                if (s < 0) {
+                    s = 0;
+                }
+            }
+        }
+        return s;
+    }
+
+    // The author's share of a slash that takes s: a tenth of the lesser of the stake as it was charged and the NO
+    // total, and no more than s.
+    function rewardOf(int s, byte[] st) : int {
+        int no = int(byte[8](st.slice(CHARGE_NO_AT, CHARGE_NO_AT + 8)));
+        int cap = int(byte[8](st.slice(CHARGE_ATSTAKE_AT, CHARGE_ATSTAKE_AT + 8)));
+        require(cap > 0);
+        if (no < cap) {
+            cap = no;
+        }
+        int r = cap / REWARD_DIV;
+        if (r > s) {
+            r = s;
+        }
+        return r;
+    }
+
+    // `v` at the burn script, at this input's mirror index.
+    function burnAt(int v) {
+        if (v >= BURN_DUST) {
+            int j = tx.outputs.length - 1 - this.activeInputIndex;
+            require(j >= tx.inputs.length);
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SH(BURN)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    // What a held stake w keeps when it is shown two prices (review C5, C5-F2): a tenth, at least 1 KAS.
+    function keptOf(int w) : int {
+        int rem = w / REWARD_DIV;
+        if (rem < KAS) {
+            rem = KAS;
+        }
+        require(w > rem);
+        return rem;
+    }
+
+    // This exit's continuation holding `amt` with the holds h: the one output of the id, worth what it was less what
+    // left it.
+    function contWith(int amt, byte[32] h, int left) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovOutputCount(rid) == 1);
+        byte[] rs = ownRs();
+        int o = OpCovOutputIdx(rid, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, AMOUNT_AT) + byte[](amt as byte[8])
+            + rs.slice(AMOUNT_AT + 8, HOLD_AT) + byte[](h) + rs.slice(HOLD_AT + 32, this.bytecodeSize))));
+        require(tx.outputs[o].value >= tx.inputs[self].value - left);
+        require(tx.outputs[o].value >= amt);
+    }
+
+    entry withdraw() {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(OpCovOutputCount(rid) == 0);
+        require(release >= 0);
+        require(release < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= release);
+        require(amount > 0);
+        require(hold == zero32());
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+        require(tx.outputs[self].value >= amount);
+    }
+
+    // Forfeit: this stake's key signed two prices for one time while it held a member (or after: a signature is a
+    // signature). The exit time is what leaves this proof time to arrive. Charges it is held for are left behind.
+    entry forfeit(byte[32] market, byte[8] t0b, byte[8] p1b, datasig s1, byte[8] p2b, datasig s2) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(amount > 0);
+        require(int(p1b) != int(p2b));
+        byte[] head = byte[](0x6b70662d7469636b2d31) + byte[](rid) + byte[](market) + byte[](t0b);
+        require(checkMsgSig(s1, blake2b(head + byte[](p1b)), ownerKey));
+        require(checkMsgSig(s2, blake2b(head + byte[](p2b)), ownerKey));
+        if (hold == zero32()) {
+            require(OpCovOutputCount(rid) == 0);
+            burnAt(amount - amount / REWARD_DIV);
+        } else {
+            // Review C5 (C5-F2), as KpfCommittee.forfeit: a held stake keeps a tenth under its holds and nobody is paid.
+            int rem = keptOf(amount);
+            contWith(rem, hold, amount - rem);
+            burnAt(amount - rem);
+        }
+    }
+
+    entry charge(byte[32] market, byte[8] t0b, byte[8] pb, datasig s, byte[32] payKey, int k, byte[] cPre, byte[] cSuf) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(amount > 0);
+        require(chargeBond >= KAS);
+        require(chargeBond <= BOND_MAX);
+        require(chargeDaa > 0);
+        require(chargeDaa < CSV_LIMIT);
+        require(checkMsgSig(s, blake2b(byte[](0x6b70662d7469636b2d31) + byte[](rid) + byte[](market) + byte[](t0b) + byte[](pb)), ownerKey));
+        require(k >= 0);
+        byte[32] cid = fresh(k);
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == CHARGE_TPL);
+        byte[] rs = ownRs();
+        require(tx.outputs[k].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + i9(1) + i9(0) + byte[](0x20) + byte[](rid)
+            + rs.slice(1, 34) + byte[](0x20) + byte[](payKey) + byte[](0x20) + byte[](market) + byte[](0x08) + byte[](t0b)
+            + byte[](0x08) + byte[](pb) + i9(amount) + rs.slice(JUDGE_AT, STATE_END) + cSuf)));
+        require(tx.outputs[k].value >= chargeBond);
+        cont(blake2b(byte[](hold) + byte[](cid)));
+    }
+
+    // The charge at input c, shown to be among the holds: its state, and the holds without it.
+    function held(int c, byte[32] a, byte[256] later) : (byte[], byte[32]) {
+        require(c >= 0);
+        require(c < tx.inputs.length);
+        require(c != this.activeInputIndex);
+        byte[32] cid = OpInputCovenantId(c);
+        require(cid != zero32());
+        byte[] st = tplState(c, CHARGE_PRE, CHARGE_STATE_LEN, CHARGE_SUF, CHARGE_TPL);
+        require(fold(blake2b(byte[](a) + byte[](cid)), later) == hold);
+        return (st, fold(a, later));
+    }
+
+    entry slash(byte[8] cb, byte[8] ib, byte[32] a, byte[256] later) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(int(ib) == 0);
+        require(amount > 0);
+        int c = int(cb);
+        (byte[] st, byte[32] rest) = held(c, a, later);
+        require(st.slice(0, 9) == i9(CHARGE_REFUTED));
+        int s = takeOf(amount, st, rest);
+        int reward = rewardOf(s, st);
+        if (s == amount) {
+            require(OpCovOutputCount(rid) == 0);
+        } else {
+            contWith(amount - s, rest, s);
+        }
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(st.slice(CHARGE_PAYKEY_AT, CHARGE_PAYKEY_AT + 32)))));
+        require(tx.outputs[c].value >= tx.inputs[c].value + reward);
+        burnAt(s - reward);
+    }
+
+    entry clear(byte[8] cb, byte[8] ib, byte[32] a, byte[256] later) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        require(OpCovInputCount(rid) == 1);
+        require(int(ib) == 0);
+        int c = int(cb);
+        (byte[] st, byte[32] rest) = held(c, a, later);
+        if (st.slice(0, 9) == i9(CHARGE_UPHELD)) {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(st.slice(CHARGE_STAKEKEY_AT, CHARGE_STAKEKEY_AT + 32)))));
+        } else {
+            if (st.slice(0, 9) == i9(CHARGE_PENDING)) {
+                int born = OpTxInputDaaScore(c);
+                require(born >= 0);
+                require(chargeDaa > 0);
+                require(chargeDaa < CSV_LIMIT);
+                require(born + chargeDaa < LOCK_TIME_THRESHOLD);
+                require(tx.daa >= born + chargeDaa);
+            } else {
+                require(st.slice(0, 9) == i9(CHARGE_LAPSED));
+            }
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SH(BURN)));
+        }
+        require(tx.outputs[c].value >= tx.inputs[c].value);
+        cont(rest);
+    }
+}

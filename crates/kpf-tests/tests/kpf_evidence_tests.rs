@@ -634,7 +634,7 @@ fn short_trigger(p: &Pair) -> i64 {
 }
 
 #[test]
-fn p6_trigger_exactly_at_and_one_tick_before() {
+fn p6_trigger_exactly_at_and_one_price_before() {
     let l = live(&base(), 0x4b);
     let a = long_trigger(&l.p);
     assert_eq!(a, 947_368_421);

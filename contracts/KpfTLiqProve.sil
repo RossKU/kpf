@@ -1,0 +1,299 @@
+pragma silverscript ^0.1.0;
+
+// KpfTLiqProve: the answer to a dispute of a liquidation (KpfTLiq, KpfTLiqDispute), as a script under the library's
+// id. A liquidation states a fee and a cure, and prices of its liquidator's own that no script reads. Whoever answers
+// shows the position whole and spends an epoch table of each leg's committee by its attest for the claim's time, and
+// the script computes the rule of a liquidation at the prices the committee signed (KpfCrossC's): the side is below
+// its maintenance even at the prices moved toward it and the other party is not; the fee is at most the keeper's
+// there (and what the side is still owed); the cure is between what puts the side at the maintenance at the prices
+// moved toward it and at the prices moved against it.
+//   verdict 1  the liquidation is within that: the claim becomes a proved one (it waits a dispute period again, so that
+//              the side keeps its time to cure) and the liquidator has half of the disputer's bond;
+//   verdict 0  it is not: the claim is refuted. The position again, the disputer its bond, whoever answers (rkey)
+//              half of the liquidator's.
+// One entry answers both ways, and the verdict it is told must be the one it computes: with the committee's signatures
+// every disputed liquidation is proved or refuted, and never both. The other half of the bond lost stays in this
+// script's copy: the committee's, which answered.
+//   answer(who, ageb, slotLen, st, moving, side, t0, a1, a2, fee, add, bond, lkey, dkey, rkey, verdict)
+//     who: the claim and the two epoch tables; rkey: who is paid for a refutation (the disputer's key in a proof)
+contract KpfTLiqProve(byte[32] EPOCH_TABLE_TPL, int EPOCH_TABLE_PRE, int EPOCH_TABLE_SUF, byte[4] ATTEST_TAG, int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant DIR_LONG = 1;
+    int constant BPS = 10000;
+    int constant STATE_AT = 2;
+    // The epoch table (KpfEpochTable) and the signature script of its attest, as KpfCrossC reads them.
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant SPREAD_MARGIN = 4;
+    int constant ATTEST_T0_AT = 33;
+    int constant ATTEST_P_AT = 42;
+    int constant ATTEST_BITS_AT = 51;
+    int constant ATTEST_PRICES_AT = 60;
+    int constant ATTEST_SIGS_AT = 182;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+    // Offsets of the values in the fixed part (KpfCrossC's state up to the keys) and in the moving part.
+    int constant MMR_AT = 10;
+    int constant G_AT = 19;
+    int constant LEG1_AT = 90;
+    int constant LEG2_AT = 201;
+    int constant AKEY_AT = 1;
+    int constant BKEY_AT = 34;
+    int constant AMARGIN_AT = 67;
+    int constant BMARGIN_AT = 76;
+
+    int constant LIQFEE_AT = 28;
+    int constant KEEPER_AT = 37;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function quoteAt(int n, int sc, int r) : int {
+        int m = n % sc;
+        int q = n / sc;
+        return q * r + m * (r / sc) + (m * (r % sc)) / sc;
+    }
+
+    function moved(int p, int pm, int dr, int fav, int g) : int {
+        int rise = 0;
+        if (dr == DIR_LONG) {
+            if (fav == 1) { rise = 1; }
+        } else {
+            if (fav == 0) { rise = 1; }
+        }
+        int x = p * (BPS - g) / BPS;
+        if (rise == 1) {
+            x = (p * (BPS + g) + BPS - 1) / BPS;
+            if (x > pm) { x = pm; }
+        }
+        return x;
+    }
+
+    function gain(int dr, int qx, int qe) : int {
+        int d = qx - qe;
+        if (dr != DIR_LONG) { d = qe - qx; }
+        return d;
+    }
+
+    function maint(int n, int mmr) : int {
+        int v = (n / BPS) * mmr + ((n % BPS) * mmr + BPS - 1) / BPS;
+        return v;
+    }
+
+    function clampPot(int v, int pot) : int {
+        int c = v;
+        if (c < 0) { c = 0; }
+        if (c > pot) { c = pot; }
+        return c;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // Input u is an epoch table of the committee `rid` spent by its `attest` for the market `mkt` and the time t0 (the
+    // epoch table's script is the pinned template, its signature script shows the entry's arguments, and its own
+    // script checks the members' signatures and that it goes on): the price the committee signed. The committee's
+    // spread leaves the position's tolerance g a margin.
+    function priced(int u, int t0, byte[32] mkt, byte[32] rid, int g) : int {
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        byte[] z8 = byte[](0 as byte[8]);
+        require(rid != byte[32](z8 + z8 + z8 + z8));
+        require(OpInputCovenantId(u) == rid);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        int spread = int(byte[8](trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN - 8, EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN)));
+        require(spread >= 0);
+        require(spread * SPREAD_MARGIN <= g);
+        require(OpTxInputScriptSigSubstr(u, 0, ATTEST_T0_AT) == p33(mkt));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_T0_AT, ATTEST_P_AT) == i9(t0));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_P_AT + 1) == byte[](0x08));
+        int c = int(byte[8](OpTxInputScriptSigSubstr(u, ATTEST_P_AT + 1, ATTEST_BITS_AT)));
+        require(c >= 0);
+        require(OpTxInputScriptSigSubstr(u, ATTEST_BITS_AT, ATTEST_BITS_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_PRICES_AT, ATTEST_PRICES_AT + 2) == byte[](0x4c78));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_SIGS_AT, ATTEST_SIGS_AT + 3) == byte[](0x4dc003));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+        return c;
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    // Whether the liquidation of `side` with the fee and the cure stated is within the rule at the committee's prices
+    // c1, c2 (1) or not (0).
+    function within(byte[] sb0, byte[] mv, int side, int fee, int add, int c1, int c2) : int {
+        int ok = 1;
+        // The two parties are two keys (a position of one owner liquidates nobody).
+        if (mv.slice(AKEY_AT, AKEY_AT + 32) == mv.slice(BKEY_AT, BKEY_AT + 32)) { ok = 0; }
+        int mmr = int(byte[8](sb0.slice(MMR_AT, MMR_AT + 8)));
+        int g = int(byte[8](sb0.slice(G_AT, G_AT + 8)));
+        int scale1 = int(byte[8](sb0.slice(LEG1_AT + 67, LEG1_AT + 67 + 8)));
+        int pm1 = int(byte[8](sb0.slice(LEG1_AT + 76, LEG1_AT + 76 + 8)));
+        int size1 = int(byte[8](sb0.slice(LEG1_AT + 85, LEG1_AT + 85 + 8)));
+        int dir1 = int(byte[8](sb0.slice(LEG1_AT + 94, LEG1_AT + 94 + 8)));
+        int scale2 = int(byte[8](sb0.slice(LEG2_AT + 67, LEG2_AT + 67 + 8)));
+        int pm2 = int(byte[8](sb0.slice(LEG2_AT + 76, LEG2_AT + 76 + 8)));
+        int size2 = int(byte[8](sb0.slice(LEG2_AT + 85, LEG2_AT + 85 + 8)));
+        int dir2 = int(byte[8](sb0.slice(LEG2_AT + 94, LEG2_AT + 94 + 8)));
+        int aMargin = int(byte[8](mv.slice(AMARGIN_AT, AMARGIN_AT + 8)));
+        int pot = aMargin + int(byte[8](mv.slice(BMARGIN_AT, BMARGIN_AT + 8)));
+        int p1 = c1;
+        if (p1 > pm1) { p1 = pm1; }
+        int p2 = c2;
+        if (p2 > pm2) { p2 = pm2; }
+        // A long leg gains A what its worth rose by, a short one what it fell by: base is A's margin less the legs'
+        // worth at their entries, signed.
+        int s1 = 1;
+        if (dir1 != DIR_LONG) { s1 = 0 - 1; }
+        int s2 = 1;
+        if (dir2 != DIR_LONG) { s2 = 0 - 1; }
+        int base = aMargin - s1 * quoteAt(size1, scale1, int(byte[8](sb0.slice(LEG1_AT + 103, LEG1_AT + 103 + 8)))) - s2 * quoteAt(size2, scale2, int(byte[8](sb0.slice(LEG2_AT + 103, LEG2_AT + 103 + 8))));
+        // Toward the side's gain: toward A for side A, against A for side B.
+        int favT = 0;
+        if (side == SIDE_A) { favT = 1; }
+        // The trigger: the side below its maintenance even at the prices moved toward it, the other party not.
+        int t1 = quoteAt(size1, scale1, moved(p1, pm1, dir1, favT, g));
+        int t2 = quoteAt(size2, scale2, moved(p2, pm2, dir2, favT, g));
+        int rawT = base + s1 * t1 + s2 * t2;
+        if (side != SIDE_A) { rawT = pot - rawT; }
+        int vT = clampPot(rawT, pot);
+        int mT = maint(t1 + t2, mmr);
+        if (vT >= mT) { ok = 0; }
+        if (pot - vT < mT) { ok = 0; }
+        // The fee: at most the keeper's at the committee's prices, and what the side is still owed there.
+        int r1 = quoteAt(size1, scale1, p1);
+        int r2 = quoteAt(size2, scale2, p2);
+        int owed = base + s1 * r1 + s2 * r2;
+        if (owed < 0) { owed = 0; }
+        if (owed > pot) { owed = pot; }
+        if (side != SIDE_A) { owed = pot - owed; }
+        int f = ((r1 + r2) / BPS) * int(byte[8](sb0.slice(LIQFEE_AT, LIQFEE_AT + 8))) + (((r1 + r2) % BPS) * int(byte[8](sb0.slice(LIQFEE_AT, LIQFEE_AT + 8)))) / BPS;
+        if (f < int(byte[8](sb0.slice(KEEPER_AT, KEEPER_AT + 8)))) { f = int(byte[8](sb0.slice(KEEPER_AT, KEEPER_AT + 8))); }
+        if (f > owed) { f = owed; }
+        if (fee < 0) { ok = 0; }
+        if (fee > f) { ok = 0; }
+        // The cure: at least what puts the side at the maintenance at the prices moved toward it (less would leave it
+        // liquidated again at once), at most what does at the prices moved against it.
+        int q1 = quoteAt(size1, scale1, moved(p1, pm1, dir1, 1 - favT, g));
+        int q2 = quoteAt(size2, scale2, moved(p2, pm2, dir2, 1 - favT, g));
+        int rawC = base + s1 * q1 + s2 * q2;
+        if (side != SIDE_A) { rawC = pot - rawC; }
+        if (add < mT - rawT) { ok = 0; }
+        if (add > maint(q1 + q2, mmr) - rawC) { ok = 0; }
+        return ok;
+    }
+
+    function liqHash(byte[32] position, int side, int t0, int a1, int a2, int fee, int add, int bond, byte[32] lkey) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(fee) + i9(add) + i9(bond) + p33(lkey));
+    }
+
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[312] st, byte[138] moving, int side, int t0, int a1, int a2, int fee, int add, int bond, byte[32] lkey, byte[32] dkey, byte[32] rkey, int verdict) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= OpTxInputScriptSigLen(j));
+        byte[] rs = OpTxInputScriptSigSubstr(j, OpTxInputScriptSigLen(j) - slotLen, OpTxInputScriptSigLen(j));
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        byte[] sb0 = byte[](st);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(blake2b(sb0)) + mv);
+        byte[32] h0 = liqHash(position, side, t0, a1, a2, fee, add, bond, lkey);
+        require(blake2b(p33(h0) + p33(dkey)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(side == SIDE_A || side == SIDE_B);
+        // The committee's prices for the claim's time: an epoch table of each leg's committee, spent by its attest.
+        int g = int(byte[8](sb0.slice(G_AT, G_AT + 8)));
+        int size2 = int(byte[8](sb0.slice(LEG2_AT + 85, LEG2_AT + 85 + 8)));
+        int c1 = priced(int(byte[8](who.slice(8, 16))), t0, byte[32](sb0.slice(LEG1_AT + 1, LEG1_AT + 1 + 32)), byte[32](sb0.slice(LEG1_AT + 34, LEG1_AT + 34 + 32)), g);
+        int c2 = 0;
+        // With one leg the third place names the first epoch table: an object named at a place nobody reads would be
+        // spent under no rule.
+        if (size2 <= 0) {
+            require(who.slice(16, 24) == who.slice(8, 16));
+        }
+        if (size2 > 0) {
+            require(who.slice(8, 16) != who.slice(16, 24));
+            c2 = priced(int(byte[8](who.slice(16, 24))), t0, byte[32](sb0.slice(LEG2_AT + 1, LEG2_AT + 1 + 32)), byte[32](sb0.slice(LEG2_AT + 34, LEG2_AT + 34 + 32)), g);
+        }
+        require(within(sb0, mv, side, fee, add, c1, c2) == verdict);
+        int v = tx.inputs[j].value;
+        require(bond >= 0);
+        int half = bond / 2;
+        if (verdict == 1) {
+            // Within the rule: the claim goes on as a proved one, holding one bond less, and the liquidator has half
+            // of the disputer's bond at the mirror of the claim's index. It is settled a dispute period later, unless
+            // the side cures it. (No key is paid for answering: the argument is held to the disputer's.)
+            require(rkey == dkey);
+            require(v >= bond);
+            becomes(j, rs, slotLen, blake2b(i9(1) + p33(h0)), v - bond);
+            if (half > 0) {
+                int m = tx.outputs.length - 1 - 2 * j;
+                require(m >= tx.inputs.length);
+                require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(lkey))));
+                require(tx.outputs[m].value >= half);
+            }
+        } else {
+            // Not within the rule: the position again; the disputer has its bond back (the output before the last);
+            // whoever shows the committee's signatures has half of the bond lost (the last output).
+            require(bond > 0);
+            require(v >= bond + bond);
+            becomes(j, rs, slotLen, position, v - bond - bond);
+            int n = tx.outputs.length - 1 - 2 * j;
+            require(n - 1 >= tx.inputs.length);
+            require(tx.outputs[n - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[n - 1].value >= bond);
+            if (half > 0) {
+                require(tx.outputs[n].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+                require(tx.outputs[n].value >= half);
+            }
+        }
+        // The other half of the bond lost stays in this script's copy: the committee's, which answered.
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

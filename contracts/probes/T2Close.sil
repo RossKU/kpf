@@ -1,0 +1,195 @@
+pragma silverscript ^0.1.0;
+
+// T2Close (probe): the logic of one operation of a cross-margin account that carries no logic (T2Slot): "a party
+// closes at attested prices" (KpfCrossC.propose kind 1, docs/DESIGN-COMMITTEE.md 3b), with the prices read from
+// price notes instead of tickets. A price note is a T2Slot under the roster's covenant id whose state is (market,
+// tick, price): the attestation that writes it is a transaction of its own, once a tick, and every claim of the tick
+// reads the note and writes it back. The account's state (KpfCrossC's 405 bytes) is shown whole and checked against
+// the position's hash; the pending claim is the same position with another state's hash, so no template is passed.
+//   run(who, slotLen, st, side, a1, a2, t0, s)   who: the input indices of the position and the two notes
+// The arithmetic is KpfCrossC's, to the operator. Not here: the quiet time (an age is the spent input's own to
+// check), the liquidation, the dust rules of the settlement.
+contract T2Close(int init_version) {
+    int version = init_version;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant DIR_LONG = 1;
+    int constant BPS = 10000;
+    int constant KIND_CLOSE = 1;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    // Where the state hash sits in a T2Slot's redeem script.
+    int constant STATE_AT = 2;
+    // Offsets of the fields' values in the account's state (each int behind a 0x08 push, each hash behind a 0x20).
+    int constant MMR_AT = 10;
+    int constant G_AT = 19;
+    int constant LATE_AT = 73;
+    int constant LEG1_AT = 90;
+    int constant LEG2_AT = 201;
+    int constant AKEY_AT = 313;
+    int constant BKEY_AT = 346;
+    int constant AMARGIN_AT = 379;
+    int constant BMARGIN_AT = 388;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function hAt(byte[] b, int at) : byte[32] {
+        return byte[32](b.slice(at, at + 32));
+    }
+
+    function quoteAt(int n, int sc, int r) : int {
+        int m = n % sc;
+        int q = n / sc;
+        return q * r + m * (r / sc) + (m * (r % sc)) / sc;
+    }
+
+    function moved(int p, int pm, int dr, int fav, int g) : int {
+        int rise = 0;
+        if (dr == DIR_LONG) {
+            if (fav == 1) { rise = 1; }
+        } else {
+            if (fav == 0) { rise = 1; }
+        }
+        int x = p * (BPS - g) / BPS;
+        if (rise == 1) {
+            x = (p * (BPS + g) + BPS - 1) / BPS;
+            if (x > pm) { x = pm; }
+        }
+        return x;
+    }
+
+    function gain(int dr, int qx, int qe) : int {
+        int d = qx - qe;
+        if (dr != DIR_LONG) { d = qe - qx; }
+        return d;
+    }
+
+    function maint(int n, int mmr) : int {
+        int v = (n / BPS) * mmr + ((n % BPS) * mmr + BPS - 1) / BPS;
+        return v;
+    }
+
+    function clampPot(int v, int pot) : int {
+        int c = v;
+        if (c < 0) { c = 0; }
+        if (c > pot) { c = pot; }
+        return c;
+    }
+
+    // Input n is a price note of the roster rid for (mkt, t0, a): a slot of the position's own script under the
+    // roster's covenant id whose state hash is that of the three, going on unchanged at its own index. The price
+    // counted, at most pm.
+    function noted(int n, int slotLen, byte[32] mkt, byte[32] rid, int t0, int a, int pm) : int {
+        require(n >= 0);
+        require(n < tx.inputs.length);
+        require(OpInputCovenantId(n) == rid);
+        int len = OpTxInputScriptSigLen(n);
+        require(slotLen <= len);
+        byte[] nrs = OpTxInputScriptSigSubstr(n, len - slotLen, len);
+        require(tx.inputs[n].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(nrs)));
+        require(a >= 0);
+        require(blake2b(p33(mkt) + i9(t0) + i9(a)) == byte[32](nrs.slice(STATE_AT, STATE_AT + 32)));
+        require(tx.outputs[n].scriptPubKey == tx.inputs[n].scriptPubKey);
+        require(OpOutputCovenantId(n) == rid);
+        require(tx.outputs[n].value >= tx.inputs[n].value);
+        int p = a;
+        if (p > pm) { p = pm; }
+        return p;
+    }
+
+    entry run(byte[24] who, int slotLen, byte[405] st, int side, int a1, int a2, int t0, sig s) {
+        int self = this.activeInputIndex;
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        int n1 = int(byte[8](who.slice(8, 16)));
+        int n2 = int(byte[8](who.slice(16, 24)));
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != self);
+        // The position: its script from its own signature script, the state shown against its hash.
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        byte[] sb0 = byte[](st);
+        require(blake2b(sb0) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int mmr = iAt(sb0, MMR_AT);
+        int g = iAt(sb0, G_AT);
+        int late = iAt(sb0, LATE_AT);
+        int scale1 = iAt(sb0, LEG1_AT + 67);
+        int pm1 = iAt(sb0, LEG1_AT + 76);
+        int size1 = iAt(sb0, LEG1_AT + 85);
+        int dir1 = iAt(sb0, LEG1_AT + 94);
+        int entry1 = iAt(sb0, LEG1_AT + 103);
+        int scale2 = iAt(sb0, LEG2_AT + 67);
+        int pm2 = iAt(sb0, LEG2_AT + 76);
+        int size2 = iAt(sb0, LEG2_AT + 85);
+        int dir2 = iAt(sb0, LEG2_AT + 94);
+        int entry2 = iAt(sb0, LEG2_AT + 103);
+        int aMargin = iAt(sb0, AMARGIN_AT);
+        int bMargin = iAt(sb0, BMARGIN_AT);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        int born = OpTxInputDaaScore(j);
+        require(born >= 0);
+        require(t0 + late >= born);
+        // The prices: a note a leg, for one tick.
+        int p1 = noted(n1, slotLen, hAt(sb0, LEG1_AT + 1), hAt(sb0, LEG1_AT + 34), t0, a1, pm1);
+        int p2 = 0;
+        if (size2 <= 0) {
+            require(n2 == n1);
+        }
+        if (size2 > 0) {
+            require(n2 != n1);
+            p2 = noted(n2, slotLen, hAt(sb0, LEG2_AT + 1), hAt(sb0, LEG2_AT + 34), t0, a2, pm2);
+        }
+        int pot = aMargin + bMargin;
+        int e1 = quoteAt(size1, scale1, entry1);
+        int e2 = quoteAt(size2, scale2, entry2);
+        int f1 = quoteAt(size1, scale1, moved(p1, pm1, dir1, 1, g));
+        int f2 = quoteAt(size2, scale2, moved(p2, pm2, dir2, 1, g));
+        int g1 = quoteAt(size1, scale1, moved(p1, pm1, dir1, 0, g));
+        int g2 = quoteAt(size2, scale2, moved(p2, pm2, dir2, 0, g));
+        int vaF = clampPot(aMargin + gain(dir1, f1, e1) + gain(dir2, f2, e2), pot);
+        int vaG = clampPot(aMargin + gain(dir1, g1, e1) + gain(dir2, g2, e2), pot);
+        int mF = maint(f1 + f2, mmr);
+        int mG = maint(g1 + g2, mmr);
+        int amount = vaG;
+        pubkey k = pubkey(hAt(sb0, AKEY_AT));
+        if (side == SIDE_A) {
+            require(amount >= mG || pot - vaF < mF);
+        } else {
+            require(side == SIDE_B);
+            amount = pot - vaF;
+            require(amount >= mF || vaG < mG);
+            k = pubkey(hAt(sb0, BKEY_AT));
+        }
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+        // The pending claim: the same position, the hash of another state.
+        byte[32] nh = blake2b(i9(KIND_CLOSE) + i9(side) + i9(t0) + i9(amount) + i9(late) + p33(blake2b(sb0)));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](nh) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value);
+        // This logic goes on as it is.
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+}

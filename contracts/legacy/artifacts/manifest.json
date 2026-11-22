@@ -1,0 +1,60 @@
+{
+  "compiler": "silverscript-lang (vendor/kob @ ed16148, SilverScript v1.0.0), CompileOptions::default(); 0.1.0",
+  "format": "kpf-artifacts/1",
+  "kob_ask": {
+    "prefix_len": 1,
+    "source": "contracts/orders/KobAsk.sil",
+    "source_sha256": "e3b7856a382607f371a8aa328282259ff137971b05a588b2a118af86c4178178",
+    "suffix_len": 1407,
+    "template_hash": "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"
+  },
+  "kob_bid": {
+    "prefix_len": 1,
+    "source": "contracts/orders/KobBid.sil",
+    "source_sha256": "e0f16161f8014a3f341a26b9d96fbc830c2f99fb1f4a841cf415a4604c96c66e",
+    "suffix_len": 1343,
+    "template_hash": "dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef"
+  },
+  "kob_commit": "ed16148",
+  "kpf_lock": {
+    "artifact": "KpfLock.json",
+    "artifact_sha256": "2551abe820cda422a9cd241ac6cd3a0b1885d38f7749a60f250e2f07dc9c87b5",
+    "prefix_len": 1,
+    "source": "contracts/legacy/KpfLock.sil",
+    "source_sha256": "42e4f20cae33289e8fd78f2e33265241c1dc78693da5de3b42e284c585bf8430",
+    "state_len": 468,
+    "suffix_len": 1830,
+    "template_hash": "837e7edb8bf40b5ab88da1f5e2a94d044971e4c6d9fbef6a68ce7e81d451b80f"
+  },
+  "kpf_open": {
+    "artifact": "KpfOpen.json",
+    "artifact_sha256": "c271aa498b05358531811906bef5ff030869908376e456ba0c376d3dc052d312",
+    "prefix_len": 1,
+    "source": "contracts/legacy/KpfOpen.sil",
+    "source_sha256": "44569091f0a94d062282e47e1275c8bf751da3bd2ceb876a465ee62d4936ed21",
+    "state_len": 402,
+    "suffix_len": 2852,
+    "template_hash": "90bb48cdb6dfc9784f2ab540c74ac2cf5c06ab872f14f4e21a07613d28ad3a03"
+  },
+  "kpf_pair": {
+    "artifact": "KpfPair.json",
+    "artifact_sha256": "7a43c98e518f18f10dcc3013c40f40068ef7b9ee92ca384071e1b1d413d8f974",
+    "prefix_len": 1,
+    "source": "contracts/legacy/KpfPair.sil",
+    "source_sha256": "e893fa8f119fbc442712a1b51997a17a029489d7fa3fcc8b700857d0969e3748",
+    "state_len": 519,
+    "suffix_len": 11850,
+    "template_hash": "afbe2011ce6dba69dacc1ba49a7b5a74954c7fb850b917e6961a57149ef74481"
+  },
+  "kpf_pending": {
+    "artifact": "KpfPending.json",
+    "artifact_sha256": "8fbb4257c2e29487d42a228c0754116d26fbb7a284713dd86260212119eebbdf",
+    "prefix_len": 1,
+    "source": "contracts/legacy/KpfPending.sil",
+    "source_sha256": "b2f611a86b80b1191ac7dfc6cb65b3aa087d1ce846204712b8bb0b0c9332ea2f",
+    "state_len": 666,
+    "suffix_len": 3945,
+    "template_hash": "6d950622067f1ce99a72b4c5102649a52c910cf6ef63fa2e1fce897b7380d8b8"
+  },
+  "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write"
+}

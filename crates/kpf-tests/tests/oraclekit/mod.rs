@@ -1,4 +1,4 @@
-//! Fixtures and transaction builders for the oracle-market family (`contracts/KpfOpenO.sil`, `KpfPairO.sil`,
+//! Fixtures and transaction builders for the oracle-market family (`contracts/legacy/KpfOpenO.sil`, `KpfPairO.sil`,
 //! `KpfPendingO.sil`) wired to the real slot (`KpfBond`) and the real judge (`KpfStake`). The templates are compiled
 //! from source once per test binary (`oracle_attack_tests` checks that they equal the pinned artifacts); states and
 //! values come from the library model (`kpf_protocol::oracle`, `bond`, `judge`), so every accepted transaction here is
@@ -84,9 +84,9 @@ pub fn ok() -> &'static OK {
     static K: OnceLock<OK> = OnceLock::new();
     K.get_or_init(|| {
         let m = omarket();
-        let bond = compile("KpfBond.sil", &Bond::new([7; 32], m.bond_market(), 0).ctor());
+        let bond = compile("legacy/KpfBond.sil", &Bond::new([7; 32], m.bond_market(), 0).ctor());
         let bond_t = Template::of("KpfBond", &bond);
-        let stake = compile("KpfStake.sil", &Js::free([7; 32], m.judge_market()).ctor());
+        let stake = compile("legacy/KpfStake.sil", &Js::free([7; 32], m.judge_market()).ctor());
         let stake_t = Template::of("KpfStake", &stake);
         let mut consts = OConsts {
             bond_tpl: bond_t.hash,
@@ -105,13 +105,13 @@ pub fn ok() -> &'static OK {
         // The pending template needs no pair template (its return states are hashes); the pair pins the pending one,
         // the order the pair's: KpfOpenO -> KpfPairO -> KpfPendingO -> KpfStake, KpfPairO -> KpfBond, KpfOpenO -> KpfBond.
         let sw = sample_pending(&sp);
-        let pending = compile("KpfPendingO.sil", &sw.ctor_with(&consts));
+        let pending = compile("legacy/KpfPendingO.sil", &sw.ctor_with(&consts));
         let pending_t = Template::of("KpfPendingO", &pending);
         consts.pending_tpl = pending_t.hash;
-        let pair = compile("KpfPairO.sil", &sp.ctor_with(&consts));
+        let pair = compile("legacy/KpfPairO.sil", &sp.ctor_with(&consts));
         let pair_t = Template::of("KpfPairO", &pair);
         consts.pair_tpl = pair_t.hash;
-        let open = compile("KpfOpenO.sil", &sample_order(&m, LONG, [3; 32]).ctor_with(&consts));
+        let open = compile("legacy/KpfOpenO.sil", &sample_order(&m, LONG, [3; 32]).ctor_with(&consts));
         let open_t = Template::of("KpfOpenO", &open);
         OK { kit: OKit { open: open_t, pair: pair_t, pending: pending_t, bond: bond_t, stake: stake_t, consts }, open, pair, pending, bond, stake }
     })

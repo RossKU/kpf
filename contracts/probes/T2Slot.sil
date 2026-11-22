@@ -1,0 +1,24 @@
+pragma silverscript ^0.1.0;
+
+// T2Slot (probe): the one script of every object that carries no logic: a position, a pending claim, a price note.
+// It holds the hash of its state and the hashes of the scripts allowed to move it. A logic input may serve several
+// objects of one transaction (a claim: the position and one price note a leg), so it names them in a list, the first
+// push of its signature script (three 8-byte input indices), and an object checks that it is the k-th of them.
+//   go(l, k)   input l is one of the allowed logic scripts and its list names this input at place k (0, 1 or 2)
+contract T2Slot(byte[32] LOGIC_A, byte[32] LOGIC_B, byte[32] init_stateHash) {
+    byte[32] stateHash = init_stateHash;
+
+    entry go(int l, int k) {
+        int self = this.activeInputIndex;
+        require(l >= 0);
+        require(l < tx.inputs.length);
+        require(l != self);
+        require(k >= 0);
+        require(k <= 2);
+        byte[] spk = tx.inputs[l].scriptPubKey;
+        require(spk == byte[](new ScriptPubKeyP2SH(LOGIC_A)) || spk == byte[](new ScriptPubKeyP2SH(LOGIC_B)));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+        require(byte[](stateHash).length == 32);
+    }
+}

@@ -80,8 +80,8 @@ fn open_many(m: &OMarket, k: u64, count: usize) -> (Vec<LPair>, LSlot, usize) {
 /// with the same constants. So no family can relax or tighten a shared bound alone.
 #[test]
 fn holds_the_market_bond_judge_bounds_and_the_bind_proof_are_one_text() {
-    let (o, p, w) = (src("KpfOpenO.sil"), src("KpfPairO.sil"), src("KpfPendingO.sil"));
-    let (bond, stake, kopen) = (src("KpfBond.sil"), src("KpfStake.sil"), src("KpfOpen.sil"));
+    let (o, p, w) = (src("legacy/KpfOpenO.sil"), src("legacy/KpfPairO.sil"), src("legacy/KpfPendingO.sil"));
+    let (bond, stake, kopen) = (src("legacy/KpfBond.sil"), src("legacy/KpfStake.sil"), src("legacy/KpfOpen.sil"));
     let m = |s: &str| between(s, "// BEGIN oracle market bounds", "// END oracle market bounds");
     assert_eq!(m(&o), m(&p));
     assert_eq!(m(&o), m(&w));
@@ -169,7 +169,7 @@ fn holds_the_market_bond_judge_bounds_and_the_bind_proof_are_one_text() {
 }
 
 /// The templates these engine tests compile from source are the pinned ones the library and the command line build
-/// with (`contracts/artifacts/oracle/`), constants included.
+/// with (`contracts/legacy/artifacts/oracle/`), constants included.
 #[test]
 fn holds_the_engine_templates_are_the_pinned_artifacts() {
     let (a, b) = (kit(), kpf_protocol::oracle_artifacts::kit());

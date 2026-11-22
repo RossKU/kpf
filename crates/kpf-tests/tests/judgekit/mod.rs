@@ -1,4 +1,4 @@
-//! Fixtures for the stake judge (`contracts/KpfStake.sil`, `contracts/stubs/KpfClaimStub.sil`): the compiled templates,
+//! Fixtures for the stake judge (`contracts/legacy/KpfStake.sil`, `contracts/legacy/stubs/KpfClaimStub.sil`): the compiled templates,
 //! the real `Env` of the model, and the builder that turns a model transaction (`kpf_protocol::judge::JTx`) into a
 //! rusty-kaspa transaction, so that the model's verdict and the engine's can be compared input by input. The contracts
 //! are compiled from source once per test binary (they are not pinned artifacts in this slice).
@@ -44,7 +44,7 @@ fn tag(art: &SilAbiArtifact, entry: &str) -> [u8; 4] {
 pub fn jkit() -> &'static JKit {
     static K: OnceLock<JKit> = OnceLock::new();
     K.get_or_init(|| {
-        let stake = compile("KpfStake.sil", &Js::free([7; 32], jmarket()).ctor());
+        let stake = compile("legacy/KpfStake.sil", &Js::free([7; 32], jmarket()).ctor());
         let stake_t = Template::of("KpfStake", &stake);
         let open_tag = tag(&stake, "open");
         let resolve_tag = tag(&stake, "resolve");
@@ -56,7 +56,7 @@ pub fn jkit() -> &'static JKit {
             ArtifactValue::Bytes(resolve_tag.to_vec()),
         ];
         let sample = ClaimStub { m: jmarket(), owner: [7; 32], status: CLAIM_PENDING };
-        let claim = compile("stubs/KpfClaimStub.sil", &[consts, sample.ctor_state()].concat());
+        let claim = compile("legacy/stubs/KpfClaimStub.sil", &[consts, sample.ctor_state()].concat());
         let claim_t = Template::of("KpfClaimStub", &claim);
         JKit { stake, stake_t, claim, claim_t, open_tag, resolve_tag }
     })

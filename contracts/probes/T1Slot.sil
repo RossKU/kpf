@@ -1,0 +1,24 @@
+pragma silverscript ^0.1.0;
+
+// T1Slot (probe): a position that carries no logic. Its script is a hash of its state and the hashes of the scripts
+// that may move it; whoever spends it presents one of those scripts as another input of the transaction (a "logic"
+// input), and that script, not this one, checks the transition. A transaction then carries the code of the one
+// operation it performs, not the code of every operation the position has.
+//   go(l)   input l is a P2SH of one of the allowed logic scripts, and its signature script names this input (its
+//           first push is this input's index), so the logic that runs is checking this position and no other
+// Measured against KpfCrossC.addMargin (7,532 bytes) and KpfPairC.addMargin (13,824 bytes) by
+// crates/kpf-tests/tests/thin_probe_tests.rs.
+contract T1Slot(byte[32] LOGIC_A, byte[32] LOGIC_B, byte[32] init_stateHash) {
+    byte[32] stateHash = init_stateHash;
+
+    entry go(int l) {
+        int self = this.activeInputIndex;
+        require(l >= 0);
+        require(l < tx.inputs.length);
+        require(l != self);
+        byte[] spk = tx.inputs[l].scriptPubKey;
+        require(spk == byte[](new ScriptPubKeyP2SH(LOGIC_A)) || spk == byte[](new ScriptPubKeyP2SH(LOGIC_B)));
+        require(OpTxInputScriptSigSubstr(l, 0, 9) == byte[](0x08) + byte[](self as byte[8]));
+        require(byte[](stateHash).length == 32);
+    }
+}

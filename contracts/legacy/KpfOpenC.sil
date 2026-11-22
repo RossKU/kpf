@@ -1,0 +1,381 @@
+pragma silverscript ^0.1.0;
+
+// KpfOpenC: a resting order to open (or enter) one side of a committee-market pair KpfPairC, escrowed in KAS
+// (docs/DESIGN-COMMITTEE.md 3). It is the oracle family's order (KpfOpenO) without an underwriter: no slot is bound
+// and no premium is paid.
+//
+// A long order opens at a price X <= limit with its own margin rate myRate (bl = X - myRate) and accepts a short whose
+// rate bs - X is at least minCounterRate; a short order mirrors it. Whoever writes the first order of a market block
+// creates the market; nothing is registered.
+//
+// Entries:
+//   fill(pairOut, n, x, bl, bs, counterKey, counterMk, xe, cPre, cSuf)
+//          open: n units at x into the fresh KpfPairC at output pairOut with the lease xe. This order pays its margin
+//          and its tip, and the pair's carrier only if the fill empties it.
+//   take(partOut, n, x, e, bound, counterKey, pm, ca, cm, ct, xe, cPre, cSuf)
+//          transfer: n units at x take a same-side listing of an existing pair into a part under a fresh covenant id
+//          (this order checks that no input and no other output carries it), with the pair's entry e accepted only in
+//          this order's favour and the pair's lease xe.
+//   cancel(s)   owner only, SIGHASH_ALL.
+//   refund()    anyone, once tx.daa >= min(expiryDaa, UTXO DAA + 90 days): the escrow to the owner, less
+//               keeperFeeMin (at most a twentieth of the escrow) for whoever sends it.
+// Every part (and what the order leaves) holds at least PART_FLOOR (0.2 KAS) of this order's margin, and the order pays
+// at most one carrier, with its last part (KpfOpenO, review 10).
+// The lease of a new pair (fill): at least one term after this order's own UTXO was accepted (the only clock an order
+// can prove) and at most one term from the present (tx.daa >= xe - termDaa: a lock time is a lower bound on the
+// present). So a new pair is never born lapsed by more than its orders rested, and never with a lease further out than
+// a signed price could give it.
+// The lease of a part an order enters (take): at least half a term after this order was accepted and at most one term
+// from the present; and both sides are healthy at x, as at fill.
+// DESIGN: review C1 (C1-F2): take put no bound on the lease and asked only this order's side to be healthy. A take
+// needs no pair (nothing proves the other input is one), so anyone entered a resting order into a pair of its own
+// making: against a counter side with no margin, liquidated at once for a fee out of the order's margin; with a lease
+// already over, an option to settle at the entry whenever the price went the order's way; or with a lease beyond every
+// clock. A side listed in a pair whose lease has less than half a term left is renewed (keepAlive) before an order
+// can take it.
+contract KpfOpenC(
+    byte[32] PAIR_TPL,
+    byte[32] init_market,
+    byte[32] init_committeeId,
+    byte[32] init_feedHash,
+    int init_termDaa,
+    int init_scale,
+    int init_priceMax,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_graceDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    int init_side,
+    pubkey init_ownerKey,
+    int init_sizeLeft,
+    int init_limit,
+    int init_myRate,
+    int init_minCounterRate,
+    int init_minFill,
+    int init_tip,
+    int init_activeFrom,
+    int init_expiryDaa
+) {
+    // The committee market block (state [0..216)), byte for byte the pair's (KpfPairC describes every field).
+    byte[32] market = init_market;
+    byte[32] committeeId = init_committeeId;
+    byte[32] feedHash = init_feedHash;
+    int termDaa = init_termDaa;
+    int scale = init_scale;
+    int priceMax = init_priceMax;
+    int mmrBps = init_mmrBps;
+    int gBps = init_gBps;
+    int liqFeeBps = init_liqFeeBps;
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;
+    int graceDaa = init_graceDaa;
+    int lateDaa = init_lateDaa;
+    int quietDaa = init_quietDaa;
+    // Order (state [216..330)).
+    int side = init_side;                    // 1 long, 2 short
+    pubkey ownerKey = init_ownerKey;
+    int sizeLeft = init_sizeLeft;            // *
+    int limit = init_limit;
+    int myRate = init_myRate;
+    int minCounterRate = init_minCounterRate;
+    int minFill = init_minFill;
+    int tip = init_tip;
+    int activeFrom = init_activeFrom;
+    int expiryDaa = init_expiryDaa;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant BPS = 10000;
+    int constant INT_MAX = 9223372036854775807;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant MMR_CAP = 5000;
+    int constant FEE_MIN_MAX = 1000000000000;
+    int constant TERM_MAX = 77760000;
+    int constant TERM_MIN = 1200;
+    int constant WAIT_MAX = 864000;
+    int constant MAX_IDLE = 77760000;
+    int constant MAX_OUTPUTS = 8;
+    int constant PART_FLOOR = 20000000;
+    // Redeem offsets (the state starts at byte 1): the market body [34..217); sizeLeft's payload [260..268).
+    int constant BODY_AT = 34;
+    int constant BLOCK_END = 217;
+    int constant LEFT_AT = 260;
+    byte[54] constant NO_LISTS = byte[54](0x080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000080000000000000000);
+    byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
+
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    // BEGIN maker
+    // This input's maker commitment (KpfPairO, review 7): blake2b of its outpoint, the transaction id and then the
+    // index as 8 bytes; unique to this input.
+    function me() : byte[32] {
+        int self = this.activeInputIndex;
+        return blake2b(byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[8]));
+    }
+    // END maker
+
+    // BEGIN committee market bounds
+    function checkMarket() {
+        require(blake3(ownRs().slice(BODY_AT, BLOCK_END)) == market);
+        require(committeeId != zero32());
+        require(termDaa >= TERM_MIN);
+        require(termDaa <= TERM_MAX);
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(gBps > 0);
+        require(gBps < BPS);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(keeperFeeMin <= FEE_MIN_MAX);
+        require(minSize > 0);
+        require(carrier >= 0);
+        require(idleDaa >= 0);
+        require(idleDaa <= TERM_MAX);
+        require(graceDaa >= 0);
+        require(graceDaa <= WAIT_MAX);
+        require(lateDaa > 0);
+        require(lateDaa <= WAIT_MAX);
+        require(quietDaa >= 0);
+        require(quietDaa <= WAIT_MAX);
+    }
+    // END committee market bounds
+
+    function checkOrder() {
+        checkMarket();
+        require(myRate > 0);
+        require(minCounterRate >= 0);
+        require(tip >= 0);
+    }
+
+    // The amount of a fill or take: n >= minFill unless it takes all that is left, every part >= minSize, and this
+    // order's margin in the part and in what it leaves at least PART_FLOOR (KpfOpenO, review 10).
+    function amount(int n) : int {
+        require(n > 0);
+        require(n <= sizeLeft);
+        require(n >= minSize);
+        require(n >= minFill || n == sizeLeft);
+        int left = sizeLeft - n;
+        require(left == 0 || left >= minSize);
+        require(n / scale <= (INT_MAX - carrier) / priceMax - 1);
+        require(quoteOf(n, myRate, 0) >= PART_FLOOR);
+        require(left == 0 || quoteOf(left, myRate, 0) >= PART_FLOOR);
+        return left;
+    }
+
+    // What a fill or take may take from the escrow (rate r per whole unit, rounded down, and one pair carrier only with
+    // the part that empties the order), and the rest: a continuation with sizeLeft = left, or the owner's refund at
+    // output i.
+    function escrow(int n, int r, int left) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        int spend = quoteOf(n, r, 0);
+        if (left == 0) {
+            spend = spend + carrier;
+        }
+        if (left > 0) {
+            require(OpCovOutputCount(selfId) == 1);
+            int c = OpCovOutputIdx(selfId, 0);
+            byte[] rs = ownRs();
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                rs.slice(0, LEFT_AT) + byte[](left as byte[8]) + rs.slice(LEFT_AT + 8, this.bytecodeSize)
+            )));
+            require(tx.outputs[c].value >= tx.inputs[self].value - spend);
+        } else {
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+            require(tx.outputs[self].value >= tx.inputs[self].value - spend);
+        }
+    }
+
+    // BEGIN fresh id
+    // The output `out` starts a new lineage (KpfPairO, review 6): its covenant id is not zero and no input carries it,
+    // so it is a genesis, and no other output carries it (the scan, at most MAX_OUTPUTS outputs). After this
+    // transaction the id has exactly one UTXO, the one the caller writes.
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+        return id;
+    }
+    // END fresh id
+
+    // Open (as KpfOpenO.fill, without a binding). The new pair names this order as its long or short maker (`me`) and
+    // counterMk, the counter order's commitment (zero when the counterparty is not an order), as the other; parent,
+    // host and donor are zero, so no pair's hand-over can accept the same output.
+    entry fill(int pairOut, int n, int x, int bl, int bs, byte[32] counterKey, byte[32] counterMk, int xe, byte[] cPre, byte[] cSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(tx.daa >= activeFrom);
+        checkOrder();
+        int left = amount(n);
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+        byte[32] lk = byte[32](ownerKey);
+        byte[32] sk = counterKey;
+        byte[32] tl = me();
+        byte[32] ts = counterMk;
+        if (side == SIDE_LONG) {
+            require(x <= limit);
+            require(bl == x - myRate);
+            require(bs - x >= minCounterRate);
+        } else {
+            require(side == SIDE_SHORT);
+            require(x >= limit);
+            require(bs == x + myRate);
+            require(x - bl >= minCounterRate);
+            lk = counterKey;
+            sk = byte[32](ownerKey);
+            ts = tl;
+            tl = counterMk;
+        }
+        // Healthy at entry (DESIGN 4.5c), both sides, and the range wider than both maintenance bands.
+        require(x * (BPS - mmrBps) >= bl * BPS);
+        require(bs * BPS >= x * (BPS + mmrBps));
+        require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
+        // The lease: at least one term after this order was accepted, at most one term from the present.
+        require(OpTxInputDaaScore(self) >= 0);
+        require(xe >= OpTxInputDaaScore(self) + termDaa);
+        require(xe < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= xe - termDaa);
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        byte[] z = p33(zero32());
+        require(tx.outputs[pairOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
+            + i9(n) + i9(bl) + i9(bs) + i9(x) + p33(lk) + p33(sk) + i9(xe) + byte[](NO_LISTS)
+            + p33(tl) + p33(ts) + z + z + z + cSuf)));
+        // The pair starts a fresh lineage: no input and no other output carries its id.
+        fresh(pairOut);
+        require(tx.outputs[pairOut].value >= quoteOf(n, bs - bl, 0) + carrier);
+        escrow(n, myRate + tip, left);
+    }
+
+    // Transfer (as KpfOpenO.take, without a binding): the part at partOut takes a listed side of an existing pair, under
+    // a fresh id, with the pair's entry e accepted only in this order's favour, this order's side unlisted and named by
+    // its maker, the stayer's key and listing as given, and the pair's lease xe. The part names this order as its maker
+    // on this order's side (`me`), pm (the commitment of the pair handing over, which checks it there) as its parent.
+    entry take(int partOut, int n, int x, int e, int bound, byte[32] counterKey, byte[32] pm, int ca, int cm, int ct, int xe, byte[] cPre, byte[] cSuf) {
+        int bl = bound;
+        int bs = x + myRate;
+        if (side == SIDE_LONG) {
+            bl = x - myRate;
+            bs = bound;
+        }
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(tx.daa >= activeFrom);
+        checkOrder();
+        int left = amount(n);
+        byte[32] lk = counterKey;
+        byte[32] sk = byte[32](ownerKey);
+        byte[] lists = i9(ca) + i9(cm) + i9(ct) + byte[](NO_LIST);
+        byte[32] tl = zero32();
+        byte[32] ts = me();
+        if (side == SIDE_LONG) {
+            require(x <= limit);
+            require(e >= x);
+            require(bs - x >= minCounterRate);
+            lk = byte[32](ownerKey);
+            sk = counterKey;
+            lists = byte[](NO_LIST) + i9(ca) + i9(cm) + i9(ct);
+            byte[32] t = tl;
+            tl = ts;
+            ts = t;
+        } else {
+            require(side == SIDE_SHORT);
+            require(x >= limit);
+            require(e <= x);
+            require(x - bl >= minCounterRate);
+        }
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+        // Healthy at x, both sides (as fill), and the range wider than both maintenance bands.
+        require(x * (BPS - mmrBps) >= bl * BPS);
+        require(bs * BPS >= x * (BPS + mmrBps));
+        require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
+        // The lease: at least half a term after this order was accepted, at most one term from the present.
+        require(OpTxInputDaaScore(self) >= 0);
+        require(xe >= OpTxInputDaaScore(self) + termDaa / 2);
+        require(xe < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= xe - termDaa);
+        require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == PAIR_TPL);
+        require(tx.outputs[partOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(cPre + ownRs().slice(1, BLOCK_END)
+            + i9(n) + i9(bl) + i9(bs) + i9(e) + p33(lk) + p33(sk) + i9(xe) + lists
+            + p33(tl) + p33(ts) + p33(pm) + p33(zero32()) + p33(zero32()) + cSuf)));
+        fresh(partOut);
+        require(tx.outputs[partOut].value >= quoteOf(n, bs - bl, 0) + carrier);
+        escrow(n, myRate + tip, left);
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, ownerKey));
+    }
+
+    entry refund() {
+        int self = this.activeInputIndex;
+        int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+        if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+        require(tx.daa >= idleEnd);
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 0);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(ownerKey)));
+        // DESIGN: review C2 (C2-F2): nothing proves that the present is before a time, so fill and take cannot refuse an
+        // order past its expiry; the expiry binds only when a refund lands. Whoever lands it keeps keeperFeeMin of the
+        // escrow, so an expired order is somebody's business from the block it expires in.
+        // Review C3 (C3-F1): and at most a twentieth of the escrow, whatever the market's floor is.
+        int fee = keeperFeeMin;
+        if (fee > tx.inputs[self].value / 20) { fee = tx.inputs[self].value / 20; }
+        require(tx.outputs[self].value >= tx.inputs[self].value - fee);
+    }
+}

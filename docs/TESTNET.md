@@ -672,3 +672,281 @@ agreed. Details: `docs/DESIGN-ORACLE-IMPL.md` section 19 (refreshed after review
   identical bindings (one slot, cover rate, expiry and premium: P3 keeps the binding of each side's own pair), and since
   review 9 with one entry price (P3 keeps it). A transfer to an order (`KpfOpenO.take`) and a partial
   transfer or mutual close (`--n`) are not built either: the commands above move whole pairs.
+
+## 10. A committee market: prices signed by a staked roster
+
+The design is `DESIGN-COMMITTEE.md`; live run 3 (`LIVE-3.md`) ran exactly this. Nobody states a price: seats of a
+roster sign ticks, a price needs the signatures of its quorum, and a claim with it must land within `lateDaa` of the
+tick. Every command works offline on files and contacts a node only with `--node`; with it a command makes one query
+for each object file it is given, one for the funder's UTXOs and at most three for the DAA score and the submission.
+None polls.
+
+### 10.1 What must exist before
+
+A testnet-10 node as in section 1, a funded key, and one key file for every seat, every party. Keys:
+
+```sh
+export NODE=ws://127.0.0.1:18210
+kpf keygen --name funder ; F=~/.kpf/keys/funder.json     # fund its kaspatest: address
+for k in seat0 seat1 seat2 long short; do kpf keygen --name $k; done
+K=~/.kpf/keys
+```
+
+A builder is run as `kpf <command> ... --funder $F --node $NODE --submit --out-dir out`: it prints the transaction,
+verifies it locally, submits it and writes one object file for every object it created (`out/<txid8>-out<i>-<kind>.json`).
+Without `--submit` it is a dry run under `out/dry-run/`. A later command takes those files; with `--node` their UTXO,
+value and DAA score are read from the node, whatever the file says.
+
+### 10.2 The roster
+
+```sh
+kpf roster-create --funder $F --node $NODE --submit --out-dir out --out roster.json
+#   roster.json: the roster id and the genesis facts it is recomputed from. Give it to everyone.
+kpf roster-check --roster roster.json --object out/<..>-roster.json --node $NODE
+kpf roster-join --roster out/<..>-roster.json --genesis roster.json --seat 0 --amount 30 --owner $K/seat0.json --funder $F --node $NODE --submit --out-dir out
+kpf roster-join --roster out/<..>-roster.json --genesis roster.json --seat 1 --amount 22 --owner $K/seat1.json ...   # the newest roster file each time
+kpf roster-join --roster out/<..>-roster.json --genesis roster.json --seat 2 --amount 15 --owner $K/seat2.json ...
+kpf roster-show --roster out/<..>-roster.json --node $NODE
+kpf roster-roll --roster out/<..>-roster.json --funder $F --node $NODE --submit --out-dir out
+```
+
+`--genesis roster.json` is what shows the roster began empty: whoever puts KAS into a roster gives it (or says
+`--unchecked`). The roster needs 20 DAA of rest between two changes (the tool says "usable from DAA X" and refuses to submit
+earlier). A seat signs from the next roll; a roll is possible once the current epoch has ended and writes the tickets
+of the epoch that holds the present. Until someone rolls, no price can be attested.
+
+### 10.3 The market and a pair
+
+```sh
+kpf oracle-market --feed-template feed.txt        # then edit the quantity, the sources and the sessions
+kpf c-market --roster roster.json --feed feed.txt --out market.json --late-daa 600   # by hand: see 10.4
+kpf c-check  --market market.json --feed feed.txt   # the wallet's check; refuses a market whose roster did not begin empty
+kpf c-order --market market.json --side long  --size 10 --limit 10 --rate 1 --expiry <DAA> --owner $K/long.json  --funder $F ...
+kpf c-order --market market.json --side short --size 10 --limit 10 --rate 2 --expiry <DAA> --owner $K/short.json --funder $F ...
+kpf c-open --long out/<..>-committee-order.json --short out/<..>-committee-order.json --n 10 --x 10 --market market.json --funder $F ...
+kpf c-watch --object out/<..>-committee-pair.json --node $NODE --price 10
+```
+
+`c-open-taker --order O --n T --x P --rate P` opens against the funder's own key instead of a second order. An
+order's `--expiry` does not stop a fill: from that DAA on anyone may `c-refund` it (and keeps a small fee), and until
+someone does it can still be filled at its limit; `c-cancel --order O --key OWNER` takes it back at any time.
+`--market market.json` on every command that enters a position (`c-open`, `c-open-taker`, `c-assign`, `c-transfer`,
+`c-take`) refuses an object of another market than the one you checked.
+
+### 10.4 A price, a close, a liquidation
+
+A claim must land within the market's `lateDaa` of the tick it names. The default is 100 DAA (10 s), which a script
+meets and a hand does not: the market of 10.3 is created with `--late-daa 600` (a minute) so that these lines can be
+typed.
+
+A seat signs its own price for one DAA; the claim presents the seats' files and one ticket of the epoch that holds
+that DAA.
+
+```sh
+T0=$(kpf daa --node $NODE | sed 's/.*score //')
+for i in 0 1 2; do kpf tick-sign --market market.json --t0 $T0 --price 10.5 --key $K/seat$i.json --out tick-$T0-$i.json; done   # one file a seat and a tick
+kpf tick-check --market market.json --ticket out/<..>-ticket.json --tick tick-$T0-0.json --tick tick-$T0-1.json --tick tick-$T0-2.json
+kpf c-close --pair out/<..>-committee-pair.json --side long --ticket out/<..>-ticket.json \
+    --tick tick-$T0-0.json --tick tick-$T0-1.json --tick tick-$T0-2.json --key $K/long.json --funder $F --node $NODE --submit --out-dir out
+kpf c-finalize --pending out/<..>-committee-pending-part.json --funder $F --node $NODE --submit --out-dir out
+```
+
+`c-liquidate` takes the same ticket and tick arguments and no party's key; its `c-finalize` waits `graceDaa`, in which
+the loser may `c-cure --pending W --key LOSER`. A ticket is re-created by every claim that uses it: the claim's
+`out/<..>-ticket.json` is the ticket to use next, and two claims in the same seconds use two different tickets of the
+epoch. A claim whose transaction lands more than `lateDaa` after its tick is void: `c-finalize` restores the part.
+
+A seat signs one price a tick. `tick-sign` refuses to write a second price over the seat's own file for that tick;
+two signed prices of one seat for one tick are a proof anyone uses:
+
+```sh
+kpf seat-forfeit --roster out/<..>-roster.json --tick A.json --tick B.json --funder $F --node $NODE --submit --out-dir out
+kpf exit-forfeit --exit out/<..>-exit.json --tick A.json --tick B.json --funder $F ...   # if the seat has left
+```
+
+The seat's stake is gone: a tenth to the sender, the rest burned.
+
+A seat that signs a **false** price (one price, so there is no proof) is charged and judged. The judge is a stake
+apart from the seats': whoever bonds under the roster's judge block (`roster.json` names it) rules on its ticks.
+
+```sh
+kpf judge-stake --roster roster.json --value 100 --owner $K/judge.json --funder $F ...   # counts on charges made ageDaa later
+kpf charge --roster out/<..>-roster.json --tick T.json --funder $F ...     # or --exit E.json; the bond; prints the charge id
+kpf charge-contest --charge out/<..>-charge.json --stake out/<..>-judge-stake.json --key $K/judge.json --funder $F ...
+kpf charge-answer --dispute out/<..>-out2-judge-stake.json --charge out/<..>-charge.json --side yes --stake ST.json --key OWNER --roster out/<..>-roster.json ...   # other stakers, and the charged seat
+kpf charge-decide --charge out/<..>-charge.json --dispute out/<..>-judge-stake.json --funder $F ...   # after the round
+kpf charge-settle --charge out/<..>-charge.json --roster out/<..>-roster.json --funder $F ...         # or --exit E.json
+kpf settle-pool --pool out/<..>-judge-stake.json --receipt R.json ...                                 # the judge's own stakes
+```
+
+The tick file is the evidence that the key signed; whether the price was false is the judge's verdict: YES if it
+lies within the market's `g` of the feed at that DAA score by the market's feed definition, NO otherwise. A
+contest nobody answers within a round is a verdict for NO: a seat charged for a true price answers on YES with
+judge stake of its own, aged before the charge (`c-watch --me KEY` on the roster and on the charge says when). A
+charged seat goes on signing and its stake is held (an exit of it is not withdrawn) until the charge is settled:
+refuted, the stake loses up to the total the NO side had at risk (a tenth of that and the bond to the charge's
+author, the rest burned); upheld, the bond goes to
+the charged key and the contesting stake is lost to the judge's winners; not contested within `chargeDaa` (an hour by
+default), the bond is burned. A stake held for several charges is settled with `--before` and `--later`, which
+`kpf hold-witness --ids ID,ID,... --of ID` prints from the charge ids in the order they were made: keep the ids.
+With the default judge (stakes aged 7 days, rounds of 12 hours) none of this fits an afternoon: a roster made for a
+trial takes `--judge-age-daa`, `--judge-unbond-daa`, `--judge-round-daa`, `--judge-min-stake`, `--charge-daa` and
+`--charge-bond` at `roster-create`.
+
+### 10.4a Unattended seats
+
+```sh
+kpf seat-run --market market.json --key $K/seat0.json --price-file price.txt --dir ticks --node $NODE   # one process a seat
+while :; do kpf roster-roll --roster "$(ls -t out/*-roster.json | head -1)" --wait --funder $F --node $NODE --submit --out-dir out; done
+kpf c-watch --scan out --me $K/seat0.json --node $NODE    # from cron: exit code 3 when something needs an action
+```
+
+`seat-run` signs the feed's price every `--grid` DAA (default 100: ten seconds) for the tick at the last whole
+multiple of the grid, so seats that never talk sign the same ticks, and writes `ticks/tick-<t0>-<key>.json`. The
+price comes from a file something else keeps current (`--price-file`), from a command (`--price-cmd`, the first word
+it prints) or is constant (`--price`, for trials); when the source fails nothing is signed, and a market without
+ticks is closed, not wrong. The node is asked for the DAA score once a minute and the clock counts between. A seat's
+journal (`<key file>.signed.jsonl`) refuses a second price for a tick: keep it with the key. `roster-roll --wait`
+sleeps to the end of the epoch and rolls: two or three questions to the node an epoch. In a shell loop around it,
+pause on a failure (`|| sleep 30`): a roster file of a spent UTXO fails at once, and a loop without a pause asks the
+node without end (review C8, C8-N3).
+
+### 10.5 The lease, the hand-overs, leaving
+
+```sh
+kpf c-keep-alive --pair P --ticket T --tick ... --funder $F ...      # any attested tick of the market renews the lease
+kpf c-lapse-settle --pair P --funder $F ...                          # idleDaa after an unrenewed lease: the entry price
+kpf c-assign --pair P --side long --x 10 --key $K/long.json --funder $F ...   # the long is paid in this transaction;
+                                                                     # the funder holds the position (an executor's exit)
+kpf c-amend --pair P --side long --price 9.9 --key $K/long.json --funder $F ...   # list a side
+kpf c-transfer --pair P --side long --x 10 --funder $F ...           # a signing taker takes the listed side
+kpf c-take --pair P --order O --x 10 --funder $F ...                 # a resting order takes it
+kpf c-mutual-close --pair P --x 10.1 --funder $F ...                 # both sides listed and crossing
+kpf c-coop-close --pair P --long-pay 12 --key $K/long.json --key $K/short.json --node $NODE --submit
+kpf roster-leave --roster R --seat 2 --key $K/seat2.json --funder $F ...
+kpf exit-withdraw --exit out/<..>-exit.json --funder $F ...          # after the epoch and the exit time
+kpf ticket-retire --ticket T --funder $F ...                         # an epoch after the ticket's window
+```
+
+### 10.5a Taking margin out of a position and moving it
+
+```sh
+kpf c-account --me $K/you.json --scan positions/ --price 11.3
+# every position of the key at that price: what it is worth, where it is liquidated and how far that is, and the
+# margin `c-trim` frees. Exit code 3 and the commands to run when one is within 3 % of its liquidation.
+kpf c-trim --pair A.json --side long --take 9.862425 --ticket T --tick ... --key $K/you.json --funder $F ...
+kpf c-finalize --pending out/<..>-committee-pending-part.json --funder $F ...   # pays the 9.862425 KAS at once
+kpf c-add-margin --pair B.json --side short --delta 0.9862425 --key $K/you.json --funder $K/you.json ...
+```
+
+`c-trim` takes `--take KAS`, `--bound P` (the side's new bound) or `--max` (as far as the attested price allows: the
+side then keeps nothing above its maintenance but the tolerance, and the command says so). The size and the other
+side's bound do not change; the side's liquidation line moves toward the price. It is a claim like a close: void, and
+the pair restored, if it lands more than `lateDaa` after its tick. A side trimmed above the pair's entry price is owed
+nothing more if the lease lapses: keep the lease alive.
+
+Unattended, with the key of the positions as signer and funder:
+
+```sh
+kpf c-margin-run --key $K/you.json --dir positions/ --ticks ticks/ --tickets out/ --node $NODE --submit
+```
+
+Every 30 s it asks the node for each position in `positions/` (one question each), prices each market by the newest
+tick in `ticks/` that a ticket in `out/` attests, and acts on what it finds: margin for a position within 3 % of its
+liquidation (from the wallet, otherwise by trimming the positions that have it to spare), a cure for a pending
+liquidation, the finalize of a pending trim. What it writes goes into `positions/`, and what was spent into
+`positions/spent/`. It renews a lease in its second half, manages only the files it was started with and those it
+wrote (a file that appears from elsewhere is reported and left alone: restart to adopt a position you opened), and
+keep 1 KAS or so in the key's wallet for fees. Margin follows the positions while it runs and no longer: a position
+is liquidated at its own bounds, and nobody but the key moves its margin.
+
+### 10.5b Cross margin: two positions in one account
+
+The owner of two positions (a long in one market, a short in another, each in a pair of its own) and an executor turn
+them into one account in which they are liquidated on their total (design note 3b). With both key files on one
+machine as below, or on two machines (10.5c).
+
+```sh
+kpf x-swap --pair1 A.json --side1 long --x1 11 --pair2 B.json --side2 short --x2 10.5 --b-margin 20     --key $K/you.json --funder $K/executor.json --node $NODE --submit --out-dir out
+#   the executor takes both pairs over as they are and funds the account; --x1/--x2 are the prices the two agree
+#   (the account's entries), --a-margin what the owner is owed there (default: what its sides are worth at them)
+kpf x-show --account out/<..>-cross-account.json --price1 11 --price2 13       # what each is owed; who is liquidated
+kpf x-add-margin --account X --side a --amount 5 --key $K/you.json --funder $K/you.json ...
+```
+
+A claim on an account needs both markets attested for one tick: the seats of both markets sign the same DAA
+(`seat-run` puts them on one grid), and a roll writes four tickets, so two of the same roster are at hand.
+
+```sh
+T0=$(kpf daa --node $NODE | sed 's/.*score //')
+for i in 0 1 2; do
+  kpf tick-sign --market m1.json --t0 $T0 --price 13.5 --key $K/seat$i.json --out m1-tick-$T0-$i.json
+  kpf tick-sign --market m2.json --t0 $T0 --price 13   --key $K/seat$i.json --out m2-tick-$T0-$i.json
+done
+L="--ticket1 out/<..>-out1-ticket.json --tick1 m1-tick-$T0-0.json --tick1 m1-tick-$T0-1.json --tick1 m1-tick-$T0-2.json    --ticket2 out/<..>-out2-ticket.json --tick2 m2-tick-$T0-0.json --tick2 m2-tick-$T0-1.json --tick2 m2-tick-$T0-2.json"
+kpf x-close --account X --side a $L --key $K/you.json --funder $F ...       # a party's exit; then x-finalize, at once
+kpf x-liquidate --account X --side a $L --funder $F ...                      # anyone, when the total is below maintenance
+kpf x-cure --pending out/<..>-cross-pending-claim.json --key $K/you.json --funder $K/you.json ...   # the loser, within the grace
+kpf x-finalize --pending out/<..>-cross-pending-claim.json --funder $F ...
+kpf x-keep-alive --account X --leg 1 --ticket1 T --tick1 ... --funder $F ...   # a tick of either leg's market
+kpf x-lapse-settle --account X --funder $F ...                               # idleDaa after an unrenewed lease
+kpf x-coop-close --account X --a-pay 30 --key $K/you.json --key $K/executor.json --node $NODE --submit
+```
+
+The loser of a liquidation forfeits the whole account less the fee; `c-watch --me KEY` on the pending claim says
+when a cure is due. `x-open` writes an account with no pairs before it.
+
+### 10.5c Signing on two machines
+
+An executor funds what a user builds (a swap into an account, an instant exit by `c-assign`): the user's key and the
+executor's are on two machines. Any builder takes `--partial FILE` with `--funder <the executor's address>`; the
+executor's plain UTXOs are read from the node (or from a funding file it gave: `kpf utxos --key K --out offer.json`,
+passed as `--funding`).
+
+```sh
+# the user: builds, signs its own inputs, sends nothing
+kpf x-swap --pair1 A.json --side1 long --x1 11 --pair2 B.json --side2 short --x2 10.5 --b-margin 20     --key $K/you.json --funder kaspatest:<the executor> --node $NODE --partial request.json
+# the executor: reads what the transaction does, signs its funding, sends it
+kpf cosign --tx request.json --key $K/executor.json --market m1.json --market m2.json --node $NODE --submit --out-dir out
+```
+
+`cosign` first checks the signatures the file carries, then prints every input it is asked to sign and every
+output as read from the transaction itself, before and after it signs: its own address, an object, another address,
+or a script it does not know; never the labels or the title in the file. An output is an object only if it has an
+object's script and a covenant id the transaction gives it: an object's script without one is spent by no entry,
+whatever is put there is locked, and `cosign` refuses to sign (review C11, C11-F1). Under every object it says
+which of the object's keys are yours, or that none is (C12-F1). The sums are apart (back to you, into objects that
+name a key of yours, into objects that name none, to other addresses, the fee), and money that goes to another
+address or into an object of other keys is a warning.
+Give it the market files you checked (`--market`, once a market): an object priced in any other market is refused,
+for whoever holds that market's roster prices it as it likes (C14-F1); without them the ids are printed to be
+compared by eye. With a node or `--daa`, an order past its expiry or an object past its lease is refused. What it
+does not judge is the terms: the prices agreed, the margins, the rates are yours to read. Run it once without
+`--submit` and read; then with it.
+
+The last signer decides: until the executor sends it nothing has happened. A partly signed transaction is an offer
+with no end, at the terms written into it: a writer with an input in it takes the offer back by respending that
+input (for a swap, by moving one of its pairs); a writer with none (`x-open` funded wholly by the co-signer) has
+nothing in it. Only plain inputs are left to a co-signer; a signature checked inside a contract's script is made by
+the builder.
+
+### 10.6 Not possible yet
+
+- A cross-margin account has two legs at most.
+- `cosign` reads a transaction somebody else wrote and refuses or warns of what it knows to look for (reviews C11
+  to C15 each found one more thing). Give it `--market` for every market and `--daa` or a node, read the printout,
+  and do not use it for more than a test network's value: a co-signer that rebuilds the transaction itself is not
+  built.
+- Signing on two machines covers a party whose only inputs are plain ones (an executor's funding: 10.5c). A
+  transaction in which two parties each sign inside one script (`c-coop-close`, `x-coop-close`) still needs both key
+  files on one machine.
+
+- Positions that are liquidated on their total: a position of this section is liquidated on its own, and
+  `c-margin-run` is what moves margin before that. It does not follow a position that somebody else spent (a hand-over, a claim on a part):
+  the successor's file must be put into its directory.
+
+- Seats' signed ticks reach a claimant as files in a directory; how that directory reaches claimants elsewhere (a
+  shared folder, a sync) is not built.
+- A false price is slashed only if someone charges each seat that signed it and a judge's stake contests each
+  charge: fifteen signers are fifteen disputes. Pools and fees for seats are not built.
+- Discovery from a node: objects are found from the files the tool wrote, as in every other section.

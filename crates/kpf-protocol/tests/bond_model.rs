@@ -585,7 +585,7 @@ fn z8_run(p: BondParams, k: i64, n: usize, c: i64, renew_before: &dyn Fn(&mut Rn
     opens.reverse();
     // (expiry, renewal time)
     let mut pairs: Vec<(i64, i64)> = vec![];
-    let tick = 36_000; // one hour
+    let signed_price = 36_000; // one hour
     let (mut sum, mut cnt, mut worst, mut peak, mut lapsed) = (0f64, 0f64, f64::MAX, 0i64, 0usize);
     let mut t = start;
     while t < start + 2 * month {
@@ -626,7 +626,7 @@ fn z8_run(p: BondParams, k: i64, n: usize, c: i64, renew_before: &dyn Fn(&mut Rn
             cnt += 1.0;
             worst = worst.min(r);
         }
-        t += tick;
+        t += signed_price;
     }
     Z8 { avg: sum / cnt, worst, peak, lapsed }
 }

@@ -1,0 +1,522 @@
+pragma silverscript ^0.1.0;
+
+// KpfCrossC: a cross-margin account of a committee market family (docs/DESIGN-COMMITTEE.md 3b). One UTXO between two
+// parties, A (the account's owner) and B (its counterparty: an executor that took A's positions over and gave A this
+// account for them), holding up to two legs and one margin. A leg is a position of A in one market: its market id
+// and committee, the market's scale and price limit, a size, a direction (1: A is long, 2: A is short) and the entry
+// price it is counted from. The account holds aMargin + bMargin (the pot) and a carrier.
+//
+// At prices (x1, x2) of the two markets, with q_i(x) = floor(size_i x / scale_i):
+//   pnl_i = q_i(x_i) - q_i(entry_i) for a long leg, q_i(entry_i) - q_i(x_i) for a short one
+//   A is owed  V_A = clamp(aMargin + pnl_1 + pnl_2, 0, pot),  B is owed  pot - V_A
+// so a gain of one leg pays for a loss of the other as it happens: nothing is moved between positions, and the account
+// is liquidated on its total. Prices move it only when epoch tables of the legs' committees attest them for one time in the
+// same transaction (KpfEpochTable.attest, one epoch table a leg), as a claim: the account moves whole into a KpfPendingX,
+// which settles the claim if it landed within lateDaa of the time and restores the account otherwise.
+//
+// The tolerance g: a price moved by g toward A's gain is ceil(p (10^4 + g) / 10^4) for a long leg (at most the leg's
+// priceMax) and floor(p (10^4 - g) / 10^4) for a short one; moved against A, the other way round. N is the notional
+// q_1 + q_2 at the prices used and M(N) = ceil(N mmr / 10^4) the maintenance.
+//
+// Entries:
+//   addMargin(s, side, delta)   the owner of `side` signs, after quietDaa: its margin grows by delta, paid in
+//   coopClose(sa, sb)           both parties sign every output; the account ends (or is written again as they agree)
+//   lapseSettle()               anyone, idleDaa after the lease: A is paid aMargin, B the rest (the entry prices)
+//   keepAlive(leg, u, t0)       anyone: an epoch table of the leg's committee attests a signed price of its market at t0, so the lease
+//                               becomes t0 + termDaa, at least a quarter of a term later than it was
+//   propose(kind, side, a1, a2, t0, u1, u2, s, k, pk, pPre, pSuf)
+//       the epoch tables at inputs u1 and u2 attest a1 and a2 for the time t0 (u2 is not read when the second leg is
+//       empty); each counts as at most its leg's priceMax.
+//       kind 1 close: the owner of `side` signs, after quietDaa. It is paid its side at the prices moved by g
+//              against it, where it is not below the maintenance, or is one that no claim liquidates at this signed price
+//              (the other party lacks the maintenance too); the other party is paid the rest.
+//       kind 2 liquidation: anyone; `side` is below the maintenance at the prices moved by g toward its gain (the
+//              tolerance inside the trigger) and the other party is not; the two keys differ. The fee
+//              max(keeperFeeMin, floor(N liqFeeBps / 10^4)) at the attested prices, at most what the loser is still
+//              owed at them, goes to pk; the other party is paid the rest
+//              of the account. Until finalize the loser may cure: it adds what puts its side at the maintenance at
+//              the prices moved by g against it, so no claim within g of these prices reopens a cured account.
+// DESIGN: two parties, by consent. Nothing here checks a market's parameters or how the account began: A and B both
+// sign the transaction that writes it (and each reads the state it signs), and no third party ever holds a side. The
+// counterparties of the positions A had are the executor's: they keep the pairs they had, with the executor in A's
+// place, and nothing of theirs depends on this account.
+// DESIGN: both prices for one time. A claim needs an epoch table for every leg at the same t0: a leg priced now and a leg
+// priced a minute ago would be an account that never existed. A market without signed prices closes the account to claims
+// (fail closed); the lease unwinds it at the entries if the committee is gone for good.
+contract KpfCrossC(
+    byte[32] PENDX_TPL,
+    byte[32] EPOCH_TABLE_TPL,
+    int EPOCH_TABLE_PRE,
+    int EPOCH_TABLE_SUF,
+    byte[4] ATTEST_TAG,
+    int init_termDaa,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_carrier,
+    int init_idleDaa,
+    int init_graceDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    byte[32] init_market1,
+    byte[32] init_committee1,
+    int init_scale1,
+    int init_priceMax1,
+    int init_size1,
+    int init_dir1,
+    int init_entry1,
+    byte[32] init_market2,
+    byte[32] init_committee2,
+    int init_scale2,
+    int init_priceMax2,
+    int init_size2,
+    int init_dir2,
+    int init_entry2,
+    pubkey init_aKey,
+    pubkey init_bKey,
+    int init_aMargin,
+    int init_bMargin,
+    int init_expiry
+) {
+    // The terms (state [0..90)), agreed by the two parties.
+    int termDaa = init_termDaa;          // the lease an attested signed price gives
+    int mmrBps = init_mmrBps;            // maintenance, of the notional
+    int gBps = init_gBps;                // tolerance g inside the trigger and the close prices
+    int liqFeeBps = init_liqFeeBps;      // the proposer's fee rate of a liquidation
+    int keeperFeeMin = init_keeperFeeMin;
+    int carrier = init_carrier;
+    int idleDaa = init_idleDaa;          // how long after the lease anyone settles at the entries
+    int graceDaa = init_graceDaa;        // a liquidation's time to cure before finalize
+    int lateDaa = init_lateDaa;          // a claim is valid only if it lands within this of its time
+    int quietDaa = init_quietDaa;        // the age every party entry needs
+    // The legs (state [90..201) and [201..312)).
+    byte[32] market1 = init_market1;     // the id of the market whose signed prices price the leg
+    byte[32] committee1 = init_committee1;     // the covenant id of the committee whose epoch tables attest them
+    int scale1 = init_scale1;            // base units per whole unit
+    int priceMax1 = init_priceMax1;      // prices are sompi per whole unit, counted as at most this
+    int size1 = init_size1;
+    int dir1 = init_dir1;                // 1: A is long; 2: A is short
+    int entry1 = init_entry1;            // the price the leg is counted from
+    byte[32] market2 = init_market2;
+    byte[32] committee2 = init_committee2;
+    int scale2 = init_scale2;
+    int priceMax2 = init_priceMax2;
+    int size2 = init_size2;              // 0: no second leg
+    int dir2 = init_dir2;
+    int entry2 = init_entry2;
+    // The parties and the margin (state [312..405)).
+    pubkey aKey = init_aKey;
+    pubkey bKey = init_bKey;
+    int aMargin = init_aMargin;          // * what A is owed at the entries
+    int bMargin = init_bMargin;          // * what B is owed at the entries
+    int expiry = init_expiry;            // * the end of the lease
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant KIND_LIQ = 2;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant INT_MAX = 9223372036854775807;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant MMR_CAP = 5000;
+    int constant FEE_MIN_MAX = 1000000000000;
+    int constant TERM_MAX = 77760000;
+    int constant TERM_MIN = 1200;
+    int constant WAIT_MAX = 864000;
+    int constant MAX_OUTPUTS = 8;
+    int constant SPREAD_MARGIN = 4;
+    // KpfEpochTable's state length and the offsets of attest's arguments in its signature script (as KpfPairC).
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant ATTEST_T0_AT = 33;
+    int constant ATTEST_P_AT = 42;
+    int constant ATTEST_BITS_AT = 51;
+    int constant ATTEST_PRICES_AT = 60;
+    int constant ATTEST_SIGS_AT = 182;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+    // Offsets in this redeem script (the state starts at byte 1; an int is a 0x08 push and 8 bytes).
+    int constant MARGIN_AT = 379;
+    int constant EXPIRY_AT = 397;
+    int constant STATE_END = 406;
+
+    // floor(n r / sc), without the product n r.
+    function quoteAt(int n, int sc, int r) : int {
+        int m = n % sc;
+        int q = n / sc;
+        return q * r + m * (r / sc) + (m * (r % sc)) / sc;
+    }
+
+    function checkLeg(int sc, int pm, int sz, int dr, int en) {
+        require(sc > 0);
+        require(sc <= SCALE_MAX);
+        require(pm > 0);
+        require(pm <= PRICE_CAP);
+        require(sz >= 0);
+        require(sz / sc <= (INT_MAX / 8) / pm - 1);
+        require(dr == DIR_LONG || dr == DIR_SHORT);
+        require(en >= 0);
+        require(en <= pm);
+    }
+
+    function checkCross() {
+        require(termDaa >= TERM_MIN);
+        require(termDaa <= TERM_MAX);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(gBps > 0);
+        require(gBps < BPS);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(keeperFeeMin <= FEE_MIN_MAX);
+        require(carrier >= 0);
+        require(carrier <= FEE_MIN_MAX);
+        require(idleDaa >= 0);
+        require(idleDaa <= TERM_MAX);
+        require(graceDaa >= 0);
+        require(graceDaa <= WAIT_MAX);
+        require(lateDaa > 0);
+        require(lateDaa <= WAIT_MAX);
+        require(quietDaa >= 0);
+        require(quietDaa <= WAIT_MAX);
+        checkLeg(scale1, priceMax1, size1, dir1, entry1);
+        checkLeg(scale2, priceMax2, size2, dir2, entry2);
+        require(size1 > 0);
+        require(aMargin >= 0);
+        require(aMargin <= INT_MAX / 8);
+        require(bMargin >= 0);
+        require(bMargin <= INT_MAX / 8);
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // This input's maker commitment (as KpfPairC.me): unique to this input.
+    function me() : byte[32] {
+        int self = this.activeInputIndex;
+        return blake2b(byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[8]));
+    }
+
+    function quiet() {
+        require(this.ageDaa >= quietDaa);
+    }
+
+    // This script with the margins and the lease replaced.
+    function contRs(byte[] rs, int am, int bm, int x) : byte[] {
+        return rs.slice(0, MARGIN_AT) + i9(am) + i9(bm) + i9(x) + rs.slice(STATE_END, this.bytecodeSize);
+    }
+
+    // The single output of this id: the given script, holding at least v and the pot's floor.
+    function cont(byte[] script, int v, int pot) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(script)));
+        require(tx.outputs[c].value >= v);
+        require(tx.outputs[c].value >= pot + carrier);
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    // The output `out` starts a new lineage (as KpfPairC.fresh).
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+        return id;
+    }
+
+    // Input u is an epoch table of the committee `rid` spent by attest for the market `mkt` and the time t0, attesting the
+    // price a (as KpfPairC.priced, with the price read here): the price counted, at most pm.
+    function priced(int u, int t0, byte[32] mkt, byte[32] rid, int a, int pm) : int {
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        require(rid != zero32());
+        require(OpInputCovenantId(u) == rid);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        int spread = int(byte[8](trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN - 8, EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN)));
+        require(spread >= 0);
+        require(spread * SPREAD_MARGIN <= gBps);
+        require(OpTxInputScriptSigSubstr(u, 0, ATTEST_T0_AT) == p33(mkt));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_T0_AT, ATTEST_P_AT) == i9(t0));
+        require(a >= 0);
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_BITS_AT) == i9(a));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_BITS_AT, ATTEST_BITS_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_PRICES_AT, ATTEST_PRICES_AT + 2) == byte[](0x4c78));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_SIGS_AT, ATTEST_SIGS_AT + 3) == byte[](0x4dc003));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+        int p = a;
+        if (p > pm) { p = pm; }
+        return p;
+    }
+
+    // The price p of a leg moved by g: toward A's gain when fav is 1, against A when it is 0. A long leg gains when
+    // the price rises.
+    function moved(int p, int pm, int dr, int fav) : int {
+        int rise = 0;
+        if (dr == DIR_LONG) {
+            if (fav == 1) { rise = 1; }
+        } else {
+            if (fav == 0) { rise = 1; }
+        }
+        int x = p * (BPS - gBps) / BPS;
+        if (rise == 1) {
+            x = (p * (BPS + gBps) + BPS - 1) / BPS;
+            if (x > pm) { x = pm; }
+        }
+        return x;
+    }
+
+    // A leg's gain for A when it is worth qx and was worth qe at its entry.
+    function gain(int dr, int qx, int qe) : int {
+        int d = qx - qe;
+        if (dr != DIR_LONG) { d = qe - qx; }
+        return d;
+    }
+
+    // ceil(n mmr / 10^4), without the product n mmr.
+    function maint(int n) : int {
+        int v = (n / BPS) * mmrBps + ((n % BPS) * mmrBps + BPS - 1) / BPS;
+        return v;
+    }
+
+    function clampPot(int v, int pot) : int {
+        int c = v;
+        if (c < 0) { c = 0; }
+        if (c > pot) { c = pot; }
+        return c;
+    }
+
+    // Add margin: the owner of `side` signs, after quietDaa; its margin grows by delta, which the output holds.
+    entry addMargin(sig s, int side, int delta) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        checkCross();
+        quiet();
+        require(delta > 0);
+        require(delta <= INT_MAX / 8);
+        int am = aMargin;
+        int bm = bMargin;
+        pubkey k = aKey;
+        if (side == SIDE_A) {
+            am = aMargin + delta;
+        } else {
+            require(side == SIDE_B);
+            bm = bMargin + delta;
+            k = bKey;
+        }
+        signedBy(s, k);
+        require(am <= INT_MAX / 8);
+        require(bm <= INT_MAX / 8);
+        cont(contRs(ownRs(), am, bm, expiry), tx.inputs[self].value + delta, am + bm);
+    }
+
+    // Cooperative close: both parties sign every output; the account ends.
+    entry coopClose(sig sa, sig sb) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        signedBy(sa, aKey);
+        signedBy(sb, bKey);
+        require(OpCovOutputCount(selfId) == 0);
+    }
+
+    // Lapse settle: anyone, idleDaa after the lease by the calendar. The account ends at its entries: A is paid
+    // aMargin at output i, B the rest of this UTXO's value at M - 1 - i; a payout below dust goes to the other party.
+    entry lapseSettle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkCross();
+        int end = expiry + idleDaa;
+        require(end >= 0);
+        require(end < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= end);
+        require(OpCovOutputCount(selfId) == 0);
+        int v = tx.inputs[self].value;
+        int ap = aMargin;
+        if (ap > v) { ap = v; }
+        int bp = v - ap;
+        if (ap < PLAIN_DUST) {
+            ap = 0;
+            bp = v;
+        } else {
+            if (bp < PLAIN_DUST) {
+                ap = v;
+                bp = 0;
+            }
+        }
+        payTo(self, aKey, ap);
+        if (bp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, bKey, bp);
+        }
+    }
+
+    // Keep alive: an epoch table of the leg's committee attests a signed price of its market at t0, so the lease becomes t0 + termDaa.
+    // It must grow by at least a quarter of a term. Nothing else changes and no value leaves.
+    entry keepAlive(int leg, int u, int a, int t0) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        checkCross();
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        if (leg == 1) {
+            priced(u, t0, market1, committee1, a, priceMax1);
+        } else {
+            require(leg == 2);
+            require(size2 > 0);
+            priced(u, t0, market2, committee2, a, priceMax2);
+        }
+        int x2 = t0 + termDaa;
+        require(x2 >= expiry + termDaa / 4);
+        cont(contRs(ownRs(), aMargin, bMargin, x2), tx.inputs[self].value, aMargin + bMargin);
+    }
+
+    // Propose: the account moves whole into a KpfPendingX with the claim, written at output k under a fresh covenant
+    // id and naming this input as its parent. The amounts are fixed here, where the legs are known; KpfPendingX
+    // reads only when the claim landed.
+    entry propose(int kind, int side, int a1, int a2, int t0, int u1, int u2, byte[] s, int k, byte[32] pk, byte[] pPre, byte[] pSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkCross();
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        // A claim whose signed price is more than lateDaa older than this UTXO is certainly void (as KpfPairC, review C1).
+        int born = OpTxInputDaaScore(self);
+        require(born >= 0);
+        require(t0 + lateDaa >= born);
+        int p1 = priced(u1, t0, market1, committee1, a1, priceMax1);
+        int p2 = 0;
+        if (size2 > 0) {
+            require(u2 != u1);
+            p2 = priced(u2, t0, market2, committee2, a2, priceMax2);
+        }
+        int pot = aMargin + bMargin;
+        int e1 = quoteAt(size1, scale1, entry1);
+        int e2 = quoteAt(size2, scale2, entry2);
+        // Toward A's gain (F) and against A (G).
+        int f1 = quoteAt(size1, scale1, moved(p1, priceMax1, dir1, 1));
+        int f2 = quoteAt(size2, scale2, moved(p2, priceMax2, dir2, 1));
+        int g1 = quoteAt(size1, scale1, moved(p1, priceMax1, dir1, 0));
+        int g2 = quoteAt(size2, scale2, moved(p2, priceMax2, dir2, 0));
+        int rawF = aMargin + gain(dir1, f1, e1) + gain(dir2, f2, e2);
+        int rawG = aMargin + gain(dir1, g1, e1) + gain(dir2, g2, e2);
+        int mF = maint(f1 + f2);
+        int mG = maint(g1 + g2);
+        int vaF = clampPot(rawF, pot);
+        int vaG = clampPot(rawG, pot);
+        byte[] rs = ownRs();
+        byte[32] ch = zero32();
+        byte[32] who = pk;
+        int amount = 0;
+        int add = 0;
+        if (kind == KIND_CLOSE) {
+            // A close is refused only where it would escape a due liquidation: the closer has its maintenance at the
+            // prices it is paid at, or it could not be liquidated at this signed price because the other party lacks the
+            // maintenance too (the second condition is the negation of the liquidation's own, at the liquidation's
+            // prices). Without it a pot smaller than two maintenances would hold both parties until the lapse, which
+            // pays the entries: a party owed the whole pot by a bankrupt one would be paid its margin only.
+            quiet();
+            if (side == SIDE_A) {
+                signedBy(sig(byte[65](s)), aKey);
+                amount = vaG;
+                require(amount >= mG || pot - vaF < mF);
+                who = byte[32](aKey);
+            } else {
+                require(side == SIDE_B);
+                signedBy(sig(byte[65](s)), bKey);
+                amount = pot - vaF;
+                require(amount >= mF || vaG < mG);
+                who = byte[32](bKey);
+            }
+        } else {
+            require(kind == KIND_LIQ);
+            require(byte[32](aKey) != byte[32](bKey));
+            // Review C9. The other party is not below the maintenance itself (C9-F1): a pot smaller than two
+            // maintenances, which a rise of both markets makes of an account that lost nothing, is no liquidation of
+            // either side for whoever claims first; the parties add margin, close together, or wait. And the fee is at
+            // most what the loser is still owed at the attested prices (C9-F2), never the winner's money.
+            int n1 = quoteAt(size1, scale1, p1);
+            int n2 = quoteAt(size2, scale2, p2);
+            int cap = clampPot(aMargin + gain(dir1, n1, e1) + gain(dir2, n2, e2), pot);
+            if (side == SIDE_A) {
+                require(vaF < mF);
+                require(pot - vaF >= mF);
+                add = mG - rawG;
+                require(add > 0);
+                require(aMargin + add <= INT_MAX / 8);
+                ch = blake2b(contRs(rs, aMargin + add, bMargin, expiry));
+            } else {
+                require(side == SIDE_B);
+                require(pot - vaG < mG);
+                require(vaG >= mG);
+                add = mF - (pot - rawF);
+                require(add > 0);
+                require(bMargin + add <= INT_MAX / 8);
+                ch = blake2b(contRs(rs, aMargin, bMargin + add, expiry));
+                cap = pot - cap;
+            }
+            int n = n1 + n2;
+            amount = (n / BPS) * liqFeeBps + ((n % BPS) * liqFeeBps) / BPS;
+            if (amount < keeperFeeMin) { amount = keeperFeeMin; }
+            if (amount > cap) { amount = cap; }
+        }
+        byte[] st = i9(lateDaa) + i9(graceDaa) + i9(kind) + i9(side) + i9(t0) + i9(amount) + i9(add) + rs.slice(STATE_END - 93, MARGIN_AT)
+            + p33(who) + p33(blake2b(rs)) + p33(ch) + p33(me()) + byte[](0x4d9501) + rs.slice(1, STATE_END);
+        require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDX_TPL);
+        fresh(k);
+        require(tx.outputs[k].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf)));
+        require(tx.outputs[k].value >= tx.inputs[self].value);
+        require(OpCovOutputCount(selfId) == 0);
+    }
+}

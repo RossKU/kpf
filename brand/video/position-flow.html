@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KPF: a position, from order to close</title>
+<style>
+  :root {
+    --bg: #070707; --panel: #101112; --panel-2: #16181a; --line: rgba(237,237,237,.10); --line-2: rgba(237,237,237,.18);
+    --fg: #f4f4f4; --fg-2: #b2b2b2; --fg-3: #7d8084; --kaspa: #70c7ba; --amber: #e8b86a; --rose: #e98c8c; --blue: #8fb3ff;
+    --sans: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--fg); font-family: var(--sans); overflow: hidden; }
+  #stage { position: relative; width: 1280px; height: 720px; overflow: hidden; background:
+    radial-gradient(900px 500px at 78% 12%, rgba(112,199,186,.07), transparent 60%), var(--bg); }
+  .abs { position: absolute; }
+  .top { left: 0; top: 0; width: 1280px; height: 56px; border-bottom: 1px solid var(--line); }
+  .logo { left: 32px; top: 15px; font-weight: 700; font-size: 20px; letter-spacing: .04em; }
+  .logo span { color: var(--kaspa); }
+  .logo small { font-weight: 500; font-size: 13px; color: var(--fg-2); letter-spacing: 0; margin-left: 12px; }
+  .tag { right: 32px; top: 16px; font-size: 12px; color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 12px; }
+  .tag i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--kaspa); margin-right: 7px; }
+  .steps { left: 430px; top: 14px; width: 420px; display: flex; gap: 6px; justify-content: center; }
+  .step { font-size: 12.5px; color: var(--fg-3); padding: 5px 12px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+  .step b { font-weight: 600; margin-right: 6px; }
+  .head { font-size: 11.5px; letter-spacing: .14em; color: var(--fg-3); font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  /* what you see */
+  .ui { left: 32px; top: 104px; width: 456px; height: 500px; padding: 20px 22px; }
+  .mkt { display: flex; align-items: baseline; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+  .mkt b { font-size: 19px; } .mkt em { font-style: normal; color: var(--fg-2); font-size: 12.5px; margin-left: 8px; }
+  .mkt .px { font-family: var(--mono); font-size: 19px; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-top: 13px; font-size: 14px; color: var(--fg-2); }
+  .field { font-family: var(--mono); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 12px; min-width: 150px; text-align: right; font-size: 14px; }
+  .seg { display: flex; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; font-size: 13.5px; }
+  .seg span { padding: 7px 22px; color: var(--fg-2); } .seg .on { background: rgba(112,199,186,.18); color: var(--kaspa); font-weight: 600; }
+  .btn { margin-top: 20px; text-align: center; padding: 11px; border-radius: 9px; background: var(--kaspa); color: #06211d; font-weight: 700; font-size: 15px; }
+  .note { margin-top: 12px; font-size: 12.5px; color: var(--fg-3); line-height: 1.45; }
+  .big { font-family: var(--mono); font-size: 30px; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; margin-top: 16px; }
+  .kv div { font-size: 12px; color: var(--fg-3); } .kv b { display: block; margin-top: 3px; font-family: var(--mono); font-size: 15px; color: var(--fg); font-weight: 500; }
+  .pos { color: var(--kaspa); } .chart { margin-top: 14px; height: 120px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+  .bar { height: 8px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line-2); overflow: hidden; margin-top: 10px; }
+  .bar i { display: block; height: 100%; background: var(--amber); }
+  .cursor { width: 18px; height: 22px; filter: drop-shadow(0 1px 2px #000); }
+  /* what the chain sees */
+  .chain { left: 512px; top: 104px; width: 736px; height: 500px; }
+  .u { width: 178px; height: 60px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line-2); padding: 8px 11px; }
+  .u b { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .u span { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); margin-top: 4px; white-space: nowrap; }
+  .u i { position: absolute; right: 10px; top: -7px; font-style: normal; font-size: 9px; letter-spacing: .1em; color: var(--fg-3); background: var(--panel); padding: 0 6px; border-radius: 4px; line-height: 13px; }
+  .u.lib { border-color: rgba(112,199,186,.55); } .u.lib i { color: var(--kaspa); }
+  .u.reg { border-color: rgba(232,184,106,.6); } .u.reg i { color: var(--amber); }
+  .u.key { border-style: dashed; }
+  .u.hot { box-shadow: 0 0 0 1px rgba(232,184,106,.5), 0 0 26px rgba(232,184,106,.22); }
+  .tx { width: 96px; border-radius: 12px; background: #0c0d0e; border: 1px solid var(--kaspa); text-align: center; padding-top: 10px; }
+  .tx b { display: block; font-size: 11px; letter-spacing: .12em; color: var(--kaspa); } .tx span { display: block; font-family: var(--mono); font-size: 12.5px; margin-top: 6px; }
+  .tx em { display: block; font-style: normal; font-size: 10.5px; color: var(--fg-3); margin-top: 6px; line-height: 1.3; }
+  .chain > svg { position: absolute; left: 0; top: 0; overflow: visible; }
+  .chart svg { display: block; }
+  .w { stroke: var(--fg-3); stroke-width: 1.4; fill: none; }
+  .legend { font-size: 11.5px; color: var(--fg-3); } .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin: 0 6px 0 14px; border: 1px solid; vertical-align: -1px; }
+  .member { width: 150px; height: 46px; border-radius: 23px; background: var(--panel-2); border: 1px solid var(--line-2); font-size: 12.5px; padding: 7px 14px; }
+  .member span { display: block; font-size: 11px; color: var(--fg-3); margin-top: 2px; }
+  .sig { font-family: var(--mono); font-size: 12px; padding: 5px 10px; border-radius: 7px; background: rgba(143,179,255,.12); border: 1px solid rgba(143,179,255,.45); color: var(--blue); white-space: nowrap; }
+  .tray { width: 250px; height: 150px; border: 1px dashed var(--line-2); border-radius: 12px; padding: 10px 12px; font-size: 11.5px; color: var(--fg-3); }
+  .cap { left: 0; top: 632px; width: 1280px; text-align: center; }
+  .cap div { display: inline-block; background: rgba(22,24,26,.96); border: 1px solid var(--line-2); border-radius: 999px; padding: 12px 26px; font-size: 19px; font-weight: 600; }
+  .cap i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--kaspa); margin-right: 12px; vertical-align: 1px; }
+  .title { left: 0; top: 0; width: 1280px; height: 720px; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .title h1 { font-size: 54px; letter-spacing: -.02em; font-weight: 700; } .title h1 span { color: var(--kaspa); }
+  .title p { margin-top: 18px; font-size: 22px; color: var(--fg-2); } .title small { margin-top: 26px; font-size: 14px; color: var(--fg-3); }
+  .card3 { width: 224px; height: 150px; padding: 16px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line-2); }
+  .card3 b { display: block; font-size: 14.5px; margin-bottom: 8px; } .card3 span { font-size: 12.5px; color: var(--fg-2); line-height: 1.5; }
+  .u.sm { height: 48px; padding: 6px 11px; } .u.sm b { font-size: 12px; } .u.sm span { margin-top: 2px; font-size: 11px; }
+  .steps { left: 300px; width: 680px; } .step { padding: 5px 9px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+const S = document.getElementById('stage');
+const A = [];                                   // actors: functions of time
+const cl = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => { x = cl(x); return x * x * (3 - 2 * x); };
+const lerp = (a, b, x) => a + (b - a) * x;
+const vis = (t, a, b, fi = .4, fo = .4) => t < a || t > b ? 0 : cl(Math.min((t - a) / fi, (b - t) / fo));
+function el(parent, cls, html, x, y) {
+  const d = document.createElement('div');
+  d.className = 'abs ' + cls; d.innerHTML = html || '';
+  if (x !== undefined) { d.style.left = x + 'px'; d.style.top = y + 'px'; }
+  parent.appendChild(d); return d;
+}
+function shown(d, a, b, rise = 10) { A.push(t => { const v = vis(t, a, b); d.style.opacity = v; d.style.transform = `translateY(${(1 - ease(cl((t - a) / .5))) * rise}px)`; d.style.visibility = v > 0 ? 'visible' : 'hidden'; }); return d; }
+
+// ---- the times of the scenes
+const T = { order: [3.6, 11.8], match: [11.8, 24.2], swap: [24.2, 34.8], merge: [34.8, 43.8], hold: [43.8, 51.8], close: [51.8, 64.8], dispute: [64.8, 79.8], end: [79.8, 85.6] };
+
+// ---- frame
+el(S, 'top');
+el(S, 'logo', '<span>K</span>PF<small>Kaspa Perpetual Futures</small>');
+el(S, 'tag', '<i></i>testnet-10 · research prototype');
+const steps = el(S, 'steps');
+[['1', 'Order', T.order], ['2', 'Match', T.match], ['3', 'Reassign', T.swap], ['4', 'Merge', T.merge], ['5', 'Hold', T.hold], ['6', 'Close', T.close], ['7', 'Dispute', T.dispute]].forEach(([n, name, [a, b]]) => {
+  const d = document.createElement('div'); d.className = 'step'; d.innerHTML = `<b>${n}</b>${name}`; steps.appendChild(d);
+  A.push(t => { const on = t >= a && t < b; d.style.color = on ? 'var(--fg)' : 'var(--fg-3)'; d.style.borderColor = on ? 'var(--kaspa)' : 'transparent'; d.style.background = on ? 'rgba(112,199,186,.10)' : 'transparent'; });
+});
+el(S, 'head', 'WHAT YOU SEE', 34, 78);
+el(S, 'head', 'WHAT THE CHAIN SEES &nbsp;·&nbsp; UTXOs', 514, 78);
+el(S, 'legend', 'under: <i style="border-color:#7d8084;border-style:dashed"></i>a key <i style="border-color:rgba(112,199,186,.7)"></i>the script library <i style="border-color:rgba(232,184,106,.7)"></i>the registry (orders, positions)', 820, 77).style.whiteSpace = 'nowrap';
+const ui = el(S, 'panel ui'), chain = el(S, 'panel chain');
+const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', 736); svg.setAttribute('height', 500); chain.appendChild(svg);
+
+// ---- pieces of the chain view
+function utxo(x, y, kind, tag, title, sub, a, b) { return shown(el(chain, 'u ' + kind, `<i>${tag}</i><b>${title}</b><span>${sub}</span>`, x, y), a, b); }
+function tx(x, y, h, name, note, a, b) {
+  const d = el(chain, 'tx', `<b>TX</b><span>${name}</span><em>${note}</em>`, x, y); d.style.height = h + 'px';
+  A.push(t => { const v = vis(t, a, b); d.style.opacity = v; d.style.visibility = v > 0 ? 'visible' : 'hidden'; const p = cl((t - a) / .6); d.style.transform = `scale(${lerp(.86, 1, ease(p))})`; d.style.boxShadow = `0 0 ${lerp(34, 10, cl((t - a - .4) / 1.2))}px rgba(112,199,186,${lerp(.5, .12, cl((t - a - .4) / 1.2))})`; });
+  return d;
+}
+function wire(x1, y1, x2, y2, a, b, dur = .55) {
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); const mx = (x1 + x2) / 2;
+  p.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`); p.setAttribute('class', 'w'); svg.appendChild(p);
+  const L = p.getTotalLength(); p.style.strokeDasharray = L;
+  A.push(t => { const v = vis(t, a, b, .01, .4); p.style.opacity = v; p.style.strokeDashoffset = L * (1 - ease(cl((t - a) / dur))); });
+}
+// a transaction: inputs on the left, outputs on the right, appearing in order. o: {gap, top, sm, lead}
+const IX = 22, TXX = 320, OX = 536;
+function scene(a, b, name, note, ins, outs, o = {}) {
+  const UH = o.sm ? 48 : 60, gap = o.gap || (o.sm ? 56 : 74), top = o.top === undefined ? 44 : o.top, cls = o.sm ? ' sm' : '';
+  const n = Math.max(ins.length, outs.length), h = (n - 1) * gap + UH;
+  const yi = i => top + (h - ((ins.length - 1) * gap + UH)) / 2 + i * gap, yo = i => top + (h - ((outs.length - 1) * gap + UH)) / 2 + i * gap;
+  const tIn = a + (o.lead || .3), tTx = tIn + ins.length * .3 + .5, tOut = tTx + .9;
+  ins.forEach((u, i) => { utxo(IX, yi(i), u[0] + cls, u[1], u[2], u[3], tIn + i * .3, b); wire(IX + 178, yi(i) + UH / 2, TXX, top + h / 2 - 20 + i * (40 / Math.max(1, ins.length - 1) || 0), tTx - .2 + i * .08, b); });
+  tx(TXX, top + h / 2 - 62, 124, name, note, tTx, b);
+  outs.forEach((u, i) => { wire(TXX + 96, top + h / 2 - 20 + i * (40 / Math.max(1, outs.length - 1) || 0), OX, yo(i) + UH / 2, tOut + i * .3, b); const d = utxo(OX, yo(i), u[0] + cls, u[1], u[2], u[3], tOut + .35 + i * .3, b); if (u[4]) d.classList.add('hot'); });
+  return tOut + .35 + outs.length * .3;
+}
+const foot = (txt, a, b) => shown(el(chain, 'legend', txt, 22, 468), a, b, 0);
+
+// ---- 1. the order
+scene(T.order[0] + .2, T.order[1] - .2, 'place', 'signed by you', [
+  ['key', 'YOURS', 'Your coin', '100.00 KAS'],
+  ['lib', 'LIBRARY', 'script: KpfTPlace', '2.400 KAS'],
+  ['reg', 'REGISTRY', 'anchor', '1.00 KAS'],
+], [
+  ['reg', 'REGISTRY', 'ORDER · long 4 ≤ 10.10', '12.05 KAS  margin + tip', 1],
+  ['lib', 'LIBRARY', 'script: KpfTPlace', '2.402 KAS  +0.002 fee'],
+  ['reg', 'REGISTRY', 'anchor', '1.00 KAS'],
+  ['key', 'YOURS', 'change', '87.94 KAS'],
+]);
+// ---- 2. the match: many orders against many; yours is filled by two sellers; the rest is the executor's
+scene(T.match[0] + .2, T.match[1] - .2, 'match', 'by an executor,<br>a transaction a pair,<br>nobody signs', [
+  ['reg', 'BUY', 'ORDER · long 4', 'you'],
+  ['reg', 'BUY', 'ORDER · long 3', 'user B'],
+  ['reg', 'SELL', 'ORDER · short 3', 'user D'],
+  ['reg', 'SELL', 'ORDER · short 1', 'user E'],
+  ['reg', 'SELL', 'ORDER · short 2', 'user G'],
+  ['key', 'EXECUTOR', "executor's margin", 'for what is left over'],
+], [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', '3 @ 10.00 · 18 KAS', 1],
+  ['reg', 'REGISTRY', 'POSITION · you ↔ E', '1 @ 10.00 · 6 KAS', 1],
+  ['reg', 'REGISTRY', 'POSITION · B ↔ G', '2 @ 10.00'],
+  ['reg', 'REGISTRY', 'POSITION · B ↔ executor', '1 @ 10.00 · the rest'],
+], { sm: 1, top: 34, gap: 60 });
+foot('7 to buy, 6 to sell. Your 4 met two sellers: two UTXOs. The executor may take the 1 left over, within a limit it sets.', T.match[0] + 4.6, T.match[1] - .2);
+// ---- 3. a counterparty leaves: the piece it held faces the other seller
+scene(T.swap[0] + .2, T.swap[1] - .2, 'novate', 'by an executor,<br>nobody signs', [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ E', 'you long 1 @ 10.00'],
+  ['reg', 'REGISTRY', 'POSITION · E ↔ D', 'E long 1 @ 10.20'],
+  ['lib', 'LIBRARY', 'script: KpfTNovate', '2.400 KAS'],
+], [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', 'you long 1 @ 10.00', 1],
+  ['key', "E'S", 'E is paid out', 'its margins less 0.215'],
+  ['lib', 'LIBRARY', 'script: KpfTNovate', '2.402 KAS  +0.002 fee'],
+], { top: 70 });
+foot('E was short 1 from 10.00 and bought it back from D at 10.20: it leaves with its loss of 0.20 (and 0.015 to the sender), and you face D.', T.swap[0] + 3.6, T.swap[1] - .2);
+// ---- 4. two positions of the same two users become one
+scene(T.merge[0] + .2, T.merge[1] - .2, 'merge', 'by anyone,<br>nobody signs', [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', 'long 3 @ 10.00 · 18 KAS'],
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', 'long 1 @ 10.00 · 6.2 KAS'],
+  ['lib', 'LIBRARY', 'script: KpfTMerge', '2.400 KAS'],
+], [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', '4 @ 10.00 · 24.19 KAS', 1],
+  ['lib', 'LIBRARY', 'script: KpfTMerge', '2.402 KAS  +0.002 fee'],
+], { top: 70 });
+foot('18 + 6.2 = 24.2, less 0.01 KAS for whoever merges (half from each margin): one UTXO, one pot of 24.19 KAS.', T.merge[0] + 3.4, T.merge[1] - .2);
+// ---- 5. holding: nothing is sent
+{
+  const [a, b] = [T.hold[0] + .2, T.hold[1] - .2];
+  utxo(279, 200, 'reg hot', 'REGISTRY', 'POSITION · you ↔ D', '4 @ 10.00 · 24.19 KAS', a + .2, b);
+  shown(el(chain, 'head', 'ON CHAIN: 0 TRANSACTIONS WHILE YOU HOLD', 236, 284), a + .7, b);
+  [['You', 'your own price view'], ['Executors', 'their own price view'], ['Committee', 'asked only in a dispute']].forEach((m, i) => shown(el(chain, 'member', `${m[0]}<span>${m[1]}</span>`, 60 + i * 216, 372), a + 1.0 + i * .3, b).style.width = '190px');
+  shown(el(chain, 'head', 'EVERYONE WATCHES THE MARKET ON THEIR OWN. NO PRICE FEED IS PUSHED TO THE CHAIN', 60, 340), a + 1.0, b);
+}
+// ---- 6. the close: a claim at your own price, the dispute period, the settlement
+scene(T.close[0] + .2, 58.6, 'close', 'signed by you:<br>"11.00 at this time"', [
+  ['reg', 'REGISTRY', 'POSITION · you ↔ D', '4 @ 10.00 · 24.19 KAS'],
+  ['lib', 'LIBRARY', 'script: KpfTClose', '2.400 KAS'],
+  ['key', 'YOURS', 'your coin (the bond)', '87.94 KAS'],
+], [
+  ['reg', 'REGISTRY', 'CLAIM · you 15.775 @ 11.00', '26.609 KAS  pot + bond', 1],
+  ['lib', 'LIBRARY', 'script: KpfTClose', '2.402 KAS  +0.002 fee'],
+  ['key', 'YOURS', 'change', '85.51 KAS'],
+], { gap: 82, top: 56 });
+scene(58.9, T.close[1] - .2, 'settle', 'by anyone, after<br>the dispute period', [
+  ['reg', 'REGISTRY', 'CLAIM · you 15.775 @ 11.00', '26.609 KAS'],
+  ['lib', 'LIBRARY', 'script: KpfTSettle', '2.400 KAS'],
+], [
+  ['key', 'YOURS', 'you', '18.194 KAS  15.775 + bond', 1],
+  ['key', "D'S", 'counterparty D', '8.415 KAS'],
+  ['lib', 'LIBRARY', 'script: KpfTSettle', '2.402 KAS  +0.002 fee'],
+], { gap: 82, top: 56 });
+// ---- 7. a dispute: the committee answers, the chain checks
+{
+  const [a, b] = [T.dispute[0] + .2, T.dispute[1] - .2];
+  shown(el(chain, 'head', 'IF SOMEBODY DISPUTES THE CLAIM: THE COMMITTEE MEMBERS SIGN WHAT THEY SAW', 22, 18), a + .2, b);
+  [0, 1, 2].forEach(i => shown(el(chain, 'member', `Member ${i + 1}<span>stake at risk</span>`, 22 + i * 164, 44), a + .8 + i * .2, b));
+  [0, 1, 2].forEach(i => {
+    const s = el(chain, 'sig', `11.01 ✓ m${i + 1}`, 0, 0), t0 = a + 2.2 + i * .35;
+    A.push(t => { const x = ease(cl((t - t0 - 1.6) / .8)), v = vis(t, t0, b, .2, .4); s.style.opacity = v; s.style.visibility = v > 0 ? 'visible' : 'hidden'; s.style.left = lerp(52 + i * 164, 308, x) + 'px'; s.style.top = lerp(100, 136 + i * 26, x) + 'px'; });
+  });
+  shown(el(chain, 'legend', 'each posts its signed price as a note in a transaction (data, not a script)', 520, 60), a + 2.4, b, 0).style.width = '200px';
+  scene(a + 3.0, b, 'prove', 'signatures and<br>stake checked:<br>67 % or more', [
+    ['reg', 'REGISTRY', 'CLAIM, disputed', '29.028 KAS  pot + 2 bonds'],
+    ['reg', 'COMMITTEE', 'member table (this epoch)', 'keys and stake'],
+    ['lib', 'LIBRARY', 'script: KpfTProve', '2.400 KAS'],
+  ], [
+    ['key', 'YOURS', 'you', '19.4035 KAS  + half a bond', 1],
+    ['key', "D'S", 'counterparty D', '8.415 KAS'],
+    ['lib', 'LIBRARY', 'script: KpfTProve', '3.6115 KAS  half a bond'],
+    ['reg', 'COMMITTEE', 'member table', 'unchanged'],
+  ], { top: 150, gap: 66, lead: .2 });
+  foot('Claimed no more than the committee price gives: proved. More: refuted, and the bond is lost. No answer: void, bonds returned.', a + 8.6, b);
+}
+// ---- 8. the rules, at the end
+{
+  const [a, b] = [T.end[0] + .2, T.end[1] - .2];
+  [['Nobody holds your margin', 'It sits in a UTXO under a script, from the order to the payout.'],
+   ['Nobody feeds a price', 'You close at the price you saw. A staked committee is called only to settle a dispute.'],
+   ['Positions move without you', 'A counterparty can change and your pieces can merge. Your size and worth do not.']]
+    .forEach((c, i) => shown(el(chain, 'card3', `<b>${c[0]}</b><span>${c[1]}</span>`, 22 + i * 236, 170), a + .2 + i * .45, b));
+  shown(el(chain, 'head', 'WHAT THE SCRIPTS HOLD EVERYONE TO', 22, 132), a, b);
+}
+
+// ---- what you see
+function card(a, b, html) { const d = el(ui, '', html, 22, 20); d.style.width = '410px'; return shown(d, a, b, 6); }
+const MK = (px, id) => `<div class="mkt"><div><b>XYZ-PERP</b><em>margin and settlement in KAS</em></div><div class="px"${id ? ` id="${id}"` : ''}>${px}</div></div>`;
+card(T.order[0], 9.4, MK('10.00') + `
+  <div class="row"><span>Side</span><div class="seg"><span class="on">Long</span><span>Short</span></div></div>
+  <div class="row"><span>Size</span><div class="field" id="f1"></div></div>
+  <div class="row"><span>Limit price</span><div class="field" id="f2"></div></div>
+  <div class="row"><span>Margin</span><div class="field" id="f3"></div></div>
+  <div class="row"><span>Tip for the executor</span><div class="field" id="f4"></div></div>
+  <div class="btn" id="b1">Place order</div>
+  <div class="note">Signed in your wallet. No deposit to an exchange: the margin goes into the order itself.</div>`);
+[['f1', '4 XYZ', 4.4], ['f2', '10.10 KAS', 5.1], ['f3', '12.00 KAS', 5.8], ['f4', '0.05 KAS', 6.5]].forEach(([id, s, t0]) => A.push(t => { document.getElementById(id).textContent = s.slice(0, Math.floor(cl((t - t0) / .5) * s.length)) || ' '; }));
+card(9.4, T.match[0] + 3.4, MK('10.00') + `<div class="row" style="margin-top:22px"><span>Open order</span><b style="color:var(--amber)">resting</b></div>
+  <div class="kv"><div>Side · size<b>Long 4 XYZ</b></div><div>Limit<b>≤ 10.10 KAS</b></div><div>Margin in the order<b>12.00 KAS</b></div><div>Tip<b>0.05 KAS</b></div></div>
+  <div class="note" style="margin-top:22px">Waiting for orders that cross it. You can cancel: the order pays back to your key and to nobody else.</div>`);
+// the position: one card from the match to the close. The price starts to move after the match, and the
+// reassignment and the merge happen while it moves.
+card(T.match[0] + 3.4, T.close[0], `<div id="mka"></div><div class="row" style="margin-top:14px"><span>Position</span><b class="pos" id="psa"></b></div>
+  <div class="kv" style="margin-top:12px"><div>Your margin<b id="mga"></b></div><div>Counterparty<b id="cpa"></b></div><div>Unrealised<b id="pna" class="pos"></b></div><div>Held as<b id="cma"></b></div></div>
+  <div class="chart" style="height:104px;margin-top:12px"><svg id="ch" width="408" height="102"></svg></div>
+  <div class="note" id="nta" style="margin-top:10px;min-height:38px"></div>
+  <div class="btn" id="b2" style="margin-top:8px;background:transparent;border:1px solid var(--kaspa);color:var(--kaspa)">Close at the price you see</div>`);
+const set = (id, v) => { const d = document.getElementById(id); if (d.innerHTML !== v) d.innerHTML = v; };
+// the price you see: 10.00 until the match is done, then up, with a pause at each step of the story
+const KEYS = [[T.swap[0], 10.00], [T.swap[1], 10.20], [T.merge[1], 10.34], [T.hold[0] + 1.0, 10.42], [T.hold[1] - 1.2, 11.00], [T.close[0], 11.00]];
+function price(t) {
+  if (t <= KEYS[0][0]) return 10.00;
+  for (let k = 0; k < KEYS.length - 1; k++) { const [t0, p0] = KEYS[k], [t1, p1] = KEYS[k + 1]; if (t <= t1) { const x = (t - t0) / (t1 - t0); return lerp(p0, p1, ease(x)) + Math.sin(x * 9.4) * .012 * Math.sin(x * Math.PI); } }
+  return 11.00;
+}
+{
+  const ch = document.getElementById('ch'), path = document.createElementNS('http://www.w3.org/2000/svg', 'path'), dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  path.setAttribute('fill', 'none'); path.setAttribute('stroke', '#70c7ba'); path.setAttribute('stroke-width', '2'); dot.setAttribute('r', 4); dot.setAttribute('fill', '#70c7ba'); ch.appendChild(path); ch.appendChild(dot);
+  const t0 = T.swap[0] - 1.2, t1 = T.close[0], X = t => 10 + (t - t0) / (t1 - t0) * 388, Y = p => 92 - (p - 9.95) / 1.1 * 82;
+  A.push(t => {
+    if (t < T.match[0] + 3 || t > T.close[0] + .5) return;
+    const now = price(t), swapped = t >= T.swap[0] + 5.4, merged = t >= T.merge[0] + 4.4;
+    const amber = on => `style="color:${on ? 'var(--amber)' : 'inherit'}"`;
+    set('mka', MK(now.toFixed(2)));
+    set('psa', 'Long 4 XYZ @ 10.00');
+    set('mga', `<span ${amber(merged && t < T.merge[1])}>${merged ? '11.995 KAS' : '12.00 KAS'}</span>`);
+    set('cma', `<span ${amber(merged && t < T.merge[1])}>${merged ? '1 UTXO' : '2 UTXOs'}</span>`);
+    set('cpa', `<span ${amber(swapped && t < T.swap[1])}>${merged ? 'D' : swapped ? 'D (3) · D (1)' : 'D (3) · E (1)'}</span>`);
+    const g = 4 * (now - 10);
+    set('pna', (g >= .005 ? '+' : '') + g.toFixed(2) + ' KAS');
+    set('nta', t < T.swap[0] ? 'Filled in a batch. Your 4 met two sellers: 3 against D and 1 against E.'
+      : t < T.merge[0] ? (swapped ? 'E left. Both pieces now face D. Your size, entry and margin did not change, and nobody asked you to sign.' : 'The price is rising. E, short 1 against you, is buying its way out…')
+      : t < T.hold[0] ? (merged ? 'The two pieces became one position: one UTXO, one margin. The merge cost you 0.005 KAS.' : 'Two positions against the same counterparty can be merged by anyone.')
+      : 'Nothing to do while you hold. No transaction, no fee.');
+    let d = ''; const n = 160, upto = cl((t - t0) / (t1 - t0));
+    for (let k = 0; k <= Math.max(1, Math.floor(n * upto)); k++) { const tt = t0 + (k / n) * (t1 - t0), x = X(tt), y = Y(price(tt)); d += (k ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1); dot.setAttribute('cx', x); dot.setAttribute('cy', y); }
+    path.setAttribute('d', d);
+  });
+}
+// the close
+card(T.close[0], T.dispute[0], MK('11.00') + `<div class="row" style="margin-top:16px"><span id="cs"></span><b class="big pos" id="amt"></b></div>
+  <div class="kv"><div>Price you stated<b>11.00</b></div><div>Margin of caution<b>0.5 % of the price</b></div></div>
+  <div class="row" style="margin-top:18px"><span>Dispute period</span><b id="dp" style="font-family:var(--mono)"></b></div><div class="bar"><i id="dpb"></i></div>
+  <div class="note" id="cn" style="margin-top:16px"></div>`);
+A.push(t => {
+  if (t < T.close[0] - .5 || t > T.dispute[0] + .5) return;
+  const done = t >= 61.6, t1 = T.close[0] + 2.2, left = cl(1 - (t - t1) / 5.0);
+  document.getElementById('cs').textContent = done ? 'Closed' : 'Closing'; document.getElementById('amt').textContent = done ? '+3.78 KAS' : '15.775 KAS';
+  document.getElementById('dp').textContent = done ? 'passed' : t < t1 ? '00:30' : '00:' + String(Math.ceil(left * 30)).padStart(2, '0'); document.getElementById('dpb').style.width = (done ? 100 : (1 - left) * 100) + '%';
+  document.getElementById('cn').textContent = done ? 'You received 15.775 KAS (your margin of 11.995 and 3.78) and your bond back. D received 8.415 KAS.' : 'You stated the price you saw, with a bond. Executors compare it with what they see. If nobody disputes it within the period, anyone settles it.';
+});
+// the dispute, as you would see it
+card(T.dispute[0], T.end[0], MK('11.00') + `<div class="row" style="margin-top:16px"><span>If your close is disputed</span><b style="color:var(--amber)" id="ds"></b></div>
+  <div id="dl" style="margin-top:14px"></div>`);
+A.push(t => {
+  if (t < T.dispute[0] - .5 || t > T.end[0] + .5) return;
+  const a = T.dispute[0], L = [['A disputer posts a bond against your claim', a + .6], ['Committee members each sign the price they saw', a + 2.4], ['The chain checks the signatures and their stake', a + 5.4], ['You are paid, with half of the disputer\'s bond', a + 8.2]];
+  set('ds', t > a + 8.2 ? 'proved' : 'waiting for the committee');
+  set('dl', L.map(([s, t0], i) => `<div class="row" style="justify-content:flex-start;gap:12px;opacity:${t >= t0 ? 1 : .28}"><b style="color:var(--kaspa);font-family:var(--mono)">${i + 1}</b><span style="color:var(--fg)">${s}</span></div>`).join('') +
+    `<div class="note" style="margin-top:18px;opacity:${t > a + 9 ? 1 : 0}">A committee that does not answer decides nothing: the claim is void and both bonds go back.</div>`);
+});
+card(T.end[0], T.end[1] + 1, MK('11.00') + `<div class="row" style="margin-top:22px"><span>Closed</span><b class="big pos">+3.78 KAS</b></div>
+  <div class="kv"><div>Opened<b>Long 4 XYZ @ 10.00</b></div><div>Closed<b>11.00</b></div><div>Transactions you signed<b>2</b></div><div>Custodian<b>none</b></div></div>
+  <div class="note" style="margin-top:22px">The order and the close were yours to sign. The matches, the change of counterparty, the merge and the settlement were sent by others and checked by scripts on Kaspa L1.</div>`);
+// the cursor
+const cur = el(S, 'cursor', '<svg width="18" height="22" viewBox="0 0 18 22"><path d="M2 1 L2 17 L6.2 13.4 L9 20 L11.6 18.9 L8.8 12.4 L14.5 12.2 Z" fill="#fff" stroke="#111" stroke-width="1.2" stroke-linejoin="round"/></svg>', 0, 0);
+// a place is a point of the stage, or an element (its place on the page, measured when it is needed)
+const at = (id, fx = .5, fy = .55) => () => { const r = document.getElementById(id).getBoundingClientRect(); return [r.left + r.width * fx, r.top + r.height * fy]; };
+const CUR = [[3.6, [420, 560]], [4.3, at('f1', .7)], [5.0, at('f2', .7)], [5.7, at('f3', .7)], [6.4, at('f4', .7)], [7.6, at('b1')], [8.6, at('b1')], [9.6, [300, 540]], [12.0, [330, 572]],
+  [T.hold[1] - 2.0, [330, 572]], [T.hold[1] - .9, at('b2')], [T.close[0] + .3, at('b2')], [T.close[0] + 1.6, [330, 592]]];
+const where = c => typeof c[1] === 'function' ? c[1]() : c[1];
+A.push(t => { let i = 0; while (i < CUR.length - 1 && CUR[i + 1][0] <= t) i++; const p = CUR[i], q = CUR[Math.min(i + 1, CUR.length - 1)], x = ease(cl((t - p[0]) / Math.max(.01, q[0] - p[0]))), a = where(p), b = where(q);
+  cur.style.left = (lerp(a[0], b[0], x) - 2) + 'px'; cur.style.top = (lerp(a[1], b[1], x) - 1) + 'px'; cur.style.opacity = vis(t, 3.9, T.close[0] + 2.4, .3, .3); });
+A.push(t => { const b1 = document.getElementById('b1'), b2 = document.getElementById('b2'); b1.style.filter = t > 8.0 && t < 8.6 ? 'brightness(1.35)' : ''; b2.style.background = t > T.hold[1] - .7 && t < T.close[0] + .2 ? 'rgba(112,199,186,.25)' : 'transparent'; });
+
+// ---- captions
+const cap = el(S, 'cap', '<div><i></i><span id="ct"></span></div>');
+const CAP = [[4.0, 8.0, 'An order is a UTXO: your margin sits in it, under a script'], [8.2, 11.6, 'No deposit, no custodian'],
+  [12.2, 16.2, 'An executor matches many orders against many'], [16.4, 20.4, 'Your 4 met two sellers: two positions, two UTXOs'], [20.6, 24.0, 'What is left over, the executor may take itself'],
+  [24.6, 29.2, 'The price moves. Seller E buys its way out'], [29.4, 34.6, 'Both your pieces now face D. You signed nothing; your size and entry did not change'],
+  [35.2, 39.0, 'Two positions against the same counterparty…'], [39.2, 43.6, '…are merged into one UTXO, by anyone'],
+  [44.2, 47.6, 'While you only hold, nothing touches the chain'], [47.8, 51.6, 'Everyone watches the market on their own'],
+  [52.2, 55.6, 'To close, you state the price you see and post a bond'], [55.8, 58.6, 'Executors compare it with what they see'], [58.8, 64.6, 'Nobody disputes: after the period, the script pays both sides'],
+  [65.2, 69.4, 'If somebody disputes, the committee is asked'], [69.6, 73.6, 'Members sign on their own. The chain checks signatures and stake'], [73.8, 79.6, 'True claim: paid, plus half the disputer\'s bond. False claim: its bond is lost'],
+  [80.2, 85.4, 'Rules, not operators: every step is checked on Kaspa L1']];
+A.push(t => { const c = CAP.find(c => t >= c[0] && t <= c[1]); cap.style.opacity = c ? vis(t, c[0], c[1], .3, .3) : 0; if (c) document.getElementById('ct').textContent = c[2]; });
+
+// ---- title and end: the landing page's slide (brand/kpf-lp-hero.png), fitted to the height
+const SLIDE = '<img src="../kpf-lp-hero.png" style="height:720px;display:block">';
+const t1 = el(S, 'title', SLIDE);
+A.push(t => { const v = t < 3.0 ? 1 : cl(1 - (t - 3.0) / .6); t1.style.opacity = v; t1.style.visibility = v > 0 ? 'visible' : 'hidden'; });
+const t2 = el(S, 'title', SLIDE);
+A.push(t => { const v = cl((t - T.end[1]) / .6); t2.style.opacity = v; t2.style.visibility = v > 0 ? 'visible' : 'hidden'; });
+
+window.DURATION = 90;
+window.setT = t => { for (const f of A) f(t); };
+const q = new URLSearchParams(location.search);
+if (q.has('t')) setT(parseFloat(q.get('t'))); else { const t0 = performance.now(); (function loop() { setT(((performance.now() - t0) / 1000) % window.DURATION); requestAnimationFrame(loop); })(); }
+</script>
+</body>
+</html>

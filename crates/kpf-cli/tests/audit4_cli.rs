@@ -112,7 +112,7 @@ fn holds_watch_does_not_report_an_order_that_cannot_cover_the_part() {
 /// command can run offline without a funder, so the wording is checked in the source the binary is built from.
 #[test]
 fn holds_no_message_promises_a_fresh_clock_after_a_challenge() {
-    let src = include_str!("../src/evcmds.rs");
+    let src = include_str!("../src/legacy/evcmds.rs");
     assert!(!src.contains("fresh clock"), "a message still promises a fresh clock after a challenge");
     assert_eq!(src.matches("clock S kept").count(), 2, "both messages say the clock S is kept");
 }

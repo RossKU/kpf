@@ -1,0 +1,121 @@
+pragma silverscript ^0.1.0;
+
+// KpfEpochTable: one epoch's copy of a committee's member table, under the committee's covenant id (docs/DESIGN-COMMITTEE.md 1, 2).
+// It is the verifier of the committee's price: a claim that needs a price spends an epoch table by `attest`, the epoch table
+// checks the members' signatures and continues unchanged, and the claimant reads what was attested from this input's
+// signature script. Covenants have no read-only inputs, so one epoch has several epoch tables (KpfCommittee.roll writes them):
+// as many claims can use the epoch at once as it has epoch tables.
+//
+// State (redeem bytes from 1): members, 15 x (x-only key 32, weight 8) in one 600-byte push; total, the sum of the
+// weights; the window [from, until) of the signed prices it serves; quorumBps; spreadBps.
+//
+// A signed price is (committee id, market id, t0, price). Member i signs
+//   blake2b("kpf-tick-1" || committee id || market id || t0 || price_i)
+// as a data signature (64 bytes, checkMsgSig). The digest names the committee (this input's covenant id), so a signature
+// serves no other committee, and no pair, so a member cannot choose whom it serves.
+//
+// Entries:
+//   attest(market, t0, p, bits, prices, sigs)   anyone: from <= t0 < until and tx.daa >= t0 (no signed price of the future);
+//                     every member i in bits has weight > 0 and signed prices[i] for the time, and prices[i] lies within
+//                     spreadBps of p; the weight of those members is at least ceil(total x quorumBps / 10^4); the epoch table
+//                     continues at its own output index with the same script, covenant id and at least its value;
+//                     other epoch tables of the committee may attest beside it, each for its own market
+//   retire()          anyone, a whole window after `until` (tx.daa >= until + (until - from)): no output of the id
+// Every argument of attest is a fixed-width push, so a claimant reads them at fixed offsets of this input's signature
+// script (market [0..33), t0 [33..42), p [42..51)) and the dispatch tag before the redeem script, as the oracle family
+// read KpfBond.bind.
+// DESIGN: each member signs its own price, not one price every member signs: members need no round, no leader and no
+// knowledge of each other. A price p is attested when members holding the quorum each signed a price within spreadBps
+// of p. Whoever builds the claim chooses p and which signed members it includes, so it can move p by the spread around
+// the prices a quorum signed; the claim's tolerance g is what that may cost a party.
+// DESIGN: review C1 (C1-F1): the first rule was a weighted median of the included prices. The claimant chooses the
+// included members, so members holding half a quorum added just enough honest signatures (public, of the true price) to
+// reach the quorum and stay the majority of what was included: a third of the weight dictated any price. Now every
+// included price must lie near p, so a false price needs a quorum of the weight to have signed near it.
+// DESIGN: fifteen members. A node admits at most 15 signature operations in an input's script and counts every data
+// signature of the unrolled loop below, whatever entry runs (live run 3): with sixteen no epoch table could be spent.
+// DESIGN: the epoch table trusts its own state. Every UTXO of a committee's id is written by the committee or by an epoch table
+// continuing itself, provided the lineage began as one empty committee, which a wallet checks offline by recomputing the
+// committee id from its genesis (a covenant id is a hash of the genesis outputs).
+contract KpfEpochTable(
+    byte[600] init_members,
+    int init_total,
+    int init_from,
+    int init_until,
+    int init_quorumBps,
+    int init_spreadBps
+) {
+    byte[600] members = init_members;
+    int total = init_total;
+    int from = init_from;
+    int until = init_until;
+    int quorumBps = init_quorumBps;
+    int spreadBps = init_spreadBps;
+
+    int constant N = 15;
+    int constant BPS = 10000;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    // 15 members of at most 2.5 x 10^17 sompi each.
+    int constant TOTAL_MAX = 4000000000000000000;
+    // The largest price an epoch table attests: nine times the largest priceMax a market may have, and p x 10^4 below 2^63.
+    int constant PRICE_LIMIT = 900000000000000;
+
+    entry attest(byte[32] market, byte[8] t0b, byte[8] pb, byte[8] bitsb, byte[120] prices, byte[960] sigs) {
+        int self = this.activeInputIndex;
+        byte[32] rid = OpInputCovenantId(self);
+        // Several epoch tables of one committee may attest in one transaction, one a market (the legs of a cross-margin
+        // account are priced for one time: docs/DESIGN-COMMITTEE.md 3b). Each continues at its own output index (below),
+        // so as many outputs carry the id as inputs do and none is made. The committee itself is never beside an epoch table
+        // (every entry of KpfCommittee requires to be the only input of the id), nor an epoch table that retires (no output).
+        require(OpCovOutputCount(rid) == OpCovInputCount(rid));
+        int t0 = int(t0b);
+        int p = int(pb);
+        require(t0 >= from);
+        require(t0 < until);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= t0);
+        require(p >= 0);
+        require(p <= PRICE_LIMIT);
+        require(spreadBps >= 0);
+        require(spreadBps <= BPS);
+        require(total > 0);
+        require(total <= TOTAL_MAX);
+        // "kpf-tick-1", the committee id, the market id, t0.
+        byte[] head = byte[](0x6b70662d7469636b2d31) + byte[](rid) + byte[](market) + byte[](t0b);
+        int b = int(bitsb);
+        require(b >= 0);
+        int w = 0;
+        for (i, 0, N, N) {
+            if (b % 2 == 1) {
+                int wi = int(byte[8](members.slice(40 * i + 32, 40 * i + 40)));
+                require(wi > 0);
+                byte[8] pi = byte[8](prices.slice(8 * i, 8 * i + 8));
+                require(checkMsgSig(datasig(sigs.slice(64 * i, 64 * i + 64)), blake2b(head + byte[](pi)), pubkey(members.slice(40 * i, 40 * i + 32))));
+                int dev = int(pi) - p;
+                if (dev < 0) { dev = 0 - dev; }
+                require(dev <= PRICE_LIMIT);
+                require(dev * BPS <= p * spreadBps);
+                w = w + wi;
+                require(w <= total);
+            }
+            b = b / 2;
+        }
+        require(b == 0);
+        // w >= ceil(total * quorumBps / 10^4), in the split form (total * 10^4 would overflow).
+        require(w >= (total / BPS) * quorumBps + ((total % BPS) * quorumBps + BPS - 1) / BPS);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == rid);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    entry retire() {
+        byte[32] rid = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(rid) == 1);
+        require(OpCovOutputCount(rid) == 0);
+        int end = until + (until - from);
+        require(end >= 0);
+        require(end < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= end);
+    }
+}

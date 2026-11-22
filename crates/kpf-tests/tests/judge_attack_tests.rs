@@ -42,8 +42,8 @@ fn between(src: &str, a: &str, b: &str) -> String {
 
 #[test]
 fn holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim() {
-    let s = contract_source("KpfStake.sil");
-    let c = contract_source("stubs/KpfClaimStub.sil");
+    let s = contract_source("legacy/KpfStake.sil");
+    let c = contract_source("legacy/stubs/KpfClaimStub.sil");
     assert_eq!(between(&s, "// BEGIN judge bounds", "// END judge bounds"), between(&c, "// BEGIN judge bounds", "// END judge bounds"));
     for k in ["MU_MIN_BPS = 11000", "MU_MAX_BPS = 15000", "BURN_MAX_BPS = 5000", "MIN_STAKE_MAX = 1000000000000", "ROUND_MAX = 2592000", "AGE_MAX = 25920000", "UNBOND_MAX = 77760000", "UNIT = 1000000000"] {
         assert!(s.contains(k) && c.contains(k), "{k} in both");
@@ -79,7 +79,7 @@ fn holds_the_judge_bounds_are_one_text_in_the_stake_and_the_claim() {
 
 #[test]
 fn holds_the_contracts_offsets_are_the_encodings() {
-    let s = contract_source("KpfStake.sil");
+    let s = contract_source("legacy/KpfStake.sil");
     let mut j = Js::free([7; 32], jmarket());
     j.side = 0x11;
     j.amt = 0x12;
@@ -97,7 +97,7 @@ fn holds_the_contracts_offsets_are_the_encodings() {
     }
     assert!(s.contains("int constant MARKET_AT = 43;") && s.contains("int constant MARKET_END = 130;") && s.contains("int constant STATE_END = 271;"));
     assert_eq!(&st[42..129], &jmarket().bytes()[..]);
-    let c = contract_source("stubs/KpfClaimStub.sil");
+    let c = contract_source("legacy/stubs/KpfClaimStub.sil");
     assert!(c.contains("int constant STAKE_SIDE_AT = 162;") && c.contains("int constant STAKE_STATUS_AT = 33;"));
     let cs = ClaimStub { m: jmarket(), owner: [7; 32], status: CLAIM_PENDING }.state_bytes();
     assert!(c.contains("int constant STATUS_AT = 121;") && cs[120] == 0x08 && cs[121] == CLAIM_PENDING as u8);

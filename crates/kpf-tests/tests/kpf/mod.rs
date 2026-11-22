@@ -90,7 +90,7 @@ pub fn pair(long: &Keypair, short: &Keypair) -> Pair {
     }
 }
 
-/// The pinned `KpfPair` artifact (`contracts/artifacts`); equal to a fresh compile (`cargo test -p kpf-artifacts`).
+/// The pinned `KpfPair` artifact (`contracts/legacy/artifacts`); equal to a fresh compile (`cargo test -p kpf-artifacts`).
 pub fn pair_base() -> &'static SilAbiArtifact {
     kpf_protocol::artifacts::pair_base()
 }

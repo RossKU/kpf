@@ -1,5 +1,5 @@
 //! A fresh compile with the vendored compiler reproduces the committed artifacts byte for byte.
-//! If this fails after a change to `contracts/KpfPair.sil` or `contracts/KpfOpen.sil` (or the compiler pin), regenerate:
+//! If this fails after a change to `contracts/legacy/KpfPair.sil` or `contracts/legacy/KpfOpen.sil` (or the compiler pin), regenerate:
 //! `CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write`, review the diff and commit the result.
 
 #[test]

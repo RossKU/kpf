@@ -1,0 +1,121 @@
+pragma silverscript ^0.1.0;
+
+// KpfTLate: the end of a declared claim (KpfTClose) that landed later than lateDaa after its time, as a script under
+// the library's id. Such a claim (and one that landed before its own time) is neither settled nor disputed:
+// anyone restores the position, and the claimer's bond is shared by who did (`rkey`) and the other party.
+//   late(who, ageb, slotLen, fixed, moving, side, t0, a1, a2, amount, bond, rkey)
+contract KpfTLate(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant STATE_AT = 2;
+    int constant AKEY_AT = 1;
+    int constant BKEY_AT = 34;
+    int constant LATE_AT = 94;
+    int constant DISPUTE_AT = 103;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry late(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[138] moving, int side, int t0, int a1, int a2, int amount, int bond, byte[32] rkey) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        // The places this script does not read name the object it does: an object named at a place nobody reads would
+        // be spent under no rule.
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(fixed) + mv);
+        require(claimHash(position, side, t0, a1, a2, amount, bond) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int landed = OpTxInputDaaScore(j);
+        require(landed >= 0);
+        require(landed - t0 > iAt(mv, LATE_AT) || landed < t0);
+        int v = tx.inputs[j].value;
+        require(bond >= 0);
+        require(v >= bond);
+        becomes(j, rs, slotLen, position, v - bond);
+        // The claimer's bond is shared: half (and the odd sompi) to who ends the claim, the last of this object's two
+        // places from the end; half to the party the claim was made against, the place before it. A claim made late,
+        // or of a signed price to come, holds the position for as long as nobody looks, and this is what it costs.
+        int half = bond / 2;
+        int m = tx.outputs.length - 1 - 2 * j;
+        require(m - 1 >= tx.inputs.length);
+        if (bond - half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= bond - half);
+        }
+        pubkey other = pubkey(byte[32](mv.slice(AKEY_AT, AKEY_AT + 32)));
+        if (side == SIDE_A) {
+            other = pubkey(byte[32](mv.slice(BKEY_AT, BKEY_AT + 32)));
+        }
+        if (half > 0) {
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(other)));
+            require(tx.outputs[m - 1].value >= half);
+        }
+        require(int(ageb) >= 0);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

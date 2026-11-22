@@ -92,7 +92,7 @@ fn claims(l: &Live, n: i64) -> Vec<(PairLeg, Evidence, Evidence)> {
     ]
 }
 
-fn one_tick_short(e: &Evidence) -> Evidence {
+fn one_price_short(e: &Evidence) -> Evidence {
     let mut x = e.clone();
     match x.kind {
         Kind::Ask => x.ask.price += 1,
@@ -252,16 +252,16 @@ fn a_false_claim_disputed_in_the_window_makes_the_victim_whole() {
     }
 }
 
-/// The margin g at its boundary for disputes, as for challenges: one tick in the claim's favour is refused; and the
+/// The margin g at its boundary for disputes, as for challenges: one time in the claim's favour is refused; and the
 /// counter-evidence must be of the opposite kind.
 #[test]
-fn a_dispute_one_tick_short_of_the_margin_is_refused() {
+fn a_dispute_one_price_short_of_the_margin_is_refused() {
     let l = lv(0x34);
     for (g, e, c) in claims(&l, FULL) {
         let w = pend(&g, e.price());
         let (_, lock) = guaranteed(&w);
         accept(&dispute(&[lock.clone()], &c));
-        refused(&dispute(&[lock.clone()], &one_tick_short(&c)), 0);
+        refused(&dispute(&[lock.clone()], &one_price_short(&c)), 0);
     }
     let w = pend(&liq(&l, FULL, LONG), LIQ_ASK);
     let (_, lock) = guaranteed(&w);

@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
     "submit", "json", "brief", "priority", "show-secret", "unlist", "help", "example", "no-save", "allow-in-repo", "update",
-    "allow-dead-evidence", "accept-untraced", "any-slot", "void-ok",
+    "allow-dead-evidence", "accept-untraced", "any-slot", "void-ok", "unchecked", "second-price", "once", "wait", "max",
+    "private", "lib-unchecked", "registry-unchecked", "mutual", "no-rest", "past-expiry", "inputs-unchecked", "from-now", "catch-up",
 ];
 
 /// Parsed arguments of one command.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Args {
     pub command: String,
     flags: BTreeMap<String, Vec<String>>,
@@ -53,6 +54,11 @@ impl Args {
 
     pub fn has(&self, name: &str) -> bool {
         self.flags.contains_key(name)
+    }
+
+    /// Sets a flag to one value (a command that fixes an option of the commands it runs).
+    pub fn set(&mut self, name: &str, value: &str) {
+        self.flags.insert(name.to_string(), vec![value.to_string()]);
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {

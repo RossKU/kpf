@@ -1,0 +1,167 @@
+pragma silverscript ^0.1.0;
+
+// KpfTLiq: the declaration of a liquidation, and the end of one that landed late.
+//   liquidate(..., side, t0, a1, a2, fee, add, lkey)   anyone, with the bond: the position becomes a liquidation claim
+//   late(..., fee, add, bond, lkey, rkey)               anyone: a claim that landed after lateDaa, or before its own time,
+//                                                       is the position again; half of the bond to `rkey`, the
+//                                                       other half stays in this script's copy
+//
+// A liquidation in the thin family is declared, as a close is: a liquidator (anyone) states that at the prices of a
+// signed price the side `side` of a position is below its maintenance, with its fee and with what a cure must add, and posts
+// a bond. The side liquidated cures until the claim is settled; anyone settles it after the dispute period; a dispute asks the
+// liquidator for the proof (the arithmetic of KpfCrossC's liquidation, on the price notes), and a proved claim waits
+// a dispute period again before it is settled, so that no dispute takes the cure's time away. States: a claim
+// `liqHash(...)`, a disputed claim `blake2b(push(claim) + push(disputer))`, a proved claim
+// `blake2b(int 1 + push(claim))`.
+contract KpfTLiq(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant BPS = 10000;
+    int constant STATE_AT = 2;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    int constant AKEY_AT = 1;
+    int constant BKEY_AT = 34;
+    int constant AMARGIN_AT = 67;
+    int constant BMARGIN_AT = 76;
+    int constant LATE_AT = 94;
+    int constant DISPUTE_AT = 103;
+    int constant BOND_AT = 112;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // A liquidation claim's state hash: the position, the side liquidated, the signed price and its prices, the liquidator's
+    // fee, what a cure adds, the bond, and the liquidator's key.
+    function liqHash(byte[32] position, int side, int t0, int a1, int a2, int fee, int add, int bond, byte[32] lkey) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(fee) + i9(add) + i9(bond) + p33(lkey));
+    }
+
+    entry liquidate(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[138] moving, int side, int t0, int a1, int a2, int fee, int add, byte[32] lkey) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        // The places this script does not read name the object it does: an object named at a place nobody reads would
+        // be spent under no rule.
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(fixed) + mv);
+        byte[32] st = byte[32](rs.slice(STATE_AT, STATE_AT + 32));
+        require(position == st);
+        int pot = iAt(mv, AMARGIN_AT) + iAt(mv, BMARGIN_AT);
+        require(side == SIDE_A || side == SIDE_B);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        require(a1 >= 0);
+        require(a2 >= 0);
+        require(fee >= 0);
+        require(fee <= pot);
+        require(add > 0);
+        require(add <= MARGIN_MAX);
+        int bond = (pot / BPS) * iAt(mv, BOND_AT) + ((pot % BPS) * iAt(mv, BOND_AT)) / BPS;
+        // A claim without a bond could not be disputed: none is made.
+        require(bond > 0);
+        becomes(j, rs, slotLen, liqHash(position, side, t0, a1, a2, fee, add, bond, lkey), tx.inputs[j].value + bond);
+        require(int(ageb) >= 0);
+        goesOn();
+    }
+
+    entry late(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[138] moving, int side, int t0, int a1, int a2, int fee, int add, int bond, byte[32] lkey, byte[32] rkey) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        // The places this script does not read name the object it does: an object named at a place nobody reads would
+        // be spent under no rule.
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(fixed) + mv);
+        byte[32] st = byte[32](rs.slice(STATE_AT, STATE_AT + 32));
+        require(liqHash(position, side, t0, a1, a2, fee, add, bond, lkey) == st);
+        int landed = OpTxInputDaaScore(j);
+        require(landed >= 0);
+        require(landed - t0 > iAt(mv, LATE_AT) || landed < t0);
+        int v = tx.inputs[j].value;
+        require(bond >= 0);
+        require(v >= bond);
+        becomes(j, rs, slotLen, position, v - bond);
+        // Half of the liquidator's bond (and the odd sompi) to who ends the claim, at this object's place from the end.
+        int half = bond / 2;
+        int m = tx.outputs.length - 1 - 2 * j;
+        require(m >= tx.inputs.length);
+        if (bond - half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= bond - half);
+        }
+        require(int(ageb) >= 0);
+        // The other half is nobody's: it stays in this script's own copy. A side can be its own liquidator and its own
+        // disputer under other keys, and whatever a party could receive it would have back (review T1b, F2b).
+        goesOn();
+        require(tx.outputs[this.activeInputIndex].value >= tx.inputs[this.activeInputIndex].value + half + ORACLE_FEE);
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

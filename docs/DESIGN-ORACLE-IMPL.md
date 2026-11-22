@@ -16,11 +16,11 @@ unbonding; KAS margin (form a) only; the "one underwriter per side" alternative 
 
 | Path | What |
 |---|---|
-| `contracts/KpfBond.sil` | the slot (O2§1.3 `KpfUw`), statuses slot (2) and unbonding (3): `bind`, `advance`, `split`, `unbond`, `withdraw` |
-| `contracts/stubs/KpfPairStub.sil` | a stand-in pair: `renew` (counted by its slot's bind), `rely` (what a price claim will require of the cover), `close` |
-| `contracts/stubs/KpfOpenStub.sil` | a stand-in opening order: `fill` (T1′: the new pair is bound by the slot, no twin) |
+| `contracts/legacy/KpfBond.sil` | the slot (O2§1.3 `KpfUw`), statuses slot (2) and unbonding (3): `bind`, `advance`, `split`, `unbond`, `withdraw` |
+| `contracts/legacy/stubs/KpfPairStub.sil` | a stand-in pair: `renew` (counted by its slot's bind), `rely` (what a price claim will require of the cover), `close` |
+| `contracts/legacy/stubs/KpfOpenStub.sil` | a stand-in opening order: `fill` (T1′: the new pair is bound by the slot, no twin) |
 | `contracts/probes/Z1Spk.sil`, `Z11Twin.sil` | experiments Z1 and Z11 |
-| `crates/kpf-protocol/src/bond.rs` | the pure model: parameters and bounds, the ring, the acceptance rule of every entry of the three contracts (every `require`, and a failure on any 64-bit overflow), plus the note's merge and reserve |
+| `crates/kpf-protocol/src/legacy/bond.rs` | the pure model: parameters and bounds, the ring, the acceptance rule of every entry of the three contracts (every `require`, and a failure on any 64-bit overflow), plus the note's merge and reserve |
 | `crates/kpf-protocol/tests/bond_model.rs` | Z3 (property fuzz) and Z8 (capacity over a month) on the model |
 | `crates/kpf-tests/tests/bondkit/` | fixtures and transaction builders |
 | `crates/kpf-tests/tests/kpf_bond_tests.rs` | every path positive and negative, boundaries (21 tests) |
@@ -29,7 +29,7 @@ unbonding; KAS margin (form a) only; the "one underwriter per side" alternative 
 
 Run: `CARGO_BUILD_JOBS=2 cargo test --workspace --jobs 2` (457 tests: the 414 before this slice and 43 new), or
 `-p kpf-tests --test kpf_bond_tests` etc.; `--nocapture` prints the measured tables. The contracts are compiled from
-source by the tests; they are not in `contracts/artifacts/` yet (pinning changes the manifest, and belongs with the
+source by the tests; they are not in `contracts/legacy/artifacts/` yet (pinning changes the manifest, and belongs with the
 first transaction builder and command line, next slice). The four existing contracts and the book-market path are
 untouched.
 
@@ -166,7 +166,7 @@ changes `KpfPending` and the pinned artifacts, so it is a slice of its own.
 - **Price claims by the underwriter**: Z1's reader with the SIGHASH_ALL check on the underwriter's P2PK input.
 - **Stake judge, reserve, release, pay, records**: the model's `reserve` and Z3's slashed invariant; the `KpfLock` fold.
 - **Closed-market rules, dollar-token margin**: not started.
-- Pin `KpfBond` and the real pair in `contracts/artifacts/`, builders and command line.
+- Pin `KpfBond` and the real pair in `contracts/legacy/artifacts/`, builders and command line.
 
 # Second slice: the stake judge
 
@@ -182,9 +182,9 @@ answers resolves for the side that staked.
 
 | Path | What |
 |---|---|
-| `contracts/KpfStake.sil` | the judge, one template, statuses free stake (4), unbonding (5), receipt (6), dispute (7), resolved (8): `open`, `commit`, `unbond`, `withdraw`, `deposit`, `resolve`, `settle`, `close`, `redeem` |
-| `contracts/stubs/KpfClaimStub.sil` | a stand-in claim: `contest` (hands itself to the judge), `decide` (receives the verdict), `close` |
-| `crates/kpf-protocol/src/judge.rs` | the pure model: parameters and bounds, the state codec, whole transactions (`JTx`) and the acceptance rule of every input of both contracts (every `require`, a failure on any 64-bit overflow), the transaction shapes (`Arena`), a UTXO world |
+| `contracts/legacy/KpfStake.sil` | the judge, one template, statuses free stake (4), unbonding (5), receipt (6), dispute (7), resolved (8): `open`, `commit`, `unbond`, `withdraw`, `deposit`, `resolve`, `settle`, `close`, `redeem` |
+| `contracts/legacy/stubs/KpfClaimStub.sil` | a stand-in claim: `contest` (hands itself to the judge), `decide` (receives the verdict), `close` |
+| `crates/kpf-protocol/src/legacy/judge.rs` | the pure model: parameters and bounds, the state codec, whole transactions (`JTx`) and the acceptance rule of every input of both contracts (every `require`, a failure on any 64-bit overflow), the transaction shapes (`Arena`), a UTXO world |
 | `crates/kpf-protocol/tests/judge_model.rs` | property games, adversarial strategies, Z10 (9 tests) |
 | `crates/kpf-tests/tests/judgekit/` | the compiled templates, the real hash environment, `JTx` to engine transaction |
 | `crates/kpf-tests/tests/kpf_judge_tests.rs` | every path positive and negative, boundaries, payouts to the sompi (10) |
@@ -361,11 +361,11 @@ leader's verdict; the game ends.
   stakers') judgement, not a covenant rule; no judge change is needed.
 - **Tooling**: wallets must trace a dispute to its opening before committing; aggregators chain deposits from
   SINGLE\|ANYONECANPAY commitments and complete an answer in one chain.
-- **Not done here**: pinning `KpfStake` and the claim in `contracts/artifacts/`, builders and command line; the fold
+- **Not done here**: pinning `KpfStake` and the claim in `contracts/legacy/artifacts/`, builders and command line; the fold
   with `KpfBond` and `KpfLock`; the coordinated (triage) honest strategy of the drill; Z12.
 # Third slice: the integration (oracle-market pair, order and pending part)
 
-Status: implemented and tested offline; pinned (`contracts/artifacts/oracle/`), builders and command line; not on
+Status: implemented and tested offline; pinned (`contracts/legacy/artifacts/oracle/`), builders and command line; not on
 testnet. Implements the smallest first version of `DESIGN-ORACLE-2.md` (O2§7) end to end: form (a) only (KAS margin, the
 underlying priced in KAS); `ρ` a market parameter, 1 by default, refused above 5; one underwriter per pair, chosen at open
 by both orders; live disputes during the window, decided by the stake judge of the second slice; no retrospective
@@ -378,14 +378,14 @@ a lateness bound; markets permissionless (the contracts enforce parameter bounds
 
 | Path | What |
 |---|---|
-| `contracts/KpfOpenO.sil` | the oracle-market order: `fill` (T1′: two orders, the slot's bind, the twin scan), `take` (T2 with a fresh bind), `cancel`, `refund` |
-| `contracts/KpfPairO.sil` | the oracle-market pair: `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose`, `coopClose`, `lapseSettle`, `renew`, `propose` |
-| `contracts/KpfPendingO.sil` | the oracle-market pending part: `contest`, `decide`, `cure`, `finalize`; statuses pending, contested, upheld, refuted |
-| `contracts/KpfBond.sil`, `KpfStake.sil` | unchanged from slices A and B1 (source, bytecode and tests untouched); pinned with the family |
-| `contracts/artifacts/oracle/` | the five pinned artifacts, `manifest.json` (template hashes, cuts, the bind, open and resolve dispatch tags), `SHA256SUMS`; the book market's files in `contracts/artifacts/` are byte for byte as before |
-| `crates/kpf-protocol/src/oracle.rs` | the oracle market block (codec, id, bounds, testnet defaults), the feed check, the states and codecs of the three templates, the math of every entry (trigger with g, close price, bond and its split, cure and forfeit bounds, validity, the settlement of every branch, renewal, lapse), the wallet's market warnings, the worst case |
-| `crates/kpf-protocol/src/oracle_artifacts.rs`, `oracle_build.rs` | the pinned kit; builders of every shape: slot (create, advance, split, unbond, withdraw), stake (create, unbond, withdraw), order, open, propose, contest, deposit, resolve and decide, finalize, cure, renew (up to 7 pairs), lapse settle, cooperative close, amend, transfer, mutual close, settle and close a pool |
-| `crates/kpf-cli/src/ocmds.rs` | `oracle-market`, `oracle-check`, `bond`, `unbond`, `withdraw-bond`, `stake`, `oracle-order`, `oracle-open`, `vouch`, `contest`, `deposit`, `resolve`, `oracle-cure`, `oracle-finalize`, `renew`, `lapse-settle`, `settle-pool`, `oracle-watch` |
+| `contracts/legacy/KpfOpenO.sil` | the oracle-market order: `fill` (T1′: two orders, the slot's bind, the twin scan), `take` (T2 with a fresh bind), `cancel`, `refund` |
+| `contracts/legacy/KpfPairO.sil` | the oracle-market pair: `amend`, `addMargin`, `transfer`, `closeHost`, `closeDonor`, `mutualClose`, `coopClose`, `lapseSettle`, `renew`, `propose` |
+| `contracts/legacy/KpfPendingO.sil` | the oracle-market pending part: `contest`, `decide`, `cure`, `finalize`; statuses pending, contested, upheld, refuted |
+| `contracts/legacy/KpfBond.sil`, `KpfStake.sil` | unchanged from slices A and B1 (source, bytecode and tests untouched); pinned with the family |
+| `contracts/legacy/artifacts/oracle/` | the five pinned artifacts, `manifest.json` (template hashes, cuts, the bind, open and resolve dispatch tags), `SHA256SUMS`; the book market's files in `contracts/legacy/artifacts/` are byte for byte as before |
+| `crates/kpf-protocol/src/legacy/oracle.rs` | the oracle market block (codec, id, bounds, testnet defaults), the feed check, the states and codecs of the three templates, the math of every entry (trigger with g, close price, bond and its split, cure and forfeit bounds, validity, the settlement of every branch, renewal, lapse), the wallet's market warnings, the worst case |
+| `crates/kpf-protocol/src/legacy/oracle_artifacts.rs`, `oracle_build.rs` | the pinned kit; builders of every shape: slot (create, advance, split, unbond, withdraw), stake (create, unbond, withdraw), order, open, propose, contest, deposit, resolve and decide, finalize, cure, renew (up to 7 pairs), lapse settle, cooperative close, amend, transfer, mutual close, settle and close a pool |
+| `crates/kpf-cli/src/legacy/ocmds.rs` | `oracle-market`, `oracle-check`, `bond`, `unbond`, `withdraw-bond`, `stake`, `oracle-order`, `oracle-open`, `vouch`, `contest`, `deposit`, `resolve`, `oracle-cure`, `oracle-finalize`, `renew`, `lapse-settle`, `settle-pool`, `oracle-watch` |
 | `crates/kpf-tests/tests/oraclekit/` | fixtures and engine builders of every shape (the templates compiled from source, checked equal to the pinned ones) |
 | `crates/kpf-tests/tests/oracle_tests.rs` | the lifecycle and the negatives of every rule (24) |
 | `crates/kpf-tests/tests/oracle_attack_tests.rs` | the attacks of section 21, the one-text checks, pinned equals compiled (24) |

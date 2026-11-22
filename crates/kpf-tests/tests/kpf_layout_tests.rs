@@ -150,7 +150,7 @@ fn kob_evidence_offsets_match_the_compiled_templates() {
         assert!(src.contains("int constant MAX_IDLE = 77760000;"), "{rel}: MAX_IDLE");
         assert!(src.contains("int constant TIF_GTC = 0;"), "{rel}: TIF_GTC");
     }
-    let pair_src = contract_source("KpfPair.sil");
+    let pair_src = contract_source("legacy/KpfPair.sil");
     assert!(pair_src.contains("int constant IOC_LIFE = 600;") && pair_src.contains("int constant MAX_IDLE = 77760000;"));
 }
 
@@ -161,15 +161,15 @@ fn splice_equals_compile() {
     p.entry = -5;
     p.long_ask = 77;
     p.tag_s = ZERO;
-    assert_eq!(bytecode(&p.art()), bytecode(&compile("KpfPair.sil", &p.ctor())));
+    assert_eq!(bytecode(&p.art()), bytecode(&compile("legacy/KpfPair.sil", &p.ctor())));
     let mut o = short_order(&keypair(5));
     o.size_left = 123_456_789;
-    assert_eq!(bytecode(&o.art()), bytecode(&compile("KpfOpen.sil", &o.ctor())));
+    assert_eq!(bytecode(&o.art()), bytecode(&compile("legacy/KpfOpen.sil", &o.ctor())));
     // A pending part as KpfPair.propose writes it (the library's state of a real claim).
     let l = kpf::evidence::live(&pair(&keypair(3), &keypair(4)), 0x11).at(1_000);
     let g = kpf::evidence::PairLeg { l: l.clone(), n: 400_000_000, q: 0, act: kpf::evidence::Act::Liq { side: LONG } };
     let w = kpf::evidence::pend(&g, 940_000_000).w;
-    assert_eq!(bytecode(&w.art()), bytecode(&compile("KpfPending.sil", &w.ctor())));
+    assert_eq!(bytecode(&w.art()), bytecode(&compile("legacy/KpfPending.sil", &w.ctor())));
 }
 
 #[test]
@@ -178,5 +178,5 @@ fn splice_equals_compile_lock() {
     let g = kpf::evidence::PairLeg { l: l.clone(), n: 400_000_000, q: 0, act: kpf::evidence::Act::Liq { side: LONG } };
     let w = kpf::evidence::pend(&g, 940_000_000);
     let lock = w.w.lock_of(xonly(&keypair(5)), w.id, w.daa, w.value);
-    assert_eq!(bytecode(&lock.art()), bytecode(&compile("KpfLock.sil", &lock.ctor())));
+    assert_eq!(bytecode(&lock.art()), bytecode(&compile("legacy/KpfLock.sil", &lock.ctor())));
 }

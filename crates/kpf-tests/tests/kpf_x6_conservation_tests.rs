@@ -23,7 +23,7 @@
 //! in its owners' payoffs as the pair it would be restored to. In addition to the above:
 //!   - a challenge is accepted exactly when its counter quote contradicts the claim by g and the counter order was
 //!     fillable through max(exposed, P) + R + L with the lock time proving max(exposed, P) + R (P the pending UTXO's
-//!     DAA score; old orders, orders placed after P, short-lived orders and quotes one tick short are mixed in);
+//!     DAA score; old orders, orders placed after P, short-lived orders and quotes one time short are mixed in);
 //!   - a party that did not act never loses value except through a finalized, unrefuted proposal: a proposal, a
 //!     challenge and a cure leave every non-acting party's payoff unchanged or better at every grid price (up to the
 //!     rounding of a split); a finalize takes from the loser (its side, forfeited) and from the winner at most the fee;
@@ -904,7 +904,7 @@ impl Sim {
         Some(self.w.pendings[i].clone())
     }
 
-    /// A challenge of a random pending part with a counter quote at or beyond its refutation bound (or one tick short),
+    /// A challenge of a random pending part with a counter quote at or beyond its refutation bound (or one time short),
     /// from an order placed before or after P, sometimes short-lived. Accepted exactly as the module docs say; then the
     /// part is restored with every owner's payoff unchanged, the proposer gets nothing and the bond is the challenger's.
     fn challenge(&mut self) {
@@ -1095,10 +1095,10 @@ impl Sim {
             let winner = w.w.winner_key();
             if winner != w.w.proposer_key {
                 let g = self.grid(&[&pv, &d.pairs[0].1]);
-                // The forfeit bound moves in whole ticks: the range floor may sit up to one tick (q(n, 1)) below the
+                // The forfeit bound moves in whole signed prices: the range floor may sit up to one time (q(n, 1)) below the
                 // value the part keeps, which stays in the UTXO as excess, outside the DESIGN 3.1 payoff.
-                let tick = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
-                self.non_consenting(&before, &winner, w.w.fee as i128 + tick + 2, &g);
+                let signed_price = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
+                self.non_consenting(&before, &winner, w.w.fee as i128 + signed_price + 2, &g);
             }
             self.st.finalized_liq += 1;
         }
@@ -1174,8 +1174,8 @@ impl Sim {
             let winner = w.w.winner_key();
             if winner != w.w.proposer_key {
                 let g = self.grid(&[&pv, &d.pairs[0].1]);
-                let tick = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
-                self.non_consenting(&before, &winner, w.w.fee as i128 + tick + 2, &g);
+                let signed_price = q(w.w.n, 1, SCALE, SCALE - 1) as i128;
+                self.non_consenting(&before, &winner, w.w.fee as i128 + signed_price + 2, &g);
             }
             settled = 0;
             self.st.guaranteed_liq += 1;
@@ -1183,7 +1183,7 @@ impl Sim {
         self.lock_src.insert(lock.op, (w, settled));
     }
 
-    /// DESIGN 4.5f: a dispute of a random lock with a counter quote at or beyond its refutation bound (or one tick short),
+    /// DESIGN 4.5f: a dispute of a random lock with a counter quote at or beyond its refutation bound (or one time short),
     /// from an order placed before or after P, sometimes short-lived, sometimes resting until after the window. Accepted
     /// exactly when a challenge of the claim would have been (clock P, rest R, life L, margin g) and the rest ended by
     /// F + D - R. Then the victim is paid H (and is whole at the counter quote: what the settlement paid it plus H is at

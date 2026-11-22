@@ -311,7 +311,7 @@ fn holds_cure_of_a_short_is_not_reopened_within_g() {
 /// (10^4 - m) / 10^4); no ask a >= pg (a * 10^4 >= p * (10^4 - g)) liquidates the cured part, and the largest ask that
 /// does, floor-adjacent to cb * 10^4 / (10^4 - m), is below pg. Short loser at bid p: pg = floor(p (10^4 + g) / 10^4), cb =
 /// ceil(pg (10^4 + m) / 10^4); no bid b <= pg liquidates it, the smallest that does is above pg. At pg - 1 (long) or
-/// pg + 1 (short) the cured part is liquidatable unless the rounding of cb leaves it one tick short (then the first
+/// pg + 1 (short) the cured part is liquidatable unless the rounding of cb leaves it one time short (then the first
 /// quote that triggers is one sompi further).
 #[test]
 fn holds_cure_margin_inequality() {
@@ -506,9 +506,9 @@ fn holds_counter_fill_must_cover_kc_n() {
     accept(&ch_draft(&[w], &Evidence::bid(980_000_000, N), &fk(), 2));
 }
 
-/// The four contradiction rows at equality and one tick on the wrong side (DESIGN 4.5d: equality contradicts).
+/// The four contradiction rows at equality and one time on the wrong side (DESIGN 4.5d: equality contradicts).
 #[test]
-fn holds_contradiction_rows_at_the_tick() {
+fn holds_contradiction_rows_at_the_price() {
     let l = lv(0x55, 1_000);
     let cases: Vec<(PairLeg, i64, Evidence, Evidence)> = vec![
         (liq(&l, N, LONG), 940_000_000, Evidence::bid(966_315_790, N), Evidence::bid(966_315_789, N)),

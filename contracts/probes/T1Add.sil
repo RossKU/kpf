@@ -1,0 +1,56 @@
+pragma silverscript ^0.1.0;
+
+// T1Add (probe): the logic of one operation, "the owner adds margin", for positions that carry no logic (T1Slot).
+// It is a UTXO of its own with a fixed script, so its address is fixed and anyone may keep copies of it; it goes on
+// unchanged at its own output index. It reads the position's script from the position input's signature script (the
+// last push, the redeem script the input's P2SH fixes), takes the state hash from it, checks the state it is shown
+// against that hash and the owner's signature, and requires the position to continue with the same script and the
+// new state's hash. It knows nothing of the position's script but where the state hash sits.
+//   run(jb, slotLen, aKey, aMargin, bMargin, delta, s)   jb is the position's input index as 8 bytes (the position
+//           reads it from this input's signature script)
+contract T1Add(int init_version) {
+    int version = init_version;
+
+    byte constant SIGHASH_ALL = 0x01;
+    // Where the state hash sits in a position's redeem script: one leading byte, a 0x20 push, 32 bytes.
+    int constant STATE_AT = 2;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    entry run(byte[8] jb, int slotLen, pubkey aKey, int aMargin, int bMargin, int delta, sig s) {
+        int self = this.activeInputIndex;
+        int j = int(jb);
+        require(version == 1);
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != self);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake2b(p33(byte[32](aKey)) + i9(aMargin) + i9(bMargin)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(delta > 0);
+        require(aMargin >= 0);
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, aKey));
+        byte[32] nh = blake2b(p33(byte[32](aKey)) + i9(aMargin + delta) + i9(bMargin));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](nh) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value + delta);
+        // This logic goes on as it is, at its own index.
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+}

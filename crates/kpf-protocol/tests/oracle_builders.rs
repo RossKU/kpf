@@ -31,11 +31,11 @@ fn the_oracle_manifest_and_checksums_agree_with_the_sources() {
     assert_eq!(m.format, "kpf-artifacts/oracle-1");
     for (name, text) in pinned::artifact_texts() {
         let c = &m.contracts[name];
-        let src = std::fs::read_to_string(contracts().join(format!("{name}.sil"))).unwrap().replace("\r\n", "\n");
-        assert_eq!(c.source_sha256, sha(src.as_bytes()), "contracts/{name}.sil changed: regenerate the artifacts");
+        let src = std::fs::read_to_string(contracts().join(format!("legacy/{name}.sil"))).unwrap().replace("\r\n", "\n");
+        assert_eq!(c.source_sha256, sha(src.as_bytes()), "contracts/legacy/{name}.sil changed: regenerate the artifacts");
         assert_eq!(c.artifact_sha256, sha(text.replace("\r\n", "\n").as_bytes()), "{name}");
     }
-    let sums = std::fs::read_to_string(contracts().join("artifacts/oracle/SHA256SUMS")).unwrap();
+    let sums = std::fs::read_to_string(contracts().join("legacy/artifacts/oracle/SHA256SUMS")).unwrap();
     let mut seen = 0;
     for line in sums.lines() {
         let (h, path) = line.split_once("  ").unwrap();

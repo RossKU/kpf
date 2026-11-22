@@ -1,4 +1,4 @@
-//! `kpf-artifacts write` regenerates `contracts/artifacts/`; `kpf-artifacts check` compares a fresh compile with it.
+//! `kpf-artifacts write` regenerates `contracts/legacy/artifacts/`; `kpf-artifacts check` compares a fresh compile with it.
 
 fn main() {
     match std::env::args().nth(1).as_deref() {

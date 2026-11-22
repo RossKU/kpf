@@ -304,8 +304,8 @@ fn constant(src: &str, name: &str) -> Option<String> {
 #[test]
 fn holds_the_market_check_is_one_text_in_kpf_open_and_kpf_pending() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts");
-    let open = std::fs::read_to_string(root.join("KpfOpen.sil")).unwrap();
-    let pending = std::fs::read_to_string(root.join("KpfPending.sil")).unwrap();
+    let open = std::fs::read_to_string(root.join("legacy/KpfOpen.sil")).unwrap();
+    let pending = std::fs::read_to_string(root.join("legacy/KpfPending.sil")).unwrap();
     let (a, b) = (market_block(&open), market_block(&pending));
     assert_eq!(a, b, "KpfOpen.checkMarket and KpfPending.checkMarket differ");
     assert!(a.contains("function checkMarket()"));
@@ -526,7 +526,7 @@ fn exploit_a_two_key_attacker_on_a_thin_book_takes_an_honest_guarantors_whole_lo
 
 /// Attack on the fix: a party that arranges to be closed or liquidated by a truthful claim and then has it disputed,
 /// on a book that is NOT thin. A dispute needs an order of the opposite kind beyond the claim by the margin g, resting R
-/// from P. Orders at the true market, and one tick short of the bound, are refused; an order at the bound is mispriced
+/// from P. Orders at the true market, and one time short of the bound, are refused; an order at the bound is mispriced
 /// by at least g (a bid above the market, an ask below it), and any fill of it by an arbitrageur re-creates its UTXO
 /// (a KOB continuation), whose rest restarts: one placed or re-created less than R before the dispute is refused. So on a
 /// book where somebody fills a mispriced order within R the party cannot make the counter-evidence, whatever it is paid;

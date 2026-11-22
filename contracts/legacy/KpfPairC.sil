@@ -1,0 +1,872 @@
+pragma silverscript ^0.1.0;
+
+// KpfPairC: one perpetual position of a committee market (docs/DESIGN-COMMITTEE.md 3). It is the oracle family's pair
+// (KpfPairO; docs/DESIGN-ORACLE-IMPL.md) with the underwriter replaced by the market's committee: the pair is the price
+// range [bl, bs] of size s, the long is owed q(s, c(p) - bl) and the short q(s, bs - c(p)), every pair output holds at
+// least q(s, bs - bl) + carrier, and a price moves it only when an epoch table of the market's committee attests it in the
+// same transaction (KpfEpochTable.attest: members holding a quorum of the committee's weight each signed a price within the
+// committee's spread of it). The market's tolerance g must be at least SPREAD_MARGIN times that spread, or no epoch table of
+// the committee prices this market.
+//
+// The market (state [0..216)): its id (blake3 of the rest), the committee id (the covenant id of the KpfCommittee whose
+// epoch tables price this market), the hash of its human-readable feed definition, and the parameters. Anyone writes a
+// market by writing an order (KpfOpenC); the contracts enforce the parameter bounds (checkMarket), never a list of
+// markets, and never that the committee is sound: a wallet checks that offline (the committee id recomputed from its
+// genesis, an empty committee).
+//
+// Entries without a price:
+//   amend, addMargin, transfer, mutualClose   as KpfPairO (P1-P4 of KpfPair), each needing the pair UTXO to be
+//                     quietDaa old (CSV); a part an entrant gets starts a fresh covenant id this script checks and
+//                     names this input as its maker; the remainder keeps this id
+//   assign(s, side, n, x, nb, ek, c)   the owner of `side` signs (SIGHASH_ALL): its side of the part n goes to ek at
+//                     x under the rules of a hand-over, without a listing. An executor's instant exit: the leaver is
+//                     paid in this transaction, the entrant holds the position
+//   coopClose         both owners, any split (P9)
+//   lapseSettle       anyone, idleDaa after the lease has ended (tx.daa >= expiry + idleDaa, CLTV): settle all at the
+//                     entry price (P8 of a pair nobody kept alive)
+// Entries that read an epoch table (input u, a KpfEpochTable of this market's committee spent by attest for this market):
+//   keepAlive(u, t0)  anyone: the committee was alive at t0, so the lease becomes t0 + termDaa, at least a quarter of
+//                     a term later than it was
+//   propose(n, kind, side, p, t0, u, s, fb, k, pk, pPre, pSuf)
+//                     the part n moves into a KpfPendingC with the claim (kind, side, the attested price p at t0),
+//                     exactly as KpfPairO.propose moves it into KpfPendingO. Kind 1 close: the owner of `side` signs,
+//                     after quietDaa, and is not below its maintenance at the price it is paid (p moved by g against
+//                     it). Kind 2 liquidation: anyone; the loser `side` is liquidatable at p with the tolerance g
+//                     inside the trigger; the fee goes to pk. Kind 3 trim: the owner of `side` signs, after quietDaa;
+//                     its bound moves inward to fb, where it is still not below its maintenance at p moved by g
+//                     against it, and what that frees is paid to it (cross margin: it adds it to another pair)
+// DESIGN: no close-versus-close in this family (KpfPairO.closeHost, closeDonor): a side leaves by transfer, assign,
+// mutual close or a close at the committee's price, and every one of them is one pair's business.
+// DESIGN: the lease. Without a price source a pair whose parties cannot agree would be locked for ever, so a pair
+// carries an expiry after which, and idleDaa more, anyone settles it at the entry price both parties agreed to. An
+// attested signed price proves a quorum signed at t0; anyone may use one to move the lease to t0 + termDaa. While the
+// committee signs, a party that wants its position kept renews once a term; when the committee is gone for good, every
+// pair unwinds. The lease must move by at least a quarter of a term, so nobody can respend a pair on every signed price.
+// DESIGN: the cover rate and its shares (KpfPairO, review 9) are gone with the underwriter whose liability they
+// bounded: a range is bounded by priceMax only.
+contract KpfPairC(
+    byte[32] PENDING_TPL,
+    byte[32] EPOCH_TABLE_TPL,
+    int EPOCH_TABLE_PRE,
+    int EPOCH_TABLE_SUF,
+    byte[4] ATTEST_TAG,
+    byte[32] init_market,
+    byte[32] init_committeeId,
+    byte[32] init_feedHash,
+    int init_termDaa,
+    int init_scale,
+    int init_priceMax,
+    int init_mmrBps,
+    int init_gBps,
+    int init_liqFeeBps,
+    int init_keeperFeeMin,
+    int init_minSize,
+    int init_carrier,
+    int init_idleDaa,
+    int init_graceDaa,
+    int init_lateDaa,
+    int init_quietDaa,
+    int init_size,
+    int init_bl,
+    int init_bs,
+    int init_entryPrice,
+    pubkey init_longKey,
+    pubkey init_shortKey,
+    int init_expiry,
+    int init_longAsk,
+    int init_longMin,
+    int init_longTip,
+    int init_shortBid,
+    int init_shortMin,
+    int init_shortTip,
+    byte[32] init_mkLong,
+    byte[32] init_mkShort,
+    byte[32] init_mkParent,
+    byte[32] init_mkHost,
+    byte[32] init_mkDonor
+) {
+    // The committee market block (state [0..216)).
+    byte[32] market = init_market;       // blake3 of state [33..216): the committee id, the feed hash, every parameter
+    byte[32] committeeId = init_committeeId;   // the covenant id of the committee whose epoch tables price this market
+    byte[32] feedHash = init_feedHash;   // blake3 of the human-readable feed definition; not interpreted on chain
+    int termDaa = init_termDaa;          // the lease an attested signed price gives
+    int scale = init_scale;              // base units per whole unit of the underlying
+    int priceMax = init_priceMax;        // prices are sompi per whole unit (the underlying priced in KAS)
+    int mmrBps = init_mmrBps;            // maintenance margin
+    int gBps = init_gBps;                // tolerance g inside the trigger and the close price
+    int liqFeeBps = init_liqFeeBps;      // the proposer's fee rate of a liquidation
+    int keeperFeeMin = init_keeperFeeMin;
+    int minSize = init_minSize;
+    int carrier = init_carrier;          // C
+    int idleDaa = init_idleDaa;          // how long after the lease anyone settles at the entry
+    int graceDaa = init_graceDaa;        // a liquidation's time to cure before finalize (CSV)
+    int lateDaa = init_lateDaa;          // a claim is valid only if it lands within this of its time
+    int quietDaa = init_quietDaa;        // the age every party entry needs (CSV)
+    // Position (state [216..546)). Mutable fields are marked *.
+    int size = init_size;                // * s
+    int bl = init_bl;                    // * long bankruptcy price
+    int bs = init_bs;                    // * short bankruptcy price
+    int entryPrice = init_entryPrice;    // * E, last consented price
+    pubkey longKey = init_longKey;       // * long owner
+    pubkey shortKey = init_shortKey;     // * short owner
+    int expiry = init_expiry;            // * X, the end of the lease
+    int longAsk = init_longAsk;          // * long listing (0 = unlisted)
+    int longMin = init_longMin;          // *
+    int longTip = init_longTip;          // *
+    int shortBid = init_shortBid;        // * short listing (0 = unlisted)
+    int shortMin = init_shortMin;        // *
+    int shortTip = init_shortTip;        // *
+    // The makers (KpfPairO, review 7): who created this UTXO, one field per creating role, each the maker commitment
+    // of that input (blake2b of its outpoint, `me`) or zero; written by the transaction that creates a fresh part and
+    // zero in every output any other entry writes. Host and donor are kept in the layout and always zero here.
+    byte[32] mkLong = init_mkLong;       // * the long-side entrant: a long order (fill, take)
+    byte[32] mkShort = init_mkShort;     // * the short-side entrant: a short order (fill, take)
+    byte[32] mkParent = init_mkParent;   // * the pair whose part this is (transfer, assign, the pair side of a take)
+    byte[32] mkHost = init_mkHost;       // * unused (zero)
+    byte[32] mkDonor = init_mkDonor;     // * unused (zero)
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_LONG = 1;
+    int constant SIDE_SHORT = 2;
+    int constant KIND_CLOSE = 1;
+    int constant KIND_LIQ = 2;
+    int constant KIND_TRIM = 3;
+    int constant BPS = 10000;
+    int constant PLAIN_DUST = 2000000;
+    int constant PART_FLOOR = 20000000;
+    int constant INT_MAX = 9223372036854775807;
+    int constant CSV_LIMIT = 4294967296;
+    int constant LOCK_TIME_THRESHOLD = 500000000000;
+    int constant SCALE_MAX = 1000000000;
+    int constant PRICE_CAP = 100000000000000;
+    int constant MMR_CAP = 5000;
+    int constant FEE_MIN_MAX = 1000000000000;
+    int constant TERM_MAX = 77760000;
+    int constant TERM_MIN = 1200;
+    int constant WAIT_MAX = 864000;
+    int constant MAX_OUTPUTS = 8;
+    // The tolerance g of a market is at least this many times its committee's spread (review C2, C2-F1).
+    int constant SPREAD_MARGIN = 4;
+    // KpfEpochTable's state length, and KpfEpochTable.attest's signature script: market (33 bytes with its push), t0, p and
+    // bits (9 each), the prices (0x4c 0x78 + 120), the signatures (0x4d 0xc0 0x03 + 960), the 4-byte dispatch tag
+    // (5), then the redeem script (OP_PUSHDATA2, 3 bytes of header).
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant ATTEST_T0_AT = 33;
+    int constant ATTEST_P_AT = 42;
+    int constant ATTEST_BITS_AT = 51;
+    int constant ATTEST_PRICES_AT = 60;
+    int constant ATTEST_SIGS_AT = 182;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+    // Redeem offsets (the state starts at byte 1). The market body hashed into the id is [34..217).
+    int constant BODY_AT = 34;
+    int constant BLOCK_END = 217;
+    // Position: size payload [218..226), bl [227..235), bs [236..244); the entry push 244; the keys [253..319); the
+    // lease push 319; the listings [328..382); the makers [382..547); the state ends at 547.
+    int constant SIZE_AT = 218;
+    int constant BL_AT = 227;
+    int constant BS_AT = 236;
+    int constant ENTRY_AT = 244;
+    int constant EXPIRY_AT = 319;
+    int constant LISTS_AT = 328;
+    int constant LISTS_END = 382;
+    int constant LIST_LEN = 27;
+    int constant STATE_END = 547;
+    byte[27] constant NO_LIST = byte[27](0x080000000000000000080000000000000000080000000000000000);
+
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // As KpfPair.checkPair.
+    function checkPair() {
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(carrier >= 0);
+        require(size > 0);
+        require(size / scale <= (INT_MAX - carrier) / priceMax - 1);
+        require(bl >= 0);
+        require(bl < bs);
+        require(bs <= priceMax);
+    }
+
+    function floorOf(int b0, int b1) : int {
+        return quoteOf(size, b1 - b0, 0) + carrier;
+    }
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    // Every maker zero: what every output gets that is not a fresh part made in this transaction.
+    function noMakers() : byte[] {
+        byte[] z = p33(zero32());
+        return z + z + z + z + z;
+    }
+
+    // BEGIN maker
+    // This input's maker commitment (KpfPairO, review 7): blake2b of its outpoint, the transaction id and then the
+    // index as 8 bytes; unique to this input.
+    function me() : byte[32] {
+        int self = this.activeInputIndex;
+        return blake2b(byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[8]));
+    }
+    // END maker
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // Every party entry needs this UTXO to be quietDaa old (CSV), so a party cannot respend its pair on every block
+    // to outrun a claim that names this outpoint.
+    function quiet() {
+        require(this.ageDaa >= quietDaa);
+    }
+
+    // P2SH of this script with bl, bs and the two listing windows replaced and every maker zero.
+    function contSpk(byte[] rs, int newBl, int newBs, byte[] lists) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, BL_AT) + byte[](newBl as byte[8]) + rs.slice(BL_AT + 8, BS_AT) + byte[](newBs as byte[8])
+                + rs.slice(BS_AT + 8, LISTS_AT) + lists + noMakers() + rs.slice(STATE_END, this.bytecodeSize)
+        ));
+    }
+
+    // The redeem script of a KpfPairC with this script's template, market and lease and the given position: size,
+    // range, entry, keys, the listings (54 bytes) and the makers (165).
+    function pairRs(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] lists, byte[] mk) : byte[] {
+        return rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + byte[](0x08) + byte[](b0 as byte[8]) + byte[](0x08)
+            + byte[](b1 as byte[8]) + byte[](0x08) + byte[](e as byte[8]) + byte[](0x20) + byte[](lk) + byte[](0x20)
+            + byte[](sk) + rs.slice(EXPIRY_AT, LISTS_AT) + lists + mk + rs.slice(STATE_END, this.bytecodeSize);
+    }
+
+    function pairSpk(byte[] rs, int sz, int b0, int b1, int e, byte[32] lk, byte[32] sk, byte[] lists, byte[] mk) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(pairRs(rs, sz, b0, b1, e, lk, sk, lists, mk)));
+    }
+
+    // The P2SH hash of a pair state propose fixes for KpfPendingC: this lease, the entry kept, every maker zero.
+    function pairHash(byte[] rs, int sz, int b0, int b1, byte[32] lk, byte[32] sk, byte[] lists) : byte[32] {
+        return blake2b(pairRs(rs, sz, b0, b1, entryPrice, lk, sk, lists, noMakers()));
+    }
+
+    // P2SH of the remainder: this script with the size replaced and every maker zero.
+    function restSpk(byte[] rs, int sz) : byte[] {
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, SIZE_AT) + byte[](sz as byte[8]) + rs.slice(SIZE_AT + 8, LISTS_END) + noMakers()
+                + rs.slice(STATE_END, this.bytecodeSize)
+        ));
+    }
+
+    function win(int a, int m, int t) : byte[] {
+        return byte[](0x08) + byte[](a as byte[8]) + byte[](0x08) + byte[](m as byte[8]) + byte[](0x08) + byte[](t as byte[8]);
+    }
+
+    // KpfPairO, review 11 (R11-F7): a split gives each side with value at the entry at least PART_FLOOR of it in each
+    // piece, so no hand-over, close or claim splits a passive side into lineages whose value the payout floor takes.
+    function floorOk(int m, int r) {
+        require(r == 0 || quoteOf(m, r, 0) >= PART_FLOOR);
+    }
+
+    function checkPart(int n) {
+        require(n > 0);
+        require(n <= size);
+        require(n >= minSize);
+        int rest = size - n;
+        require(rest == 0 || rest >= minSize);
+        if (rest > 0) {
+            int e = entryPrice;
+            if (e < bl) { e = bl; }
+            if (e > bs) { e = bs; }
+            int m = n;
+            if (rest < m) { m = rest; }
+            floorOk(m, e - bl);
+            floorOk(m, bs - e);
+        }
+    }
+
+    function owed(int n, int r, int t) : int {
+        int rr = r;
+        if (rr < 0) { rr = 0; }
+        int tt = t;
+        if (tt > rr) { tt = rr; }
+        if (tt < 0) { tt = 0; }
+        return quoteOf(n, rr, 0) - quoteOf(n, tt, 0);
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    // The part a party enters at output c, under a fresh covenant id (`fresh`) and naming this input as its maker in
+    // the role partSpk fixes (`me`), and the remainder (n < s) as the only output of this pair's id, as
+    // KpfPairO.partAndRest.
+    function partAndRest(byte[32] selfId, byte[] rs, int n, int c, byte[] partSpk, int partRange, int keep) {
+        fresh(c);
+        require(tx.outputs[c].scriptPubKey == partSpk);
+        require(tx.outputs[c].value >= partRange + carrier);
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[c].value >= partRange + keep);
+        } else {
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+    }
+
+    // BEGIN fresh id
+    // The output `out` starts a new lineage (KpfPairO, review 6): its covenant id is not zero and no input carries it,
+    // so it is a genesis, and no other output carries it (the scan, at most MAX_OUTPUTS outputs). After this
+    // transaction the id has exactly one UTXO, the one the caller writes.
+    function fresh(int out) : byte[32] {
+        byte[32] id = OpOutputCovenantId(out);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 0);
+        require(tx.outputs.length <= MAX_OUTPUTS);
+        for (j, 0, tx.outputs.length, MAX_OUTPUTS) {
+            if (j != out) {
+                require(OpOutputCovenantId(j) != id);
+            }
+        }
+        return id;
+    }
+    // END fresh id
+
+    // BEGIN epoch table proof
+    // Input u is an epoch table of this market's committee spent by attest for this market and the time t0: it carries the
+    // committee id, it is the P2SH of an instance of the epoch table template, and its signature script is attest's, checked
+    // push by push from its first byte (a signature script is push-only and its last push is the redeem script whose
+    // hash the input's P2SH fixes): the market id, t0, p and bits as fixed-width pushes, the two blobs with their
+    // fixed push headers, the dispatch tag, the redeem script. KpfEpochTable.attest checks the rest: the window, the
+    // signatures, the spread, the quorum, and that the present is at least t0.
+    // DESIGN: review C2 (C2-F1): whoever builds a claim chooses the price within the committee's spread of what a quorum
+    // signed, and g is what absorbs that choice. The pair did not read the spread: on a committee with a spread of 10 %
+    // and a market with g of 2 %, a keeper attested a price 9 % below what every member signed and forfeited a healthy
+    // side. The epoch table's spread (the last field of its state) must now leave g a margin: SPREAD_MARGIN x spread <= g.
+    function priced(int u, int t0) {
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        require(OpInputCovenantId(u) == committeeId);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        int spread = int(byte[8](trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN - 8, EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN)));
+        require(spread >= 0);
+        require(spread * SPREAD_MARGIN <= gBps);
+        require(OpTxInputScriptSigSubstr(u, 0, ATTEST_T0_AT) == p33(market));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_T0_AT, ATTEST_P_AT) == i9(t0));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_P_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_BITS_AT, ATTEST_BITS_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_PRICES_AT, ATTEST_PRICES_AT + 2) == byte[](0x4c78));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_SIGS_AT, ATTEST_SIGS_AT + 3) == byte[](0x4dc003));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+    }
+    // END epoch table proof
+
+    // BEGIN committee market bounds
+    function checkMarket() {
+        require(blake3(ownRs().slice(BODY_AT, BLOCK_END)) == market);
+        require(committeeId != zero32());
+        require(termDaa >= TERM_MIN);
+        require(termDaa <= TERM_MAX);
+        require(scale > 0);
+        require(scale <= SCALE_MAX);
+        require(priceMax > 0);
+        require(priceMax <= PRICE_CAP);
+        require(mmrBps >= 0);
+        require(mmrBps < MMR_CAP);
+        require(gBps > 0);
+        require(gBps < BPS);
+        require(liqFeeBps >= 0);
+        require(liqFeeBps <= BPS);
+        require(keeperFeeMin >= 0);
+        require(keeperFeeMin <= FEE_MIN_MAX);
+        require(minSize > 0);
+        require(carrier >= 0);
+        require(idleDaa >= 0);
+        require(idleDaa <= TERM_MAX);
+        require(graceDaa >= 0);
+        require(graceDaa <= WAIT_MAX);
+        require(lateDaa > 0);
+        require(lateDaa <= WAIT_MAX);
+        require(quietDaa >= 0);
+        require(quietDaa <= WAIT_MAX);
+    }
+    // END committee market bounds
+
+    // P1 amend (as KpfPair), after quietDaa.
+    entry amend(sig s, int side, int ask, int minPart, int tipRate) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        quiet();
+        require(ask >= 0);
+        require(ask <= priceMax);
+        require(minPart >= 0);
+        require(tipRate >= 0);
+        byte[] rs = ownRs();
+        byte[] w = win(ask, minPart, tipRate);
+        byte[] lists = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN) + w;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            lists = w + rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+        }
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, bl, bs, lists));
+        require(tx.outputs[c].value >= tx.inputs[self].value);
+        require(tx.outputs[c].value >= floorOf(bl, bs));
+    }
+
+    // P2 add margin (as KpfPair), after quietDaa.
+    entry addMargin(sig s, int side, int delta) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        quiet();
+        require(delta > 0);
+        int nbl = bl;
+        int nbs = bs;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            nbl = bl - delta;
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+            nbs = bs + delta;
+        }
+        require(nbl >= 0);
+        require(nbl < nbs);
+        require(nbs <= priceMax);
+        byte[] rs = ownRs();
+        require(OpCovOutputCount(selfId) == 1);
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == contSpk(rs, nbl, nbs, rs.slice(LISTS_AT, LISTS_END)));
+        require(tx.outputs[c].value - tx.inputs[self].value >= quoteOf(size, delta, scale - 1));
+        require(tx.outputs[c].value >= floorOf(nbl, nbs));
+    }
+
+    // P3 transfer (as KpfPair), after quietDaa: a listed side changes hands at x within its listing.
+    entry transfer(int side, int n, int x, int nb, byte[32] ek, byte[32] et, int c) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(x >= 0);
+        require(x <= priceMax);
+        int pay = 0;
+        if (side == SIDE_LONG) {
+            require(longAsk > 0);
+            require(x >= longAsk);
+            require(n >= longMin || n == size);
+            pay = owed(n, x - bl, longTip);
+        } else {
+            require(side == SIDE_SHORT);
+            require(shortBid > 0);
+            require(x <= shortBid);
+            require(n >= shortMin || n == size);
+            pay = owed(n, bs - x, shortTip);
+        }
+        handOver(side, n, nb, ek, et, c, pay, x);
+    }
+
+    // Assign: the owner of `side` signs its side of the part n over to ek at x (SIGHASH_ALL: every output, so its
+    // own payout and the entrant's part). No listing and no tip: the two agreed off chain, and the signature is the
+    // leaver's consent to x. The stayer is protected as in every hand-over: the entrant posts at least the leaver's
+    // margin (its bound no nearer than the leaver's) and is healthy at x.
+    entry assign(sig s, int side, int n, int x, int nb, byte[32] ek, int c) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(x >= 0);
+        require(x <= priceMax);
+        int pay = 0;
+        if (side == SIDE_LONG) {
+            signedBy(s, longKey);
+            pay = owed(n, x - bl, 0);
+        } else {
+            require(side == SIDE_SHORT);
+            signedBy(s, shortKey);
+            pay = owed(n, bs - x, 0);
+        }
+        handOver(side, n, nb, ek, zero32(), c, pay, x);
+    }
+
+    function handOver(int side, int n, int nb, byte[32] ek, byte[32] et, int c, int pay, int hp) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        byte[] rs = ownRs();
+        byte[32] lk = byte[32](longKey);
+        byte[32] sk = byte[32](shortKey);
+        byte[] lw = rs.slice(LISTS_AT, LISTS_AT + LIST_LEN);
+        byte[] sw = rs.slice(LISTS_AT + LIST_LEN, LISTS_END);
+        byte[32] z = zero32();
+        byte[32] tl = z;
+        byte[32] ts = z;
+        int b0 = bl;
+        int b1 = bs;
+        pubkey payKey = longKey;
+        if (side == SIDE_LONG) {
+            require(nb >= 0);
+            require(nb <= bl);
+            require(hp * (BPS - mmrBps) >= nb * BPS);
+            b0 = nb;
+            lk = ek;
+            lw = byte[](NO_LIST);
+            tl = et;
+        } else {
+            require(nb >= bs);
+            require(nb <= priceMax);
+            require(nb * BPS >= hp * (BPS + mmrBps));
+            b1 = nb;
+            sk = ek;
+            sw = byte[](NO_LIST);
+            ts = et;
+            payKey = shortKey;
+        }
+        int p = pay;
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (p < PLAIN_DUST) {
+            keep = keep + p;
+            p = 0;
+        }
+        payTo(self, payKey, p);
+        // The makers: the entrant's side names et (the order of a take, which checks it there; zero for a signing taker),
+        // the parent is this input, host and donor are zero.
+        byte[] mk = p33(tl) + p33(ts) + p33(me()) + p33(z) + p33(z);
+        partAndRest(selfId, rs, n, c, pairSpk(rs, n, b0, b1, entryPrice, lk, sk, lw + sw, mk), quoteOf(n, b1 - b0, 0), keep);
+    }
+
+    // P4 mutual close (as KpfPair), after quietDaa.
+    entry mutualClose(int n, int x) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkPart(n);
+        quiet();
+        require(longAsk > 0);
+        require(shortBid > 0);
+        require(x >= longAsk);
+        require(x <= shortBid);
+        require(x <= priceMax);
+        require(n >= longMin || n == size);
+        require(n >= shortMin || n == size);
+        int lp = owed(n, x - bl, longTip);
+        int sp = owed(n, bs - x, shortTip);
+        int keep = tx.inputs[self].value - quoteOf(n, bs - bl, 0);
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            sp = sp + keep;
+            if (lp < PLAIN_DUST) {
+                sp = sp + lp;
+                lp = 0;
+            }
+            if (sp < PLAIN_DUST) {
+                lp = lp + sp;
+                sp = 0;
+            }
+            if (lp < PLAIN_DUST) { lp = 0; }
+        } else {
+            if (lp < PLAIN_DUST) {
+                keep = keep + lp;
+                lp = 0;
+            }
+            if (sp < PLAIN_DUST) {
+                keep = keep + sp;
+                sp = 0;
+            }
+            require(OpCovOutputCount(selfId) == 1);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            byte[] rs = ownRs();
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= keep);
+        }
+        payTo(self, longKey, lp);
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, shortKey, sp);
+        }
+    }
+
+    // Lapse settle (P8 of a pair nobody kept alive). Anyone, idleDaa after the lease by the calendar (tx.daa >= expiry
+    // + idleDaa, CLTV, the expiry read from this state): the pair ends at the entry price clamped to [bl, bs], the long
+    // at output i, the short the rest of this UTXO's value at M - 1 - i (as KpfPair.idleSettle). No party can postpone
+    // it but by an attested signed price (keepAlive): every other entry copies the lease.
+    entry lapseSettle() {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        int end = expiry + idleDaa;
+        require(end >= 0);
+        require(end < LOCK_TIME_THRESHOLD);
+        require(tx.daa >= end);
+        require(OpCovOutputCount(selfId) == 0);
+        int e = entryPrice;
+        if (e < bl) { e = bl; }
+        if (e > bs) { e = bs; }
+        int v = tx.inputs[self].value;
+        int lp = quoteOf(size, e - bl, 0);
+        int sp = v - lp;
+        if (lp < PLAIN_DUST) {
+            lp = 0;
+            sp = v;
+        } else {
+            if (sp < PLAIN_DUST) {
+                lp = v;
+                sp = 0;
+            }
+        }
+        payTo(self, longKey, lp);
+        if (sp > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, shortKey, sp);
+        }
+    }
+
+    // P9 cooperative close (as KpfPair): both owners sign every output; the pair ends.
+    entry coopClose(sig sl, sig ss) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        signedBy(sl, longKey);
+        signedBy(ss, shortKey);
+        require(OpCovOutputCount(selfId) == 0);
+    }
+
+    // Keep alive: the epoch table at input u attests a signed price of this market at t0, so a quorum of the committee signed at t0
+    // and the lease becomes t0 + termDaa. It must grow by at least a quarter of a term. Nothing else changes (the
+    // listings are kept, the makers are zero) and no value leaves.
+    entry keepAlive(int u, int t0) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 1);
+        checkPair();
+        checkMarket();
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        priced(u, t0);
+        int x2 = t0 + termDaa;
+        require(x2 >= expiry + termDaa / 4);
+        byte[] rs = ownRs();
+        int c = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, EXPIRY_AT) + i9(x2)
+            + rs.slice(EXPIRY_AT + 9, LISTS_END) + noMakers() + rs.slice(STATE_END, this.bytecodeSize))));
+        require(tx.outputs[c].value >= tx.inputs[self].value);
+    }
+
+    function feeAt(int n, int p) : int {
+        int f = quoteOf(n, p * liqFeeBps / BPS, 0);
+        if (f < keeperFeeMin) { f = keeperFeeMin; }
+        return f;
+    }
+
+    // Propose: the part n moves into a KpfPendingC with the claim (kind, side, the price the epoch table at input u
+    // attests for the time t0: `a`, counted as p = min(a, priceMax)), the remainder continues this pair as on every split. Nothing settles here; KpfPendingC
+    // settles the claim if it landed within lateDaa of t0 and restores the part otherwise.
+    //   kind 1 close: the owner of `side` signs; the pair UTXO is quietDaa old; the closer is not below its maintenance
+    //          at the close price c, p moved by g against it (a long: c = floor(p (10^4 - g) / 10^4), c (10^4 - m) >=
+    //          bl 10^4; a short: c = ceil(p (10^4 + g) / 10^4), bs 10^4 >= c (10^4 + m)), so a close never escapes a due
+    //          liquidation; at settlement the closer is paid at c.
+    //   kind 2 liquidation: anyone builds it and names pk, who receives the fee; the loser `side` is liquidatable at p
+    //          only with the tolerance g inside the trigger: a long iff ceil(p (10^4 + g) / 10^4) (10^4 - mmrBps) < bl
+    //          10^4, a short iff bs 10^4 < floor(p (10^4 - g) / 10^4) (10^4 + mmrBps); and bl (10^4 + m) < bs (10^4 -
+    //          m); the two keys differ; the fee, the cure bound (no claim within g of p reopens a cured part; no cure
+    //          when the short's cured bound would exceed priceMax) and the forfeit bound fb as KpfPairO.
+    //   kind 3 trim: the owner of `side` signs; the pair UTXO is quietDaa old; the whole pair (n = s). The side's bound
+    //          moves inward to fb and what that frees, q(s, bs - bl) - q(s, new range), is paid to its owner at
+    //          settlement. The side is not below its maintenance at p moved by g against it, measured from fb (the rule
+    //          of a close, and the bound a cure at p would give); the trimmed range is still wider than both maintenance
+    //          bands; at least PLAIN_DUST leaves. The trimmed state keeps the entry, the lease and both listings.
+    // DESIGN: cross margin (docs/DESIGN-COMMITTEE.md 3a). A side's value is q(s, c(p) - its bound): the margin it posted
+    // and what the price has earned it are one number, and nothing took it out but leaving. A trim takes out what is
+    // above maintenance at an attested price, and the same owner adds it to another pair (addMargin): margin moves
+    // between positions without closing one. The other party's payoff at every price inside the new range is unchanged;
+    // what it loses is the range beyond fb, which it is paid in full if the price gets there (the liquidation of a
+    // side at maintenance). A party could already end the pair at the same price (kind 1), which takes more from the
+    // other. Time is what a trim must not choose: a signed price signed when the price was better would free margin the side
+    // no longer has, so a trim is a claim like a close and is void unless it lands within lateDaa of its time.
+    // Every pair state the part may become (restore, cure, forfeit) is fixed here with this lease, the entry kept and
+    // every maker 0; cure and forfeit unlist both sides, restore keeps the listings. The pending part is written at output k under a fresh covenant id and
+    // names this input as its parent. The proposer funds the new part's carrier when n < s (the refund).
+    entry propose(int n, int kind, int side, int a, int t0, int u, byte[] s, int fb, int k, byte[32] pk, byte[] pPre, byte[] pSuf) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        checkPair();
+        checkMarket();
+        checkPart(n);
+        require(t0 >= 0);
+        require(t0 < LOCK_TIME_THRESHOLD);
+        require(a >= 0);
+        priced(u, t0);
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_BITS_AT) == i9(a));
+        // Review C1 (C1-F3): a claim whose signed price is more than lateDaa older than this UTXO is certainly void (it lands no
+        // earlier than this UTXO was accepted), so it is refused here: a void claim's restore is a new UTXO, and the next
+        // claim on it needs a signed price of the present. Nobody chains claims on one stale signed price.
+        int born = OpTxInputDaaScore(self);
+        require(born >= 0);
+        require(t0 + lateDaa >= born);
+        // Review C1 (C1-F4): a price above priceMax counts as priceMax, so a feed beyond the market's range still
+        // liquidates a short and still closes a long.
+        int p = a;
+        if (p > priceMax) { p = priceMax; }
+        byte[32] lk = byte[32](longKey);
+        byte[32] sk = byte[32](shortKey);
+        byte[] rs = ownRs();
+        byte[] unlisted = byte[](NO_LIST) + byte[](NO_LIST);
+        int part = quoteOf(n, bs - bl, 0);
+        byte[32] ch = zero32();
+        byte[32] fh = ch;
+        byte[32] who = pk;
+        int cb = 0;
+        int fee = 0;
+        if (kind != KIND_LIQ) {
+            // A close (kind 1) or a trim (kind 3): the owner of `side` signs, after quietDaa, and is not below its
+            // maintenance at p moved by g against it, measured from the bound it will have: its own for a close, the
+            // new bound fb for a trim.
+            quiet();
+            int hl = bl;
+            int hs = bs;
+            if (kind != KIND_CLOSE) {
+                require(kind == KIND_TRIM);
+                require(n == size);
+                cb = fb;
+                if (side == SIDE_LONG) {
+                    require(fb > bl);
+                    hl = fb;
+                } else {
+                    require(fb < bs);
+                    hs = fb;
+                }
+                // The trimmed range is still wider than both maintenance bands (either side can still be liquidated),
+                // and what leaves is worth an output.
+                require(hl * (BPS + mmrBps) < hs * (BPS - mmrBps));
+                require(part - quoteOf(n, hs - hl, 0) >= PLAIN_DUST);
+                ch = pairHash(rs, n, hl, hs, lk, sk, rs.slice(LISTS_AT, LISTS_END));
+            }
+            if (side == SIDE_LONG) {
+                signedBy(sig(byte[65](s)), longKey);
+                require((p * (BPS - gBps) / BPS) * (BPS - mmrBps) >= hl * BPS);
+                who = lk;
+            } else {
+                require(side == SIDE_SHORT);
+                signedBy(sig(byte[65](s)), shortKey);
+                require(hs * BPS >= ((p * (BPS + gBps) + BPS - 1) / BPS) * (BPS + mmrBps));
+                who = sk;
+            }
+        } else {
+            require(kind == KIND_LIQ);
+            require(lk != sk);
+            require(bl * (BPS + mmrBps) < bs * (BPS - mmrBps));
+            int t = 0;
+            int u0 = bl;
+            int u1 = bs;
+            int f0 = bl;
+            int f1 = bs;
+            byte[32] wk = sk;
+            int pg = 0;
+            if (side == SIDE_LONG) {
+                require(((p * (BPS + gBps) + BPS - 1) / BPS) * (BPS - mmrBps) < bl * BPS);
+                t = bl * BPS / (BPS - mmrBps) - bl;
+                pg = (p * (BPS - gBps) + BPS - 1) / BPS;
+                cb = pg * (BPS - mmrBps) / BPS;
+                u0 = cb;
+                f0 = fb;
+            } else {
+                require(side == SIDE_SHORT);
+                require(bs * BPS < (p * (BPS - gBps) / BPS) * (BPS + mmrBps));
+                t = bs - (bs * BPS + BPS + mmrBps - 1) / (BPS + mmrBps);
+                pg = p * (BPS + gBps) / BPS;
+                cb = (pg * (BPS + mmrBps) + BPS - 1) / BPS;
+                u1 = cb;
+                f1 = fb;
+                wk = lk;
+            }
+            fee = feeAt(n, p);
+            int slice = quoteOf(n, t, 0);
+            if (fee > slice) { fee = slice; }
+            require(f0 >= bl);
+            require(f1 <= bs);
+            require(f0 < f1);
+            require(quoteOf(n, f1 - f0, 0) + fee <= part);
+            require(f1 - f0 == bs - bl || quoteOf(n, f1 - f0 + 1, 0) + fee > part);
+            fh = pairHash(rs, n, f0, f1, wk, wk, unlisted);
+            if (u1 <= priceMax) {
+                ch = pairHash(rs, n, u0, u1, lk, sk, unlisted);
+            } else {
+                cb = 0;
+            }
+        }
+        // The restore state keeps the listings (review C1, C1-F3: a void claim must not unlist a pair).
+        byte[32] rh = pairHash(rs, n, bl, bs, lk, sk, rs.slice(LISTS_AT, LISTS_END));
+        int refund = 0;
+        if (n < size) { refund = carrier; }
+        byte[] st = rs.slice(1, BLOCK_END) + i9(kind) + i9(side) + i9(n) + i9(bl) + i9(bs) + i9(p) + i9(t0) + i9(cb) + i9(fee)
+            + i9(refund) + p33(who) + rs.slice(ENTRY_AT, LISTS_END) + p33(rh) + p33(ch) + p33(fh) + p33(me());
+        require(blake3(byte[](pPre.length as byte[8]) + pPre + byte[](pSuf.length as byte[8]) + pSuf) == PENDING_TPL);
+        byte[] pend = byte[](new ScriptPubKeyP2SHFromRedeemScript(pPre + st + pSuf));
+        int v = tx.inputs[self].value;
+        fresh(k);
+        require(tx.outputs[k].scriptPubKey == pend);
+        if (n == size) {
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[k].value >= v);
+        } else {
+            require(OpCovOutputCount(selfId) == 1);
+            require(tx.outputs[k].value >= part + refund);
+            int c1 = OpCovOutputIdx(selfId, 0);
+            int rest = size - n;
+            require(tx.outputs[c1].scriptPubKey == restSpk(rs, rest));
+            require(tx.outputs[c1].value >= quoteOf(rest, bs - bl, 0) + carrier);
+            require(tx.outputs[c1].value >= v - part);
+        }
+    }
+}

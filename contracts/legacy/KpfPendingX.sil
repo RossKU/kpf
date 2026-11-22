@@ -1,0 +1,146 @@
+pragma silverscript ^0.1.0;
+
+// KpfPendingX: a cross-margin account (KpfCrossC) against which a claim at attested prices is pending
+// (docs/DESIGN-COMMITTEE.md 3b). KpfCrossC.propose writes it under a fresh covenant id and names itself as its maker,
+// after reading the prices from epoch tables of the legs' committees in the same transaction, and fixes every amount: this
+// script knows nothing of legs or prices. What is still open is time, as for KpfPendingC: a claim is valid iff this
+// UTXO's own DAA score P is within lateDaa of the time, P - t0 <= lateDaa.
+//
+// Entries:
+//   cure(s)     kind 2 only, the loser's signature, any time before finalize: the account is written again with the
+//               loser's margin grown by cureAdd (cureHash), holding this UTXO's value and cureAdd more
+//   finalize()  anyone. Valid: kind 1 at once: the closer `side` is paid `amount`, the other party the rest of this
+//               UTXO's value (a payout below dust goes to the other party). kind 2 once this UTXO is graceDaa old (the
+//               loser's time to cure): the proposer is paid the fee `amount`, the winner the rest. Void: the account is
+//               restored with this UTXO's whole value (restoreHash), at once.
+// A is paid at output i (this input's index), B at M - 1 - i; a liquidation pays the proposer at i and the winner at
+// M - 1 - i.
+contract KpfPendingX(
+    int init_lateDaa,
+    int init_graceDaa,
+    int init_kind,
+    int init_side,
+    int init_t0,
+    int init_amount,
+    int init_cureAdd,
+    pubkey init_aKey,
+    pubkey init_bKey,
+    pubkey init_proposerKey,
+    byte[32] init_restoreHash,
+    byte[32] init_cureHash,
+    byte[32] init_mkParent,
+    byte[405] init_account
+) {
+    int lateDaa = init_lateDaa;
+    int graceDaa = init_graceDaa;
+    int kind = init_kind;                // 1 close, 2 liquidation
+    int side = init_side;                // 1 A, 2 B: the closer (kind 1) or the loser (kind 2)
+    int t0 = init_t0;                    // the signed price's DAA
+    int amount = init_amount;            // kind 1: what the closer is paid; kind 2: the proposer's fee
+    int cureAdd = init_cureAdd;          // kind 2: what a cure adds to the loser's margin
+    pubkey aKey = init_aKey;
+    pubkey bKey = init_bKey;
+    pubkey proposerKey = init_proposerKey; // kind 2: who built the claim; kind 1: the closer
+    byte[32] restoreHash = init_restoreHash;
+    byte[32] cureHash = init_cureHash;
+    // The outpoint commitment of the account input whose propose wrote this (KpfCrossC.me), so two accounts that
+    // would write one pending state never both accept one output.
+    byte[32] mkParent = init_mkParent;
+    // The account's state when the claim was proposed (KpfCrossC's state, byte for byte): not read here. Whoever
+    // finalizes or cures writes the restored or the cured account from it; restoreHash and cureHash are what bind.
+    byte[405] account = init_account;
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_A = 1;
+    int constant KIND_CLOSE = 1;
+    int constant KIND_LIQ = 2;
+    int constant PLAIN_DUST = 2000000;
+
+    function signedBy(sig s, pubkey k) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, k));
+    }
+
+    function payTo(int j, pubkey k, int v) {
+        if (v > 0) {
+            require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(k)));
+            require(tx.outputs[j].value >= v);
+        }
+    }
+
+    // The single output of this id: the P2SH of the hash h, holding at least v.
+    function only(byte[32] h, int v) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovOutputCount(selfId) == 1);
+        int o = OpCovOutputIdx(selfId, 0);
+        require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SH(h)));
+        require(tx.outputs[o].value >= v);
+    }
+
+    // The two payouts of a settlement: x at output i, y at M - 1 - i.
+    function pays(pubkey kx, int x, pubkey ky, int y) {
+        int self = this.activeInputIndex;
+        require(OpCovOutputCount(OpInputCovenantId(self)) == 0);
+        payTo(self, kx, x);
+        if (y > 0) {
+            int j = tx.outputs.length - 1 - self;
+            require(j >= tx.inputs.length);
+            payTo(j, ky, y);
+        }
+    }
+
+    // Cure: kind 2 only. The loser signs; the account is written again with its margin grown by cureAdd.
+    entry cure(sig s) {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        require(kind == KIND_LIQ);
+        require(cureAdd > 0);
+        pubkey k = bKey;
+        if (side == SIDE_A) { k = aKey; }
+        signedBy(s, k);
+        only(cureHash, tx.inputs[self].value + cureAdd);
+    }
+
+    // Finalize: anyone. P is this UTXO's own DAA score; the claim is valid iff it landed within lateDaa of its time.
+    entry finalize() {
+        int self = this.activeInputIndex;
+        require(OpCovInputCount(OpInputCovenantId(self)) == 1);
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        int v = tx.inputs[self].value;
+        if (p - t0 <= lateDaa) {
+            if (kind == KIND_CLOSE) {
+                int mine = amount;
+                if (mine > v) { mine = v; }
+                int other = v - mine;
+                if (other < PLAIN_DUST) {
+                    mine = v;
+                    other = 0;
+                } else {
+                    if (mine < PLAIN_DUST) {
+                        mine = 0;
+                        other = v;
+                    }
+                }
+                if (side == SIDE_A) {
+                    pays(aKey, mine, bKey, other);
+                } else {
+                    pays(aKey, other, bKey, mine);
+                }
+            } else {
+                require(kind == KIND_LIQ);
+                require(this.ageDaa >= graceDaa);
+                int fee = amount;
+                if (fee > v) { fee = v; }
+                if (fee < PLAIN_DUST) { fee = 0; }
+                pubkey winner = aKey;
+                if (side == SIDE_A) { winner = bKey; }
+                pays(proposerKey, fee, winner, v - fee);
+            }
+        } else {
+            only(restoreHash, v);
+        }
+    }
+}

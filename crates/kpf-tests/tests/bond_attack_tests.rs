@@ -61,7 +61,7 @@ fn constant(s: &str, name: &str) -> Option<String> {
 /// stand-ins. So no contract can relax or tighten a bound alone (the rule of review 5, F2).
 #[test]
 fn holds_the_bond_bounds_and_the_bind_proof_are_one_text() {
-    let (bond, pair, open, kopen) = (src("KpfBond.sil"), src("stubs/KpfPairStub.sil"), src("stubs/KpfOpenStub.sil"), src("KpfOpen.sil"));
+    let (bond, pair, open, kopen) = (src("legacy/KpfBond.sil"), src("legacy/stubs/KpfPairStub.sil"), src("legacy/stubs/KpfOpenStub.sil"), src("legacy/KpfOpen.sil"));
     let b = block(&bond, "// BEGIN bond bounds", "// END bond bounds");
     assert_eq!(b, block(&pair, "// BEGIN bond bounds", "// END bond bounds"));
     assert_eq!(b, block(&open, "// BEGIN bond bounds", "// END bond bounds"));
@@ -149,8 +149,8 @@ fn holds_no_market_runs_above_rho_five() {
 /// refuses its bind (template hash), so a look-alike bond cannot count cover for a pair, however it is written.
 #[test]
 fn holds_a_look_alike_bond_template_cannot_bind_a_pair() {
-    let fake_src = src("KpfBond.sil").replace("require(ringSum(r2b) <= capacity(v));", "require(ringSum(r2b) >= 0);");
-    assert_ne!(fake_src, src("KpfBond.sil"));
+    let fake_src = src("legacy/KpfBond.sil").replace("require(ringSum(r2b) <= capacity(v));", "require(ringSum(r2b) >= 0);");
+    assert_ne!(fake_src, src("legacy/KpfBond.sil"));
     let s0 = slot();
     let fake = silverscript_lang::compiler::compile_to_sil_abi_artifact_with_options(&fake_src, &s0.b.ctor(), silverscript_lang::compiler::CompileOptions::default()).expect("fake");
     let ft = kpf_protocol::artifacts::Template::of("Fake", &fake);

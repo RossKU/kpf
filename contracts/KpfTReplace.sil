@@ -1,0 +1,276 @@
+pragma silverscript ^0.1.0;
+
+// KpfTReplace: two orders matched into a position, as a script under the library's id. A user leaves the position by
+// an order of its own, and the owner of the other order takes its place: one transaction where a match (KpfTMatch)
+// and a novation (KpfTNovate) were two, and no position of the leaver and the newcomer is ever written.
+//
+// The position P is A long against B, np units from the entry ep. One of the two (the leaver, `side`) has an order
+// the other way: a short order if it is A, a long one if it is B. The other order is anybody's (the newcomer's). The
+// two orders match as in KpfTMatch: n units (of what both orders and the position have) at a price x inside both
+// limits. For those n units:
+//   - the leaver is paid its share of margin in P, its order's share of margin, and d, what the price moved its way
+//     since ep (quote(n, x) - quote(n, ep) for a long, the opposite for a short; negative when it moved against it);
+//   - the one that stays keeps its side, now from the entry x with its share of margin less d: its worth is at every
+//     price what it was;
+//   - the newcomer has the leaver's side from x with its order's share of margin, as a match would give it.
+// What is left of P goes on as it is, smaller; what is left of each order rests, as after a match. If the newcomer is
+// the one that stays, nothing is written of the n units: the two are paid.
+//   replace(who, ageb, slotLen, st, moving, [the long order: key, size, limit, margin, tip, expiry, least, ask],
+//           [the short], n, x, side)          who: the position, the long order, the short order
+//       anyone. Nobody signs: the leaver's order is its word (a price it agreed to leave at), the newcomer's order its
+//       own, and what protects the one that stays is what protects it in a novation: each position carries what each
+//       party asked of its counterparty's margin when it was made, and
+//         - the newcomer's margin is at least what the one that stays asked, and d more when d is its loss;
+//         - the margin of the one that stays, after d, is at least what the newcomer's order asks.
+//       The three are of one id, the library's registry: each entered it by its owner's signature or was written by a
+//       script from what did. The tips' shares of the two orders are whoever sends the transaction's.
+contract KpfTReplace(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    int constant STATE_AT = 2;
+    int constant SIZE_MAX = 2000000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    // The least a part of an order that rests holds.
+    int constant ORDER_MIN = 20000000;
+    // The position's fixed part: terms and the leg's head [0, 174), the leg's size, direction and entry [174, 201),
+    // the second leg [201, 312). Its moving part: the two keys [0, 66), the two margins [66, 84), four values [84, 120),
+    // what each party asked of its counterparty [120, 138). An order's template is the position without the keys, the
+    // size, the entry, the margins and the asks.
+    int constant SCALE_AT = 157;
+    int constant PMAX_AT = 166;
+    int constant LEG_AT = 174;
+    int constant LEG2_AT = 201;
+    int constant LEG2_SIZE_AT = 286;
+    int constant KEYS_END = 66;
+    int constant TAIL_AT = 84;
+    int constant ASK_AT = 120;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    function quoteAt(int n, int sc, int r) : int {
+        int m = n % sc;
+        int q = n / sc;
+        return q * r + m * (r / sc) + (m * (r % sc)) / sc;
+    }
+
+    function orderHash(byte[32] tplh, byte[32] owner, int dir, int size, int limit, int margin, int tip, int expiry, int minFill, int minCounter) : byte[32] {
+        return blake2b(i9(3) + p33(tplh) + p33(owner) + i9(dir) + i9(size) + i9(limit) + i9(margin) + i9(tip) + i9(expiry) + i9(minFill) + i9(minCounter));
+    }
+
+    // (A share of v for n of size units is (v / size) * n + ((v % size) * n) / size, rounded down and all of it when n is
+    // the size; it and the reading of a number are written out below, since a call keeps its arguments on the stack to
+    // the entry's end and the engine holds 244 items.)
+    entry replace(byte[24] who, byte[8] ageb, int slotLen, byte[312] st, byte[138] moving, byte[32] lk, int ls, int ll, int lm, int lt, int le, int ln, int la, byte[32] sk, int ss, int sl, int sm, int stip, int se, int sn, int sa, int n, int x, int side) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j0 = int(byte[8](who.slice(0, 8)));
+        int j1 = int(byte[8](who.slice(8, 16)));
+        int j2 = int(byte[8](who.slice(16, 24)));
+        require(j0 != j1);
+        require(j0 != j2);
+        require(j1 != j2);
+        byte[] r0 = slotOf(j0, slotLen);
+        byte[] r1 = slotOf(j1, slotLen);
+        byte[] r2 = slotOf(j2, slotLen);
+        byte[] t = byte[](st);
+        byte[] mv = byte[](moving);
+        require(blake2b(p33(blake2b(t)) + mv) == byte[32](r0.slice(STATE_AT, STATE_AT + 32)));
+        // The two orders are of the position's template: they mean a position of these terms and this market.
+        byte[] tail = mv.slice(TAIL_AT, ASK_AT);
+        byte[32] th = blake2b(t.slice(0, LEG_AT) + t.slice(LEG2_AT, 312) + tail);
+        require(orderHash(th, lk, DIR_LONG, ls, ll, lm, lt, le, ln, la) == byte[32](r1.slice(STATE_AT, STATE_AT + 32)));
+        require(orderHash(th, sk, DIR_SHORT, ss, sl, sm, stip, se, sn, sa) == byte[32](r2.slice(STATE_AT, STATE_AT + 32)));
+        // One leg, long for its A.
+        int np = int(byte[8](t.slice(LEG_AT + 1, LEG_AT + 1 + 8)));
+        int ep = int(byte[8](t.slice(LEG_AT + 19, LEG_AT + 19 + 8)));
+        require(int(byte[8](t.slice(LEG_AT + 10, LEG_AT + 10 + 8))) == DIR_LONG);
+        require(int(byte[8](t.slice(LEG2_SIZE_AT, LEG2_SIZE_AT + 8))) == 0);
+        require(np > 0);
+        require(np <= SIZE_MAX);
+        // The match, as KpfTMatch asks it, within what the position has.
+        require(n > 0);
+        require(n <= ls);
+        require(n <= ss);
+        require(n <= np);
+        require(n >= ln || n == ls);
+        require(n >= sn || n == ss);
+        require(ls <= SIZE_MAX);
+        require(ss <= SIZE_MAX);
+        require(x > 0);
+        require(x <= ll);
+        require(x >= sl);
+        require(x <= int(byte[8](t.slice(PMAX_AT, PMAX_AT + 8))));
+        byte[32] ak = byte[32](mv.slice(1, 33));
+        byte[32] bk = byte[32](mv.slice(34, 66));
+        int am = int(byte[8](mv.slice(KEYS_END + 1, KEYS_END + 1 + 8)));
+        int bm = int(byte[8](mv.slice(KEYS_END + 10, KEYS_END + 10 + 8)));
+        int aq = int(byte[8](mv.slice(ASK_AT + 1, ASK_AT + 1 + 8)));
+        int bq = int(byte[8](mv.slice(ASK_AT + 10, ASK_AT + 10 + 8)));
+        int ams = ((am / np) * n + ((am % np) * n) / np);
+        int bms = ((bm / np) * n + ((bm % np) * n) / np);
+        int aqs = ((aq / np) * n + ((aq % np) * n) / np);
+        int bqs = ((bq / np) * n + ((bq % np) * n) / np);
+        // Each order's share of margin, of tip and of what it asks of the other side, for the n units.
+        int lms = ((lm / ls) * n + ((lm % ls) * n) / ls);
+        int sms = ((sm / ss) * n + ((sm % ss) * n) / ss);
+        int lf = ((lt / ls) * n + ((lt % ls) * n) / ls);
+        int sf = ((stip / ss) * n + ((stip % ss) * n) / ss);
+        int lq = ((la / ls) * n + ((la % ls) * n) / ls);
+        int sq = ((sa / ss) * n + ((sa % ss) * n) / ss);
+        require(lms > 0);
+        require(sms > 0);
+        // What the price moved the leaver's way since the position's entry. A leaves by its short order, and the long
+        // order's owner comes in; B leaves by its long order, and the short order's owner comes in.
+        int d = quoteAt(n, int(byte[8](t.slice(SCALE_AT, SCALE_AT + 8))), x) - quoteAt(n, int(byte[8](t.slice(SCALE_AT, SCALE_AT + 8))), ep);
+        byte[32] uk = ak;
+        byte[32] kk = bk;
+        byte[32] nk = lk;
+        int us = ams + sms;
+        int ks = bms;
+        int kq = bqs;
+        int ns = lms;
+        int nq = lq;
+        if (side == SIDE_A) {
+            require(sk == ak);
+        } else {
+            require(side == SIDE_B);
+            require(lk == bk);
+            d = 0 - d;
+            uk = bk;
+            kk = ak;
+            nk = sk;
+            us = bms + lms;
+            ks = ams;
+            kq = aqs;
+            ns = sms;
+            nq = sq;
+        }
+        // The leaver's own: its two shares of margin and d. The one that stays: its share less d.
+        int u = us + d;
+        require(u >= 0);
+        int zs = ks - d;
+        require(zs > 0);
+        require(zs <= MARGIN_MAX);
+        int same = 0;
+        if (nk == kk) { same = 1; }
+        if (same == 0) {
+            int more = 0;
+            if (d > 0) { more = d; }
+            require(ns >= kq + more);
+            require(zs >= nq);
+        }
+        // The three are of one id, the registry's.
+        byte[32] id = OpInputCovenantId(j0);
+        require(OpInputCovenantId(j1) == id);
+        require(OpInputCovenantId(j2) == id);
+        require(OpCovInputCount(id) == 3);
+        int xv = tx.inputs[j0].value;
+        require(xv >= am + bm);
+        int lv = tx.inputs[j1].value - lms - lf;
+        int sv = tx.inputs[j2].value - sms - sf;
+        require(lv >= 0);
+        require(sv >= 0);
+        // What the two of the new position hold together, and what a position that ends held beyond its margins.
+        int zv = zs + ns;
+        int rx = 0;
+        if (np > n) { rx = 1; }
+        if (rx == 0) { zv = zv + xv - am - bm; }
+        int nz = 1 - same;
+        int lkeep = 0;
+        if (ls > n) { lkeep = 1; }
+        int skeep = 0;
+        if (ss > n) { skeep = 1; }
+        // Under the id, in this order: what is left of the position, the new position, what rests of the long order,
+        // what rests of the short one (each if there is one).
+        require(OpCovOutputCount(id) == rx + nz + lkeep + skeep);
+        if (rx == 1) {
+            int ox = OpCovOutputIdx(id, 0);
+            byte[32] xh = blake2b(p33(blake2b(t.slice(0, LEG_AT) + i9(np - n) + t.slice(LEG_AT + 9, 312))) + mv.slice(0, KEYS_END) + i9(am - ams) + i9(bm - bms) + tail + i9(aq - aqs) + i9(bq - bqs));
+            require(tx.outputs[ox].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(r0.slice(0, STATE_AT) + byte[](xh) + r0.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[ox].value >= xv - ams - bms);
+        }
+        if (nz == 1) {
+            int oz = OpCovOutputIdx(id, rx);
+            byte[] zm = p33(nk) + p33(kk) + i9(ns) + i9(zs) + tail + i9(nq) + i9(kq);
+            if (side != SIDE_A) { zm = p33(kk) + p33(nk) + i9(zs) + i9(ns) + tail + i9(kq) + i9(nq); }
+            byte[32] zh = blake2b(p33(blake2b(t.slice(0, LEG_AT) + i9(n) + i9(DIR_LONG) + i9(x) + t.slice(LEG2_AT, 312))) + zm);
+            require(tx.outputs[oz].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(r0.slice(0, STATE_AT) + byte[](zh) + r0.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[oz].value >= zv);
+        }
+        if (lkeep == 1) {
+            int lo = OpCovOutputIdx(id, rx + nz);
+            require(lv >= ORDER_MIN);
+            require(tx.outputs[lo].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(r1.slice(0, STATE_AT) + byte[](orderHash(th, lk, DIR_LONG, ls - n, ll, lm - lms, lt - lf, le, ln, la - lq)) + r1.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[lo].value >= lv);
+        }
+        if (skeep == 1) {
+            int so = OpCovOutputIdx(id, rx + nz + lkeep);
+            require(sv >= ORDER_MIN);
+            require(tx.outputs[so].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(r2.slice(0, STATE_AT) + byte[](orderHash(th, sk, DIR_SHORT, ss - n, sl, sm - sms, stip - sf, se, sn, sa - sq)) + r2.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[so].value >= sv);
+        }
+        // The leaver's own at the position's last place from the end; and, when the newcomer is the one that stays,
+        // its own at the place before it.
+        int pu = tx.outputs.length - 1 - 2 * j0;
+        if (u > 0) {
+            require(pu >= tx.inputs.length);
+            require(tx.outputs[pu].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(uk))));
+            require(tx.outputs[pu].value >= u);
+        }
+        if (same == 1) {
+            require(pu - 1 >= tx.inputs.length);
+            require(tx.outputs[pu - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(kk))));
+            require(tx.outputs[pu - 1].value >= zv);
+        }
+        // The tips' shares are in no output of the id: they are whoever sends this transaction's.
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

@@ -58,8 +58,8 @@ enum Inv {
 
 // ---------------------------------------------------------------- the feed
 
-/// The walk's simulated feed for one market: a seeded price path (one price per tick), closed sessions in which the
-/// price is frozen and no claim is true, and gaps at some ticks and at every reopening.
+/// The walk's simulated feed for one market: a seeded price path (one price per signed price), closed sessions in which the
+/// price is frozen and no claim is true, and gaps at some signed prices and at every reopening.
 #[derive(Clone, Debug)]
 struct Feed {
     path: Vec<(u64, i64)>,
@@ -88,7 +88,7 @@ impl Feed {
         let (p, g) = (p as i128, g as i128);
         !self.closed_at(d) && f * 10_000 >= p * (10_000 - g) && f * 10_000 <= p * (10_000 + g)
     }
-    fn tick(&mut self, rng: &mut Rng, now: u64) {
+    fn signed_price(&mut self, rng: &mut Rng, now: u64) {
         let last = self.now();
         let was_closed = self.closed_at(now.saturating_sub(1)) && !self.closed_at(now);
         if self.closed_at(now) {
@@ -96,7 +96,7 @@ impl Feed {
             return;
         }
         let mut f = last as i128;
-        // A move per tick: up to 2 % on a volatile seed, 0.2 % on a calm one.
+        // A move per signed price: up to 2 % on a volatile seed, 0.2 % on a calm one.
         let w = if self.calm { 20 } else { 200 };
         f += f * (rng.below(2 * w + 1) as i128 - w as i128) / 10_000;
         // A gap: at a reopening, or now and then (up to 6 %).
@@ -568,10 +568,10 @@ impl Walk {
         self.pairs.push(WP { lp, b0: p.b, renewals: vec![], born: self.now, silent });
     }
 
-    fn tick(&mut self) {
+    fn signed_price(&mut self) {
         self.now += 10 + self.rng.below(140);
         let now = self.now;
-        self.feed.tick(&mut self.rng, now);
+        self.feed.signed_price(&mut self.rng, now);
     }
 
     /// The feed now.
@@ -2028,7 +2028,7 @@ impl Walk {
     fn play(&mut self, steps: usize) {
         for s in 0..steps {
             self.step = s;
-            self.tick();
+            self.signed_price();
             if self.pairs.len() < 4 && self.rng.chance(40) {
                 self.guarded("open", |w| w.open());
                 if self.rng.chance(50) {

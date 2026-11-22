@@ -1,8 +1,8 @@
-//! Regenerates and checks the pinned compiled artifacts of `KpfPair` and `KpfOpen` (`contracts/artifacts/`).
+//! Regenerates and checks the pinned compiled artifacts of `KpfPair` and `KpfOpen` (`contracts/legacy/artifacts/`).
 //!
 //! This is the only crate that links the SilverScript compiler (KOB's vendored v1.0.0, by path into `vendor/kob`).
 //!
-//! What is pinned (all under `contracts/artifacts/`):
+//! What is pinned (all under `contracts/legacy/artifacts/`):
 //! - `KpfPair.json`, `KpfOpen.json`: the compiler's `SilAbiArtifact` of each contract, compiled with a fixed sample
 //!   state (the template prefix and suffix, the ABI, the template hash);
 //! - `manifest.json`: source and artifact digests, template hashes and cuts, and the `KobAsk` / `KobBid` evidence
@@ -96,10 +96,10 @@ pub fn generate() -> Vec<(String, String)> {
     let kob = r.join("vendor/kob/contracts/orders");
     let ask_src = read_norm(&kob.join("KobAsk.sil"));
     let bid_src = read_norm(&kob.join("KobBid.sil"));
-    let pair_src = read_norm(&r.join("contracts/KpfPair.sil"));
-    let open_src = read_norm(&r.join("contracts/KpfOpen.sil"));
-    let pending_src = read_norm(&r.join("contracts/KpfPending.sil"));
-    let lock_src = read_norm(&r.join("contracts/KpfLock.sil"));
+    let pair_src = read_norm(&r.join("contracts/legacy/KpfPair.sil"));
+    let open_src = read_norm(&r.join("contracts/legacy/KpfOpen.sil"));
+    let pending_src = read_norm(&r.join("contracts/legacy/KpfPending.sil"));
+    let lock_src = read_norm(&r.join("contracts/legacy/KpfLock.sil"));
     let m = sample_market();
 
     // KobAsk / KobBid: any valid constructor; the template does not depend on the state.
@@ -240,35 +240,37 @@ pub fn generate() -> Vec<(String, String)> {
         "kob_commit": KOB_COMMIT,
         "kob_ask": kobc("contracts/orders/KobAsk.sil", &ask_src, (at, ap, asf)),
         "kob_bid": kobc("contracts/orders/KobBid.sil", &bid_src, (bt, bp, bsf)),
-        "kpf_pair": contract("contracts/KpfPair.sil", "KpfPair.json", &pair, &pair_json),
-        "kpf_open": contract("contracts/KpfOpen.sil", "KpfOpen.json", &open, &open_json),
-        "kpf_pending": contract("contracts/KpfPending.sil", "KpfPending.json", &pending, &pending_json),
-        "kpf_lock": contract("contracts/KpfLock.sil", "KpfLock.json", &lock, &lock_json),
+        "kpf_pair": contract("contracts/legacy/KpfPair.sil", "KpfPair.json", &pair, &pair_json),
+        "kpf_open": contract("contracts/legacy/KpfOpen.sil", "KpfOpen.json", &open, &open_json),
+        "kpf_pending": contract("contracts/legacy/KpfPending.sil", "KpfPending.json", &pending, &pending_json),
+        "kpf_lock": contract("contracts/legacy/KpfLock.sil", "KpfLock.json", &lock, &lock_json),
     });
     let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
     let sums = [
-        ("KpfPair.sil", pair_src.clone()),
-        ("KpfOpen.sil", open_src.clone()),
-        ("KpfPending.sil", pending_src.clone()),
-        ("KpfLock.sil", lock_src.clone()),
-        ("artifacts/KpfPair.json", pair_json.clone()),
-        ("artifacts/KpfOpen.json", open_json.clone()),
-        ("artifacts/KpfPending.json", pending_json.clone()),
-        ("artifacts/KpfLock.json", lock_json.clone()),
-        ("artifacts/manifest.json", manifest_text.clone()),
+        ("legacy/KpfPair.sil", pair_src.clone()),
+        ("legacy/KpfOpen.sil", open_src.clone()),
+        ("legacy/KpfPending.sil", pending_src.clone()),
+        ("legacy/KpfLock.sil", lock_src.clone()),
+        ("legacy/artifacts/KpfPair.json", pair_json.clone()),
+        ("legacy/artifacts/KpfOpen.json", open_json.clone()),
+        ("legacy/artifacts/KpfPending.json", pending_json.clone()),
+        ("legacy/artifacts/KpfLock.json", lock_json.clone()),
+        ("legacy/artifacts/manifest.json", manifest_text.clone()),
     ]
     .iter()
     .map(|(p, t)| format!("{}  {p}\n", sha256_hex(t.as_bytes())))
     .collect::<String>();
     let mut files = vec![
-        ("artifacts/KpfPair.json".into(), pair_json),
-        ("artifacts/KpfOpen.json".into(), open_json),
-        ("artifacts/KpfPending.json".into(), pending_json),
-        ("artifacts/KpfLock.json".into(), lock_json),
-        ("artifacts/manifest.json".into(), manifest_text),
-        ("artifacts/SHA256SUMS".into(), sums),
+        ("legacy/artifacts/KpfPair.json".into(), pair_json),
+        ("legacy/artifacts/KpfOpen.json".into(), open_json),
+        ("legacy/artifacts/KpfPending.json".into(), pending_json),
+        ("legacy/artifacts/KpfLock.json".into(), lock_json),
+        ("legacy/artifacts/manifest.json".into(), manifest_text),
+        ("legacy/artifacts/SHA256SUMS".into(), sums),
     ];
     files.extend(generate_oracle(&r));
+    files.extend(generate_committee(&r));
+    files.extend(generate_thin(&r));
     files
 }
 
@@ -276,7 +278,7 @@ fn tag_of(a: &SilAbiArtifact, entry: &str) -> [u8; 4] {
     *a.contracts.values().next().expect("one contract").entries[entry].dispatch_tag.as_bytes()
 }
 
-/// The oracle-market family (docs/DESIGN-ORACLE-IMPL.md, third slice), pinned under `contracts/artifacts/oracle/` with
+/// The oracle-market family (docs/DESIGN-ORACLE-IMPL.md, third slice), pinned under `contracts/legacy/artifacts/oracle/` with
 /// its own manifest and `SHA256SUMS`: the slot `KpfBond`, the judge `KpfStake`, and `KpfPendingO`, `KpfPairO`,
 /// `KpfOpenO`, each compiled with the build constants of the ones it pins (KpfOpenO -> KpfPairO -> KpfPendingO ->
 /// KpfStake; KpfPairO, KpfOpenO -> KpfBond).
@@ -285,7 +287,7 @@ fn generate_oracle(r: &Path) -> Vec<(String, String)> {
     use kpf_protocol::judge::Js;
     use kpf_protocol::oracle::{samples, OConsts};
     let names = ["KpfBond", "KpfStake", "KpfPendingO", "KpfPairO", "KpfOpenO"];
-    let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/{n}.sil")))).collect();
+    let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/legacy/{n}.sil")))).collect();
     let om = samples::market();
     let k3 = pubkey_of(&[3; 32]).unwrap();
     let k1 = pubkey_of(&[1; 32]).unwrap();
@@ -322,7 +324,7 @@ fn generate_oracle(r: &Path) -> Vec<(String, String)> {
         contracts.insert(
             n.to_string(),
             json!({
-                "source": format!("contracts/{n}.sil"), "source_sha256": sha256_hex(srcs[i].as_bytes()),
+                "source": format!("contracts/legacy/{n}.sil"), "source_sha256": sha256_hex(srcs[i].as_bytes()),
                 "artifact": format!("{n}.json"), "artifact_sha256": sha256_hex(jsons[i].as_bytes()),
                 "template_hash": hex(&hash), "prefix_len": pre, "suffix_len": suf, "state_len": c.state_span.len,
             }),
@@ -338,15 +340,209 @@ fn generate_oracle(r: &Path) -> Vec<(String, String)> {
     let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
     let mut sums = String::new();
     for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  legacy/{n}.sil\n", sha256_hex(srcs[i].as_bytes())));
+    }
+    for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  legacy/artifacts/oracle/{n}.json\n", sha256_hex(jsons[i].as_bytes())));
+    }
+    sums.push_str(&format!("{}  legacy/artifacts/oracle/manifest.json\n", sha256_hex(manifest_text.as_bytes())));
+    let mut files: Vec<(String, String)> = names.iter().zip(jsons).map(|(n, j)| (format!("legacy/artifacts/oracle/{n}.json"), j)).collect();
+    files.push(("legacy/artifacts/oracle/manifest.json".into(), manifest_text));
+    files.push(("legacy/artifacts/oracle/SHA256SUMS".into(), sums));
+    files
+}
+
+/// The committee family (docs/DESIGN-COMMITTEE.md), pinned under `contracts/legacy/artifacts/committee/` with its own manifest
+/// and `SHA256SUMS`: the committee `KpfCommittee`, its `KpfEpochTable` and `KpfExit`, and `KpfPendingC`, `KpfPairC`, `KpfOpenC`,
+/// each compiled with the build constants of the ones it pins (KpfOpenC -> KpfPairC -> KpfPendingC, KpfEpochTable;
+/// KpfCommittee -> KpfEpochTable, KpfExit).
+fn generate_committee(r: &Path) -> Vec<(String, String)> {
+    use kpf_protocol::cmarket::{samples, CConsts};
+    let names = ["KpfEpochTable", "KpfExit", "KpfCommittee", "KpfPendingC", "KpfPairC", "KpfOpenC", "KpfCharge", "KpfPendingX", "KpfCrossC"];
+    let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/legacy/{n}.sil")))).collect();
+    let k1 = pubkey_of(&[1; 32]).unwrap();
+    let epoch_table = compile("KpfEpochTable", &srcs[0], &samples::epoch_table().ctor());
+    let (tt, tp, ts) = facts(&epoch_table);
+    // The committee and the exit pin the charge's template; the charge names their scripts by their lengths and by the
+    // tags of their `slash` and `clear` (a length and a tag do not depend on a hash, so nothing is circular): the three
+    // are compiled until the charge's constants no longer change. The judge is the oracle family's pinned KpfStake.
+    let ok = &kpf_protocol::oracle_artifacts::kit().consts;
+    let len_of = |a: &SilAbiArtifact| a.contracts.values().next().expect("one contract").compiled.bytecode.len() as i64;
+    let mut cc = kpf_protocol::committee::ChargeConsts {
+        judge_tpl: ok.judge_tpl,
+        judge_pre: ok.judge_pre,
+        judge_suf: ok.judge_suf,
+        open_tag: ok.open_tag,
+        resolve_tag: ok.resolve_tag,
+        committee_len: 9_000,
+        exit_len: 2_000,
+        committee_slash: [0; 4],
+        committee_clear: [0; 4],
+        exit_slash: [0; 4],
+        exit_clear: [0; 4],
+    };
+    let mut rc = kpf_protocol::committee::RConsts { epoch_table_tpl: tt, exit_tpl: [0; 32], charge_tpl: [0; 32], charge_pre: 1, charge_suf: 1 };
+    let mut built = None;
+    let mut settled = false;
+    for _ in 0..4 {
+        let charge = compile("KpfCharge", &srcs[6], &samples::charge().ctor(&cc));
+        let (ct, cp, cs) = facts(&charge);
+        rc = kpf_protocol::committee::RConsts { charge_tpl: ct, charge_pre: cp, charge_suf: cs, ..rc };
+        let exit = compile("KpfExit", &srcs[1], &samples::exit().ctor(&rc));
+        rc.exit_tpl = facts(&exit).0;
+        let committee = compile("KpfCommittee", &srcs[2], &samples::committee().ctor(&rc));
+        let next = kpf_protocol::committee::ChargeConsts {
+            committee_len: len_of(&committee),
+            exit_len: len_of(&exit),
+            committee_slash: tag_of(&committee, "slash"),
+            committee_clear: tag_of(&committee, "clear"),
+            exit_slash: tag_of(&exit, "slash"),
+            exit_clear: tag_of(&exit, "clear"),
+            ..cc
+        };
+        let done = next == cc;
+        cc = next;
+        built = Some((charge, exit, committee));
+        if done {
+            settled = true;
+            break;
+        }
+    }
+    let (charge, exit, committee) = built.expect("compiled");
+    // Review C5 (C5-N2): the loop ended because a round changed nothing, not because it ran out of rounds; and the
+    // charge compiled once more from the final constants is the one the committee and the exit pin.
+    assert!(settled, "the charge's constants did not settle in four rounds");
+    assert_eq!(facts(&compile("KpfCharge", &srcs[6], &samples::charge().ctor(&cc))).0, rc.charge_tpl, "the pinned charge is not the one compiled from the final constants");
+    assert_eq!((cc.committee_len, cc.exit_len), (len_of(&committee), len_of(&exit)));
+    let _ = &charge;
+    let et = rc.exit_tpl;
+    let mut consts = CConsts { epoch_table_tpl: tt, epoch_table_pre: tp, epoch_table_suf: ts, attest_tag: tag_of(&epoch_table, "attest"), exit_tpl: et, pending_tpl: [0; 32], pair_tpl: [0; 32] };
+    let m = samples::market();
+    let sp = samples::pair(&m);
+    let pending = compile("KpfPendingC", &srcs[3], &samples::pending(&sp).ctor());
+    consts.pending_tpl = facts(&pending).0;
+    let pair = compile("KpfPairC", &srcs[4], &sp.ctor_with(&consts));
+    consts.pair_tpl = facts(&pair).0;
+    let open = compile("KpfOpenC", &srcs[5], &samples::order(&m, LONG, k1).ctor_with(&consts));
+    // The cross-margin account pins its pending claim and the epoch table, as the pair does.
+    let xs = kpf_protocol::cross::samples::cross();
+    let pendx = compile("KpfPendingX", &srcs[7], &kpf_protocol::cross::samples::pending(&xs).ctor());
+    let xc = kpf_protocol::cross::XConsts { pendx_tpl: facts(&pendx).0, epoch_table_tpl: tt, epoch_table_pre: tp, epoch_table_suf: ts, attest_tag: consts.attest_tag };
+    let cross = compile("KpfCrossC", &srcs[8], &xs.ctor_with(&xc));
+    let arts = [&epoch_table, &exit, &committee, &pending, &pair, &open, &charge, &pendx, &cross];
+    let json = |a: &SilAbiArtifact| format!("{}\n", serde_json::to_string(a).expect("artifact json"));
+    let jsons: Vec<String> = arts.iter().map(|a| json(a)).collect();
+    let mut contracts = serde_json::Map::new();
+    for (i, n) in names.iter().enumerate() {
+        let c = &arts[i].contracts.values().next().expect("one contract").compiled;
+        let (hash, pre, suf) = facts(arts[i]);
+        contracts.insert(
+            n.to_string(),
+            json!({
+                "source": format!("contracts/legacy/{n}.sil"), "source_sha256": sha256_hex(srcs[i].as_bytes()),
+                "artifact": format!("{n}.json"), "artifact_sha256": sha256_hex(jsons[i].as_bytes()),
+                "template_hash": hex(&hash), "prefix_len": pre, "suffix_len": suf, "state_len": c.state_span.len,
+            }),
+        );
+    }
+    let manifest = json!({
+        "format": "kpf-artifacts/committee-1",
+        "compiler": format!("silverscript-lang (vendor/kob @ {KOB_COMMIT}, SilverScript v1.0.0), CompileOptions::default(); {}", pair.compiler_version),
+        "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
+        "contracts": contracts,
+        "tags": {
+            "attest": hex(&consts.attest_tag),
+            "committee_slash": hex(&cc.committee_slash), "committee_clear": hex(&cc.committee_clear),
+            "exit_slash": hex(&cc.exit_slash), "exit_clear": hex(&cc.exit_clear),
+        },
+        "lengths": { "committee": cc.committee_len, "exit": cc.exit_len },
+    });
+    let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
+    let mut sums = String::new();
+    for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  legacy/{n}.sil\n", sha256_hex(srcs[i].as_bytes())));
+    }
+    for (i, n) in names.iter().enumerate() {
+        sums.push_str(&format!("{}  legacy/artifacts/committee/{n}.json\n", sha256_hex(jsons[i].as_bytes())));
+    }
+    sums.push_str(&format!("{}  legacy/artifacts/committee/manifest.json\n", sha256_hex(manifest_text.as_bytes())));
+    let mut files: Vec<(String, String)> = names.iter().zip(jsons).map(|(n, j)| (format!("legacy/artifacts/committee/{n}.json"), j)).collect();
+    files.push(("legacy/artifacts/committee/manifest.json".into(), manifest_text));
+    files.push(("legacy/artifacts/committee/SHA256SUMS".into(), sums));
+    files
+}
+
+/// The thin family, the main one (docs/DESIGN-COMMITTEE.md 8a), pinned under `contracts/artifacts/` with its manifest
+/// and `SHA256SUMS`: `KpfSlot`, the one script of every object, and the scripts of the operations, each compiled as the
+/// library holds it (version 1). An object's script is the slot's with two values of 32 bytes in it, the library's id
+/// and the hash of the object's state: the manifest says where they are, found here by compiling with other values.
+fn generate_thin(r: &Path) -> Vec<(String, String)> {
+    let names = ["KpfSlot", "KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTSweep", "KpfTPay", "KpfFeePool"];
+    let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/{n}.sil")))).collect();
+    let code = |a: &SilAbiArtifact| a.contracts.values().next().expect("one contract").compiled.bytecode.clone();
+    let (lib, state) = ([0x4c_u8; 32], [0x5a_u8; 32]);
+    let slot_with = |l: [u8; 32], h: [u8; 32]| compile("KpfSlot", &srcs[0], &[ArtifactValue::Bytes(l.to_vec()), ArtifactValue::Bytes(h.to_vec())]);
+    let slot = slot_with(lib, state);
+    let s = code(&slot);
+    let at = |other: Vec<u8>| -> usize {
+        assert_eq!(other.len(), s.len(), "KpfSlot's length does not depend on its values");
+        let d: Vec<usize> = (0..s.len()).filter(|i| s[*i] != other[*i]).collect();
+        assert!(d.len() == 32 && d[31] - d[0] == 31, "a value of KpfSlot is one run of 32 bytes");
+        d[0]
+    };
+    let lib_at = at(code(&slot_with([0x4d; 32], state)));
+    let state_at = at(code(&slot_with(lib, [0x5b; 32])));
+    assert_eq!(state_at, 2, "the scripts of the library read the state's hash at byte 2 of an object");
+    let mut arts = vec![slot];
+    // The proofs read the committee's epoch table by its pinned template (the committee family's artifacts on disk).
+    let tk = &kpf_protocol::committee_artifacts::xkit().consts;
+    let epoch_table = [ArtifactValue::Bytes(tk.epoch_table_tpl.to_vec()), ArtifactValue::Int(tk.epoch_table_pre), ArtifactValue::Int(tk.epoch_table_suf), ArtifactValue::Bytes(tk.attest_tag.to_vec()), ArtifactValue::Int(1)];
+    for i in 1..names.len() {
+        // The merge is compiled with what its sender keeps (the library's, the same for every account in it).
+        let merge = [ArtifactValue::Int(kpf_protocol::thin::MERGE_TIP), ArtifactValue::Int(1)];
+        let novate = [ArtifactValue::Int(kpf_protocol::thin::NOVATE_TIP), ArtifactValue::Int(1)];
+        let purse = [ArtifactValue::Bytes(state.to_vec())];
+        let ctor: &[ArtifactValue] = if names[i] == "KpfFeePool" { &purse } else if names[i].ends_with("Prove") || names[i].ends_with("Refute") || names[i] == "KpfTPay" { &epoch_table } else if names[i] == "KpfTMerge" || names[i] == "KpfTJoin" || names[i] == "KpfTFold" { &merge } else if names[i] == "KpfTLeave" { &novate } else if names[i] == "KpfTNovate" { &novate } else { &[ArtifactValue::Int(1)] };
+        arts.push(compile(names[i], &srcs[i], ctor));
+    }
+    // The purse is an object as KpfSlot is, with one value: the scripts read its state's hash where they read an
+    // object's.
+    let purse_code = code(arts.last().expect("the purse"));
+    let other = code(&compile("KpfFeePool", srcs.last().expect("the purse"), &[ArtifactValue::Bytes([0x5b; 32].to_vec())]));
+    assert_eq!(purse_code.len(), other.len(), "KpfFeePool's length does not depend on its value");
+    let d: Vec<usize> = (0..purse_code.len()).filter(|i| purse_code[*i] != other[*i]).collect();
+    assert!(d.len() == 32 && d[0] == state_at && d[31] == state_at + 31, "the purse's state is where an object's is");
+    let jsons: Vec<String> = arts.iter().map(|a| format!("{}\n", serde_json::to_string(a).expect("artifact json"))).collect();
+    let mut contracts = serde_json::Map::new();
+    for (i, n) in names.iter().enumerate() {
+        contracts.insert(
+            n.to_string(),
+            json!({
+                "source": format!("contracts/{n}.sil"), "source_sha256": sha256_hex(srcs[i].as_bytes()),
+                "artifact": format!("{n}.json"), "artifact_sha256": sha256_hex(jsons[i].as_bytes()),
+                "script_len": code(&arts[i]).len(),
+            }),
+        );
+    }
+    let manifest = json!({
+        "format": "kpf-artifacts/thin-2",
+        "compiler": format!("silverscript-lang (vendor/kob @ {KOB_COMMIT}, SilverScript v1.0.0), CompileOptions::default(); {}", arts[0].compiler_version),
+        "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
+        "slot": { "lib_at": lib_at, "state_at": state_at, "sample_lib": hex(&lib), "sample_state": hex(&state) },
+        "contracts": contracts,
+    });
+    let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));
+    let mut sums = String::new();
+    for (i, n) in names.iter().enumerate() {
         sums.push_str(&format!("{}  {n}.sil\n", sha256_hex(srcs[i].as_bytes())));
     }
     for (i, n) in names.iter().enumerate() {
-        sums.push_str(&format!("{}  artifacts/oracle/{n}.json\n", sha256_hex(jsons[i].as_bytes())));
+        sums.push_str(&format!("{}  artifacts/{n}.json\n", sha256_hex(jsons[i].as_bytes())));
     }
-    sums.push_str(&format!("{}  artifacts/oracle/manifest.json\n", sha256_hex(manifest_text.as_bytes())));
-    let mut files: Vec<(String, String)> = names.iter().zip(jsons).map(|(n, j)| (format!("artifacts/oracle/{n}.json"), j)).collect();
-    files.push(("artifacts/oracle/manifest.json".into(), manifest_text));
-    files.push(("artifacts/oracle/SHA256SUMS".into(), sums));
+    sums.push_str(&format!("{}  artifacts/manifest.json\n", sha256_hex(manifest_text.as_bytes())));
+    let mut files: Vec<(String, String)> = names.iter().zip(jsons).map(|(n, j)| (format!("artifacts/{n}.json"), j)).collect();
+    files.push(("artifacts/manifest.json".into(), manifest_text));
+    files.push(("artifacts/SHA256SUMS".into(), sums));
     files
 }
 

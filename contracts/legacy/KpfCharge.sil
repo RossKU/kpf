@@ -1,0 +1,264 @@
+pragma silverscript ^0.1.0;
+
+// KpfCharge: the charge that a member of a committee committee signed a false price (docs/DESIGN-COMMITTEE.md 5a). It is
+// written by KpfCommittee.charge or KpfExit.charge under a fresh covenant id, which the stake it names adds to its
+// holds, and it is the claim the stake judge (KpfStake, unchanged) rules on: the claim is "the signed price is true".
+//
+//   1 pending     written with the bond. Anyone holding aged judge stake contests it (the opener's stake on NO, "the
+//                 signed price is false"); if nobody does for chargeDaa, the hold ends and the bond is burned
+//   2 contested   with the judge; `clock` is the DAA score the charge was accepted at
+//   3 upheld      YES led: the signed price was true. The hold ends, the bond is the charged key's
+//   4 refuted     NO led: the signed price was false. The stake is slashed, by at most the total the judge's NO side had at
+//                 risk (written to `clock` by the verdict); the bond and the reporter's share are payKey's
+//   5 lapsed      the contest came chargeDaa or more after the charge: as a pending charge nobody contested
+//
+// Entries:
+//   contest(u, d)  pending: the judge's free stake at input u opens a dispute on this claim (KpfStake.open naming this
+//                  input and this output; the dispute at output d). As KpfPendingO.contest
+//   decide(d)      contested: the verdict of the dispute at input d (KpfStake.resolve naming this input)
+//   settle(r)      any other status: with the stake that holds this charge at input r (a KpfCommittee or KpfExit of
+//                  committeeId running `slash` or `clear` on this input). No output of this id; where the bond goes and
+//                  what happens to the stake is that entry's rule, which reads this state
+// DESIGN: the stake and the charge must leave together: a charge settled alone would leave a hold nothing can end.
+// The stake's templates pin this one, so this one cannot pin theirs (a cycle); it names them by the committee's covenant
+// id (every object of it is written by the committee's templates), by the dispatch tags of the two entries and by the
+// lengths of their signature scripts, as a claim names the judge's entries.
+// DESIGN: review C5 (C5-F1): a contest nobody answers is a verdict, and the opener's stake comes back whole. So a
+// verdict takes no more than its NO side had at risk, and pays its author a tenth of no more than that: silencing a
+// committee by charges nobody answers needs as much aged judge stake as the members hold, all of it lost to whoever
+// answers once. `atStake` is the stake when it was charged: what the author's tenth is measured by, whatever is left
+// of the stake when the verdict arrives (C5-F2).
+// DESIGN: a charge on a stake that is gone (slashed whole by another charge) cannot be settled: its bond stays here.
+// Nothing is owed to it: the stake it wanted slashed is slashed.
+// The settle entry is tied to its stake by lengths and tags (below) and, last, by the engine's clean-stack rule: a
+// script of the committee's id run with a signature script padded to this shape fails with what it leaves on the stack
+// (review C5, C5-N1).
+contract KpfCharge(
+    byte[32] JUDGE_TPL,
+    int JUDGE_PRE,
+    int JUDGE_SUF,
+    byte[4] OPEN_TAG,
+    byte[4] RESOLVE_TAG,
+    int COMMITTEE_LEN,
+    int EXIT_LEN,
+    byte[4] COMMITTEE_SLASH_TAG,
+    byte[4] COMMITTEE_CLEAR_TAG,
+    byte[4] EXIT_SLASH_TAG,
+    byte[4] EXIT_CLEAR_TAG,
+    int init_status,
+    int init_clock,
+    byte[32] init_committeeId,
+    byte[32] init_stakeKey,
+    byte[32] init_payKey,
+    byte[32] init_market,
+    int init_t0,
+    int init_price,
+    int init_atStake,
+    byte[87] init_judge,
+    int init_chargeBond,
+    int init_chargeDaa
+) {
+    int status = init_status;
+    int clock = init_clock;              // contested: the DAA score the charge was accepted at; decided: the NO total
+    byte[32] committeeId = init_committeeId;   // the covenant id of the committee whose stake is charged
+    byte[32] stakeKey = init_stakeKey;   // the key that signed the signed price
+    byte[32] payKey = init_payKey;       // who is paid if the signed price is refuted
+    byte[32] market = init_market;       // the signed price: the market, the DAA score, the price signed
+    int t0 = init_t0;
+    int price = init_price;
+    int atStake = init_atStake;          // what the stake held when it was charged
+    byte[87] judge = init_judge;         // the judge block, byte for byte a KpfStake's state [42..129)
+    int chargeBond = init_chargeBond;
+    int chargeDaa = init_chargeDaa;
+
+    int constant PENDING = 1;
+    int constant CONTESTED = 2;
+    int constant UPHELD = 3;
+    int constant REFUTED = 4;
+    int constant LAPSED = 5;
+    int constant YES = 1;
+    int constant CSV_LIMIT = 4294967296;
+    // Redeem offsets: the status and the clock [1..19), the rest of the state from 19.
+    int constant STATUS_AT = 1;
+    int constant KEEP_AT = 19;
+    // KpfStake, as KpfPendingO reads it.
+    int constant STAKE_STATE_LEN = 270;
+    int constant STAKE_FREE = 4;
+    int constant STAKE_DISPUTE = 7;
+    int constant STAKE_STATUS_AT = 33;
+    int constant STAKE_MARKET_AT = 42;
+    int constant STAKE_MARKET_END = 129;
+    int constant STAKE_SIDE_AT = 162;
+    int constant STAKE_NO_AT = 198;
+    int constant OPEN_SIG_AT = 27;
+    int constant OPEN_TAG_AT = 93;
+    int constant OPEN_HEAD = 101;
+    int constant RESOLVE_TAG_AT = 9;
+    int constant RESOLVE_HEAD = 17;
+    // `slash` and `clear` of KpfCommittee and KpfExit take (byte[8] c, byte[8] i, byte[32] a, byte[256] later): two
+    // 8-byte pushes, a 32-byte push, a 256-byte push (OP_PUSHDATA2), the 4-byte dispatch tag, then the redeem script
+    // (OP_PUSHDATA2, 3 bytes of header).
+    int constant SETTLE_TAG_AT = 310;
+    int constant SETTLE_HEAD = 318;
+
+    function ownRs() : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        return OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function zero32() : byte[32] {
+        byte[] z8 = byte[](0 as byte[8]);
+        return byte[32](z8 + z8 + z8 + z8);
+    }
+
+    // As KpfPair.tplState.
+    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int sz = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - sz;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + sz);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, sz)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+
+    // The 8-byte push at offset `at` of input u's signature script.
+    function push8(int u, int at) : int {
+        require(OpTxInputScriptSigSubstr(u, at, at + 1) == byte[](0x08));
+        return int(byte[8](OpTxInputScriptSigSubstr(u, at + 1, at + 9)));
+    }
+
+    // As KpfClaimStub.canon: a KpfStake state whose every field is a canonical push.
+    function canon(byte[] st) {
+        require(st.length == STAKE_STATE_LEN);
+        require(st.slice(0, 1) == byte[](0x20));
+        require(st.slice(33, 34) == byte[](0x08));
+        require(st.slice(42, 43) == byte[](0x20));
+        require(st.slice(75, 76) == byte[](0x08));
+        require(st.slice(84, 85) == byte[](0x08));
+        require(st.slice(93, 94) == byte[](0x08));
+        require(st.slice(102, 103) == byte[](0x08));
+        require(st.slice(111, 112) == byte[](0x08));
+        require(st.slice(120, 121) == byte[](0x08));
+        require(st.slice(129, 130) == byte[](0x20));
+        require(st.slice(162, 163) == byte[](0x08));
+        require(st.slice(171, 172) == byte[](0x08));
+        require(st.slice(180, 181) == byte[](0x08));
+        require(st.slice(189, 190) == byte[](0x08));
+        require(st.slice(198, 199) == byte[](0x08));
+        require(st.slice(207, 208) == byte[](0x08));
+        require(st.slice(216, 217) == byte[](0x08));
+        require(st.slice(225, 226) == byte[](0x08));
+        require(st.slice(234, 235) == byte[](0x08));
+        require(st.slice(243, 244) == byte[](0x08));
+        require(st.slice(252, 253) == byte[](0x08));
+        require(st.slice(261, 262) == byte[](0x08));
+    }
+
+    // This charge's continuation at output `self` with the status and the clock w (18 bytes), under its id, holding
+    // at least what it held.
+    function cont(byte[] w) {
+        int self = this.activeInputIndex;
+        byte[] rs = ownRs();
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATUS_AT) + w
+            + rs.slice(KEEP_AT, this.bytecodeSize))));
+        require(OpOutputCovenantId(self) == OpInputCovenantId(self));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+    }
+
+    entry contest(byte[8] ub, byte[8] db) {
+        int self = this.activeInputIndex;
+        require(status == PENDING);
+        require(chargeDaa > 0);
+        require(chargeDaa < CSV_LIMIT);
+        byte[32] id = OpInputCovenantId(self);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 3);
+        int p = OpTxInputDaaScore(self);
+        require(p >= 0);
+        int u = int(ub);
+        int d = int(db);
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != self);
+        byte[] st = tplState(u, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        canon(st);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_FREE));
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == byte[](judge));
+        require(OpTxInputScriptSigLen(u) == OPEN_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(u, OPEN_TAG_AT, OPEN_HEAD - 3) == byte[](0x04) + byte[](OPEN_TAG));
+        require(OpTxInputScriptSigSubstr(u, OPEN_SIG_AT, OPEN_SIG_AT + 1) == byte[](0x41));
+        require(push8(u, 0) == self);
+        require(push8(u, 9) == self);
+        require(push8(u, 18) == d);
+        require(d >= 0);
+        require(OpOutputCovenantId(d) == id);
+        cont(i9(CONTESTED) + i9(p));
+    }
+
+    // Decide: upheld if YES leads, refuted if NO leads; lapsed whatever the verdict when the contest was late (this
+    // UTXO's own DAA score is the contest's acceptance).
+    // DESIGN: a late contest does not uphold the signed price (as it upholds a claim of KpfPendingO): the charged key would
+    // then contest its own charge late, win unopposed and take the bond back, and a hold would cost nothing.
+    entry decide(byte[8] db) {
+        int self = this.activeInputIndex;
+        require(status == CONTESTED);
+        byte[32] id = OpInputCovenantId(self);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int d = int(db);
+        require(d >= 0);
+        require(d < tx.inputs.length);
+        require(d != self);
+        require(OpInputCovenantId(d) == id);
+        byte[] st = tplState(d, JUDGE_PRE, STAKE_STATE_LEN, JUDGE_SUF, JUDGE_TPL);
+        require(st.slice(STAKE_STATUS_AT, STAKE_STATUS_AT + 9) == i9(STAKE_DISPUTE));
+        require(st.slice(STAKE_MARKET_AT, STAKE_MARKET_END) == byte[](judge));
+        require(OpTxInputScriptSigLen(d) == RESOLVE_HEAD + JUDGE_PRE + STAKE_STATE_LEN + JUDGE_SUF);
+        require(OpTxInputScriptSigSubstr(d, RESOLVE_TAG_AT, RESOLVE_HEAD - 3) == byte[](0x04) + byte[](RESOLVE_TAG));
+        require(push8(d, 0) == self);
+        int v = REFUTED;
+        if (int(byte[8](st.slice(STAKE_SIDE_AT + 1, STAKE_SIDE_AT + 9))) == YES) {
+            v = UPHELD;
+        }
+        int c = OpTxInputDaaScore(self);
+        require(c >= 0);
+        if (c >= clock + chargeDaa) {
+            v = LAPSED;
+        }
+        // What the NO side had at risk when the round closed: the most this verdict takes.
+        int no = int(byte[8](st.slice(STAKE_NO_AT + 1, STAKE_NO_AT + 9)));
+        require(no >= 0);
+        cont(i9(v) + i9(no));
+    }
+
+    entry settle(byte[8] rb) {
+        int self = this.activeInputIndex;
+        require(status == PENDING || status == UPHELD || status == REFUTED || status == LAPSED);
+        byte[32] id = OpInputCovenantId(self);
+        require(id != zero32());
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 0);
+        int r = int(rb);
+        require(r >= 0);
+        require(r < tx.inputs.length);
+        require(r != self);
+        require(committeeId != zero32());
+        require(OpInputCovenantId(r) == committeeId);
+        int len = OpTxInputScriptSigLen(r);
+        byte[] tg = OpTxInputScriptSigSubstr(r, SETTLE_TAG_AT, SETTLE_HEAD - 3);
+        if (len == SETTLE_HEAD + COMMITTEE_LEN) {
+            require(tg == byte[](0x04) + byte[](COMMITTEE_SLASH_TAG) || tg == byte[](0x04) + byte[](COMMITTEE_CLEAR_TAG));
+        } else {
+            require(len == SETTLE_HEAD + EXIT_LEN);
+            require(tg == byte[](0x04) + byte[](EXIT_SLASH_TAG) || tg == byte[](0x04) + byte[](EXIT_CLEAR_TAG));
+        }
+        require(push8(r, 0) == self);
+    }
+}

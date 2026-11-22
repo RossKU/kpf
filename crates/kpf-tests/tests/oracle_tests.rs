@@ -679,7 +679,7 @@ fn propose_refuses_what_the_book_market_refuses() {
     // The boundary: 9.288 triggers? ceil(p * 1.02) * 0.95 < 9  <=>  ceil(p * 1.02) <= 9.47368421
     assert!(lp.s.long_liquidatable(928_000_000) && !lp.s.long_liquidatable(929_000_000));
     proposed(&lp, &liq_long(928_000_000, 450), 500);
-    refused("one tick above the trigger", &propose_tx(&lp, &liq_long(929_000_000, 450), &uw_kp(), None).0, 0);
+    refused("one time above the trigger", &propose_tx(&lp, &liq_long(929_000_000, 450), &uw_kp(), None).0, 0);
     let mut one = lp.clone();
     one.s.short_key = one.s.long_key;
     refused("one owner", &propose_tx(&one, &liq_long(FALSE_P, 450), &uw_kp(), None).0, 0);

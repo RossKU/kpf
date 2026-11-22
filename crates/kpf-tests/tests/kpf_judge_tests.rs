@@ -1,4 +1,4 @@
-//! The stake judge in the script engine (`contracts/KpfStake.sil`, `contracts/stubs/KpfClaimStub.sil`;
+//! The stake judge in the script engine (`contracts/legacy/KpfStake.sil`, `contracts/legacy/stubs/KpfClaimStub.sil`;
 //! docs/DESIGN-ORACLE-IMPL.md, second slice): every path positive and negative, the boundary of every window, age and
 //! delay at one DAA either side, payouts to the sompi. Every transaction is built from the model's `JTx` and run in the
 //! engine; the model's verdict and the engine's must agree input by input (`judgekit::agree`), so every test here is

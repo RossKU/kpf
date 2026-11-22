@@ -1,0 +1,126 @@
+pragma silverscript ^0.1.0;
+
+// KpfTTurn: the same position written the other way round, as a script under the library's id. Nothing is owed to
+// anybody that was not: it is for the scripts that read a position one way (the user that leaves as its A, the leg
+// that changes as its first).
+//   turn(who, ageb, slotLen, st, moving, mode)
+//       anyone, once the position is TURN_AGE old (so that whoever means to use the position is overtaken by a turn once
+//       at most). mode 1: the two users change places: the keys, the margins and the asks change places and each leg's
+//       direction turns. mode 2: the two legs change places (a position of two legs).
+contract KpfTTurn(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    int constant STATE_AT = 2;
+    int constant LATE_AT = 94;
+    int constant DISPUTE_AT = 103;
+    int constant SIZE_MAX = 2000000000;
+    // The fixed part: terms [0, 90), the first leg [90, 201) (market, committee, scale at 157, price limit at 166, then
+    // size, direction and entry as pushed ints from 174), the second leg [201, 312) likewise.
+    int constant LEG_AT = 90;
+    int constant LEG_BODY = 174;
+    int constant LEG2_AT = 201;
+    // The moving part: the two keys, the two margins, four values, the two asks.
+    int constant KEYS_END = 66;
+    int constant TAIL_AT = 84;
+    int constant ASK_AT = 120;
+    int constant TURN_AGE = 100;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function iAt(byte[] b, int at) : int {
+        return int(byte[8](b.slice(at, at + 8)));
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function claimHash(byte[32] position, int side, int t0, int a1, int a2, int amount, int bond) : byte[32] {
+        return blake2b(p33(position) + i9(side) + i9(t0) + i9(a1) + i9(a2) + i9(amount) + i9(bond));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // A leg with its direction turned (a leg of no size is left as it is).
+    function turned(byte[] l) : byte[] {
+        byte[] r = l;
+        if (int(byte[8](l.slice(85, 93))) > 0) {
+            r = l.slice(0, 93) + i9(3 - int(byte[8](l.slice(94, 102)))) + l.slice(102, 111);
+        }
+        return r;
+    }
+
+    entry turn(byte[24] who, byte[8] ageb, int slotLen, byte[312] st, byte[138] moving, int mode) {
+        require(version == 1);
+        require(int(ageb) >= TURN_AGE);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] t = byte[](st);
+        byte[] mv = byte[](moving);
+        require(blake2b(p33(blake2b(t)) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(mode == 1 || mode == 2);
+        byte[] nt = t;
+        byte[] nm = mv;
+        if (mode == 1) {
+            nt = t.slice(0, LEG_AT) + turned(t.slice(LEG_AT, LEG2_AT)) + turned(t.slice(LEG2_AT, 312));
+            nm = mv.slice(33, 66) + mv.slice(0, 33) + mv.slice(75, 84) + mv.slice(66, 75) + mv.slice(TAIL_AT, ASK_AT) + mv.slice(129, 138) + mv.slice(ASK_AT, 129);
+        } else {
+            require(int(byte[8](t.slice(LEG2_AT + 85, LEG2_AT + 93))) > 0);
+            nt = t.slice(0, LEG_AT) + t.slice(LEG2_AT, 312) + t.slice(LEG_AT, LEG2_AT);
+        }
+        becomes(j, rs, slotLen, blake2b(p33(blake2b(nt)) + nm), tx.inputs[j].value);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

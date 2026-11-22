@@ -969,7 +969,7 @@ impl Walk {
         self.pairs.push(WP { lp, truth, b0: p.b, renewals: vec![], born: self.now, silent });
     }
 
-    fn tick(&mut self) {
+    fn signed_price(&mut self) {
         self.now += 10 + self.rng.below(140);
         for w in self.pairs.iter_mut() {
             let d = (self.rng.below(5) as i64 - 2) * 10_000_000;
@@ -1589,7 +1589,7 @@ impl Walk {
     fn play(&mut self, steps: usize) {
         for s in 0..steps {
             self.step = s;
-            self.tick();
+            self.signed_price();
             if self.pairs.len() < 4 && self.rng.chance(40) {
                 self.open();
                 // Two opens at one DAA share a binding, so close-versus-close can join them later.

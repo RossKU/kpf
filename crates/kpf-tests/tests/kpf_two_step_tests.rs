@@ -90,8 +90,8 @@ fn claims(l: &Live, n: i64) -> Vec<(PairLeg, Evidence, Evidence)> {
     ]
 }
 
-/// The counter quote one tick short of refuting (in the claim's favour).
-fn one_tick_short(e: &Evidence) -> Evidence {
+/// The counter quote one time short of refuting (in the claim's favour).
+fn one_price_short(e: &Evidence) -> Evidence {
     let mut x = e.clone();
     match x.kind {
         Kind::Ask => x.ask.price += 1,
@@ -273,7 +273,7 @@ fn propose_ordinal_of_the_pending_part() {
 }
 
 /// The forfeit bound is an argument and must be the nearest bound at which the narrowed range and the fee fit the
-/// part: one tick wider does not fit, one tick narrower is not the nearest, each refused even when the pending state is
+/// part: one time wider does not fit, one time narrower is not the nearest, each refused even when the pending state is
 /// written with the hash of that bound.
 #[test]
 fn propose_forfeit_bound_must_be_the_nearest() {
@@ -385,28 +385,28 @@ fn stale_proposal_is_refuted() {
 }
 
 /// A truthful liquidation (the market really is below the trigger): no counter bid in the market contradicts it by g,
-/// so a challenge with a bid one tick below the refutation bound is refused; the claim finalizes.
+/// so a challenge with a bid one time below the refutation bound is refused; the claim finalizes.
 #[test]
 fn truthful_proposal_cannot_be_refuted() {
     let l = lv(0x3c);
     let g = liq(&l, FULL, LONG);
     let w = pend(&g, 930_000_000);
-    // Bids around the market (9.3, 9.5) and up to one tick below 9.6632 do not refute.
+    // Bids around the market (9.3, 9.5) and up to one time below 9.6632 do not refute.
     for b in [930_000_000, 950_000_000, REF_LIQ_LONG - 1] {
         refused(&ch_draft(&[w.clone()], &bid(b, FULL), &fk(), 1), 0);
     }
     accept(&finalize_draft(&w, &fk(), 2));
 }
 
-/// The margin g at its boundary, for each of the four claims: the refutation quote is accepted, one tick in the
+/// The margin g at its boundary, for each of the four claims: the refutation quote is accepted, one time in the
 /// claim's favour is refused.
 #[test]
-fn challenge_short_of_the_margin_by_one_tick_is_refused() {
+fn challenge_short_of_the_margin_by_one_price_is_refused() {
     let l = lv(0x3d);
     for (g, e, c) in claims(&l, FULL) {
         let w = pend(&g, e.price());
         accept(&ch_draft(&[w.clone()], &c, &fk(), 1));
-        refused(&ch_draft(&[w.clone()], &one_tick_short(&c), &fk(), 1), 0);
+        refused(&ch_draft(&[w.clone()], &one_price_short(&c), &fk(), 1), 0);
     }
     // The counter-evidence must be of the opposite kind: the same quote as an order of the claim's own kind is refused.
     let w = pend(&liq(&l, FULL, LONG), LIQ_ASK);
@@ -599,7 +599,7 @@ fn pending_part_and_its_remainder_cannot_be_co_spent() {
 // ================================================================ cure
 
 #[test]
-fn cure_exactly_at_and_one_tick_short_of_the_bound() {
+fn cure_exactly_at_and_one_price_short_of_the_bound() {
     let l = lv(0x4a);
     for n in [FULL, HALF] {
         // DESIGN 4.5e: the cure bound clears the claim by g (before review 4: 8.93 and 12.075).
@@ -610,7 +610,7 @@ fn cure_exactly_at_and_one_tick_short_of_the_bound() {
             let signer = if side == LONG { lk() } else { sk() };
             let d = cure_draft(&w, &signer, &fk(), 1);
             accept(&d);
-            // One tick short of the bound (less margin than needed): the cured state does not match.
+            // One signed price short of the bound (less margin than needed): the cured state does not match.
             let mut c = d.pairs[0].1.clone();
             if side == LONG {
                 c.bl += 1;
