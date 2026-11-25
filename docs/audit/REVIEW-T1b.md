@@ -4491,3 +4491,217 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builder
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
 ```
+
+# Round 38
+
+Scope: the design on paper that closes F61 (`docs/ARCHITECTURE-CLEARING.md`, end of section 11, "F61 and what
+closes it", second form; the box at the head of 6a): a leg enters a covered account by a statement (kind 6) that
+both parties sign, at the price of the statement's time, answered as any row and price are; `KpfTLegAdd` is
+withdrawn. Nothing was built for this, so nothing is engine-run here; where I say the current scripts do or do not
+do a thing I read it in the contract, and the F61 hole as it stands is the committed test
+`t1b_finding_f61_...`. No contracts, no `src`, no commit, nothing under `kpf-out`; only this file changed.
+
+**The closure holds against the four takings it names, with one condition: every leg's market must have a live
+committee whose price can be cited. The dispute-only entry (no citation required to settle, only the absence of a
+disproof) does not enforce that condition, and a leg on a market nobody prices reopens F61 (H1 below). Separately,
+the lock an account is under while a statement stands can be used to keep the other party from leaving (M1). Five
+things the statement machinery does not do yet for kind 6, and three disclosed residuals I confirm are disclosed
+and not worse than said.**
+
+## Holes in the design
+
+### H1 (High). A leg on a market nobody prices reopens F61, by lapse
+
+The closure rests on the entry's price being "answered as any row and price are" (section 4a): a dispute is
+refuted by **one citation** of the committee's price (`KpfTStepPrice` reads a `KpfTCite` of a `KpfTNote` the leg's
+**named** committee signed). Two facts about that, read in the scripts:
+
+- A citation is **positive proof**: it exists only where a committee signed a price. There is no way to prove a
+  price **wrong** except by citing a different one. So a point whose market has no citable committee can be
+  **neither confirmed nor refuted**: a dispute of it **lapses** (round 35, F59: the row nobody prices; its
+  dispute lapses and returns the object as it was).
+- The leg carries its own `committee` (the 32 bytes in `XLeg`). Nothing at entry binds it to a live or honest
+  committee; `KpfTNoteApply` takes a join to an **empty** shard row for any market's hash (round 35), so a market
+  the shard never priced is introduced by the entry itself.
+
+In the owner's own account (both keys the owner's), this is F61 again:
+
+1. The owner opens a covered account, both sides its own, and enters a leg (kind 6) on a market `M` whose
+   committee is a key it controls or one that is simply offline, at an entry of its choosing. The entry's price
+   point can only lapse. The owner does not dispute its own statement, so after the dispute period it **settles**
+   and the leg is in at the chosen entry. (If the owner holds `M`'s committee key it need not even wait: it signs
+   a `KpfTNote` at any price and answers its own point **right**.)
+2. The owner states that the leg leaves (kind 4) at a price far from the entry. Same market, same unciteable
+   point; it settles undisputed. The pot cannot pay the gain; the note of what is owed is written and paid in
+   full by the shard (`KpfTNoteApply` kind 4, below the requirement, as the design keeps on purpose).
+
+A watcher of the shard **can** stop each drain: it disputes the leaving's price point, which lapses and returns
+the account as it was, so the owed note is never written. But on a lapse **both bonds return** — the watcher is
+paid nothing for the work and the fees, while the owner risks nothing and retries. For an ordinary market a false
+statement is answered **wrong** and the claimer's bond goes to the refuter: the watcher is paid and the attacker
+is charged. A market nobody prices turns that into an unpaid, unending vigil, and one missed window drains the
+shard. So the closure does not close F61 for such a market; it moves it from "one statement, done" to "a
+statement the owner may repeat for free until a watcher blinks."
+
+This is the same shape as the F60 "release before its join" residual (round 36) and the F59 "row nobody prices"
+case (round 35), and it has the same guard (a watcher's loop that is not built) — but here the guard is **unpaid**
+and the attack is **free to repeat**, which the other two were not (a false release is caught by `KpfTDrawNote`
+with the real note; a false draw row is answered wrong for the bond).
+
+**What closes it** (and why I think the citation the design leaned away from is the sound one): require a
+**positive citation at entry** — a leg settles into a covered account only if its price is **cited** within the
+tolerance, not merely left undisputed. Then a leg on a market nobody prices **cannot enter**, so no leaving on it
+can happen, and every leg in a covered account is on a live market whose later statements are refutable **for a
+bond**. This is one citation per leg at the one moment it enters (a rare event), not at every settlement, so the
+"one price" goal of `GOAL.md` is kept: the committee's price is cited once, and what the clearing party charges is
+still an output beside it. The dispute-only form the design prefers is right for a **leaving** (the leg is already
+in, its market already known live) but wrong for an **entry**, which is the one place a new market is introduced.
+
+(If committees are a **gated, staked** set and a leg's `committee` is checked against a registry at entry, H1
+narrows to the case of a registered committee going dark, which is rarer but still a free retry. If committees
+are **permissionless** at the script level, H1 is immediate and total. Which of these holds is a system fact I did
+not find enforced in `KpfTStepPrice`/`KpfTNote`; it must be stated. Either way a positive citation at entry
+closes it.)
+
+### M1 (Medium). An account under a statement is locked, and the lock is a lever
+
+Read in the scripts: `KpfTLegOut` and `KpfTLegMove` require the account's output to hash to the **account form**
+(`blake2b(p33(blake2b(terms + root)) + moving)`); `KpfTChange.state` turns the output into the **changeHash**
+form while a statement stands, and another statement cannot be stated on a changeHash output. So while any
+statement stands, the account cannot be left at once, handed over, or moved, and no second statement can be
+stated. This is correct for safety (it is what blocks F60's at-once spends mid-statement), but it is a lever:
+
+- A party that can state one-signature changes (a take/leave of its own, kind 2/3/4; a liquidation step of
+  either side, kind 3, is by anyone) keeps the account under a statement for a dispute period at a time, during
+  which the other party cannot take the at-once exit nor state its own leaving. A **false** statement is answered
+  wrong and costs the stater a bond, so honest-only statements bound this; but a party willing to fund bonds for
+  statements that are **true enough not to be refuted** can hold the account and delay an honest counterpart's
+  exit. The honest party's recourse is to dispute (and be paid if the statement is false), or to wait out the
+  period and act in the gap before the next statement lands — a race.
+- Building a multi-leg account is **serial**: each kind-6 entry locks the account for a dispute period, so the
+  next entry cannot be stated until the last settles. An N-leg account takes N dispute periods to build, and each
+  entry re-traces **all** legs so far (the k-th entry is a k-row trace), so a large account's entries are large
+  transactions. Not a security hole, but a cost to state plainly: the account is not a thing a user opens and
+  fills in one sitting.
+
+Decision needed: whether a cap on concurrent/!back-to-back statements, or a grace in which the counterpart may
+act, is wanted; and whether the dispute period for an **entry** (which moves no value and whose only risk is a
+false price) should be shorter than for a leaving or a draw.
+
+## What the statement machinery does not do yet for kind 6 (changes beyond the ones the design lists)
+
+Read in `KpfTChange.state` and the dispute scripts:
+
+1. **Two signatures at stating.** `state` takes one `sig s` and checks it against `claimer`. Kind 6 needs both
+   parties. `state` must take a second signature (the other side's key, read from the moving part) for kind 6, or
+   a sibling entry must. The design says "two signatures on the statement (a statement is one party's today)" —
+   so this is known, but it is a change to `KpfTChange` itself, not only a new end-script.
+2. **The bond, on a two-signer statement.** `state` sets `bond` = the bond rate of the pot and names one
+   `claimer`; a dispute pays the bond to the refuter, a lapse returns it to the claimer. For a kind-6 entry the
+   claimer should be one of the two signers; on the owner's own account the bond returns to the owner on a lapse,
+   which is the free-retry of H1. Who posts and who collects must be fixed; it does not by itself stop H1.
+3. **A new end-script writing a JOIN note.** The settlement writes "the account with the leg and the note that it
+   entered" — a kind-1 (join) note, flag 2 in the outs. `KpfTChange.state` already allows flag 2 for outs after
+   the first, so the outs shape is fine; but the end that computes the maintenance and emits the join is new
+   (today's `KpfTStepEnd`/`KpfTStepLiq` emit release/owed notes, not joins).
+4. **Every row a numbered point, old legs included.** The entry traces the account's existing legs **and** the
+   entering leg. If only the entering leg's row and price are disputable points, a false price on an **old** leg
+   in that trace could pass the maintenance check unrefuted and let a leg enter while A is really below its
+   maintenance. The take/leave machinery already makes every row a point (`KpfTStepRow`/`KpfTStepPrice` at
+   `2i-1`/`2i`); the kind-6 end must keep that, so an old leg marked at a false price is answered wrong like any
+   other row. If it does, this is closed; it must be built that way.
+5. **The first leg's empty prior chain.** Entering the first leg, the chain before it is the empty root (32 zero
+   bytes). `KpfTStepRow` treats a row whose **own** chain is the seed as wrong, but the seed as a **prev** is the
+   normal start. The end's "the row before the last carries the account's chain" check must accept the empty root
+   as the starting chain for a first-leg entry (there is no row before it); otherwise an account's first leg
+   cannot be entered. Build-care, not a hole.
+
+A lapse or a wrong answer returning the account as it was: confirmed the existing dispute machinery returns the
+object to `position` (the pre-statement hash), which for a kind-6 entry is the account **without** the leg — the
+right direction. Value added with the leg: confirmed none moves in the statement; margin is added before by
+`KpfTAddC` and the end only checks it. Both are as the design assumes.
+
+## What I could not break (the four takings the design names)
+
+1. **F61 as I ran it (an entry of one's own choosing).** On a market with a live citable committee, the entry's
+   price is a point anyone refutes with one citation; a wrong entry is answered **wrong** and costs the claimers
+   their bond. The owner can no longer set a price no one checks. Closed — conditioned on H1.
+2. **Two own accounts, long and short at true entries, no margin.** The end asks side A's maintenance **with the
+   leg**, so an account cannot be opened at a true entry with no margin: A must post its maintenance. With the
+   terms as they are (mmr 5 %, tolerance 0.5 %, liquidation fee 0.5 %), the owner posts 5 % of each side's worth
+   at entry; a move of the price beyond 5.5 % on the losing side **before a liquidator steps** is what the shard
+   stands behind, and the shard is asked exactly the rate on the gross for it. So the "no margin" taking is gone;
+   what is left is an ordinary default, liquidatable by anyone for the 0.5 % fee, and the shard's exposure is the
+   gross-rate residual the design discloses (section 8, "what it should be is not computed"). I confirm that
+   residual is bounded by the gross rate and is the ordinary netting risk of a clearing house, not a free drain —
+   **provided** H1 is closed (a default at a true price is refutable; a default on an unpriced market is H1).
+3. **An option struck far in the money, entered for nothing.** The option enters counted at what it is worth
+   exercised at its entry (its row's gain is 0 at entry because the entry **is** the row price), the holder is
+   paid none of that at entry, and it is kept whole as margin (the option's worth is in A's maintenance). So a
+   deep-in-the-money option cannot be used to extract at entry: the value is already in the maintenance the
+   holder must fund, and what a holder pays its writer is off the account. Closed.
+4. **F60 by an entry in place of a payment.** A gain comes only from two prices that were each answered for; an
+   entry gives no gain (entry = row price). So B's margin cannot be handed to A through an entry. Closed. (F60's
+   own fix stands from round 37; this only confirms the entry does not reopen it.)
+
+And: **the at-once lock holds across a statement** (H1/M1 aside) — `KpfTLegOut`/`KpfTLegMove`/`KpfTHand` cannot
+spend an account that carries a statement, so nothing escapes the dispute period.
+
+## Does withdrawing KpfTLegAdd leave anything that needs it?
+
+`KpfTLegMove` appends a leg to another account with its **entry unchanged** (`ny = blake2b(... root2 + lg ...)`,
+the leg's bytes as they are), by three signatures and **no price**. This is **not** the same hole, provided every
+leg's entry is honest to begin with: the move only **relocates** a leg whose entry was set when it first entered.
+Once `KpfTLegAdd` is gone and the only origination is kind 6 (a cited/answered entry), a moved leg carries a true
+entry, so the move cannot mint a false one. The one thing the move still does and should be noted: it reads no
+price and checks **no maintenance** (only margins ≥ 0 and B's margin not leaving the two accounts, from round
+37), so it can leave the receiving account below its maintenance — but at a **true** entry, which is an ordinary
+liquidatable account, not a drain. So nothing needs `KpfTLegAdd`; the move is safe as long as kind 6 is the only
+way a leg is born. (If kind 6 is **not** adopted and `KpfTLegAdd` stays, the move is the same hole between two
+own accounts, because `KpfTLegAdd`'s false entry rides along the move.)
+
+## The cheaper closures the design weighed
+
+- **A citation at every entry** — I **endorse** this, as H1 argues: it is the thing that closes the unpriced-market
+  retry, it is one citation at a rare moment (entry, not every settlement), and it keeps "one price" (the cited
+  committee price; the clearing party's charge is a separate output). The design's reason to lean away ("no
+  citation at an entry") is right for a **leaving** and wrong for an **entry**.
+- **The first form (mark a leg not yet counted, first gain not owed)** — sound against F61 (no false entry gain)
+  but it either forfeits a user's early gain or grows the row to carry an uncounted leg; it is a worse user deal
+  than citation-at-entry and does not beat it. The rejection is reasonable.
+- **Paying owed notes only above the requirement** — I **agree it must be rejected**: a user owed by a genuine
+  default must be paid from the shard whatever the shard is asked to hold; capping at the requirement would strand
+  honest claims exactly when a default has made the shard short, which is the moment the cover exists for. The
+  drain is the **entry**, not the payment; fix the entry.
+
+## Disclosed residuals I confirm (not new, not worse than said)
+
+- **The statement's time within the lateness.** Whoever states picks `t0` within the lateness the terms allow
+  (default `late_daa` 100); both parties agreeing can pick the better end of that window. Bounded, small, and the
+  same freedom a take already has. As disclosed.
+- **The gross-rate exposure of a netted shard.** A shard whose rows are large and set against one another is
+  asked little, and a default at a gap takes what margin did not hold; that is the rate on the gross, a terms
+  number not yet computed (section 8). As disclosed; item 2 above is the honest-default form of it, and it is
+  bounded by the gross rate once H1 is closed.
+
+## What must be decided before building
+
+1. **H1:** whether a kind-6 entry requires a positive citation (my recommendation), or whether committees are a
+   gated set a leg's `committee` is checked against so that no leg can name an unpriceable market. Without one of
+   these the closure does not close F61.
+2. The second signature and the bond's owner on a two-signer statement (change to `KpfTChange`).
+3. Whether the entry's dispute period and the account-lock (M1) need a shorter period or a counterpart grace, so
+   one party cannot chain statements to deny the other its exit, and so a multi-leg account is not N dispute
+   periods to build.
+4. That the kind-6 end makes every row (old legs too) a disputable point and handles the first leg's empty prior
+   chain.
+5. Whether kind 6 should refuse an account that already carries an option or a leg of no kind, or trace them like
+   any other leg (the trace and maintenance already handle options; a leg of no kind cannot be born once
+   `KpfTLegAdd` is gone, so the question is only about legs already in from before the change).
+
+## Counts and commands
+
+Nothing built or run this round; the F61 hole as it stands is the committed
+`t1b_finding_f61_the_owner_of_a_shard_is_owed_by_it_through_an_account_of_its_own_at_an_entry_of_its_choosing`
+(round 37, passing). The test suites are unchanged from round 37 (`auditT1_builders` 104, `auditT1_tests` 55,
+`auditT1_cli` 47).

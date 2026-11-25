@@ -338,7 +338,7 @@ entry far from the price (`KpfTLegAdd` reads no price), and states that the leg 
 the statement has no wrong point, the pot cannot pay the gain, and the note of what is owed is paid by the shard
 in full, whatever the shard is asked to hold. One dispute period, a bond that comes back. Until this is closed the
 cover of this section protects a user only from a clearing party that does not do this. The closure is not built;
-its form is at the end of section 11.
+its form is at the end of section 11 (a leg enters by a statement, at a price that is answered for).
 
 Written whole before anything is compiled, and walked through for each party that reads it. Nothing of this runs
 yet (D).
@@ -708,17 +708,63 @@ Order of what follows, each on paper before it is a script:
    signed within the program's limits.
 4. The position's scripts to where the earlier families are, once 1 to 3 ran on testnet-10.
 
-**F61 and what closes it** (on paper; not built, not reviewed). Three things, each as designed, make it: an entry
-nobody checks, a gain the pot cannot pay written as owed, and an owed note paid before anything the shard is asked
-to hold. Paying an owed note only above the requirement would refuse users what they are owed, so the note's rule
-stays. What changes is where a gain that is owed can come from:
+**F61 and what closes it** (on paper, second form, 26 November 2026; not built, not reviewed). Three things, each
+as designed, make it: an entry nobody checks, a gain the pot cannot pay written as owed, and an owed note paid
+before anything the shard is asked to hold. Paying an owed note only above the requirement would refuse users
+what they are owed, so the note's rule stays. The entry is what is wrong: `KpfTLegAdd` is the one change of an
+account that sets a price and is neither stated nor answered for. Everything else of this design is stated, and a
+citation only answers (section 4a).
 
-| Change | Why |
+**A leg enters a covered account by a statement** (kind 6), and `KpfTLegAdd` is withdrawn.
+
+| | |
 |---|---|
-| A leg that enters by `KpfTLegAdd` is marked as not yet counted (a mark in its direction's place). The first statement that counts it (any take, at prices that are answered for) moves its entry to the price and clears the mark | an entry is then a price somebody could dispute, without a citation at every entry and without making the entry wait |
-| What a leg not yet counted gained for side A is paid from the pot and is not owed by the shard (a row carries that sum: 120 bytes for 112) | a gain made of an entry of one's own choosing reaches nobody's cover. A user's cover of a new leg begins once the leg was counted: one dispute period after it entered, by a take of nothing that anyone states |
-| Side A adds, with a leg it is asked the maintenance of, at least that maintenance at the leg's entry | else two accounts of the owner's own keys, one long and one short at true entries and with no margin, are owed by the shard whatever way the price moves, and the side that lost has nothing to pay: the same taking, at the speed of the market. With the margin it is what any user's default is, and somebody is paid to liquidate it |
+| Who states | the account's two parties, by two signatures on the statement (a statement is one party's today) |
+| What is stated | a trace of the account's legs and of the leg that enters, last, at the prices of the statement's time; and of that leg its row's name in the shard and side B's units (the 92 bytes a leaving leg has today) |
+| The entering leg's row (`KpfTStepRow`) | the leg's entry is its row's price, so it gains nothing as it enters; it is a leg (size within the bound, a kind, a strike within the limit); what the statement says of it is its own |
+| Its price (`KpfTStepPrice`) | within the tolerance of the committee's at the statement's time, as any row's |
+| The end (a new script) | the row before the last carries the account's chain; side A stands at its maintenance with the leg (its worth, and what the options it holds are counted at); no margin below zero. Outputs: the account with the leg and every entry at its price, and the note that the leg entered |
+| When | stated at once; applied after the dispute period, as any statement. Until then the account carries the statement |
 
-What this costs a user: the cover of a new leg begins a dispute period after it enters; a leg that lowers the
-account's risk still asks its own maintenance when it enters (taken back by a take). What it does not cost: the
-entry and the way out stay at once.
+What each part closes:
+
+| | |
+|---|---|
+| An entry of one's own choosing | the entry is a price of the statement's time that anyone disputes with a bond; a wrong one is answered with one citation and costs the claimers their bond |
+| Two accounts of the owner's own keys with no margin, one long and one short at true entries (owed by the shard whichever way the price moves, the side that lost having nothing) | the end asks side A's maintenance at the entry. With it this is what any user's default is, and somebody is paid to liquidate it |
+| An option struck far in the money, entered for nothing (the same taking by a strike of one's choosing) | an option enters counted at what it is worth exercised at its entry: its holder is paid none of that, and keeps it whole as margin. What a holder pays its writer for the option is beside the account |
+| The clearing party's margin handed to a user who signs (F60, by an entry in place of a payment) | a gain comes from two prices that were answered for, and no other way |
+
+What this costs a user: an entry is final a dispute period after it is stated, and the account carries the
+statement until then (no other change of it: the way out at once is at once after that). It is the cost every
+priced change has here. What it does not cost: the price is the one both signed, from the moment it is stated; no
+citation at an entry; margin asked on the account as a whole, not a leg at a time. A leg enters at the committee's
+price and what the clearing party charges is paid beside it: one price (`GOAL.md`, the third line).
+
+Left as it is, and said: whoever states chooses the statement's time within the lateness the terms allow, so two
+parties who agree can enter at the better end of that window (as a take already chooses its time); and a shard
+whose rows are large and set against one another is asked little, while a default of one side at a gap in the
+price takes from it what a margin did not hold. That is the rate on the gross, a number of the terms, and what it
+should be is not computed (section 8).
+
+**Review 38 attacked this design on paper** and found that it does not close F61 as written (H1, high), and one
+thing older than it (M1, medium). The four takings of the table above it could not break, on a market that is
+priced by a committee the shard's users chose.
+
+| Found | What it is | Decided |
+|---|---|---|
+| H1: a leg on a market nobody prices, or that the owner's own committee prices | A leg names its own committee, and nothing binds it to one the shard's users know. A price of a committee of the owner's keys is answered right at any value. A price nobody signs is answered by nobody: a dispute of it lapses, both bonds come back, and what nobody disputed settles. So the owner enters and leaves at prices of its choosing all the same; a watcher is paid nothing for stopping it and must never miss a window | Two rules. (1) **A shard is of one committee**: its id is the hash of what its anchor gives and of a committee's id, which whoever opens it names; a leg enters an account under it only if the leg's committee is that one (the end of an entry is shown the two and holds the entering leg to it). A user who takes a shard as its cover reads its committee as it reads its rows. (2) **The price of a leg that enters is the claimers' to show**: a dispute of it that nobody answers ends the entry and pays the disputer the claimers' bond, where a dispute of any other statement that lapses returns both. An entry on a market nobody prices then costs its claimers a bond each time, and whoever watches is paid. No citation where nobody disputes |
+| M1: an account that carries a statement takes no other change | One party states a change (a take of nothing is enough; for side B anyone states it) and the account is closed to the other for a dispute period, and again: the other's way out at once and its own statement wait as long as the first has coins for bonds that come back. An account of n legs built by entries takes n dispute periods | Open. It is as old as section 4a and is not of this design; an entry by statement makes it met more often. To design: whose turn it is after a settlement, or a shorter period for what moves no value |
+
+Also decided for the building: the statement of an entry carries two signatures (`KpfTChange` takes one today) and
+the bond is the claimer's, as any statement's; every row of an entry's trace is a point as in a take, so an old
+leg marked at a false price in it is answered wrong; the first leg of an account enters after a row that is
+nothing; an entry adds no value (margins are added before it, by `KpfTAddC`).
+
+Left as it is, and said: a committee the users chose that stops signing. Nothing priced is answered then, here as
+everywhere in this design; with rule (2) nobody enters under it, and what stands is left by the exit of a market
+with no price.
+
+Order of building: the shard's id of one committee; kind 6 beside `KpfTLegAdd` (the statement with two
+signatures, the entering row, the end, the lapse of an entry's price); then the tests and the commands moved to
+it; then `KpfTLegAdd` out of the library.
