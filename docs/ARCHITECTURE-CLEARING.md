@@ -944,7 +944,40 @@ one-way book 6 %.
 Not decided: how many notes one statement on the shard takes, and what a booked object costs in bytes (one a
 leg, where a row was four numbers a market).
 
-Order: the model again with these (legs booked one by one, notes that arrive late and in any order, accounts
-held under statements, the two levels of the call, visits of whoever watches every k ticks); review of it; then
-scripts, the smallest form first.
+**The second model** (`tests/research_solvency_notes.rs`, five tests; 26 November 2026): no margin of side B in
+an account, legs booked or not, notes paid when somebody applies them and a statement on the shard waiting for
+them, the two levels, a call that pays every note the same share, and whoever watches coming every so many
+ticks. Three owners, each knowing the next tick: one that enters accounts of its own the way the price goes and
+leaves the ones that would lose; one that holds a pair of its own accounts under statements, lets the one that
+won leave and the one that lost stand (H1); one whose own accounts' entries are never booked (H2).
+
+| Rules | Owner | Ticks of | Visits | Users unpaid |
+|---|---|---|---|---|
+| all | each of the three | 0.5 %, 2 %, 4.5 % | every tick | on 0 of 1,000 paths, nine times |
+| a step does not reach an account that carries a statement | the pair | 2 % | every tick | 340 of 1,000 |
+| every leg is paid, booked or not, and the requirement is asked at a draw alone (as built today) | the unbooked | 2 % | every tick | 996 of 1,000 |
+| all | the first | 1 % | every 2nd, every 4th tick | 0 of 1,000 |
+| all | the first | 4.5 % | every 4th tick | 72 of 1,000 |
+
+**What the second model found that was not looked for: a book that is set off is held by the rate on the
+gross.** Nothing gates a leaving, and none should (a user leaves when it likes). So one side of a set-off book
+leaves, and until the next visit the other side stands against a shard that holds what a set-off book is asked:
+the rate on the gross, and nothing on a net of nothing. Two users, 1,000 units each way at 10, the owner having
+drawn all it may: the shard holds 100 KAS. The short leaves. A rise before the visit of 1 %, 1.5 %, 2 %: the long
+is paid in full (the rate on the gross of the two sides and the band of the tolerance are 2 % of its worth). Of
+4.5 %: it is short 245 KAS of 345. So the claim's bound is two bounds:
+
+| Book | The move between two visits that is held |
+|---|---|
+| one way | the maintenance rate less the tolerance (4.5 % with the terms as they are) |
+| set off | twice the rate on the gross, and twice the tolerance (2 %) |
+
+The rate on the gross was the liquidation fee's rate, taken because the terms had the number. What it is here is
+the capital a set-off book keeps for the time between one side's leaving and the call: for the one bound to be
+the other, it is half the maintenance rate less three times the tolerance (1.75 % for 0.5 %), and a set-off
+book is then asked 1.75 % of its legs' worth where two parties' margins are 5.5 % (three times less, not eleven).
+It is a number of the shard's terms, read by its users, like the others.
+
+Order: review of the second model; the scripts' design on paper, the smallest form (what review 42 listed);
+then scripts.
 
