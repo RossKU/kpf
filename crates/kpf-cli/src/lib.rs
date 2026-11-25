@@ -11,6 +11,8 @@ pub mod keys;
 pub mod node;
 pub mod report;
 pub mod tcmds;
+mod acmds;
+mod ncmds;
 pub mod xcmds;
 
 use args::Args;
@@ -513,6 +515,35 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "exec-run" => xcmds::exec_run_cmd(&a),
         "coins" => xcmds::coins_cmd(&a),
         "send" => xcmds::send_cmd(&a),
+        "probe-seq-commit" => xcmds::probe_seq_cmd(&a),
+        "node-call" => xcmds::node_call_cmd(&a),
+        "probe-cite" => xcmds::probe_cite_cmd(&a),
+        "note-write" => ncmds::note_write_cmd(&a),
+        "note-cite" => ncmds::note_cite_cmd(&a),
+        "note-reclaim" => ncmds::note_reclaim_cmd(&a),
+        "pos-take" => ncmds::take_cmd(&a),
+        "change-settle" => ncmds::change_settle_cmd(&a),
+        "change-dispute" => ncmds::change_dispute_cmd(&a),
+        "change-lapse" => ncmds::change_lapse_cmd(&a),
+        "change-late" => ncmds::change_late_cmd(&a),
+        "take-answer" => ncmds::take_answer_cmd(&a),
+        "acct-show" => acmds::show_cmd(&a),
+        "shard-open" => acmds::shard_open_cmd(&a),
+        "shard-fund" => acmds::shard_fund_cmd(&a),
+        "shard-draw" => acmds::shard_draw_cmd(&a),
+        "shard-note" => acmds::shard_note_cmd(&a),
+        "acct-open" => acmds::open_cmd(&a),
+        "acct-leg" => acmds::leg_cmd(&a),
+        "acct-add" => acmds::add_cmd(&a),
+        "acct-take" => acmds::take_cmd(&a),
+        "acct-leave" => acmds::leave_cmd(&a),
+        "acct-liq" => acmds::liq_cmd(&a),
+        "acct-end" => acmds::end_cmd(&a),
+        "stated-settle" => acmds::settle_cmd(&a),
+        "stated-dispute" => acmds::dispute_cmd(&a),
+        "stated-lapse" => acmds::lapse_cmd(&a),
+        "stated-answer" => acmds::answer_cmd(&a),
+        "draw-note" => acmds::draw_note_cmd(&a),
         "fee-sweep" => tcmds::fee_sweep_cmd(&a),
         "fee-pay" => tcmds::fee_pay_cmd(&a),
         "lib-create" => tcmds::lib_create_cmd(&a),

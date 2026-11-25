@@ -33,7 +33,7 @@ pub(crate) struct Loaded {
     pub(crate) obj: TObj,
 }
 
-fn load(a: &Args, flag: &str, node: &mut N, net: Network) -> R<Loaded> {
+pub(crate) fn load(a: &Args, flag: &str, node: &mut N, net: Network) -> R<Loaded> {
     load_path(a.need(flag)?, node, net)
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn live<T>(l: &Loaded, s: T, need_daa: bool) -> R<OLive<T>> {
     Ok(OLive { s, value: l.f.amount, id: (l.f.covenant_id != Hash::default()).then_some(l.f.covenant_id), op: l.f.op, daa })
 }
 
-fn position_of(a: &Args, node: &mut N, net: Network) -> R<(Loaded, Position)> {
+pub(crate) fn position_of(a: &Args, node: &mut N, net: Network) -> R<(Loaded, Position)> {
     let l = load(a, "position", node, net)?;
     match l.obj {
         TObj::Position(x) => Ok((l, x)),
@@ -69,7 +69,7 @@ fn position_of(a: &Args, node: &mut N, net: Network) -> R<(Loaded, Position)> {
 }
 
 /// The copy of `name` given as `--script`, which must be of the library `lib`.
-fn script_of(a: &Args, lib: &[u8; 32], name: &'static str, node: &mut N, net: Network) -> R<LibScript> {
+pub(crate) fn script_of(a: &Args, lib: &[u8; 32], name: &'static str, node: &mut N, net: Network) -> R<LibScript> {
     let Some(path) = a.get("script") else {
         // No file: a live copy is found at the node (every copy of a script is at one address, under the library's
         // id). Another machine has no file of the copy a transaction of somebody else's wrote last.
@@ -90,7 +90,7 @@ fn script_of(a: &Args, lib: &[u8; 32], name: &'static str, node: &mut N, net: Ne
 
 /// A UTXO with the script `redeem` under the covenant id `id`, read from the node: one of those the node lists, taken
 /// by the clock (two users that look at the same moment seldom take the same one; whoever loses asks again).
-fn found(node: &mut N, net: Network, redeem: Vec<u8>, id: &[u8; 32], what: &str, flag: &str) -> R<ObjFile> {
+pub(crate) fn found(node: &mut N, net: Network, redeem: Vec<u8>, id: &[u8; 32], what: &str, flag: &str) -> R<ObjFile> {
     let Some(n) = node else { return Err(format!("give --{flag} FILE, or --node URL to find a {what} there")) };
     let list: Vec<_> = n.utxos(&[p2sh_address(&redeem, net)])?.into_iter().filter(|u| u.covenant_id.map(|c| c.as_bytes()) == Some(*id)).collect();
     if list.is_empty() {
@@ -110,7 +110,7 @@ pub(crate) enum Made {
     Script(usize, &'static str),
 }
 
-fn file_of(id: kaspa_consensus_core::tx::TransactionId, daa: Option<u64>, tx: &Transaction, i: usize, redeem: Vec<u8>, net: Network) -> Value {
+pub(crate) fn file_of(id: kaspa_consensus_core::tx::TransactionId, daa: Option<u64>, tx: &Transaction, i: usize, redeem: Vec<u8>, net: Network) -> Value {
     let o = &tx.outputs[i];
     ObjFile { op: TransactionOutpoint { transaction_id: id, index: i as u32 }, amount: o.value, daa, covenant_id: o.covenant.map(|c| c.covenant_id).unwrap_or_default(), redeem }.to_json(net)
 }
@@ -173,6 +173,7 @@ pub(crate) fn parties(o: &TObj) -> Vec<[u8; 32]> {
         TObj::Disputed(d) => [of(&d.claim.position), vec![d.disputer]].concat(),
         TObj::Liq(l) => [of(&l.liq.position), vec![l.liq.liquidator]].concat(),
         TObj::ExitClaim(q) => of(&q.position),
+        TObj::Change(c) => [of(&c.position), vec![c.claimer], c.disputer.into_iter().collect()].concat(),
         TObj::Order(o) => vec![o.owner],
         TObj::Anchor => vec![],
     }
@@ -241,7 +242,7 @@ fn done_by(a: &Args, title: &str, mk: &dyn Fn(Sw) -> R<OBuilt>, keys: &KeySet, n
 
 /// Signs, verifies, prints, saves and (with `--submit`) sends, then writes the files of what the transaction made:
 /// under `dry-run/` unless the node accepted it.
-fn done(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &mut N, lib: &[u8; 32], made: &[Made]) -> R<()> {
+pub(crate) fn done(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &mut N, lib: &[u8; 32], made: &[Made]) -> R<()> {
     if a.has("partial") {
         return Err(format!("{title} is not written partly signed: `--partial` is for what two users sign (pos-open, pos-close --mutual, pos-join, pos-leave)"));
     }
@@ -254,7 +255,7 @@ fn done(a: &Args, title: &str, b: &OBuilt, keys: &KeySet, net: Network, node: &m
     r
 }
 
-fn side_of(s: &str) -> R<i64> {
+pub(crate) fn side_of(s: &str) -> R<i64> {
     match s.to_ascii_lowercase().as_str() {
         "a" | "owner" | "1" => Ok(SIDE_A),
         "b" | "counterparty" | "2" => Ok(SIDE_B),
@@ -262,7 +263,7 @@ fn side_of(s: &str) -> R<i64> {
     }
 }
 
-fn word(side: i64) -> &'static str {
+pub(crate) fn word(side: i64) -> &'static str {
     if side == SIDE_A {
         "a (the owner)"
     } else {
@@ -270,7 +271,7 @@ fn word(side: i64) -> &'static str {
     }
 }
 
-fn show(o: &TObj, lib: &[u8; 32], landed: Option<u64>, net: Network) {
+pub(crate) fn show(o: &TObj, lib: &[u8; 32], landed: Option<u64>, net: Network) {
     if let TObj::Anchor = o {
         println!("anchor of a registry of the library {}: the way in for an order (order-place) or a position (pos-open)", to_hex(lib));
         return;
@@ -281,6 +282,7 @@ fn show(o: &TObj, lib: &[u8; 32], landed: Option<u64>, net: Network) {
         TObj::Disputed(d) => &d.claim.position,
         TObj::Liq(l) => &l.liq.position,
         TObj::ExitClaim(q) => &q.position,
+        TObj::Change(c) => &c.position,
         TObj::Anchor => return,
         TObj::Order(o) => {
             println!("order of library {}", to_hex(lib));
@@ -325,8 +327,22 @@ fn show(o: &TObj, lib: &[u8; 32], landed: Option<u64>, net: Network) {
         }
         return;
     }
+    if let TObj::Change(c) = o {
+        println!("stated by {} for the time at DAA {}: a change of kind {} with a bond of {} KAS; the position becomes:", p2pk_address(&c.claimer, net), c.t0, c.kind, fmt_kas(c.bond as i128));
+        for out in c.outs.list() {
+            println!("  {} KAS {}", fmt_kas(out.value as i128), if out.key { format!("to {}", p2pk_address(&out.to, net)) } else { format!("in the position, with the state {}", to_hex(&out.to)) });
+        }
+        match c.disputer {
+            Some(d) => println!("disputed by {}: decided by whoever shows the committee's prices for its time in a citation (`take-answer`); unanswered after the dispute period it lapses, and both bonds return", p2pk_address(&d, net)),
+            None => println!("nothing is computed on the chain: applied after the dispute period of {} DAA (`change-settle`) unless it is disputed (`change-dispute`) or answered at once with a citation (`take-answer`)", c.position.dispute_daa),
+        }
+        if let Some(d) = landed {
+            println!("landed at DAA {d}: {}", if c.in_time(d) { "in time" } else { "OUT OF ITS TIME (ended with `change-late`)" });
+        }
+        return;
+    }
     let claim = match o {
-        TObj::Position(_) | TObj::Liq(_) | TObj::ExitClaim(_) | TObj::Order(_) | TObj::Anchor => return,
+        TObj::Position(_) | TObj::Liq(_) | TObj::ExitClaim(_) | TObj::Change(_) | TObj::Order(_) | TObj::Anchor => return,
         TObj::Claim(c) => c,
         TObj::Disputed(d) => {
             println!("disputed by {}: decided by whoever shows the committee's prices for its time (`pos-prove` if they give at least the amount, `pos-refute` if not: the loser's bond is shared by the winner and the committee); unanswered after the dispute period it is void, with both bonds back (`pos-lapse`)", p2pk_address(&d.disputer, net));
@@ -348,7 +364,7 @@ fn show(o: &TObj, lib: &[u8; 32], landed: Option<u64>, net: Network) {
 /// The signed price and the prices a claim states: the committee's, when the epoch tables and the members' signed prices are given
 /// (`--epoch-table1 --signed-price1 ...`), so that the claim can be proved if disputed; else as typed (`--t0 --p1 --p2`), with a
 /// warning.
-fn stated_price(a: &Args, x: &Position, node: &mut N, net: Network) -> R<(i64, [i64; 2])> {
+pub(crate) fn stated_price(a: &Args, x: &Position, node: &mut N, net: Network) -> R<(i64, [i64; 2])> {
     if a.has("epoch-table1") {
         let t1 = crate::ccmds::x_att(a, 1, &x.x, node, net)?;
         // An epoch table serves its epoch's signed prices until one epoch after the epoch's end, when anyone may retire it: the

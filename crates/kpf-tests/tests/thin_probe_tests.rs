@@ -850,7 +850,9 @@ fn the_models_hashes_and_scripts_are_the_ones_the_engine_tests_use() {
     }
     // (The proofs are compiled with the epoch table's template: `kpf-artifacts check` holds them to their sources.)
     // (So is the merge, compiled with what its sender keeps.)
-    for n in pinned::SCRIPTS.iter().filter(|n| !n.ends_with("Prove") && !n.ends_with("Refute") && !["KpfTMerge", "KpfTNovate", "KpfTJoin", "KpfTFold", "KpfTLeave", "KpfTPay"].contains(*n)) {
+    // (So are the note's writer and the citation, compiled with the note's script, and what reads a citation, with
+    // the citation's address.)
+    for n in pinned::SCRIPTS.iter().filter(|n| !n.ends_with("Prove") && !n.ends_with("Refute") && !["KpfTMerge", "KpfTNovate", "KpfTJoin", "KpfTFold", "KpfTLeave", "KpfTPay", "KpfTNote", "KpfTCite", "KpfTTake", "KpfTShardPrice", "KpfTStepPrice"].contains(*n)) {
         assert_eq!(pinned::kit().script(n).unwrap(), &bytecode(&thin(n))[..], "{n}");
     }
     // What the model says a claim pays is what the scripts accepted above (the sums of T4 and T5).

@@ -14,6 +14,36 @@ use kaspa_txscript_errors::{CovenantsError, TxScriptError};
 
 use crate::tx::{masses, min_fee, MassReport, MIN_FEE_RATE, SIGOP_SCRIPT_UNITS};
 
+thread_local! {
+    /// The chain blocks this thread's verifications may be asked the sequencing commitment of (`OpChainblockSeqCommit`,
+    /// KIP-21): (block hash, commitment). Empty unless a tool that cites the chain set it from a node's headers; the
+    /// engine then has no accessor and refuses the opcode, as before.
+    static CHAIN_VIEW: std::cell::RefCell<Vec<(kaspa_consensus_core::Hash, kaspa_consensus_core::Hash)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Sets the chain blocks, with their sequencing commitments, that scripts verified on this thread may cite. A tool
+/// reads them in the headers of a node (`acceptedIdMerkleRoot` of a block on the selected-parent chain); what the
+/// network's nodes will answer is theirs to say, and a transaction that cites a block they do not see is refused there.
+pub fn set_chain_view(blocks: Vec<(kaspa_consensus_core::Hash, kaspa_consensus_core::Hash)>) {
+    CHAIN_VIEW.with(|c| *c.borrow_mut() = blocks);
+}
+
+/// The sequencing commitment this thread's chain view gives for `block`, if it is in it.
+pub fn chain_commitment(block: &kaspa_consensus_core::Hash) -> Option<kaspa_consensus_core::Hash> {
+    CHAIN_VIEW.with(|c| c.borrow().iter().find(|(b, _)| b == block).map(|(_, c)| *c))
+}
+
+struct ChainView(Vec<(kaspa_consensus_core::Hash, kaspa_consensus_core::Hash)>);
+
+impl kaspa_txscript::SeqCommitAccessor for ChainView {
+    fn is_chain_ancestor_from_pov(&self, block_hash: kaspa_consensus_core::Hash) -> Option<bool> {
+        Some(self.0.iter().any(|(b, _)| *b == block_hash))
+    }
+    fn seq_commitment_within_depth(&self, block_hash: kaspa_consensus_core::Hash) -> Option<kaspa_consensus_core::Hash> {
+        self.0.iter().find(|(b, _)| *b == block_hash).map(|(_, c)| *c)
+    }
+}
+
 /// How script units are metered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Meter {
@@ -47,6 +77,8 @@ pub fn run_raw(tx: &Transaction, entries: &[UtxoEntry], meter: Meter) -> Result<
     let reused = SigHashReusedValuesUnsync::new();
     let cache = Cache::new(10_000);
     let flags = || EngineFlags { sigop_script_units: if meter == Meter::Free { 0u64 } else { SIGOP_SCRIPT_UNITS }.into() };
+    let view = ChainView(CHAIN_VIEW.with(|c| c.borrow().clone()));
+    let seen: Option<&dyn kaspa_txscript::SeqCommitAccessor> = if view.0.is_empty() { None } else { Some(&view) };
     Ok((0..tx.inputs.len())
         .map(|i| {
             let input = tx.inputs[i].clone();
@@ -56,7 +88,7 @@ pub fn run_raw(tx: &Transaction, entries: &[UtxoEntry], meter: Meter) -> Result<
                 &input,
                 i,
                 &entries[i],
-                EngineCtx::new(&cache).with_reused(&reused).with_covenants_ctx(&cov_ctx),
+                EngineCtx::new(&cache).with_reused(&reused).with_covenants_ctx(&cov_ctx).with_seq_commit_accessor_opt(seen),
                 flags(),
                 limit,
             );

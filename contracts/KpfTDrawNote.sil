@@ -1,0 +1,134 @@
+pragma silverscript ^0.1.0;
+
+// A draw (kind 5 of KpfTChange) is stated on a shard by its owner: 40 bytes, an amount and a price a row. It is
+// within the rule when the claimer is the shard's owner, the amount is above zero, each row that has a market has a
+// price above zero and within the market's limit, and what the shard then holds is at least its requirement at
+// those prices: the rate on the net (the terms' maintenance rate) of the worth of every row's net units, and the
+// rate on the gross (the terms' liquidation rate) of the worth of every row's gross units, and the tolerance of that
+// more (the prices are only near the committee's). A dispute names one point:
+//   point 0        the end: the rule above, and the outputs (the shard holding the amount less, the amount to its
+//                  owner): KpfTShardEnd computes it over the four rows
+//   point r, 1..4  the price of row r is within the tolerance of the committee's (KpfTShardPrice, one citation; a
+//                  row with no market, and a point beyond the fourth, are answered right)
+// And whatever was disputed or not: a note to the shard that landed before the statement and is not applied ends it
+// (KpfTDrawNote): what the shard holds and what its rows say is not what it will, once the note is applied.
+//
+// KpfTDrawNote: anyone ends a stated draw (disputed at a point or not) by a note to its shard that landed before
+// the statement and is not applied: the note stands at places 1 and 2 of `who` and goes on as it is; the shard
+// again; the claimer's bond is lost, half to whoever shows the note, half in this script's copy; a disputer has its
+// bond back. A note counts only where it is of an account whose side B is the shard's owner (no other is ever
+// applied), and a deposit does not (it only adds). Whatever such a note there is, its owner saw it coming: a leg
+// enters by the owner's own signature, and a leg's leaving and what is owed are written by a statement that waited
+// its dispute period.
+//   end(who, ageb, slotLen, fixed, moving, t0, arg, outs, bond, claimer, window, late, held, disputed, dkey, point,
+//       kind, head, net, gross, key, amount, rkey)                                                    anyone.
+contract KpfTDrawNote(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+    int constant POINT_TAG = 11;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // The lateness of a statement that stands again after a point of it was answered right: it was held to its time
+    // when it was disputed, and is not held to it again.
+    int constant LATE_AGAIN = 499999999999;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int disputed, byte[32] dkey, int point, int kind, byte[84] head, int net, int gross, byte[32] key, int amount, byte[32] rkey) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        int n = int(byte[8](who.slice(8, 16)));
+        require(who.slice(16, 24) == who.slice(8, 16));
+        require(n != j);
+        byte[] rs = slotOf(j, slotLen);
+        byte[] ns = slotOf(n, slotLen);
+        byte[] mv = byte[](moving);
+        byte[32] position = blake2b(p33(fixed) + mv);
+        byte[32] c0 = blake2b(i9(CHANGE_TAG) + p33(position) + i9(5) + i9(t0) + p33(arg) + p33(outs) + i9(bond) + p33(claimer) + i9(window) + i9(late) + i9(held));
+        require(disputed == 0 || disputed == 1);
+        if (disputed == 1) {
+            c0 = blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point));
+        }
+        require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The note: to this shard, one that changes what it is asked or what it holds for the worse and is applied
+        // (a leg's, or what a user is owed, of an account whose side B is the owner), and landed before the
+        // statement.
+        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(kind) + byte[](head) + i9(net) + i9(gross) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        if (kind == 1 || kind == 2) {
+            require(byte[](key) == mv.slice(1, 33));
+        } else {
+            // (A deposit ends no draw: it only adds to what the shard holds, and anyone writes one at any time.)
+            require(kind == 4);
+            require(byte[](head).slice(0, 33) == mv.slice(0, 33));
+        }
+        require(OpTxInputDaaScore(n) < OpTxInputDaaScore(j));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpInputCovenantId(n) == id);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int c = OpCovOutputIdx(id, 0);
+        int c1 = OpCovOutputIdx(id, 1);
+        int v = tx.inputs[j].value;
+        require(bond > 0);
+        require(v >= bond + disputed * bond);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v - bond - disputed * bond);
+        require(tx.outputs[c1].scriptPubKey == tx.inputs[n].scriptPubKey);
+        require(tx.outputs[c1].value >= tx.inputs[n].value);
+        int half = bond / 2;
+        int m = tx.outputs.length - 1 - 4 * j;
+        require(m - disputed >= tx.inputs.length);
+        if (disputed == 1) {
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m - 1].value >= bond);
+        }
+        if (half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= half);
+        }
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

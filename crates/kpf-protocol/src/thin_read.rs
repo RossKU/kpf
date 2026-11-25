@@ -321,6 +321,18 @@ fn read_call(tx: &Transaction, c: &Call, slots: &[(usize, [u8; 32])], amounts: &
         ("KpfTAdd", "add", Some(TObj::Position(a))) => c.ints(["side", "delta"]).and_then(|[s, d]| a.added(side_of(s)?, d)).map(position).unwrap_or_default(),
         ("KpfTClose", "close", Some(TObj::Position(a))) => c.ints(["side", "t0", "a1", "a2", "amount"]).and_then(|[s, t0, a1, a2, v]| a.claim(s, t0, [a1, a2], v)).map(|k| vec![TObj::Claim(k)]).unwrap_or_default(),
         ("KpfTLate", "late", Some(TObj::Claim(k))) => position(k.position),
+        // A stated change: what it states and what the position becomes are in the statement's arguments.
+        ("KpfTChange", "state", Some(TObj::Position(a))) => match (c.ints(["kind", "t0"]), c.bytes("said").and_then(crate::thin::Take::read), c.bytes("outs").and_then(crate::thin::Outs::read), c.key("claimer")) {
+            // (What the position held when it was stated is the statement's input: where that is not known, the
+            // least such a position holds is tried, and a wrong guess rebuilds nothing.)
+            (Some([kind, t0]), Some(take), Some(outs), Some(claimer)) if kind == crate::thin::KIND_TAKE => held(0).map(|v| vec![TObj::Change(crate::thin::Change { position: a, kind, t0, take, outs, bond: a.bond(), claimer, held: v, disputer: None })]).unwrap_or_default(),
+            _ => vec![],
+        },
+        ("KpfTChangeSettle", "settle", Some(TObj::Change(k))) => k.position.taken(&k.take).filter(|p| k.becomes(p)).map(position).unwrap_or_default(),
+        ("KpfTChangeDispute", "dispute", Some(TObj::Change(k))) => c.key("dkey").map(|d| vec![TObj::Change(k.disputed(d))]).unwrap_or_default(),
+        ("KpfTChangeDispute", "lapse", Some(TObj::Change(k))) | ("KpfTChangeLate", "late", Some(TObj::Change(k))) => position(k.position),
+        // An answer with the verdict 1 applies the take; with the verdict 0 the position is again.
+        ("KpfTTake", "answer", Some(TObj::Change(k))) => if c.ints(["verdict"]) == Some([1]) { k.position.taken(&k.take).map(position).unwrap_or_default() } else { position(k.position) },
         ("KpfTDispute", "dispute", Some(TObj::Claim(k))) => c.key("dkey").map(|d| vec![TObj::Disputed(k.disputed(d))]).unwrap_or_default(),
         ("KpfTDispute", "lapse", Some(TObj::Disputed(d))) => position(d.claim.position),
         // An answer with the verdict 0 refutes the claim (the position again); with the verdict 1 it settles it.

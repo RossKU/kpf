@@ -263,7 +263,7 @@ fn world() -> World {
     for k in [&a, &b, &w, &f] {
         keys.add_keypair(*k);
     }
-    let funds = vec![fund(xk(&f), 200, 1_000)];
+    let funds = vec![fund(xk(&f), 200, 3_000)];
     let (g, lib) = lib_genesis(2, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis", &g, &keys);
     let scripts = lib_scripts(&gs.tx, 6_000);
@@ -846,6 +846,7 @@ fn position_of(o: &TObj) -> Position {
         TObj::Disputed(d) => d.claim.position,
         TObj::Liq(l) => l.liq.position,
         TObj::ExitClaim(q) => q.position,
+        TObj::Change(c) => c.position,
         TObj::Order(_) => panic!("an order is on no position"),
         TObj::Anchor => panic!("an anchor is on no position"),
     }
@@ -5632,4 +5633,1940 @@ fn t1b_finding_f41_the_same_by_a_match_and_a_novation() {
     let ss = signed("settled at the entries", &sb, &w.keys);
     assert_eq!(paid(&ss, &xk(&s)), KAS1 / 10, "S, which had 10 KAS of margin, is paid a tenth of a KAS");
     println!("T1b FINDING F41 (a match and a novation): U's short and its second key's long matched 1.98 above the entry, then novated: the transfer of {} sompi leaves S's margin for U; settled at the entries S is paid {} sompi of its {ten}", nv.transfer, paid(&ss, &xk(&s)));
+}
+
+// ================================================================ round 30: notes, citations, stated changes, accounts
+
+use kpf_protocol::cite;
+use kpf_protocol::thin::{ATake, Account, Change, Out, Outs, Pointed, Stated, Take, KIND_ACCOUNT_LIQ};
+use std::cell::RefCell;
+
+const P12: i64 = 1_200_000_000;
+
+/// As `thin_change.rs` and `thin_account.rs`: a committee of three with one epoch table, sixteen markets, a library of two
+/// copies, and a chain view that takes the blocks the notes are written in.
+struct NW {
+    a: Keypair,
+    b: Keypair,
+    w: Keypair,
+    f: Keypair,
+    members: [Keypair; 3],
+    keys: KeySet,
+    rid: Hash,
+    markets: Vec<CMarket>,
+    table: OLive<EpochTable>,
+    lib: [u8; 32],
+    scripts: Vec<LibScript>,
+    genesis: Transaction,
+    chain: RefCell<Vec<(Hash, Hash)>>,
+}
+
+impl NW {
+    fn script(&self, name: &str) -> LibScript {
+        self.copy(name, 0)
+    }
+    fn copy(&self, name: &str, k: usize) -> LibScript {
+        self.scripts.iter().filter(|s| s.s == name).nth(k).cloned().unwrap_or_else(|| panic!("{name}"))
+    }
+    fn payer<'a>(&self, who: &Keypair, funds: &'a [KeyUtxo]) -> Payer<'a> {
+        Payer { funds, change_to: xk(who), rate: MIN_FEE_RATE }
+    }
+    fn terms(&self) -> XTerms {
+        let p = &self.markets[0].p;
+        XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
+    }
+    /// A against B: long 10 units of market 0 at 10, and with `two` short 5 units of market 1 at 10; 40 and 60 KAS.
+    fn position_as(&self, two: bool, id: u8, n: u8) -> OLive<Position> {
+        let (m, k) = (&self.markets[0], &self.markets[1]);
+        let leg = |m: &CMarket, size: i64, dir: i64| XLeg { market: m.id(), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max, size: size * m.p.scale, dir, entry: P10 };
+        let x = Cross { t: self.terms(), legs: [leg(m, 10, LONG), if two { leg(k, 5, SHORT) } else { XLeg::none() }], a_key: xk(&self.a), b_key: xk(&self.b), a_margin: 40 * KAS1, b_margin: 60 * KAS1, expiry: 6_000 + m.p.term };
+        let position = Position { x, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0 };
+        position.check().unwrap();
+        OLive { s: position, value: x.floor() as u64, id: Some(Hash::from_bytes([id; 32])), op: op(n), daa: 6_100 }
+    }
+    fn position(&self, two: bool) -> OLive<Position> {
+        self.position_as(two, 0x71, 10)
+    }
+    /// An account of A against B with `n` legs, one a market, long and short in turn, `3 + i` units from 10; 40 and
+    /// 60 KAS a leg.
+    fn account(&self, n: usize) -> OLive<Account> {
+        let legs = (0..n).map(|i| { let m = &self.markets[i]; XLeg { market: m.id(), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max, size: (3 + i as i64) * m.p.scale, dir: if i % 2 == 0 { LONG } else { SHORT }, entry: P10 } }).collect();
+        let s = Account { t: self.terms(), legs, a_key: xk(&self.a), b_key: xk(&self.b), a_margin: 40 * n as i64 * KAS1, b_margin: 60 * n as i64 * KAS1, expiry: 6_000 + self.markets[0].p.term, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: None };
+        s.check().unwrap();
+        OLive { value: (s.pot() + KAS1) as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(11), daa: 6_100 }
+    }
+    /// The committee's price of market `i` for T0 written as a note and accepted by a chain block: the note's
+    /// transaction and its citation.
+    fn noted(&self, i: usize, price: i64) -> (OSigned, Cited) {
+        let market = self.markets[i].id();
+        let signed_prices: Vec<SignedPrice> = self.members.iter().map(|k| sign_price(k, &self.rid.as_bytes(), &market, T0, price)).collect();
+        let att = Attestation::collect(&self.table.s, &self.rid.as_bytes(), &market, T0, &signed_prices).expect("a quorum");
+        let funds = vec![fund(xk(&self.f), 90 + i as u8, 1_000)];
+        let (b, note) = note_write(&self.lib, &self.script("KpfTNote"), (&self.table, &att), xk(&self.f), self.payer(&self.f, &funds)).unwrap();
+        let s = b.sign(&self.keys).expect("the note's transaction");
+        assert!(kpf_protocol::verify::verify(&s.tx, &s.entries).is_ok(), "the note's transaction");
+        let wit = self.witness(&s.tx);
+        let c = Cited::of(&s.tx, &self.lib, note, wit).unwrap();
+        (s, c)
+    }
+    fn cited(&self, i: usize, price: i64) -> Cited {
+        self.noted(i, price).1
+    }
+    /// A chain block that accepted `tx` fourth of five in the native lane, added to the chain view.
+    fn witness(&self, tx: &Transaction) -> cite::Witness {
+        let h = |k: u64| Hash::from_bytes(blake2b(&[&tx.id().as_bytes()[..], &k.to_le_bytes()].concat()));
+        let lane: Vec<(Hash, u16, u32)> = (0..5).map(|k| (if k == 3 { tx.id() } else { h(k) }, 1u16, k as u32 + 1)).collect();
+        let (_, activity_path) = cite::merkle(&cite::activity_leaves(&lane), 3);
+        let wit = cite::Witness { block: h(100), merge_idx: 4, activity_path, lane_key: cite::native_lane_key(), parent_ref: h(101), context: cite::context(1_700_000_000_000, 6_600, 6_500), blue_score: 6_500, lanes_path: vec![(h(102), false), (h(103), true)], inactivity_shortcut: h(104), payload_and_ctx: h(105), parent_commitment: h(106) };
+        self.chain.borrow_mut().push((wit.block, wit.commitment(&tx.id(), 1)));
+        kpf_protocol::verify::set_chain_view(self.chain.borrow().clone());
+        wit
+    }
+    fn key_of(&self, k: &[u8; 32]) -> &Keypair {
+        [&self.a, &self.b, &self.w, &self.f].into_iter().find(|x| xk(x) == *k).expect("a key of the world")
+    }
+    /// The statement `st` made on the account, landed at `landed`.
+    fn stated(&self, account: &OLive<Account>, st: &Stated, said: &[u8], landed: u64) -> OLive<Stated> {
+        let who = self.key_of(&st.claimer);
+        let f = [fund(xk(who), 30, 1_000)];
+        let b = account_state(&self.lib, account, &self.script("KpfTChange"), st, said, self.payer(who, &f)).unwrap();
+        let s = signed("stated on an account", &b, &self.keys);
+        nth(&s, 0, *st, landed)
+    }
+    fn pointed(&self, st: &OLive<Stated>, by: &Keypair, point: i64, landed: u64) -> OLive<Pointed> {
+        let f = [fund(xk(by), 31, 1_000)];
+        let (b, q) = point_dispute(&self.lib, st, &self.script("KpfTPoint"), xk(by), point, self.payer(by, &f)).unwrap();
+        let s = signed("point disputed", &b, &self.keys);
+        nth(&s, 0, q, landed)
+    }
+}
+
+fn nw_of(copies: usize) -> NW {
+    let (a, b, w, f) = (kp(1), kp(2), kp(3), kp(9));
+    let members = [kp(101), kp(102), kp(103)];
+    let mut keys = KeySet::new();
+    for k in [&a, &b, &w, &f] {
+        keys.add_keypair(*k);
+    }
+    let rid = Hash::from_bytes([0x52; 32]);
+    let rp = CommitteeParams::testnet();
+    let markets = (0..16u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    let mut table = EMPTY_TABLE;
+    for (i, wt) in [30i64, 22, 15].iter().enumerate() {
+        table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
+    }
+    let table = OLive { s: EpochTable { members: table, total: 67 * KAS1, from: 6_000, until: 9_000, quorum_bps: rp.quorum_bps, spread_bps: rp.spread_bps }, value: KAS1 as u64, id: Some(rid), op: op(20), daa: 6_000 };
+    let funds = vec![fund(xk(&f), 200, 3_000)];
+    let (g, lib) = lib_genesis(copies, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let gs = g.sign(&keys).expect("genesis");
+    NW { a, b, w, f, members, keys, rid, markets, table, lib, scripts: lib_scripts(&gs.tx, 6_000), genesis: gs.tx.clone(), chain: RefCell::new(vec![]) }
+}
+fn nw() -> NW {
+    nw_of(2)
+}
+/// Built, signed and taken by the engine, or not (a transaction that cannot be signed is not taken).
+fn taken30(b: &OBuilt, keys: &KeySet) -> bool {
+    match b.sign(keys) {
+        Ok(sg) => kpf_protocol::verify::verify(&sg.tx, &sg.entries).is_ok(),
+        Err(_) => false,
+    }
+}
+fn bytes_arg(b: &[u8]) -> Arg {
+    Arg::V(ArtifactValue::Bytes(b.to_vec()))
+}
+fn int_arg(v: i64) -> Arg {
+    Arg::V(ArtifactValue::Int(v))
+}
+/// Input `i` of a built transaction made the object whose state hashes to `h` (the builder built it for another
+/// state of the same object).
+fn object_made(b: &mut OBuilt, lib: &[u8; 32], i: usize, h: &[u8; 32]) {
+    b.entries[i].script_public_key = hash_spk(lib, h);
+    let OPlan::Contract { redeem, .. } = &mut b.plans[i] else { panic!("input {i} is not an object") };
+    *redeem = kpf_protocol::thin_artifacts::kit().object(lib, h);
+}
+/// The hash of a statement whose outputs are the bytes `outs` (the model's `Outs` holds flags 0 and 1 only).
+fn stated_hash_raw(position: &[u8; 32], kind: i64, t0: i64, arg: &[u8; 32], outs: &[u8], bond: i64, claimer: &[u8; 32], window: i64, late: i64, held: i64) -> [u8; 32] {
+    blake2b(&[i9(10), p33(position), i9(kind), i9(t0), p33(arg), p33(&blake2b(outs)), i9(bond), p33(claimer), i9(window), i9(late), i9(held)].concat())
+}
+
+/// F51 (fixed). The statement's hash now carries `held`, what the object held when the change was stated
+/// (`KpfTChange.state` writes `tx.inputs[j].value`), and every answer counts from that committed `held`, not from
+/// the live input. So a disputer writing extra value into the object at the dispute no longer turns a true take to
+/// "not within": the committed `held` is unchanged, the stored outputs still match, and the take is applied.
+#[test]
+fn t1b_fixed_f51_held_is_committed_so_more_value_at_the_dispute_does_not_turn_the_verdict() {
+    let w = nw();
+    // ---- a position (KpfTChangeDispute, KpfTTake)
+    let position = w.position(false);
+    let x = position.s;
+    let tk = Take { side: SIDE_A, a: [P12, 0], amount: x.take_max(SIDE_A, [P12, 0]) };
+    assert_eq!(tk.amount, 54 * KAS1);
+    let fa = [fund(xk(&w.a), 30, 1_000)];
+    let (b, c) = take(&w.lib, &position, &w.script("KpfTChange"), tk, T0, w.payer(&w.a, &fa)).unwrap();
+    assert_eq!(c.held, position.value as i64, "held is what the object held when it was stated");
+    let s = signed("F51 take stated", &b, &w.keys);
+    let live = nth(&s, 0, c, 6_510);
+    let (c12, cite1) = (w.cited(0, P12), w.script("KpfTCite"));
+    let fw = [fund(xk(&w.w), 31, 1_000)];
+    let (db, d) = change_dispute(&w.lib, &live, &w.script("KpfTChangeDispute"), xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    // The control: disputed as the builder writes it, the take is answered within, and W loses its bond.
+    let ds = signed("F51 disputed as built", &db, &w.keys);
+    let (ab, within, _) = take_answer(&w.lib, &nth(&ds, 0, d, 6_520), &w.script("KpfTTake"), &[(&cite1, &c12)], xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    assert!(within && taken30(&ab, &w.keys), "the control");
+    // The same dispute with one sompi more in the object: STILL within the rule (the fix).
+    let mut db1 = db.clone();
+    db1.tx.outputs[0].value += 1;
+    let ds1 = signed("F51 disputed with a sompi more", &db1, &w.keys);
+    let d1 = nth(&ds1, 0, d, 6_520);
+    assert_eq!(d1.value, live.value + c.bond as u64 + 1);
+    let (ab, within, after) = take_answer(&w.lib, &d1, &w.script("KpfTTake"), &[(&cite1, &c12)], xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    assert!(within && after == x.taken(&tk).unwrap(), "F51 is open again: a sompi more at the dispute turned the verdict");
+    let r = signed("F51 the true take applied though the object holds a sompi more", &ab, &w.keys);
+    assert_eq!((r.tx.outputs[0].value, &r.tx.outputs[0].script_public_key), ((c.held - tk.amount) as u64, &object_spk(&w.lib, &TObj::Position(after))), "the position with the take applied, holding held - amount");
+    assert_eq!(paid(&r, &xk(&w.a)), tk.amount + c.bond + c.bond / 2, "the claimer: its amount, its bond, half the disputer's");
+    // The forced "not within" verdict is refused: the take really is within.
+    let forced = take_answer_with(&w.lib, &d1, &w.script("KpfTTake"), &[(&cite1, &c12)], xk(&w.w), w.payer(&w.w, &fw), Some(false));
+    assert!(forced.is_err() || !taken30(&forced.unwrap().0, &w.keys), "the true take is refuted all the same");
+
+    // ---- an account (KpfTPoint, KpfTStepEnd): a sompi more at the dispute does not turn the end.
+    let account = w.account(3);
+    let y = &account.s;
+    let a: Vec<i64> = (0..3).map(|i| if i % 2 == 0 { P10 * 105 / 100 } else { P10 * 95 / 100 }).collect();
+    let max = y.take_max(SIDE_A, &a);
+    assert!(max > 0);
+    let (st, atk) = y.take(SIDE_A, max, &a, T0, account.value as i64).unwrap();
+    assert_eq!(st.held, account.value as i64);
+    assert_eq!(y.wrong_point(&atk, &st.claimer, &st.outs, account.value as i64, &a), None, "the statement is the rule's");
+    let lst = w.stated(&account, &st, &atk.said(), 6_510);
+    let (pb, q) = point_dispute(&w.lib, &lst, &w.script("KpfTPoint"), xk(&w.w), 0, w.payer(&w.w, &fw)).unwrap();
+    let mut pb1 = pb.clone();
+    pb1.tx.outputs[0].value += 1;
+    let ps1 = signed("F51 the end disputed with a sompi more", &pb1, &w.keys);
+    let q1 = nth(&ps1, 0, q, 6_520);
+    let (eb, right) = step_end(&w.lib, &q1, y, &atk, &w.script("KpfTStepEnd"), xk(&w.w), w.payer(&w.w, &fw), None).unwrap();
+    assert!(right && taken30(&eb, &w.keys), "F51 is open again on an account: a sompi more turned the end");
+    let forced = step_end(&w.lib, &q1, y, &atk, &w.script("KpfTStepEnd"), xk(&w.w), w.payer(&w.w, &fw), Some(false));
+    assert!(forced.is_err() || !taken30(&forced.unwrap().0, &w.keys), "the true end is answered wrong all the same");
+    println!("T1b F51 fixed: a take of 54 KAS on a position and a take of {max} sompi on an account (both the rule's), disputed with a sompi more in the object, are still answered within the rule: `held` is committed in the statement, so extra value at the dispute does not turn the verdict");
+}
+
+/// F52 (fixed). A row's answer now opens the row's chain with a `prev` the answerer gives and requires
+/// `blake2b(prev + leg) == row.g`; where `prev` is not the chain of the row before, the row is WRONG (not
+/// unanswerable). And `wrong_point_of` names the row after the last chain that is not the account's own. So a trace
+/// whose middle rows carry a chain of no leg has a wrong point anyone can answer: the row after the fabricated one,
+/// opened by the account's own chain. With the new `at != point => verdict 0` rule, that wrong row can be answered
+/// whatever point was disputed, so the false statement cannot be kept and the claimer loses its bond.
+#[test]
+fn t1b_fixed_f52_a_fabricated_trace_has_a_wrong_point_anyone_can_answer() {
+    let w = nw();
+    let n = 3usize;
+    let account = w.account(n);
+    let x = &account.s;
+    let held = account.value as i64;
+    let a: Vec<i64> = x.legs.iter().map(|l| l.entry).collect();
+    let honest = x.trace_without(&a, n as i64);
+    let g2 = honest[n - 2].g; // the real chain of the first n-1 legs, before the fabrication
+    let mut rows = honest.clone();
+    rows[n - 2].g = [0xee; 32];
+    // (The row carries a worth a side since the row of five numbers: both are set as the one worth was.)
+    (rows[n - 2].wa, rows[n - 2].wb) = (0, 0);
+    (rows[n - 1].wa, rows[n - 1].wb) = (1_000_000 * KAS1, 1_000_000 * KAS1);
+    let (after, fee) = x.liq_stepped(SIDE_B, n as i64, &rows).expect("below, by the trace's own sums");
+    assert_eq!(fee, x.b_margin, "the fabricated trace says the fee is B's whole margin");
+    let tk = ATake { side: SIDE_B, amount: fee, rows: rows.clone(), skip: n as i64, leave: None };
+    let h = blake2b(&[p33(&blake2b(&[x.terms(), p33(&rows[n - 1].h)].concat())), after.moving()].concat());
+    let outs = Outs::of(&[Out { key: false, to: h, value: held - fee }, Out { key: true, to: xk(&w.w), value: fee }]).unwrap();
+    let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_ACCOUNT_LIQ, t0: T0, arg: tk.arg(), outs, bond: x.bond(), claimer: xk(&w.w), held };
+    // The end is still "right" by its own numbers, but the model now finds a wrong point: the row after the bad chain.
+    assert!(x.liq_end_right(&tk, &st.claimer, &st.outs, held), "the end is right by its own numbers");
+    let c: Vec<i64> = a.clone();
+    assert_eq!(x.wrong_point_of(KIND_ACCOUNT_LIQ, &tk, &st.claimer, &st.outs, held, &c), Some(2 * (n as i64 - 1) + 1), "the wrong point is row n (after the fabricated chain)");
+    let live = w.stated(&account, &st, &tk.said(), 6_510);
+    let fw = [fund(xk(&w.w), 32, 1_000)];
+    let fb = [fund(xk(&w.b), 33, 1_000)];
+    // B disputes the end (point 0, which is "right"); anyone answers the wrong row (point 5) with verdict 0: the
+    // `at != point` rule lets the real wrong point be answered, so the account is restored and the claimer's bond is lost.
+    let q0 = w.pointed(&live, &w.b, 0, 6_520);
+    let at = 2 * (n as i64 - 1) + 1;
+    let (eb, right) = step_row_at(&w.lib, &q0, &tk, at, &g2, &x.legs[n - 1], &w.script("KpfTStepRow"), xk(&w.b), w.payer(&w.b, &fb), None).unwrap();
+    assert!(!right, "the wrong row is answered wrong");
+    let rs = signed("F52 the wrong row answered though the end was disputed", &eb, &w.keys);
+    let k = rs.tx.outputs.len();
+    assert_eq!((rs.tx.outputs[0].value, &rs.tx.outputs[0].script_public_key), (account.value, &hash_spk(&w.lib, &x.hash())), "the account restored");
+    assert_eq!((rs.tx.outputs[k - 2].value, &rs.tx.outputs[k - 2].script_public_key), (st.bond as u64, &p2pk_spk(&xk(&w.b))), "the disputer's bond back");
+    assert_eq!((rs.tx.outputs[k - 1].value, &rs.tx.outputs[k - 1].script_public_key), ((st.bond / 2) as u64, &p2pk_spk(&xk(&w.b))), "half of the claimer's bond to who answered");
+    // The forced "right" verdict of that row is refused (it really is wrong).
+    let forced = step_row_at(&w.lib, &q0, &tk, at, &g2, &x.legs[n - 1], &w.script("KpfTStepRow"), xk(&w.w), w.payer(&w.w, &fw), Some(true));
+    assert!(forced.is_err() || !taken30(&forced.unwrap().0, &w.keys), "the wrong row is answered right all the same");
+    // And opening the bad row itself (point 3) with the account's own chain is wrong too (its chain is not the leg's).
+    let q3 = w.pointed(&live, &w.b, 3, 6_520);
+    let g1 = honest[n - 3.min(n)].g; // chain before the bad row; for n=3, before row 2 = g_1 = honest[0].g
+    let _ = g1;
+    println!("T1b F52 fixed: a fabricated liquidation trace (B's whole {} KAS) now has a wrong point (row {at}) that anyone opens with the account's own chain; disputing the right end does not save it (at != point => verdict 0), the account is restored and the claimer loses its bond", x.b_margin / KAS1);
+    let _ = q3;
+}
+
+/// A statement of the account `obj` that is out of its time ended by `KpfTChangeLate` (the builders have this for a
+/// position's statement only): built for a position's, then made the account's.
+fn stated_late(w: &NW, obj: &OLive<Stated>, ender: &Keypair) -> OBuilt {
+    let position = w.position(false);
+    let c = position.s.take(Take { side: SIDE_A, a: [P12, 0], amount: 0 }, T0, position.value as i64).unwrap();
+    let dummy = OLive { s: c, value: position.value + c.bond as u64, id: position.id, op: op(77), daa: (T0 + position.s.x.t.late_daa + 1) as u64 };
+    let f = [fund(xk(ender), 78, 1_000)];
+    let (mut b, _) = change_late(&w.lib, &dummy, &w.script("KpfTChangeLate"), xk(ender), w.payer(ender, &f)).unwrap();
+    let st = &obj.s;
+    b.tx.inputs[0].previous_outpoint = obj.op;
+    b.entries[0].amount = obj.value;
+    b.entries[0].block_daa_score = obj.daa;
+    b.entries[0].covenant_id = obj.id;
+    object_made(&mut b, &w.lib, 0, &st.hash());
+    let args = args_of(&mut b, 1);
+    args[3] = bytes_arg(&st.position);
+    args[4] = int_arg(st.kind);
+    args[5] = int_arg(st.t0);
+    args[6] = bytes_arg(&st.arg);
+    args[7] = bytes_arg(&st.outs.hash());
+    args[8] = int_arg(st.bond);
+    args[9] = bytes_arg(&st.claimer);
+    args[10] = int_arg(st.window);
+    args[11] = int_arg(st.late);
+    args[12] = int_arg(st.held);
+    b.tx.outputs[0] = TransactionOutput { value: obj.value - st.bond as u64, script_public_key: hash_spk(&w.lib, &st.position), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: obj.id.expect("an id") }) };
+    let n = b.tx.outputs.len();
+    b.tx.outputs[n - 1].value = st.bond as u64;
+    b
+}
+
+/// F53. A point answered right writes the statement again, as it was stated: a new output, which landed when the
+/// answer did. Every script asks a statement when it LANDED (`OpTxInputDaaScore`) against the time it prices at: more
+/// than the position's lateness after it (100 DAA by the tools' terms, ten seconds) it is neither applied nor
+/// disputed, and `KpfTChangeLate` gives its bond to whoever ends it. So a true statement one point of which was
+/// disputed and answered right is not applied: it is out of its time, and its claimer's bond is anyone's.
+#[test]
+fn t1b_fixed_f53_a_point_answered_right_restores_the_statement_not_held_to_its_time() {
+    let w = nw();
+    let account = w.account(2);
+    let x = &account.s;
+    let a = vec![P10 * 105 / 100, P10 * 95 / 100];
+    let max = x.take_max(SIDE_A, &a);
+    let (st, tk) = x.take(SIDE_A, max, &a, T0, account.value as i64).unwrap();
+    assert_eq!(x.wrong_point(&tk, &st.claimer, &st.outs, account.value as i64, &a), None, "the statement is the rule's");
+    assert_eq!((x.t.late_daa, x.dispute_daa), (100, 50));
+    let live = w.stated(&account, &st, &tk.said(), 6_510);
+    let fa = [fund(xk(&w.a), 34, 1_000)];
+    let fw = [fund(xk(&w.w), 35, 1_000)];
+    // W disputes row 1, which is right, late in the dispute period; A answers it right.
+    let q = w.pointed(&live, &w.w, 1, 6_555);
+    let (rb, right) = step_row(&w.lib, &q, &tk, &x.legs[0], &w.script("KpfTStepRow"), xk(&w.a), w.payer(&w.a, &fa), None).unwrap();
+    assert!(right);
+    let rs = signed("F53 row 1 answered right", &rb, &w.keys);
+    let k = rs.tx.outputs.len();
+    // The statement stands again with LATE_AGAIN in its hash (the fix: not held to its time again), not as first stated.
+    assert_eq!(st.again().late, kpf_protocol::thin::LATE_AGAIN);
+    assert_eq!((rs.tx.outputs[0].value, &rs.tx.outputs[0].script_public_key), (live.value, &hash_spk(&w.lib, &st.again().hash())), "the statement stands again with LATE_AGAIN");
+    assert_ne!(rs.tx.outputs[0].script_public_key, hash_spk(&w.lib, &st.hash()), "not as first stated");
+    assert_eq!((rs.tx.outputs[k - 1].value, &rs.tx.outputs[k - 1].script_public_key), ((st.bond / 2) as u64, &p2pk_spk(&xk(&w.a))), "half of the disputer's bond to the claimer");
+    // The answer landed at 6,601 (past the lateness 100 of 6,500); the restored statement is still in its time.
+    let again = nth(&rs, 0, st.again(), 6_601);
+    assert!(!st.in_time(again.daa) && st.again().in_time(again.daa), "F53 is open again: the restored statement is not in its time");
+    // It is applied (settled) though the answer landed past the original lateness.
+    let sb = stated_settle(&w.lib, &again, &w.script("KpfTChangeSettle"), w.payer(&w.a, &fa)).unwrap();
+    let ss = signed("F53 the restored statement applied", &sb, &w.keys);
+    let after = x.taken(SIDE_A, max, &tk.rows).unwrap();
+    assert_eq!((ss.tx.outputs[0].value, &ss.tx.outputs[0].script_public_key), ((st.held - max) as u64, &hash_spk(&w.lib, &after.hash())), "the account with the take applied");
+    // And it cannot be ended as late: KpfTChangeLate asks the statement's own lateness (LATE_AGAIN), which no landing exceeds.
+    let lb = stated_late(&w, &again, &w.w);
+    assert!(!taken30(&lb, &w.keys), "F53 is open again: the restored statement is ended as late");
+    // It can also be disputed again and answered (the dispute period restarted).
+    assert!(point_dispute(&w.lib, &again, &w.script("KpfTPoint"), xk(&w.w), 3, w.payer(&w.w, &fw)).is_ok(), "another point of the restored statement may be disputed");
+    println!("T1b F53 fixed: a true take on an account, row 1 disputed at 6,555 and answered right at 6,601 (time 6,500, lateness 100): the statement stands again with LATE_AGAIN, is applied by the settlement, and cannot be ended as late");
+}
+
+/// F54 (fixed). A statement whose first output flag was not 0 or 1 was applied by `KpfTChangeSettle` (which read "0 =
+/// object, anything else = payment") but never read by the reader (which reads flags 0/1 only), so no executor
+/// disputed it. The fix: `KpfTChange.state` now requires the first flag to be 0 or 1 and every later flag to be 1,
+/// and `KpfTChangeSettle` requires flag 1 for a first output it pays. This verifies that: a statement with any flag
+/// other than 0/1 cannot be stated (the state script refuses it), while the honest flag-1 form is stated and read.
+#[test]
+fn t1b_fixed_f54_a_statement_states_only_flags_0_and_1() {
+    let w = nw();
+    let position = w.position(false);
+    let x = position.s;
+    let held = position.value as i64;
+    let thief = xk(&w.w);
+    // "The position ends, everything to W": the honest flag-1 form is stated and read as a change.
+    let honest = x.take(Take { side: SIDE_A, a: [P12, 0], amount: 0 }, T0, held).unwrap();
+    let c = Change { outs: Outs::of(&[Out { key: true, to: thief, value: held }]).unwrap(), claimer: thief, ..honest };
+    let fw = [fund(thief, 36, 1_000)];
+    let b1 = change_state(&w.lib, &position, &w.script("KpfTChange"), &c, w.payer(&w.w, &fw)).unwrap();
+    let s1 = signed("F54 stated with flag 1", &b1, &w.keys);
+    let known = Pool(vec![TObj::Position(x)]);
+    let r1 = read_signed(&w.lib, &s1, &known);
+    assert_eq!((r1.made.len(), r1.unread.len()), (1, 0), "the reader reads the flag-1 statement");
+    assert!(matches!(r1.made[0].1, TObj::Change(k) if k == c));
+    // Every flag other than 0 or 1 in the first output: the state script refuses it (so it is never stated). The
+    // stated-change output's hash matches the forged outs, but the script's own flag check fails input 1.
+    let mut refused = 0;
+    for flag in [2u8, 3, 0x7f, 0x80, 0xff] {
+        let mut o = c.outs.bytes();
+        o[0] = flag;
+        let h = stated_hash_raw(&x.hash(), c.kind, c.t0, &c.arg(), &o, c.bond, &c.claimer, x.dispute_daa, x.x.t.late_daa, held);
+        let mut b = b1.clone();
+        assert!(matches!(&args_of(&mut b, 1)[8], Arg::V(ArtifactValue::Bytes(bb)) if *bb == c.outs.bytes()), "the statement's outputs are its ninth argument");
+        args_of(&mut b, 1)[8] = bytes_arg(&o);
+        b.tx.outputs[0].script_public_key = hash_spk(&w.lib, &h);
+        let sg = b.sign(&w.keys).expect("signed");
+        assert!(script_refuses(&sg.tx, &sg.entries, 1), "F54 is open again: a statement with first flag {flag} is stated");
+        assert!(Outs::read(&o).is_none(), "the reader never produced such bytes");
+        refused += 1;
+    }
+    // A payment output after the first with flag 0: also refused by the state script (later flags must be 1).
+    let c2 = Change { outs: Outs::of(&[Out { key: false, to: x.taken(&Take { side: SIDE_A, a: [P12, 0], amount: KAS1 }).unwrap().hash(), value: held - KAS1 }, Out { key: true, to: thief, value: KAS1 }]).unwrap(), claimer: thief, ..x.take(Take { side: SIDE_A, a: [P12, 0], amount: KAS1 }, T0, held).unwrap() };
+    let b2 = change_state(&w.lib, &position, &w.script("KpfTChange"), &c2, w.payer(&w.w, &fw)).unwrap();
+    assert!(taken30(&b2, &w.keys), "the honest two-output form is stated");
+    let mut o2 = c2.outs.bytes();
+    o2[41] = 0;
+    let h2 = stated_hash_raw(&x.hash(), c2.kind, c2.t0, &c2.arg(), &o2, c2.bond, &c2.claimer, x.dispute_daa, x.x.t.late_daa, held);
+    let mut b = b2.clone();
+    args_of(&mut b, 1)[8] = bytes_arg(&o2);
+    b.tx.outputs[0].script_public_key = hash_spk(&w.lib, &h2);
+    let sg = b.sign(&w.keys).expect("signed");
+    assert!(script_refuses(&sg.tx, &sg.entries, 1), "F54 is open again: a later payment output with flag 0 is stated");
+    println!("T1b F54 fixed: a statement with any first-output flag but 0 or 1 ({refused} tried), or a later payment output with flag 0, is refused by KpfTChange.state; the honest flag-1 form is stated and read");
+}
+
+/// What holds of the library's id (lead 1) through the builders. A note is written only by `KpfTNote` beside the
+/// attest, and a genesis that writes one is no library (`lib_check`); a note taken back writes nothing under the id
+/// and pays its writer; a note's transaction with an output more under the id, the note at another script, a second
+/// note, or the note's script on the copy's place, is refused; a citation of a transaction whose first output is not
+/// the note under this library's id is refused by the builder and by the script.
+#[test]
+fn t1b_holds_r30_nothing_but_a_note_of_the_attest_is_written_under_the_librarys_id() {
+    let w = nw();
+    let (ns, cited) = w.noted(0, P12);
+    let note = cited.note;
+    assert_eq!((ns.tx.outputs[0].script_public_key.clone(), ns.tx.outputs[0].covenant.map(|c| c.covenant_id.as_bytes())), (note_spk(&note), Some(w.lib)));
+    // The note's writing rebuilt, for the mutations.
+    let market = w.markets[0].id();
+    let signed_prices: Vec<SignedPrice> = w.members.iter().map(|k| sign_price(k, &w.rid.as_bytes(), &market, T0, P12)).collect();
+    let att = Attestation::collect(&w.table.s, &w.rid.as_bytes(), &market, T0, &signed_prices).expect("a quorum");
+    let funds = vec![fund(xk(&w.f), 90, 1_000)];
+    let (b, _) = note_write(&w.lib, &w.script("KpfTNote"), (&w.table, &att), xk(&w.f), w.payer(&w.f, &funds)).unwrap();
+    assert!(taken30(&b, &w.keys));
+    let lid = Hash::from_bytes(w.lib);
+    let mut refused = 0;
+    let mut no = |what: &str, t: OBuilt| {
+        assert!(!taken30(&t, &w.keys), "{what}");
+        refused += 1;
+    };
+    let other_note = kpf_protocol::thin::Note { price: P10, ..note };
+    let evil = hash_spk(&w.lib, &[0x55; 32]);
+    let k = b.tx.outputs.len();
+    for auth in [1u16, 2, 0] {
+        let cov = Some(CovenantBinding { authorizing_input: auth, covenant_id: lid });
+        let mut t = b.clone();
+        t.tx.outputs.push(TransactionOutput { value: KAS1 as u64, script_public_key: note_spk(&other_note), covenant: cov });
+        t.output_labels.push("x".into());
+        no("a second note, of a price nobody signed", t);
+        let mut t = b.clone();
+        t.tx.outputs.push(TransactionOutput { value: KAS1 as u64, script_public_key: evil.clone(), covenant: cov });
+        t.output_labels.push("x".into());
+        no("an object under the library's id beside the note", t);
+        let mut t = b.clone();
+        t.tx.outputs[k - 1].covenant = cov;
+        no("the change under the library's id", t);
+    }
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = note_spk(&other_note);
+    no("the note of another price", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = note_spk(&kpf_protocol::thin::Note { t0: T0 + 1, ..note });
+    no("the note of another time", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = note_spk(&kpf_protocol::thin::Note { market: w.markets[1].id(), ..note });
+    no("the note of another market", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = note_spk(&kpf_protocol::thin::Note { spread_bps: 0, ..note });
+    no("the note of another spread", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = evil.clone();
+    no("an object in the note's place", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].script_public_key = script_spk("KpfTCite").unwrap();
+    no("a script of the library in the note's place", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].covenant = None;
+    no("the note under no id", t);
+    let mut t = b.clone();
+    t.tx.outputs[1].script_public_key = note_spk(&note);
+    no("a note in the copy's place", t);
+    let mut t = b.clone();
+    t.tx.outputs[0].value -= 1;
+    no("the note a sompi short", t);
+    // The epoch table of another committee (its own id): the note says the committee the table is under.
+    let mut t = b.clone();
+    t.entries[2].covenant_id = Some(Hash::from_bytes([0x53; 32]));
+    for o in t.tx.outputs.iter_mut() {
+        if let Some(c) = &mut o.covenant {
+            if c.covenant_id == w.rid {
+                c.covenant_id = Hash::from_bytes([0x53; 32]);
+            }
+        }
+    }
+    no("an epoch table under another id, the note naming the committee", t);
+    // Taken back: nothing under the id, the writer paid. With an output under the id, or to another key: refused.
+    let live = nth(&ns, 0, note, 6_520);
+    let fw = [fund(xk(&w.w), 40, 1_000)];
+    let rb = note_reclaim(&live, w.payer(&w.w, &fw)).unwrap();
+    let rs = signed("a note taken back", &rb, &w.keys);
+    assert_eq!((rs.tx.outputs[0].value, &rs.tx.outputs[0].script_public_key), (live.value, &p2pk_spk(&xk(&w.f))));
+    for spk in [note_spk(&other_note), evil.clone(), script_spk("KpfTCite").unwrap(), p2pk_spk(&xk(&w.w))] {
+        let mut t = rb.clone();
+        t.tx.outputs.push(TransactionOutput { value: KAS1 as u64, script_public_key: spk, covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: lid }) });
+        t.output_labels.push("x".into());
+        no("a note taken back writes under the library's id", t);
+    }
+    let mut t = rb.clone();
+    t.tx.outputs[0].script_public_key = p2pk_spk(&xk(&w.w));
+    no("a note taken back to another key", t);
+    let mut t = rb.clone();
+    t.tx.outputs[0].covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id: lid });
+    no("a note taken back, its writer's output under the id", t);
+    // A genesis that writes a note under the id is no library.
+    let mut g = w.genesis.clone();
+    assert_eq!(lib_check(&g).unwrap(), w.lib);
+    let last = g.outputs.iter().rposition(|o| o.covenant.is_some()).unwrap();
+    g.outputs[last].script_public_key = note_spk(&note);
+    assert!(lib_check(&regenesis(&g, 0)).is_err(), "a genesis with a note in a script's place");
+    let mut g = w.genesis.clone();
+    let cov = g.outputs[last].covenant;
+    g.outputs.push(TransactionOutput { value: KAS1 as u64, script_public_key: note_spk(&note), covenant: cov });
+    assert!(lib_check(&regenesis(&g, 0)).is_err(), "a genesis with a note more");
+    // A citation is of this library's note: the same transaction read for another library, or its second output
+    // read as the note, is refused by the builder.
+    assert!(Cited::of(&ns.tx, &[0x4c; 32], note, cited.witness.clone()).is_err());
+    assert!(Cited::of(&ns.tx, &w.lib, other_note, cited.witness.clone()).is_err());
+    // And by the script: the price, the time, the committee or the writer told otherwise than the note's.
+    let f = [fund(xk(&w.w), 41, 1_000)];
+    let cb = cite(&w.lib, &w.script("KpfTCite"), &cited, w.payer(&w.w, &f)).unwrap();
+    assert!(taken30(&cb, &w.keys));
+    for (i, what) in [(1usize, "the committee"), (2, "the market"), (3, "the time"), (4, "the price"), (5, "the spread"), (6, "the writer"), (0, "the chain block")] {
+        let mut t = cb.clone();
+        let Arg::V(ArtifactValue::Bytes(v)) = &mut args_of(&mut t, 0)[i] else { panic!("bytes") };
+        v[0] ^= 1;
+        no(&format!("a citation told another {what}"), t);
+    }
+    println!("T1b R30: {refused} transactions that would write under the library's id what no attest signed, or cite what no note says, refused; a genesis with a note is no library");
+}
+
+/// F55 (fixed). A take on a two-leg position is answered beside two copies of `KpfTCite` (two inputs). The fix: a
+/// library genesis writes at least two `KpfTCite` even at `--copies 1`, and `lib_check` refuses a library with fewer
+/// than two. So a two-leg take is always answerable. This verifies it: a one-copy library holds two `KpfTCite` and
+/// passes `lib_check`; a genesis with only one is refused; the two copies answer a two-leg take.
+#[test]
+fn t1b_fixed_f55_a_library_holds_two_cite_copies() {
+    let w = nw();
+    let position = w.position(true);
+    let x = position.s;
+    let tk = Take { side: SIDE_A, a: [P12, P10], amount: x.take_max(SIDE_A, [P12, P10]) };
+    let fa = [fund(xk(&w.a), 42, 1_000)];
+    let (b, c) = take(&w.lib, &position, &w.script("KpfTChange"), tk, T0, w.payer(&w.a, &fa)).unwrap();
+    let s = signed("F55 take on two legs stated", &b, &w.keys);
+    let live = nth(&s, 0, c, 6_510);
+    let (c1, c2) = (w.cited(0, P12), w.cited(1, P10));
+    let (k1, k2) = (w.copy("KpfTCite", 0), w.copy("KpfTCite", 1));
+    let (ab, within, _) = take_answer(&w.lib, &live, &w.script("KpfTTake"), &[(&k1, &c1), (&k2, &c2)], xk(&w.a), w.payer(&w.a, &fa)).unwrap();
+    assert!(within);
+    let good = signed("F55 answered beside two copies", &ab, &w.keys);
+    assert_eq!(good.tx.inputs.len(), 5, "the object, the script, two citing copies, a coin");
+    // One copy at both places: refused by the script (the two places are two inputs).
+    let mut one = ab.clone();
+    args_of(&mut one, 1)[0] = bytes_arg(&[0i64, 2, 2].iter().flat_map(|v| sm8(*v)).collect::<Vec<u8>>());
+    let sg = one.sign(&w.keys).expect("signed");
+    assert!(script_refuses(&sg.tx, &sg.entries, 1), "one citing copy cannot answer a take on two legs (the two places are two inputs)");
+    // The fix: a one-copy library holds TWO KpfTCite and passes lib_check.
+    let w1 = nw_of(1);
+    assert_eq!(lib_check(&w1.genesis).unwrap(), w1.lib, "a one-copy library is still a library");
+    assert_eq!(w1.scripts.iter().filter(|s| s.s == "KpfTCite").count(), 2, "F55 is open again: a one-copy library has fewer than two KpfTCite");
+    // And a genesis with only one KpfTCite is refused by lib_check: strip the extra copy.
+    let mut g = w1.genesis.clone();
+    let cite_spk = script_spk("KpfTCite").unwrap();
+    let extra = g.outputs.iter().rposition(|o| o.script_public_key == cite_spk).unwrap();
+    g.outputs.remove(extra);
+    assert!(lib_check(&regenesis(&g, 0)).is_err(), "F55 is open again: lib_check takes a library with one KpfTCite");
+    // The two copies of the one-copy library answer a two-leg take (the fix lets a lone operator answer).
+    let p1 = w1.position(true);
+    let tk1 = Take { side: SIDE_A, a: [P12, P10], amount: p1.s.take_max(SIDE_A, [P12, P10]) };
+    let fa1 = [fund(xk(&w1.a), 44, 1_000)];
+    let (b1, _) = take(&w1.lib, &p1, &w1.script("KpfTChange"), tk1, T0, w1.payer(&w1.a, &fa1)).unwrap();
+    let s1 = signed("F55 two-leg take stated in a one-copy library", &b1, &w1.keys);
+    let (cc1, cc2) = (w1.cited(0, P12), w1.cited(1, P10));
+    let (kk1, kk2) = (w1.copy("KpfTCite", 0), w1.copy("KpfTCite", 1));
+    let (ab1, within1, _) = take_answer(&w1.lib, &nth(&s1, 0, tk1_change(&p1.s, tk1, p1.value as i64), 6_510), &w1.script("KpfTTake"), &[(&kk1, &cc1), (&kk2, &cc2)], xk(&w1.a), w1.payer(&w1.a, &fa1)).unwrap();
+    assert!(within1 && taken30(&ab1, &w1.keys), "the two-leg take is answered beside the library's two KpfTCite copies");
+    println!("T1b F55 fixed: a take on two legs is answered beside two KpfTCite copies, one copy at both places refused; a one-copy library holds two KpfTCite and passes lib_check, a genesis with one is refused, and the two copies answer a two-leg take ({} bytes)", good.mass.size);
+}
+
+/// The `Change` of a take on `position` holding `held`, for `nth` (the live object a take-answer reads).
+fn tk1_change(position: &Position, tk: Take, held: i64) -> Change {
+    position.take(tk, T0, held).expect("a take")
+}
+
+// ================================================================ round 33: options, the 112-byte row, the reserve
+
+/// F56 (fixed in round 34). A leg whose worth at a price within its market's limit does not fit 63 bits entered a
+/// covered account (`KpfTLegAdd` asked `size <= MARGIN_MAX` alone, `Account::check` asked `size > 0`), and no
+/// statement of that account could be computed. The fix: `KpfTLegAdd` asks `scale <= SCALE_MAX` and
+/// `size / scale <= MARGIN_MAX / price_max - 1` (the bound of a position's leg), and the model's `leg_size_ok` is
+/// asked by `Account::check` and `leg_added`. Verified: the leg of round 33 is refused by the model and, built past
+/// the model, by the script; the largest size the bound allows enters, and one unit more does not; the same for an
+/// option.
+#[test]
+fn t1b_fixed_f56_a_leg_whose_worth_overflows_does_not_enter_a_covered_account() {
+    use kpf_protocol::cross::MARGIN_MAX;
+    let (a, b, f) = (kp(1), kp(2), kp(9));
+    let mut keys = KeySet::new();
+    for k in [&a, &b, &f] {
+        keys.add_keypair(*k);
+    }
+    let rid = [0x52u8; 32];
+    let market = CMarket::testnet(rid, [0xc0; 32]);
+    let price_max = market.p.price_max;
+    let scale = market.p.scale;
+    // A library (two copies) and a registry of two anchors, as the reserve world is built.
+    let funds = vec![fund(xk(&f), 200, 3_000)];
+    let (g, lib) = lib_genesis(2, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let gs = g.sign(&keys).expect("genesis");
+    let scripts = lib_scripts(&gs.tx, 6_000);
+    let script = |n: &str| scripts.iter().find(|s| s.s == n).cloned().unwrap_or_else(|| panic!("{n}"));
+    let funds = vec![fund(xk(&f), 201, 3_000)];
+    let (r, _) = registry_genesis(&lib, 2, KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let rs = r.sign(&keys).expect("registry");
+    let anchors = registry_anchors(&rs.tx, &lib, 6_000);
+    let terms = {
+        let p = &market.p;
+        XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
+    };
+    // The clearing party's shard, and a covered account of a user (A) against it (B).
+    let fs = [fund(xk(&b), 40, 1_000)];
+    let (sb, shard) = shard_open(&lib, &anchors[0], &script("KpfTShardOpen"), terms, xk(&b), 50 * KAS1, 9_000_000, 50, 100, Payer { funds: &fs, change_to: xk(&b), rate: MIN_FEE_RATE }).unwrap();
+    let ss = signed("shard opened", &sb, &keys);
+    let sid = shard.sid;
+    let account = Account { t: terms, legs: vec![], a_key: xk(&a), b_key: xk(&b), a_margin: 20 * KAS1, b_margin: 2 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
+    let fa = [fund(xk(&a), 41, 1_000)];
+    let ob = account_open_c(&lib, &anchors[1], &script("KpfTOpenC"), &account, Payer { funds: &fa, change_to: xk(&a), rate: MIN_FEE_RATE }).unwrap();
+    let os = signed("covered account opened", &ob, &keys);
+    let live = nth(&os, 0, account.clone(), 6_100);
+    let _ = ss;
+    // The leg of round 33: its size within MARGIN_MAX, its worth at the market's limit beyond 63 bits.
+    let big = XLeg { market: market.id(), committee: market.committee_id, scale, price_max, size: MARGIN_MAX, dir: LONG, entry: P10 };
+    assert!(kpf_protocol::payoff::q_checked(big.size, price_max, scale, 0).is_none());
+    let with = |l: XLeg| Account { legs: vec![l], ..account.clone() };
+    assert!(with(big).check().is_err(), "F56 is open again: Account::check takes a leg whose worth overflows");
+    let fl = [fund(xk(&a), 42, 1_000)];
+    let payer = || Payer { funds: &fl, change_to: xk(&a), rate: MIN_FEE_RATE };
+    assert!(leg_add(&lib, &live, &script("KpfTLegAdd"), big, 0, 0, payer()).is_err(), "F56 is open again: the builder adds it");
+    // Built past the model (the account and the note the outputs would be): the script refuses it.
+    let past = |l: XLeg| leg_add_as(&lib, &live, &script("KpfTLegAdd"), l, 0, 0, with(l), kpf_protocol::reserve::SNote::leg(kpf_protocol::reserve::NOTE_JOIN, sid, &l, xk(&b)), payer()).unwrap().0;
+    let refused = |l: XLeg| {
+        let sg = past(l).sign(&keys).expect("signed");
+        script_refuses(&sg.tx, &sg.entries, 1)
+    };
+    assert!(refused(big), "F56 is open again: the engine takes a leg whose worth overflows i64");
+    // The largest size the bound allows enters (model and engine), and one unit more does not; a futures leg and
+    // an option struck at the limit.
+    let most = (MARGIN_MAX / price_max - 1) * scale + (scale - 1);
+    let mut tried = 0;
+    for dir in [LONG, SHORT, kpf_protocol::thin::option_dir(kpf_protocol::thin::CALL_WRITTEN, price_max), kpf_protocol::thin::option_dir(kpf_protocol::thin::PUT_HELD, 1)] {
+        let fits = XLeg { size: most, dir, ..big };
+        let over = XLeg { size: most + 1, dir, ..big };
+        assert!(kpf_protocol::payoff::q_checked(fits.size, price_max, scale, 0).is_some(), "the largest leg's worth at the limit fits");
+        assert!(with(fits).check().is_ok() && taken30(&past(fits), &keys), "the largest leg the bound allows enters (direction's place {dir})");
+        assert!(with(over).check().is_err() && refused(over), "F56 is open again: a unit beyond the bound enters (direction's place {dir})");
+        tried += 1;
+    }
+    // A scale beyond the family's most is refused too (the bound divides by it).
+    let wide = XLeg { scale: kpf_protocol::state::SCALE_MAX + 1, size: kpf_protocol::state::SCALE_MAX + 1, ..big };
+    assert!(with(wide).check().is_err() && refused(wide), "a scale beyond SCALE_MAX");
+    println!("T1b F56 fixed: the leg of size MARGIN_MAX is refused by Account::check, by the builder and by KpfTLegAdd; the largest size the bound allows ({most}) enters and one more does not, for {tried} directions' places; a scale beyond SCALE_MAX is refused");
+}
+
+// ================================================================ round 34: the model against the scripts, at the engine
+
+use kpf_protocol::reserve::{Head, SNote, Shard};
+use kpf_protocol::thin::{option_dir, row_after, row_judged_of, Row, CALL_HELD, CALL_WRITTEN, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_TAKE, PUT_HELD, PUT_WRITTEN};
+
+/// As `thin_option.rs`: a committee of three with one epoch table, eight markets, a library, a registry of two
+/// anchors (a shard and a covered account are opened through them). `a` is the user (side A), `b` the other party
+/// (the clearing party where an account is covered), `w` anyone.
+struct OW {
+    a: Keypair,
+    b: Keypair,
+    w: Keypair,
+    f: Keypair,
+    members: [Keypair; 3],
+    keys: KeySet,
+    rid: Hash,
+    markets: Vec<CMarket>,
+    table: OLive<EpochTable>,
+    lib: [u8; 32],
+    scripts: Vec<LibScript>,
+    anchors: Vec<Anchor>,
+    chain: RefCell<Vec<(Hash, Hash)>>,
+}
+
+impl OW {
+    fn script(&self, name: &str) -> LibScript {
+        self.scripts.iter().find(|s| s.s == name).cloned().unwrap_or_else(|| panic!("{name}"))
+    }
+    fn payer<'a>(&self, who: &Keypair, funds: &'a [KeyUtxo]) -> Payer<'a> {
+        Payer { funds, change_to: xk(who), rate: MIN_FEE_RATE }
+    }
+    fn terms(&self) -> XTerms {
+        let p = &self.markets[0].p;
+        XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
+    }
+    fn fut(&self, i: usize, units: i64, dir: i64, entry: i64) -> XLeg {
+        let m = &self.markets[i];
+        XLeg { market: m.id(), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max, size: units * m.p.scale, dir, entry }
+    }
+    fn opt(&self, i: usize, units: i64, kind: i64, strike: i64, entry: i64) -> XLeg {
+        self.fut(i, units, option_dir(kind, strike), entry)
+    }
+    /// An account of A against B that no shard covers, as an output stands on the chain (nothing of it is checked
+    /// here: an account of 138 bytes is opened by its two parties' signatures over its hash).
+    fn account(&self, legs: Vec<XLeg>, am: i64, bm: i64) -> OLive<Account> {
+        let s = Account { t: self.terms(), legs, a_key: xk(&self.a), b_key: xk(&self.b), a_margin: am, b_margin: bm, expiry: 6_000 + self.markets[0].p.term, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: None };
+        OLive { value: (s.pot() + KAS1) as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(11), daa: 6_100 }
+    }
+    fn cited(&self, i: usize, price: i64) -> Cited {
+        let market = self.markets[i].id();
+        let signed_prices: Vec<SignedPrice> = self.members.iter().map(|k| sign_price(k, &self.rid.as_bytes(), &market, T0, price)).collect();
+        let att = Attestation::collect(&self.table.s, &self.rid.as_bytes(), &market, T0, &signed_prices).expect("a quorum");
+        let funds = vec![fund(xk(&self.f), 90, 1_000)];
+        let (b, note) = note_write(&self.lib, &self.script("KpfTNote"), (&self.table, &att), xk(&self.f), self.payer(&self.f, &funds)).unwrap();
+        let s = b.sign(&self.keys).expect("the note's transaction");
+        let h = |k: u64| Hash::from_bytes(blake2b(&[&s.tx.id().as_bytes()[..], &k.to_le_bytes()].concat()));
+        let lane: Vec<(Hash, u16, u32)> = (0..5).map(|k| (if k == 3 { s.tx.id() } else { h(k) }, 1u16, k as u32 + 1)).collect();
+        let (_, activity_path) = cite::merkle(&cite::activity_leaves(&lane), 3);
+        let wit = cite::Witness { block: h(100), merge_idx: 4, activity_path, lane_key: cite::native_lane_key(), parent_ref: h(101), context: cite::context(1_700_000_000_000, 6_600, 6_500), blue_score: 6_500, lanes_path: vec![(h(102), false), (h(103), true)], inactivity_shortcut: h(104), payload_and_ctx: h(105), parent_commitment: h(106) };
+        self.chain.borrow_mut().push((wit.block, wit.commitment(&s.tx.id(), 1)));
+        kpf_protocol::verify::set_chain_view(self.chain.borrow().clone());
+        Cited::of(&s.tx, &self.lib, note, wit).unwrap()
+    }
+    fn who(&self, key: &[u8; 32]) -> &Keypair {
+        [&self.a, &self.b, &self.w, &self.f].into_iter().find(|k| xk(k) == *key).unwrap_or(&self.w)
+    }
+    /// The statement made on the account (taken by the engine), landed at 6,510.
+    fn stated(&self, account: &OLive<Account>, st: &Stated, said: &[u8]) -> OLive<Stated> {
+        let who = self.who(&st.claimer);
+        let f = [fund(xk(who), 30, 1_000)];
+        let b = account_state(&self.lib, account, &self.script("KpfTChange"), st, said, self.payer(who, &f)).unwrap();
+        let s = b.sign(&self.keys).expect("stated");
+        let v = kpf_protocol::verify::verify(&s.tx, &s.entries);
+        assert!(v.is_ok(), "stated: {:?}", v.errors());
+        nth(&s, 0, *st, 6_510)
+    }
+    fn pointed(&self, st: &OLive<Stated>, point: i64) -> OLive<Pointed> {
+        let f = [fund(xk(&self.w), 31, 1_000)];
+        let (b, q) = point_dispute(&self.lib, st, &self.script("KpfTPoint"), xk(&self.w), point, self.payer(&self.w, &f)).unwrap();
+        let s = b.sign(&self.keys).expect("pointed");
+        assert!(kpf_protocol::verify::verify(&s.tx, &s.entries).is_ok());
+        nth(&s, 0, q, 6_520)
+    }
+    fn shard(&self) -> OLive<Shard> {
+        let f = [fund(xk(&self.b), 40, 1_000)];
+        let (b, shard) = shard_open(&self.lib, &self.anchors[0], &self.script("KpfTShardOpen"), self.terms(), xk(&self.b), 50 * KAS1, 9_000_000, 50, 100, self.payer(&self.b, &f)).unwrap();
+        let s = signed("shard opened", &b, &self.keys);
+        nth(&s, 0, shard, 6_100)
+    }
+    /// A covered account of the user against the clearing party, with `am` and `bm` of margin and no leg.
+    fn covered(&self, sid: [u8; 32], am: i64, bm: i64) -> OLive<Account> {
+        let a = Account { t: self.terms(), legs: vec![], a_key: xk(&self.a), b_key: xk(&self.b), a_margin: am, b_margin: bm, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
+        let f = [fund(xk(&self.a), 41, 1_000)];
+        let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, self.payer(&self.a, &f)).unwrap();
+        let s = signed("covered account opened", &b, &self.keys);
+        nth(&s, 0, a, 6_100)
+    }
+    fn added(&self, account: &OLive<Account>, leg: XLeg) -> (OLive<Account>, OLive<SNote>) {
+        let f = [fund(xk(&self.a), 42, 1_000)];
+        let (b, next, note) = leg_add(&self.lib, account, &self.script("KpfTLegAdd"), leg, 0, 0, self.payer(&self.a, &f)).unwrap();
+        let s = signed("leg added", &b, &self.keys);
+        (nth(&s, 0, next, 6_110), nth(&s, 2, note, 6_110))
+    }
+    fn applied(&self, shard: &OLive<Shard>, note: &OLive<SNote>, what: &str) -> OLive<Shard> {
+        let f = [fund(xk(&self.w), 43, 1_000)];
+        let (b, next, _) = note_apply(&self.lib, shard, note, &self.script("KpfTNoteApply"), self.payer(&self.w, &f)).unwrap();
+        let s = signed(what, &b, &self.keys);
+        nth(&s, 0, next, shard.daa + 10)
+    }
+}
+
+fn ow() -> OW {
+    let (a, b, w, f) = (kp(1), kp(2), kp(3), kp(9));
+    let members = [kp(101), kp(102), kp(103)];
+    let mut keys = KeySet::new();
+    for k in [&a, &b, &w, &f] {
+        keys.add_keypair(*k);
+    }
+    let rid = Hash::from_bytes([0x52; 32]);
+    let rp = CommitteeParams::testnet();
+    let markets = (0..8u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    let mut table = EMPTY_TABLE;
+    for (i, wt) in [30i64, 22, 15].iter().enumerate() {
+        table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
+    }
+    let table = OLive { s: EpochTable { members: table, total: 67 * KAS1, from: 6_000, until: 9_000, quorum_bps: rp.quorum_bps, spread_bps: rp.spread_bps }, value: KAS1 as u64, id: Some(rid), op: op(20), daa: 6_000 };
+    let funds = vec![fund(xk(&f), 200, 3_000)];
+    let (g, lib) = lib_genesis(1, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let gs = g.sign(&keys).expect("genesis");
+    let funds = vec![fund(xk(&f), 201, 3_000)];
+    let (r, _) = registry_genesis(&lib, 2, KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let rs = r.sign(&keys).expect("registry");
+    let anchors = registry_anchors(&rs.tx, &lib, 6_000);
+    OW { a, b, w, f, members, keys, rid, markets, table, lib, scripts: lib_scripts(&gs.tx, 6_000), anchors, chain: RefCell::new(vec![]) }
+}
+
+/// What the engine takes of a row's answer: (the verdict "right" is taken, the verdict "wrong" is taken).
+fn row_taken(w: &OW, q: &OLive<Pointed>, tk: &ATake, at: i64, prev: &[u8; 32], leg: &XLeg) -> (bool, bool) {
+    let take = |v: bool| {
+        let who = if v { w.who(&q.s.st.claimer) } else { &w.w };
+        let f = [fund(xk(who), 33, 1_000)];
+        step_row_at(&w.lib, q, tk, at, prev, leg, &w.script("KpfTStepRow"), xk(&w.w), w.payer(who, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    (take(true), take(false))
+}
+
+fn verdicts(m: Option<bool>) -> (bool, bool) {
+    match m {
+        Some(true) => (true, false),
+        Some(false) => (false, true),
+        None => (false, false),
+    }
+}
+
+/// Round 34, item 1. `KpfTStepRow` against `row_judged_of`, at the engine, for legs of every kind and for
+/// directions' places that are no kind (0, below zero, the bits 0, 1, 2 and 7 above a strike), a strike of zero and
+/// one above the market's limit, entries above and below the strike; for a row that stays and a row that leaves, by
+/// each side, in a statement of each kind (2, 3, 4); with what the statement says of the leaving leg as the model
+/// makes it, of another market, and of other units; and with each of the six numbers of the row off by one. For each
+/// the engine takes exactly the verdict the model gives, and where the model gives none (a chain that does not open
+/// the row) the engine takes neither.
+#[test]
+fn t1b_r34_a_rows_answer_is_the_models_for_every_kind_of_leg() {
+    let w = ow();
+    let pm = w.markets[1].p.price_max;
+    let scale = w.markets[1].p.scale;
+    let k = P10;
+    let mut legs: Vec<(String, XLeg)> = vec![("long".into(), w.fut(1, 7, LONG, P10)), ("short".into(), w.fut(1, 7, SHORT, P10))];
+    for (name, kind) in [("call A holds", CALL_HELD), ("call A wrote", CALL_WRITTEN), ("put A holds", PUT_HELD), ("put A wrote", PUT_WRITTEN)] {
+        legs.push((format!("{name}, entry above its strike"), w.opt(1, 7, kind, k, k * 13 / 10)));
+        legs.push((format!("{name}, entry below its strike"), w.opt(1, 7, kind, k, k * 7 / 10)));
+        legs.push((format!("{name}, strike 0"), w.opt(1, 7, kind, 0, k)));
+        legs.push((format!("{name}, strike above the limit"), w.opt(1, 7, kind, pm + 1, k)));
+    }
+    for dir in [0, -5, -8 * k + 3, 8 * k, 8 * k + 1, 8 * k + 2, 8 * k + 7, 7, 8] {
+        legs.push((format!("the direction's place {dir}"), w.fut(1, 7, dir, P10)));
+    }
+    for (_, l) in legs.iter_mut() {
+        l.size += scale / 3;
+    }
+    let first = w.fut(0, 3, SHORT, P10 * 9 / 10);
+    let (mut cases, mut rights, mut wrongs, mut nones) = (0, 0, 0, 0);
+    for (name, leg) in &legs {
+        let account = w.account(vec![first, *leg], 500 * KAS1, 500 * KAS1);
+        let x = &account.s;
+        let held = account.value as i64;
+        for (kind, skip, side) in [(KIND_ACCOUNT_TAKE, 0i64, SIDE_A), (KIND_ACCOUNT_LIQ, 2, SIDE_A), (KIND_ACCOUNT_LIQ, 2, SIDE_B), (KIND_ACCOUNT_LEAVE, 2, SIDE_A), (KIND_ACCOUNT_LEAVE, 2, SIDE_B), (KIND_ACCOUNT_TAKE, 0, SIDE_B), (KIND_ACCOUNT_LIQ, 1, SIDE_A)] {
+            for price in [k * 12 / 10 + 7, k * 8 / 10 + 3] {
+                let before = row_after(&Row::ZERO, &first, P10, skip == 1);
+                let honest = row_after(&before, leg, price, skip == 2);
+                // What the statement says of the leg that leaves: as the model makes it, and (for the row that
+                // leaves) of another market and of other units.
+                let said_of = |l: &XLeg| Some((Head::of(l), SNote::units(l)));
+                let mut leaves = vec![if skip == 2 { said_of(leg) } else if skip == 1 { said_of(&first) } else { None }];
+                if skip == 2 && kind == KIND_ACCOUNT_LEAVE {
+                    leaves.push(Some((Head::of(&XLeg { dir: if kpf_protocol::thin::option_of(leg).is_some() { LONG } else { option_dir(CALL_HELD, k) }, ..*leg }), SNote::units(leg))));
+                    leaves.push(Some((Head::of(leg), -SNote::units(leg))));
+                    leaves.push(Some((Head::of(leg), SNote::units(leg) + 1)));
+                }
+                let whole = kind == KIND_ACCOUNT_TAKE || (kind == KIND_ACCOUNT_LIQ && skip == 2 && side == SIDE_A);
+                for (li, leave) in leaves.iter().enumerate() {
+                    let mut rows = vec![honest];
+                    if whole && li == 0 && price > k {
+                        for which in 0..6 {
+                            for d in [1i64, -1] {
+                                let mut r = honest;
+                                match which {
+                                    0 => r.a += d,
+                                    1 => r.gain += d,
+                                    2 => r.wa += d,
+                                    3 => r.wb += d,
+                                    4 => r.ea += d,
+                                    _ => r.eb += d,
+                                }
+                                rows.push(r);
+                            }
+                        }
+                        let mut r = honest;
+                        r.h = [0x5a; 32];
+                        rows.push(r);
+                    }
+                    for (ri, row) in rows.iter().enumerate() {
+                        let tk = ATake { side, amount: 0, rows: vec![before, *row], skip, leave: *leave };
+                        let outs = Outs::of(&[Out { key: false, to: x.hash(), value: held }]).unwrap();
+                        let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind, t0: T0, arg: tk.arg(), outs, bond: x.bond(), claimer: xk(&w.a), held };
+                        let q = w.pointed(&w.stated(&account, &st, &tk.said()), 3);
+                        let row_leave = (skip == 2).then(|| leave.unwrap_or((Head::EMPTY, 0)));
+                        let model = row_judged_of(&before.g, leg, &before, row, row_leave, side);
+                        let engine = row_taken(&w, &q, &tk, 3, &before.g, leg);
+                        assert_eq!(engine, verdicts(model), "{name}: kind {kind}, skip {skip}, side {side}, price {price}, what is said of the leg {li}, row {ri}: the model says {model:?}");
+                        match model {
+                            Some(true) => rights += 1,
+                            Some(false) => wrongs += 1,
+                            None => nones += 1,
+                        }
+                        cases += 1;
+                        // A chain that is not the row before's, which does not open the row: neither verdict.
+                        if ri == 0 && li == 0 && price > k {
+                            assert_eq!(row_judged_of(&[0x11; 32], leg, &before, row, row_leave, side), None);
+                            assert_eq!(row_taken(&w, &q, &tk, 3, &[0x11; 32], leg), (false, false), "{name}: a chain that does not open the row");
+                            // And the leg of another row shown for this one.
+                            assert_eq!(row_taken(&w, &q, &tk, 3, &before.g, &first), (false, false), "{name}: another leg");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(rights > 50 && wrongs > 100 && nones == 0, "{rights} right, {wrongs} wrong, {nones} with no verdict");
+    println!("T1b R34 rows: {} legs, {cases} rows answered at the engine: {rights} right and {wrongs} wrong, each the model's verdict and the other refused; a chain or a leg that does not open the row is taken with neither verdict", legs.len());
+}
+
+/// What the engine takes of the answer of an end (point 0): (the verdict "right" is taken, "wrong" is taken).
+fn end_taken(w: &OW, account: &OLive<Account>, st: &Stated, tk: &ATake) -> (bool, bool) {
+    let q = w.pointed(&w.stated(account, st, &tk.said()), 0);
+    let script = w.script(if st.kind == KIND_ACCOUNT_TAKE { "KpfTStepEnd" } else { "KpfTStepLiq" });
+    let take = |v: bool| {
+        let who = if v { w.who(&st.claimer) } else { &w.w };
+        let f = [fund(xk(who), 33, 1_000)];
+        step_end(&w.lib, &q, &account.s, tk, &script, xk(&w.w), w.payer(who, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    (take(true), take(false))
+}
+
+/// An account of one to five legs, futures and options of every kind, and a price a leg; `sid`: covered by it.
+fn random_account34(w: &OW, r: &mut Rng, sid: Option<[u8; 32]>) -> (OLive<Account>, Vec<i64>) {
+    let n = r.range(1, 6) as usize;
+    let scale = w.markets[0].p.scale;
+    let tenth = |r: &mut Rng| P10 / 10 * r.range(5, 16);
+    let (mut legs, mut p) = (vec![], vec![]);
+    for i in 0..n {
+        let entry = tenth(r);
+        let mut l = match r.range(0, 6) {
+            0 => w.fut(i, 1, LONG, entry),
+            1 => w.fut(i, 1, SHORT, entry),
+            k => w.opt(i, 1, [CALL_HELD, CALL_WRITTEN, PUT_HELD, PUT_WRITTEN][k as usize - 2], tenth(r), entry),
+        };
+        l.size = r.range(1, 51) * scale + r.range(0, scale);
+        legs.push(l);
+        p.push(tenth(r) + r.range(0, 1_000));
+    }
+    let mut account = w.account(legs, r.range(0, 61) * KAS1 + r.range(0, KAS1), r.range(0, 61) * KAS1 + r.range(0, KAS1));
+    account.s.shard = sid;
+    if account.s.pot() < KAS1 {
+        account.s.a_margin += KAS1;
+    }
+    account.value = (account.s.pot() + KAS1) as u64;
+    (account, p)
+}
+
+/// The statement that the leg `skip` leaves an account that no shard covers, written as the rule would write it
+/// were it allowed (the fee and the margins by `KpfTStepLiq`'s arithmetic), whether or not the rule allows it: so
+/// that an end the script took for right against the model would be seen, and not hidden by outputs that differ.
+fn step_as_if(x: &Account, kind: i64, side: i64, skip: i64, rows: &[Row], held: i64, claimer: [u8; 32]) -> (Stated, ATake) {
+    let k = skip as usize;
+    let last = rows[rows.len() - 1];
+    let before = if k > 1 { rows[k - 2] } else { Row::ZERO };
+    let wk = (rows[k - 1].wa - before.wa).max(rows[k - 1].wb - before.wb);
+    let pot = x.pot();
+    let mut am = (x.a_margin + last.gain).clamp(0, pot);
+    let mut bm = pot - am;
+    let mine = if side == SIDE_A { am } else { bm };
+    let fee = if kind == KIND_ACCOUNT_LIQ { ((wk / 10_000) * x.t.liq_fee_bps + ((wk % 10_000) * x.t.liq_fee_bps) / 10_000).min(mine).max(0) } else { 0 };
+    if side == SIDE_A {
+        am -= fee;
+    } else {
+        bm -= fee;
+    }
+    let l = &x.legs[k - 1];
+    let tk = ATake { side, amount: fee, rows: rows.to_vec(), skip, leave: Some((Head::of(l), SNote::units(l))) };
+    let after = Account { a_margin: am, b_margin: bm, ..x.clone() };
+    let h = blake2b(&[p33(&blake2b(&[x.terms(), p33(&last.h)].concat())), after.moving()].concat());
+    let mut v = vec![Out { key: false, to: h, value: held - fee }];
+    if fee > 0 {
+        v.push(Out { key: true, to: claimer, value: fee });
+    }
+    (Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind, t0: T0, arg: tk.arg(), outs: Outs::of(&v).unwrap(), bond: x.bond(), claimer, held }, tk)
+}
+
+/// Round 34, item 2. `KpfTStepEnd` and `KpfTStepLiq` against `Account::end_right` and `step_end_right`, at the
+/// engine, on random accounts of futures and options of every kind, covered and not: a take of the most the rule
+/// gives, of a sompi more, of what the options the side holds were counted at more, of nothing, of less than
+/// nothing; a take for side B of a covered account by a stranger (a deposit) and by a stranger on one that is not
+/// covered; the last row with each of its sums below zero or moved; every leg leaving by a step of a liquidation and
+/// by its party's statement, of each side, written as the rule would write it whether or not it allows it, and with
+/// the fee a sompi more and less. The engine takes exactly the model's verdict each time. And the rule itself, in
+/// numbers: a side that takes the most keeps what its options were counted at; a side all of whose legs are options
+/// it holds is liquidated at no price.
+#[test]
+fn t1b_r34_an_ends_answer_is_the_models_for_takes_and_legs_that_leave() {
+    let w = ow();
+    let mut r = Rng(0x51ab_0c0f_fee0_3401);
+    let (mut cases, mut rights, mut wrongs, mut allowed_steps, mut refused_steps) = (0, 0, 0, 0, 0);
+    let check = |what: String, account: &OLive<Account>, st: &Stated, tk: &ATake, cases: &mut i32, rights: &mut i32, wrongs: &mut i32| -> bool {
+        let x = &account.s;
+        let model = if st.kind == KIND_ACCOUNT_TAKE { x.end_right(tk, &st.claimer, &st.outs, st.held) } else { x.step_end_right(st.kind, tk, &st.claimer, &st.outs, st.held) };
+        assert_eq!(end_taken(&w, account, st, tk), verdicts(Some(model)), "{what}: the model says {model}");
+        *cases += 1;
+        if model { *rights += 1 } else { *wrongs += 1 }
+        model
+    };
+    for round in 0..36 {
+        let sid = (round % 3 == 2).then_some([0x5d; 32]);
+        let (account, p) = random_account34(&w, &mut r, sid);
+        let x = &account.s;
+        assert!(x.check().is_ok());
+        let held = account.value as i64;
+        let rows = x.trace(&p);
+        let last = rows[rows.len() - 1];
+        let name = |s: &str| format!("account {round} ({} legs{}): {s}", x.legs.len(), if sid.is_some() { ", covered" } else { "" });
+        // ---- takes
+        for side in [SIDE_A, SIDE_B] {
+            let key = if side == SIDE_A { x.a_key } else { x.b_key };
+            let max = x.take_max(side, &p);
+            let (_, e) = last.asked(side);
+            // The rule in numbers: what is left to the side after the most it takes is at least what its options
+            // were counted at (or all it is owed, where that is less).
+            let due_a = (x.a_margin + last.gain).clamp(0, x.pot());
+            let due = if side == SIDE_A { due_a } else { x.pot() - due_a };
+            assert!(due - max >= e.min(due), "{}", name("a side that takes the most keeps what its options were counted at"));
+            for (what, amount, claimer) in [("the most", max, key), ("a sompi more than the most", max + 1, key), ("the most and what its options were counted at", max + e.max(1), key), ("nothing", 0, key), ("less than nothing", -1, key), ("the most, stated by a stranger", max, xk(&w.w)), ("a sompi more, stated by a stranger", max + 1, xk(&w.w))] {
+                let built = if amount >= 0 { x.take_by(side, amount, &p, T0, held, claimer).ok() } else { None };
+                let was_built = built.is_some();
+                let (st, tk) = match built {
+                    Some(v) => v,
+                    // (An amount the model does not write a statement of: the outputs of the take of nothing.)
+                    None => {
+                        let Ok((st0, tk0)) = x.take_by(side, 0, &p, T0, held, claimer) else { continue };
+                        let tk = ATake { amount, ..tk0 };
+                        (Stated { arg: tk.arg(), ..st0 }, tk)
+                    }
+                };
+                let model = check(name(&format!("side {side} takes {what}")), &account, &st, &tk, &mut cases, &mut rights, &mut wrongs);
+                if what == "the most" && was_built {
+                    assert!(model, "{}", name("the most the rule gives is within the rule"));
+                }
+                if what == "a sompi more than the most" || what == "the most and what its options were counted at" {
+                    assert!(!model, "{}", name("more than the most is not within the rule"));
+                }
+            }
+            // The last row with a sum of its own making (the row is then wrong; the end is judged by its numbers).
+            if let Ok((st0, tk0)) = x.take_by(side, max.min(KAS1), &p, T0, held, key) {
+                for which in 0..6 {
+                    let mut rows2 = tk0.rows.clone();
+                    let l = rows2.last_mut().unwrap();
+                    match which {
+                        0 => l.wa = -1,
+                        1 => l.wb = -1,
+                        2 => l.ea = -1,
+                        3 => l.eb = -1,
+                        4 => l.ea = -(x.pot() + 1),
+                        _ => l.eb = -(x.pot() + 1),
+                    }
+                    let tk = ATake { rows: rows2, ..tk0.clone() };
+                    let st = Stated { arg: tk.arg(), ..st0 };
+                    check(name(&format!("side {side} takes with the last row's sum {which} below zero")), &account, &st, &tk, &mut cases, &mut rights, &mut wrongs);
+                }
+            }
+        }
+        // ---- legs that leave
+        for kind in [KIND_ACCOUNT_LIQ, KIND_ACCOUNT_LEAVE] {
+            for side in [SIDE_A, SIDE_B] {
+                for skip in 1..=x.legs.len() as i64 {
+                    let key = if side == SIDE_A { x.a_key } else { x.b_key };
+                    let claimer = if kind == KIND_ACCOUNT_LIQ { xk(&w.w) } else { key };
+                    let rows = x.trace_without(&p, skip);
+                    let allowed = x.stepped(kind, side, skip, &rows, &claimer).is_some();
+                    let (st, tk) = match (x.step_any(kind, side, skip, &p, T0, held, claimer), sid) {
+                        (Ok((st, tk, _)), _) => (st, tk),
+                        (Err(_), None) => step_as_if(x, kind, side, skip, &rows, held, claimer),
+                        (Err(_), Some(_)) => continue,
+                    };
+                    let model = check(name(&format!("kind {kind}, side {side}, leg {skip} leaves")), &account, &st, &tk, &mut cases, &mut rights, &mut wrongs);
+                    assert_eq!(model, allowed, "{}", name("the end of a leg that leaves is right exactly where the rule allows it"));
+                    if allowed { allowed_steps += 1 } else { refused_steps += 1 }
+                    // The fee a sompi more and a sompi less, and (kind 4) by another key than the side's.
+                    for d in [1i64, -1] {
+                        let tk2 = ATake { amount: tk.amount + d, ..tk.clone() };
+                        let st2 = Stated { arg: tk2.arg(), ..st };
+                        assert!(!check(name(&format!("kind {kind}, side {side}, leg {skip}: the fee {d} off")), &account, &st2, &tk2, &mut cases, &mut rights, &mut wrongs));
+                    }
+                    if kind == KIND_ACCOUNT_LEAVE && allowed {
+                        let st2 = Stated { claimer: xk(&w.w), ..st };
+                        assert!(!check(name(&format!("kind 4, side {side}, leg {skip}: stated by a stranger")), &account, &st2, &tk, &mut cases, &mut rights, &mut wrongs));
+                    }
+                }
+            }
+        }
+    }
+    // ---- a side all of whose legs are options it holds: liquidated at no price, whatever its margin.
+    let mut never = 0;
+    for round in 0..40 {
+        let n = r.range(1, 4) as usize;
+        let scale = w.markets[0].p.scale;
+        let side = if round % 2 == 0 { SIDE_A } else { SIDE_B };
+        let legs: Vec<XLeg> = (0..n).map(|i| {
+            let kind = match (side, r.range(0, 2)) {
+                (SIDE_A, 0) => CALL_HELD,
+                (SIDE_A, _) => PUT_HELD,
+                (_, 0) => CALL_WRITTEN,
+                _ => PUT_WRITTEN,
+            };
+            // (Struck where it is entered: nothing was counted yet, so its holder's margin owes it nothing.)
+            let strike = P10 / 10 * r.range(5, 16);
+            let mut l = w.opt(i, 1, kind, strike, strike);
+            l.size = r.range(1, 51) * scale;
+            l
+        }).collect();
+        // (The other party holds more than the options can come to be worth at these prices: where it does not,
+        // see F57.)
+        let (am, bm) = if side == SIDE_A { (r.range(0, 3) * KAS1, 9_000 * KAS1) } else { (9_000 * KAS1, r.range(0, 3) * KAS1) };
+        let account = w.account(legs, am.max(1), bm.max(1));
+        let x = &account.s;
+        for _ in 0..6 {
+            let p: Vec<i64> = (0..n).map(|_| P10 / 100 * r.range(1, 400)).collect();
+            for skip in 1..=n as i64 {
+                let rows = x.trace_without(&p, skip);
+                assert!(x.stepped(KIND_ACCOUNT_LIQ, side, skip, &rows, &xk(&w.w)).is_none(), "a side that holds options and nothing else is liquidated (round {round}, prices {p:?})");
+                never += 1;
+            }
+        }
+        // And at the engine, once an account: the step written as the rule would write it is answered wrong.
+        if round < 6 {
+            let p: Vec<i64> = (0..n).map(|_| P10 / 100 * r.range(1, 400)).collect();
+            let rows = x.trace_without(&p, 1);
+            let (st, tk) = step_as_if(x, KIND_ACCOUNT_LIQ, side, 1, &rows, account.value as i64, xk(&w.w));
+            assert!(!check(format!("a holder of options alone, side {side}: a step of its liquidation"), &account, &st, &tk, &mut cases, &mut rights, &mut wrongs));
+        }
+    }
+    assert!(rights > 100 && wrongs > 300 && allowed_steps > 20 && refused_steps > 20, "{rights} right, {wrongs} wrong, {allowed_steps} steps allowed, {refused_steps} not");
+    println!("T1b R34 ends: {cases} ends answered at the engine on 36 random accounts (a third covered) and 6 of options held alone: {rights} right, {wrongs} wrong, each the model's verdict and the other refused; {allowed_steps} legs' leavings the rule allows and {refused_steps} it does not; a side that holds options and nothing else is liquidated at none of {never} prices and legs");
+}
+
+/// The statement that the leg `skip` leaves an account, covered or not, written as `KpfTStepLiq` would write its
+/// end (the fee and the margins by its arithmetic; on a covered account the note that the leg left and the note of
+/// what A is owed beyond the pot), whether or not the rule allows it, and saying of the leg that leaves what is
+/// given (`head`, `units`), whether or not that is the leg's.
+#[allow(clippy::too_many_arguments)]
+fn step_said35(x: &Account, kind: i64, side: i64, skip: i64, rows: &[Row], held: i64, claimer: [u8; 32], head: Head, units: i64) -> (Stated, ATake) {
+    let k = skip as usize;
+    let last = rows[rows.len() - 1];
+    let before = if k > 1 { rows[k - 2] } else { Row::ZERO };
+    let wk = (rows[k - 1].wa - before.wa).max(rows[k - 1].wb - before.wb);
+    let pot = x.pot();
+    let raw = x.a_margin + last.gain;
+    let mut am = raw.clamp(0, pot);
+    let mut bm = pot - am;
+    let mine = if side == SIDE_A { am } else { bm };
+    let fee = if kind == KIND_ACCOUNT_LIQ { ((wk / 10_000) * x.t.liq_fee_bps + ((wk % 10_000) * x.t.liq_fee_bps) / 10_000).min(mine).max(0) } else { 0 };
+    if side == SIDE_A {
+        am -= fee;
+    } else {
+        bm -= fee;
+    }
+    let tk = ATake { side, amount: fee, rows: rows.to_vec(), skip, leave: Some((head, units)) };
+    let after = Account { a_margin: am, b_margin: bm, ..x.clone() };
+    let h = blake2b(&[p33(&blake2b(&[x.terms(), p33(&last.h)].concat())), after.moving()].concat());
+    let mut v = vec![(Out { key: false, to: h, value: held - fee }, false)];
+    if fee > 0 {
+        v.push((Out { key: true, to: claimer, value: fee }, false));
+    }
+    if let Some(sid) = x.shard {
+        let release = SNote { sid, kind: NOTE_RELEASE, head, net: units, gross: units.wrapping_abs(), key: x.b_key, amount: 0 };
+        v.push((Out { key: false, to: release.hash(), value: release.value() }, true));
+        if raw > pot {
+            let owed = SNote::owed(sid, x.a_key, x.b_key, raw - pot);
+            v.push((Out { key: false, to: owed.hash(), value: owed.value() }, true));
+        }
+    }
+    (Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind, t0: T0, arg: tk.arg(), outs: Outs::with_notes(&v).unwrap(), bond: x.bond(), claimer, held }, tk)
+}
+
+/// As `step_said35`, saying of the leg that leaves what it is.
+fn step_as_if35(x: &Account, kind: i64, side: i64, skip: i64, rows: &[Row], held: i64, claimer: [u8; 32]) -> (Stated, ATake) {
+    let l = &x.legs[skip as usize - 1];
+    step_said35(x, kind, side, skip, rows, held, claimer, Head::of(l), SNote::units(l))
+}
+
+/// F57 (fixed in round 35). The holder of an option alone was liquidated, for a fee out of its margin, where the pot
+/// could not pay what the option had come to be worth: its margin was capped at the pot and what it keeps whole was
+/// not. The fix: what a side keeps whole is reduced by what the pot could not pay it (for A: what A is owed beyond
+/// the pot; for B: what A's margin lacks), not below zero, before the comparison. Verified at the engine: the step
+/// of round 34 is answered wrong and not right, on an account that is covered and on one that is not, with A and
+/// with B as the holder, calls and puts. And attacked: a holder alone whose margin is at least what its options were
+/// counted at when they entered is liquidated at no price; no side is liquidated now that was not before; a side
+/// that is no longer liquidated is one the pot did not pay in full, and counted in full it stands at its
+/// maintenance; a side below the maintenance of what it is asked is liquidated whatever it keeps whole; a side that
+/// holds no option (a writer) is judged as before. And the holder that was paid its option's gain through a note of
+/// what is owed, the option still standing: its margin is then the pot and what it keeps whole was paid out, it is
+/// below while the option is worth anything, and a step exercises the option.
+#[test]
+fn t1b_fixed_f57_a_holder_of_an_option_alone_is_not_liquidated_for_what_the_pot_did_not_pay() {
+    let w = ow();
+    let stranger = xk(&w.w);
+    // ---- the step of round 34, A and B as the holder, covered and not.
+    let mut refused = 0;
+    for (holder, kind) in [(SIDE_A, CALL_HELD), (SIDE_A, PUT_HELD), (SIDE_B, CALL_WRITTEN), (SIDE_B, PUT_WRITTEN)] {
+        for covered in [false, true] {
+            let (am, bm) = if holder == SIDE_A { (5 * KAS1, 20 * KAS1) } else { (20 * KAS1, 5 * KAS1) };
+            let mut account = w.account(vec![w.opt(0, 10, kind, P10, P10)], am, bm);
+            if covered {
+                account.s.shard = Some([0x5d; 32]);
+            }
+            let x = &account.s;
+            let held = account.value as i64;
+            // The price at which the option is worth 40 and the pot holds 25.
+            let p = [if kind == CALL_HELD || kind == CALL_WRITTEN { P10 * 14 / 10 } else { P10 * 6 / 10 }];
+            let rows = x.trace_without(&p, 1);
+            let (_, e) = rows[0].asked(holder);
+            assert_eq!(e, 40 * KAS1, "the holder keeps 40 whole");
+            assert!(x.stepped(KIND_ACCOUNT_LIQ, holder, 1, &rows, &stranger).is_none(), "F57 is open again: the holder of an option alone is liquidated where the pot is short (holder {holder}, kind {kind}, covered {covered})");
+            let (st, tk) = step_as_if35(x, KIND_ACCOUNT_LIQ, holder, 1, &rows, held, stranger);
+            assert_eq!(end_taken(&w, &account, &st, &tk), (false, true), "F57 is open again at the engine: the end of the liquidation of the holder is answered right (holder {holder}, kind {kind}, covered {covered})");
+            refused += 1;
+            // By its own statement the holder exercises, at no fee; the end is answered right.
+            let key = if holder == SIDE_A { x.a_key } else { x.b_key };
+            let (st, tk, sd) = x.step(KIND_ACCOUNT_LEAVE, holder, 1, &p, T0, held, key).expect("the holder exercises");
+            assert_eq!(sd.fee, 0);
+            assert_eq!(end_taken(&w, &account, &st, &tk), (true, false), "the leaving the holder states is answered right");
+        }
+    }
+    // ---- a holder alone, of options of any strike entered at any price, whose margin is at least what they were
+    // counted at when they entered: liquidated at no price, whatever the other party holds.
+    let mut r = Rng(0x51ab_0c0f_fee0_3501);
+    let scale = w.markets[0].p.scale;
+    let mut never = 0;
+    for round in 0..500 {
+        let n = r.range(1, 4) as usize;
+        let holder = if round % 2 == 0 { SIDE_A } else { SIDE_B };
+        let legs: Vec<XLeg> = (0..n).map(|i| {
+            let kind = match (holder, r.range(0, 2)) {
+                (SIDE_A, 0) => CALL_HELD,
+                (SIDE_A, _) => PUT_HELD,
+                (_, 0) => CALL_WRITTEN,
+                _ => PUT_WRITTEN,
+            };
+            let mut l = w.opt(i, 1, kind, P10 / 10 * r.range(5, 16), P10 / 10 * r.range(5, 16));
+            l.size = r.range(1, 51) * scale + r.range(0, scale);
+            l
+        }).collect();
+        let entries: Vec<i64> = legs.iter().map(|l| l.entry).collect();
+        let mut account = w.account(legs, KAS1, KAS1);
+        let at_entry = account.s.trace(&entries);
+        let counted = at_entry[n - 1].asked(holder).1;
+        let (mine, other) = (counted + r.range(0, 30) * KAS1, r.range(0, 30) * KAS1 + 1);
+        (account.s.a_margin, account.s.b_margin) = if holder == SIDE_A { (mine, other) } else { (other, mine) };
+        account.value = (account.s.pot() + KAS1) as u64;
+        if round % 4 >= 2 {
+            account.s.shard = Some([0x5d; 32]);
+        }
+        let x = &account.s;
+        for _ in 0..20 {
+            let p: Vec<i64> = (0..n).map(|_| P10 / 100 * r.range(1, 400)).collect();
+            for skip in 1..=n as i64 {
+                let rows = x.trace_without(&p, skip);
+                assert!(x.stepped(KIND_ACCOUNT_LIQ, holder, skip, &rows, &stranger).is_none(), "a holder alone is liquidated (round {round}, prices {p:?}, skip {skip})");
+                never += 1;
+            }
+        }
+        // And at the engine, on some: the step written as the rule would write it is answered wrong.
+        if round < 12 {
+            let p: Vec<i64> = (0..n).map(|_| P10 / 100 * r.range(1, 400)).collect();
+            let rows = x.trace_without(&p, 1);
+            let (st, tk) = step_as_if35(x, KIND_ACCOUNT_LIQ, holder, 1, &rows, account.value as i64, stranger);
+            assert_eq!(end_taken(&w, &account, &st, &tk), (false, true), "a holder alone, at the engine (round {round})");
+            refused += 1;
+        }
+    }
+    // ---- with other legs beside the options: the reduction lets nobody escape what it is asked.
+    let rate_up = |v: i64, rate: i64| (v / 10_000) * rate + ((v % 10_000) * rate + 9_999) / 10_000;
+    let (mut asked_alone, mut as_before, mut steps, mut spared, mut liquidated, mut engine) = (0, 0, 0, 0, 0, 0);
+    for round in 0..600 {
+        let (account, p) = random_account34(&w, &mut r, (round % 3 == 2).then_some([0x5d; 32]));
+        let x = &account.s;
+        let rate_lo = (x.t.mmr_bps - x.t.g_bps).max(0);
+        for side in [SIDE_A, SIDE_B] {
+            let rows = x.trace_without(&p, 1);
+            let last = rows[rows.len() - 1];
+            let (ws, es) = last.asked(side);
+            let pot = x.pot();
+            let raw = x.a_margin + last.gain;
+            let am = raw.clamp(0, pot);
+            let mine = if side == SIDE_A { am } else { pot - am };
+            // What the pot could not pay the side.
+            let unpaid = if side == SIDE_A { (raw - pot).max(0) } else { (-raw).max(0) };
+            let stepped = x.stepped(KIND_ACCOUNT_LIQ, side, 1, &rows, &stranger).is_some();
+            let before = mine < rate_up(ws, rate_lo) + es;
+            assert!(!stepped || before, "a side is liquidated now that was not before the change (round {round}, side {side})");
+            if stepped {
+                liquidated += 1;
+            }
+            if before && !stepped {
+                assert!(unpaid > 0, "a side the pot pays in full is spared (round {round}, side {side})");
+                assert!(mine >= rate_up(ws, rate_lo), "a side below the maintenance of its worth is spared (round {round}, side {side})");
+                assert!(es <= unpaid || mine + unpaid >= rate_up(ws, rate_lo) + es, "a side is spared that does not stand at its maintenance counted in full (round {round}, side {side})");
+                spared += 1;
+            }
+            // At the engine, where the pot did not pay the side in full (what the change is about): the step written
+            // as the rule would write it is answered as the model says.
+            if unpaid > 0 && engine < 120 {
+                let (st, tk) = step_as_if35(x, KIND_ACCOUNT_LIQ, side, 1, &rows, account.value as i64, stranger);
+                assert_eq!(end_taken(&w, &account, &st, &tk), if stepped { (true, false) } else { (false, true) }, "the engine and the model differ on a side the pot did not pay (round {round}, side {side})");
+                engine += 1;
+            }
+            // A side below the maintenance of what it is asked is liquidated, whatever it keeps whole and was not
+            // paid.
+            if mine < rate_up(ws, rate_lo) {
+                assert!(stepped, "a side below the maintenance of its worth escapes (round {round}, side {side})");
+                asked_alone += 1;
+            }
+            // A side that holds no option is judged by its worth alone, as before the change.
+            if es == 0 {
+                assert_eq!(stepped, mine < rate_up(ws, rate_lo), "a side that holds no option (round {round}, side {side})");
+                as_before += 1;
+            }
+            // A side the pot pays in full is judged with all it keeps.
+            if unpaid == 0 {
+                assert_eq!(stepped, before, "a side the pot pays in full (round {round}, side {side})");
+            }
+            steps += 1;
+        }
+    }
+    assert!(spared > 0 && liquidated > 50 && as_before > 50 && engine == 120, "{spared} spared, {liquidated} liquidated, {as_before} with no option, {engine} at the engine");
+    // ---- the holder that was paid through a note of what is owed, the option standing.
+    let mut account = w.account(vec![w.opt(0, 10, CALL_HELD, P10, P10), w.fut(1, 10, LONG, P10)], 5 * KAS1, 20 * KAS1);
+    account.s.shard = Some([0x5d; 32]);
+    let x = &account.s;
+    let p = [P10 * 14 / 10, P10 * 14 / 10];
+    // A leaves the futures leg by its own statement: it is owed 85 and the pot holds 25.
+    let (st, tk, sd) = x.step(KIND_ACCOUNT_LEAVE, SIDE_A, 2, &p, T0, account.value as i64, x.a_key).expect("the futures leg of A leaves by its statement");
+    assert_eq!((sd.owed, sd.after.a_margin, sd.after.b_margin, sd.after.legs.len(), sd.after.legs[0].entry), (60 * KAS1, 25 * KAS1, 0, 1, p[0]), "60 owed by the shard; the pot to A; the option stands, counted at 14");
+    assert_eq!(end_taken(&w, &account, &st, &tk), (true, false));
+    // Then: its margin is the pot (25) and what it keeps whole is the 40 the option was counted at, which it was
+    // paid. It is below at the price, above it and under it, while the option is worth anything.
+    let mut then = w.account(sd.after.legs.clone(), sd.after.a_margin, sd.after.b_margin);
+    then.s.shard = Some([0x5d; 32]);
+    let y = &then.s;
+    for (price, fee) in [(P10 * 14 / 10, 70_000_000), (P10 * 16 / 10, 80_000_000), (P10 * 30 / 10, 150_000_000), (P10 * 11 / 10, 0), (P10 + 1, 0)] {
+        let rows = y.trace_without(&[price], 1);
+        let s = y.stepped(KIND_ACCOUNT_LIQ, SIDE_A, 1, &rows, &stranger).unwrap_or_else(|| panic!("the holder that was paid is not below at {price}"));
+        assert_eq!(s.fee, fee, "at {price}");
+    }
+    let (st, tk, _) = y.step(KIND_ACCOUNT_LIQ, SIDE_A, 1, &[p[0]], T0, then.value as i64, stranger).unwrap();
+    assert_eq!(end_taken(&w, &then, &st, &tk), (true, false), "the step that exercises the option is answered right");
+    // (By its own statement it exercises at no fee.)
+    assert_eq!(y.step(KIND_ACCOUNT_LEAVE, SIDE_A, 1, &[p[0]], T0, then.value as i64, y.a_key).unwrap().2.fee, 0);
+    // What the clearing party bears of the time between: where the price is back at the strike before a step lands,
+    // the option is worth nothing, nothing is stepped, and the margin of A lacks 15 of the 40 it was paid.
+    let back = y.trace_without(&[P10], 1);
+    assert!(y.stepped(KIND_ACCOUNT_LIQ, SIDE_A, 1, &back, &stranger).is_none());
+    assert_eq!(y.a_margin + back[0].gain, -15 * KAS1, "the pot holds 25 of the 40");
+    println!("T1b F57 fixed: the liquidation of a holder where the pot is short is answered wrong and not right ({refused} at the engine: A and B as holder, calls and puts, covered and not); a holder alone whose margin covers what its options entered at is liquidated at none of {never} random prices and legs; of {steps} sides of random accounts {liquidated} are liquidated, none that was not before; {spared} are spared, each unpaid by the pot and at its maintenance counted in full; {engine} steps of sides the pot did not pay are answered at the engine as the model says; {asked_alone} below the maintenance of what they are asked are all liquidated; {as_before} that hold no option are judged as before. The holder paid 60 KAS through a note of what is owed, its option standing, is below while the option is worth anything and a step exercises it (fee 0.7 KAS at the price); the clearing party bears up to what was paid for the option less the pot (15 KAS here) until that step");
+}
+
+/// Round 35, the notes of a leg that leaves. `KpfTStepLiq` makes the note that a leg left a covered account of what
+/// the statement says of the leg (`said`: a row's name and side B's units), and `KpfTStepRow` holds that to the leg
+/// in the row of the leg. At the engine, for a futures leg and for an option that leave by their party's statement:
+/// a statement that says of the leg the other kind's row of its market, the market's bare name, another market's
+/// row, another committee, the units the other way, none, or one more, has an end that is answered right (the end
+/// is made of what is said) and a row of the leg that is answered wrong and not right, the model agreeing on both.
+/// Units of the least 64-bit number (eight bytes the engine reads as none): the end and the row are both answered
+/// wrong. And where the row of the leg that leaves carries a chain of the claimer's making (nobody opens it), in
+/// each of the three ways the chains can then be written another point is wrong and is answered so. So no statement
+/// whose note names another row has all its points right, and none has its wrong points all without an answer.
+#[test]
+fn t1b_r35_a_leaving_legs_note_names_the_legs_own_row_or_its_row_is_answered_wrong() {
+    use kpf_protocol::reserve::futures_market;
+    let w = ow();
+    let mut account = w.account(vec![w.fut(0, 10, LONG, P10), w.opt(1, 10, CALL_HELD, P10, P10)], 50 * KAS1, 50 * KAS1);
+    account.s.shard = Some([0x5d; 32]);
+    let x = &account.s;
+    let held = account.value as i64;
+    let p = [P10 * 11 / 10, P10 * 11 / 10];
+    let (mut ends_right, mut rows_wrong) = (0, 0);
+    for skip in [1i64, 2] {
+        let l = x.legs[skip as usize - 1];
+        let rows = x.trace_without(&p, skip);
+        let prev = if skip == 1 { [0u8; 32] } else { rows[0].g };
+        let before = if skip == 1 { Row::ZERO } else { rows[0] };
+        let (head, units) = (Head::of(&l), SNote::units(&l));
+        let at = 2 * skip - 1;
+        let judge = |hd: Head, un: i64| {
+            let (st, tk) = step_said35(x, KIND_ACCOUNT_LEAVE, SIDE_A, skip, &rows, held, x.a_key, hd, un);
+            let end_model = un != i64::MIN && x.step_end_right(KIND_ACCOUNT_LEAVE, &tk, &x.a_key, &st.outs, held);
+            let row_model = row_judged_of(&prev, &l, &before, &rows[skip as usize - 1], Some((hd, un)), SIDE_A);
+            let end = end_taken(&w, &account, &st, &tk);
+            let row = row_taken(&w, &w.pointed(&w.stated(&account, &st, &tk.said()), at), &tk, at, &prev, &l);
+            (end, row, end_model, row_model)
+        };
+        // The control: what the leg is.
+        assert_eq!(judge(head, units), ((true, false), (true, false), true, Some(true)), "leg {skip}: said as it is");
+        let other_kind = if skip == 1 { option_market(&l.market) } else { futures_market(&l.market) };
+        let elsewhere = XLeg { market: w.markets[2].id(), ..l };
+        for (what, hd, un) in [
+            ("the other kind's row of its market", Head { market: other_kind, ..head }, units),
+            ("its market's bare name", Head { market: l.market, ..head }, units),
+            ("another market's row", Head::of(&elsewhere), units),
+            ("another committee", Head { committee: [0x09; 32], ..head }, units),
+            ("another scale", Head { scale: head.scale * 10, ..head }, units),
+            ("another limit", Head { price_max: head.price_max + 1, ..head }, units),
+            ("no market", Head::EMPTY, units),
+            ("the units the other way", head, -units),
+            ("no units", head, 0),
+            ("a unit more", head, units + 1),
+        ] {
+            assert_eq!(judge(hd, un), ((true, false), (false, true), true, Some(false)), "leg {skip}, said of it: {what}");
+            ends_right += 1;
+            rows_wrong += 1;
+        }
+        let (end, row, _, row_model) = judge(head, i64::MIN);
+        assert_eq!((end, row, row_model), ((false, true), (false, true), Some(false)), "leg {skip}: units of the least number");
+        rows_wrong += 1;
+    }
+    // ---- and where the row of the leg that leaves is one nobody opens (its chain is of the claimer's making), the
+    // note naming another row: another point is wrong and answered so, whichever way the chains are written.
+    let wrong = |l: &XLeg| Head { market: if kpf_protocol::thin::option_of(l).is_some() { futures_market(&l.market) } else { option_market(&l.market) }, ..Head::of(l) };
+    let (l1, l2) = (x.legs[0], x.legs[1]);
+    let made = [0x6b; 32];
+    let points = |skip: i64, rows: &[Row], opens2: &[u8; 32]| {
+        let l = x.legs[skip as usize - 1];
+        let (st, tk) = step_said35(x, KIND_ACCOUNT_LEAVE, SIDE_A, skip, rows, held, x.a_key, wrong(&l), SNote::units(&l));
+        let live = w.stated(&account, &st, &tk.said());
+        let end = end_taken(&w, &account, &st, &tk);
+        let row1 = row_taken(&w, &w.pointed(&live, 1), &tk, 1, &[0; 32], &l1);
+        let row2 = row_taken(&w, &w.pointed(&live, 3), &tk, 3, opens2, &l2);
+        (end, row1, row2)
+    };
+    // The last leg leaves, its row's chain made: the row has no answer and the end is wrong (the last chain is not
+    // the account's).
+    let mut rows = x.trace_without(&p, 2);
+    let true1 = rows[0].g;
+    rows[1].g = made;
+    assert_eq!(points(2, &rows, &true1), ((false, true), (true, false), (false, false)), "the last row's chain made");
+    // The first leg leaves, its row's chain made, the second row's chain following the made one: the first row has
+    // no answer, the second is right, the end is wrong.
+    let mut rows = x.trace_without(&p, 1);
+    let true2 = rows[1].g;
+    rows[0].g = made;
+    rows[1].g = blake2b(&[&made[..], &kpf_protocol::thin::leg_bytes(&l2)].concat());
+    assert_eq!(points(1, &rows, &made), ((false, true), (false, false), (true, false)), "the first row's chain made, the second following it");
+    // The same with the second row's chain the account's own: the end is right, the first row has no answer, and
+    // the second row is wrong (the chain that opens it is not the row before's).
+    rows[1].g = true2;
+    assert_eq!(points(1, &rows, &true1), ((true, false), (false, false), (false, true)), "the first row's chain made, the second the account's own");
+    rows_wrong += 3;
+    println!("T1b R35 notes of a leg that leaves: {ends_right} statements that say another row or other units of the leg have an end answered right and the row of the leg answered wrong, {rows_wrong} rows answered wrong in all (the least 64-bit units: wrong at the end and at the row; a row of the leaving leg that nobody opens: another point answered wrong in each of three ways of writing the chains)");
+}
+
+/// What the engine takes of a row's answer where the model cannot compute the row (a sum beyond 64 bits): the
+/// transaction is built for a leg that does not open the row (the builder then computes nothing) and the leg shown
+/// is put in its place.
+fn row_taken_past_the_model(w: &OW, q: &OLive<Pointed>, tk: &ATake, at: i64, prev: &[u8; 32], leg: &XLeg, decoy: &XLeg) -> (bool, bool) {
+    let take = |v: bool| {
+        let who = if v { w.who(&q.s.st.claimer) } else { &w.w };
+        let f = [fund(xk(who), 33, 1_000)];
+        let Ok((mut b, _)) = step_row_at(&w.lib, q, tk, at, prev, decoy, &w.script("KpfTStepRow"), xk(&w.w), w.payer(who, &f), Some(v)) else { return false };
+        *args_of(&mut b, 1).last_mut().unwrap() = bytes_arg(&kpf_protocol::thin::leg_bytes(leg));
+        taken30(&b, &w.keys)
+    };
+    (take(true), take(false))
+}
+
+/// F58 (round 35: closed in the tool where an account is stated on, open where a leg is added, and left open in the
+/// scripts by decision). The scripts hold a leg to its own bound and have no count of legs; the sums of a trace
+/// may pass 64 bits, and the first row whose sum does not fit is answered by neither verdict. `Account::check` now
+/// refuses an account whose legs together are worth more at their markets' limits than 64 bits hold, and every
+/// statement the model writes goes through it. Verified: eight of the largest legs are an account and nine are not;
+/// the model writes no take and no leaving on the account of seventeen. NOT closed: `leg_added` (what `leg_add`
+/// builds from) holds the leg that enters to its own bound alone and does not ask `check` of the account it makes,
+/// so the tool still adds the ninth leg, and `KpfTLegAdd` takes it; `leg_moved` likewise moves a leg into such an
+/// account. The row nobody answers stands as it did, for two parties who sign such legs.
+#[test]
+fn t1b_open_f58_the_tool_states_on_no_account_whose_sums_do_not_fit_and_adds_no_leg_into_one() {
+    use kpf_protocol::cross::MARGIN_MAX;
+    let w = ow();
+    let scale = w.markets[0].p.scale;
+    let pm = 2 * P10;
+    let size = (MARGIN_MAX / pm - 1) * scale;
+    let big = |i: usize| XLeg { price_max: pm, size, ..w.fut(i % 8, 1, LONG, P10) };
+    let of = |n: usize| w.account((0..n).map(big).collect(), 100 * KAS1, 300 * KAS1);
+    // ---- closed: an account is one whose sums fit.
+    assert!(of(8).s.check().is_ok(), "eight of the largest legs are an account");
+    for n in [9usize, 16, 17, 64] {
+        assert!(of(n).s.check().is_err(), "F58 is open again in the model: {n} of the largest legs are an account");
+    }
+    let account = of(17);
+    let x = &account.s;
+    let held = account.value as i64;
+    let p = vec![P10; 17];
+    assert!(x.take_by(SIDE_A, 0, &p, T0, held, x.a_key).is_err() && x.step_any(KIND_ACCOUNT_LEAVE, SIDE_A, 1, &p, T0, held, x.a_key).is_err() && x.step_any(KIND_ACCOUNT_LIQ, SIDE_B, 1, &p, T0, held, xk(&w.w)).is_err(), "the model writes a statement on an account whose sums do not fit");
+    // And on the largest account that is one, every row is computed at the markets' limits.
+    let eight = of(8);
+    let at_limits = eight.s.trace(&[pm; 8]);
+    assert_eq!(at_limits.len(), 8);
+    // ---- closed in the tool after round 35 (edited by the author, mechanically, when `leg_added` and `leg_moved`
+    // were made to ask it): the model adds no ninth leg and moves none in. The script still takes the ninth leg
+    // where it is built past the model (it holds a leg to its own bound: left open by decision).
+    let mut covered = of(8);
+    covered.s.shard = Some([0x5d; 32]);
+    assert!(covered.s.leg_added(big(8), 0, 0).is_err(), "F58 is open again where a leg is added: the model adds the leg that makes the sums too large");
+    let f = [fund(xk(&w.a), 42, 1_000)];
+    assert!(leg_add(&w.lib, &covered, &w.script("KpfTLegAdd"), big(8), 0, 0, w.payer(&w.a, &f)).is_err(), "the builder adds the ninth leg");
+    let mut nine = covered.s.clone();
+    nine.legs.push(big(8));
+    assert!(nine.check().is_err());
+    let note = kpf_protocol::reserve::SNote::leg(kpf_protocol::reserve::NOTE_JOIN, [0x5d; 32], &big(8), covered.s.b_key);
+    let (lb, _, _) = leg_add_as(&w.lib, &covered, &w.script("KpfTLegAdd"), big(8), 0, 0, nine, note, w.payer(&w.a, &f)).expect("built past the model");
+    assert!(taken30(&lb, &w.keys), "the script takes the ninth leg (it holds a leg to its own bound: left open by decision)");
+    let mut one = of(1);
+    one.s.shard = Some([0x5d; 32]);
+    one.s.legs.push(w.fut(1, 1, LONG, P10));
+    assert!(one.s.leg_moved(1, &covered.s, [0; 4]).is_err(), "F58 is open again where a leg is moved: the model moves the leg that makes the sums too large");
+    // ---- left open in the scripts: the seventeenth row at the committee's own price is answered by neither verdict.
+    let legs = &x.legs;
+    let mut rows: Vec<Row> = vec![];
+    for l in &legs[..16] {
+        rows.push(row_after(rows.last().unwrap_or(&Row::ZERO), l, P10, false));
+    }
+    let b16 = rows[15];
+    let last = Row { a: P10, gain: x.b_margin, wa: 0, wb: 0, ea: 0, eb: 0, g: x.legs_root(), h: blake2b(&[&b16.h[..], &kpf_protocol::thin::leg_bytes(&legs[16])].concat()) };
+    rows.push(last);
+    let amount = x.pot();
+    let tk = ATake { side: SIDE_A, amount, rows: rows.clone(), skip: 0, leave: None };
+    let after = Account { a_margin: 0, b_margin: 0, ..x.clone() };
+    let h = blake2b(&[p33(&blake2b(&[x.terms(), p33(&last.h)].concat())), after.moving()].concat());
+    let outs = Outs::of(&[Out { key: false, to: h, value: held - amount }, Out { key: true, to: x.a_key, value: amount }]).unwrap();
+    let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_ACCOUNT_TAKE, t0: T0, arg: tk.arg(), outs, bond: x.bond(), claimer: x.a_key, held };
+    let live = w.stated(&account, &st, &tk.said());
+    let decoy = w.fut(7, 1, SHORT, P10);
+    assert_eq!(row_taken_past_the_model(&w, &w.pointed(&live, 33), &tk, 33, &b16.g, &legs[16], &decoy), (false, false), "the seventeenth row is answered (the scripts now bound the sums)");
+    assert_eq!(row_taken_past_the_model(&w, &w.pointed(&live, 31), &tk, 31, &rows[14].g, &legs[15], &decoy), (true, false), "the sixteenth row is answered right");
+    println!("T1b F58: eight of the largest legs are an account and nine are not; the model writes no statement on an account of seventeen. Open: the model's leg_added and KpfTLegAdd add the ninth leg, and leg_moved moves it in; a statement signed past the tool on seventeen has a row answered by neither verdict");
+}
+
+use kpf_protocol::reserve::{option_market, ShardRow, NOTE_RELEASE};
+
+/// The built transaction with the argument `i` of the script at input 1 replaced.
+fn with_arg(b: &OBuilt, i: usize, a: Arg) -> OBuilt {
+    let mut t = b.clone();
+    args_of(&mut t, 1)[i] = a;
+    t
+}
+fn last_arg(b: &OBuilt, a: Arg) -> OBuilt {
+    let mut t = b.clone();
+    *args_of(&mut t, 1).last_mut().unwrap() = a;
+    t
+}
+
+/// F59 (fixed in round 35). A futures leg whose market's name was the options' row's name was counted in that row
+/// and set the options' net against itself. The fix: a row is named by the hash of its legs' kind and of their
+/// market (`push8(14)` a market's futures legs, `push8(13)` its options), by `KpfTLegAdd` for the note of a leg that
+/// enters and by `KpfTStepRow` for the note of one that leaves; `KpfTShardPrice` cites the market `under` whose
+/// name hashes to the row's with one of the two tags. Verified: the leg of round 34 has a row of its own and the
+/// shard is asked more with it, not less; a note that names another kind's row or another market's is not written
+/// by `KpfTLegAdd` and not applied to that row; a row is priced by the one market its name is the hash of. And the
+/// row nobody prices (the made leg's market has no committee): its price point has no answer, the dispute lapses
+/// with the shard again and nothing drawn, and whatever price a draw states for it the shard is asked no less than
+/// without the row (at the least price next to nothing more: the owner draws as if the row were not there while
+/// nobody disputes that price; who stands on the other side of that leg signed a leg no committee prices).
+#[test]
+fn t1b_fixed_f59_a_row_is_named_by_the_kind_and_the_market_of_its_legs() {
+    use kpf_protocol::reserve::{futures_market, NOTE_JOIN};
+    let w = ow();
+    let shard = w.shard();
+    let account = w.covered(shard.s.sid, 20 * KAS1, 2 * KAS1);
+    let (m0, m1) = (w.markets[0].id(), w.markets[1].id());
+    let scale = w.markets[1].p.scale;
+    let opt = w.opt(1, 10, CALL_HELD, P10, P10);
+    let fut0 = w.fut(0, 4, LONG, P10);
+    assert_eq!((Head::of(&opt).market, Head::of(&fut0).market), (option_market(&m1), futures_market(&m0)));
+    assert_ne!(Head::of(&w.fut(1, 10, LONG, P10)), Head::of(&opt), "a market's futures legs and its options have two rows");
+    let (account, j_opt) = w.added(&account, opt);
+    let (account, j_fut) = w.added(&account, fut0);
+    let s1 = w.applied(&w.applied(&shard, &j_opt, "the option's join applied"), &j_fut, "the futures leg's join applied");
+    let need1 = s1.s.requirement(&[P10, P10, 0, 0]).unwrap();
+    // The leg of round 34: a "futures" leg on the market whose name is the options' row's old name.
+    let named = XLeg { market: option_market(&m1), ..w.fut(1, 10, LONG, P10) };
+    assert_ne!(Head::of(&named), Head::of(&opt), "F59 is open again: a futures leg's head is the options' row's");
+    assert_eq!(Head::of(&named).market, futures_market(&option_market(&m1)));
+    let (account3, j_named) = w.added(&account, named);
+    assert_ne!(j_named.s.head, j_opt.s.head);
+    // It is not applied to the options' row (the model, and the script with the row told to be the options').
+    assert!(s1.s.applied(&j_named.s, 0).is_err() && s1.s.applied(&j_named.s, 1).is_err());
+    let f = [fund(xk(&w.w), 43, 1_000)];
+    let (nb, _, _) = note_apply(&w.lib, &s1, &j_named, &w.script("KpfTNoteApply"), w.payer(&w.w, &f)).unwrap();
+    assert!(taken30(&nb, &w.keys), "the control: applied to a row of its own");
+    for r in [0i64, 1] {
+        assert!(!taken30(&last_arg(&nb, int_arg(r)), &w.keys), "F59 is open again: the named leg's note is applied to row {r}");
+    }
+    let s2 = w.applied(&s1, &j_named, "the named leg's join applied");
+    assert_eq!((s2.s.rows[0].net, s2.s.rows[0].gross, s2.s.rows[2].head, s2.s.rows[2].net), (10 * scale, 10 * scale, Head::of(&named), -10 * scale), "the options' row as it was; the named leg in a row of its own");
+    // The shard is asked no less, whatever price is stated for the row nobody prices.
+    for p3 in [1, P10 / 100, P10, w.markets[1].p.price_max] {
+        assert!(s2.s.requirement(&[P10, P10, p3, 0]).unwrap() >= need1, "the shard is asked less with the made row at {p3}");
+    }
+    // ---- a note that names another row is not written by KpfTLegAdd (built past the model).
+    let mut refused = 0;
+    let fa = [fund(xk(&w.a), 42, 1_000)];
+    let mut forged = |leg: XLeg, head: Head, net: i64| {
+        let next = Account { legs: [account.s.legs.clone(), vec![leg]].concat(), ..account.s.clone() };
+        let note = SNote { sid: shard.s.sid, kind: NOTE_JOIN, head, net, gross: leg.size, key: account.s.b_key, amount: 0 };
+        let (b, _, _) = leg_add_as(&w.lib, &account, &w.script("KpfTLegAdd"), leg, 0, 0, next, note, w.payer(&w.a, &fa)).unwrap();
+        let sg = b.sign(&w.keys).expect("signed");
+        assert!(script_refuses(&sg.tx, &sg.entries, 1), "F59 is open again: a leg's note names a row that is not its kind's and its market's");
+        refused += 1;
+    };
+    let fut1 = w.fut(1, 10, LONG, P10);
+    forged(fut1, Head::of(&opt), -fut1.size); // a futures leg noted in its market's options' row
+    forged(fut1, Head::of(&fut0), -fut1.size); // in another market's futures row
+    forged(fut1, Head { market: m1, ..Head::of(&fut1) }, -fut1.size); // under its market's bare name
+    forged(named, Head::of(&opt), -named.size); // the leg of round 34, noted in the options' row
+    forged(opt, Head::of(&fut1), opt.size); // an option noted in its market's futures row
+    forged(opt, Head::of(&fut1), -opt.size); // and with a futures leg's units
+    forged(opt, Head { market: option_market(&m0), ..Head::of(&opt) }, opt.size); // in another market's options' row
+    forged(fut1, Head::of(&fut1), fut1.size); // the right row, the units the other way
+    // ---- a row is priced by the one market its name is the hash of.
+    let fb = [fund(xk(&w.b), 50, 1_000)];
+    let fw = [fund(xk(&w.w), 51, 1_000)];
+    let prices = [P10, P10, P10, 0];
+    let max = s2.s.draw_max(&prices);
+    let (db, st, d) = shard_draw(&w.lib, &s2, &w.script("KpfTChange"), max, prices, T0, w.payer(&w.b, &fb)).unwrap();
+    let live = nth(&signed("the draw stated", &db, &w.keys), 0, st, 6_600);
+    let pointed = |point: i64| {
+        let (b, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.w), point, w.payer(&w.w, &fw)).unwrap();
+        nth(&signed("a point of the draw disputed", &b, &w.keys), 0, q, 6_610)
+    };
+    let cite1 = w.script("KpfTCite");
+    let (c0, c1) = (w.cited(0, P10), w.cited(1, P10));
+    // (The answer built with a citation the builder takes for the row, then `under` put as given.)
+    let price = |point: i64, cite: Option<&Cited>, under: Option<[u8; 32]>, verdict: bool| -> bool {
+        let who = if verdict { &w.b } else { &w.w };
+        let f = [fund(xk(who), 52, 1_000)];
+        let built = shard_price(&w.lib, &pointed(point), &s2.s, &d, point, &w.script("KpfTShardPrice"), cite.map(|c| (&cite1, c)), xk(&w.w), w.payer(who, &f), Some(verdict));
+        built.is_ok_and(|(b, _)| taken30(&match under { Some(u) => last_arg(&b, bytes_arg(&u)), None => b }, &w.keys))
+    };
+    let mut tried = 0;
+    assert!(price(1, Some(&c1), None, true) && !price(1, Some(&c1), None, false), "the options' row is priced by its market's citation");
+    assert!(price(2, Some(&c0), None, true) && !price(2, Some(&c0), None, false), "the futures row is priced by its market's citation");
+    for (point, cite, own) in [(1i64, &c1, m1), (2, &c0, m0)] {
+        for under in [[0u8; 32], if own == m1 { m0 } else { m1 }, option_market(&own), futures_market(&own), w.markets[2].id()] {
+            assert!(!price(point, Some(cite), Some(under), true) && !price(point, Some(cite), Some(under), false), "row {point} answered with `under` another than its market");
+            tried += 2;
+        }
+        // (And the other market's citation the builder does not take for the row.)
+        let other = if own == m1 { &c0 } else { &c1 };
+        assert!(!price(point, Some(other), None, true) && !price(point, Some(other), None, false));
+    }
+    // The made row (its name the hash of a name no committee signs for): no citation answers it, by either verdict.
+    for (cite, under) in [(&c1, None), (&c1, Some(option_market(&m1))), (&c1, Some(m1)), (&c0, Some(m0))] {
+        assert!(!price(3, Some(cite), under, true) && !price(3, Some(cite), under, false), "the row nobody prices is answered");
+        tried += 2;
+    }
+    assert!(price(4, None, None, true) && price(4, None, Some(m1), true) && !price(4, None, None, false), "a row with no market is right with no citation");
+    // Its dispute lapses: the shard again, both bonds back, nothing drawn.
+    let q3 = pointed(3);
+    let lb = point_lapse(&w.lib, &q3, &w.script("KpfTPoint"), w.payer(&w.w, &fw)).unwrap();
+    let ls = signed("the dispute of the made row's price lapsed", &lb, &w.keys);
+    let k = ls.tx.outputs.len();
+    assert_eq!((ls.tx.outputs[0].value, &ls.tx.outputs[0].script_public_key), (s2.value, &hash_spk(&w.lib, &s2.s.hash())), "the shard again, holding what it held");
+    assert_eq!((ls.tx.outputs[k - 2].value, ls.tx.outputs[k - 1].value), (st.bond as u64, st.bond as u64));
+    // What the owner gets of the row nobody prices: a draw that states the least price for it is asked for that
+    // row next to nothing (as if the row were not there, and no less than that), and its end is answered right;
+    // so it goes through while nobody disputes that price, and where somebody does it lapses as above.
+    let low = [P10, P10, 1, 0];
+    let need_low = s2.s.requirement(&low).unwrap();
+    assert!(need_low >= need1 && need_low - need1 < 1_000, "the made row at the least price: {} more than without it", need_low - need1);
+    let (db2, st2, d2) = shard_draw(&w.lib, &s2, &w.script("KpfTChange"), s2.s.draw_max(&low), low, T0, w.payer(&w.b, &fb)).unwrap();
+    let live2 = nth(&signed("the draw stated with the least price for the made row", &db2, &w.keys), 0, st2, 6_600);
+    let (pb, q0) = point_dispute(&w.lib, &live2, &w.script("KpfTPoint"), xk(&w.w), 0, w.payer(&w.w, &fw)).unwrap();
+    let q0 = nth(&signed("its end disputed", &pb, &w.keys), 0, q0, 6_610);
+    let end = |v: bool| {
+        let who = if v { &w.b } else { &w.w };
+        let f = [fund(xk(who), 53, 1_000)];
+        shard_end(&w.lib, &q0, &s2.s, &d2, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(who, &f), Some(v)).is_ok_and(|(b, _)| taken30(&b, &w.keys))
+    };
+    assert_eq!((end(true), end(false)), (true, false), "the end of the draw that states the least price for the made row");
+    let _ = account3;
+    println!("T1b F59 fixed: the leg of round 34 is counted in a row of its own and the shard is asked no less at any price stated for it; {refused} notes that name another kind's row, another market's, or the other units are not written by KpfTLegAdd; the named leg's note is not applied to the options' row nor the futures row; `under`: {tried} answers with another market refused, one market prices a row; the row no committee prices has no answer and its dispute lapses with the shard as it was; a draw that states the least price for it is asked {} sompi more than without the row and its end is answered right", need_low - need1);
+}
+
+/// Round 34, item 4. `KpfTHand`, at the engine: who enters holds at least what who left held and what side B
+/// asked; both sign; a shard, an account that no shard covers, a margin taken out, a signature of the wrong key and
+/// a sompi less in the account are refused. (What who leaves is paid is no rule of the script: both sign the whole
+/// transaction.)
+#[test]
+fn t1b_r34_a_side_is_handed_over_by_the_two_and_holds_what_was_asked() {
+    let w = ow();
+    let shard = w.shard();
+    let account = w.covered(shard.s.sid, 20 * KAS1, 2 * KAS1);
+    let (account, _) = w.added(&account, w.fut(0, 3, LONG, P10));
+    let x = &account.s;
+    let f = [fund(xk(&w.w), 50, 1_000)];
+    let hand = |acct: &OLive<Account>, nkey: [u8; 32], da: i64| account_hand(&w.lib, acct, &w.script("KpfTHand"), nkey, da, 3 * KAS1, w.payer(&w.w, &f));
+    let (hb, next) = hand(&account, xk(&w.w), KAS1).unwrap();
+    let hs = signed("a side handed over", &hb, &w.keys);
+    assert_eq!((next.a_key, next.a_margin, next.b_key, next.shard, &next.legs), (xk(&w.w), 21 * KAS1, x.b_key, x.shard, &x.legs));
+    assert_eq!((hs.tx.outputs[0].value, &hs.tx.outputs[0].script_public_key), (account.value + KAS1 as u64, &hash_spk(&w.lib, &next.hash())));
+    let mut refused = 0;
+    let mut no = |what: &str, t: OBuilt| {
+        assert!(!taken30(&t, &w.keys), "{what}");
+        refused += 1;
+    };
+    // The account a sompi short; the signatures by the wrong keys (args: who, age, length, fixed, moving, nkey, da,
+    // sa, sn).
+    let mut t = hb.clone();
+    t.tx.outputs[0].value -= 1;
+    no("the account a sompi short", t);
+    no("who leaves does not sign (the newcomer signs twice)", with_arg(&hb, 7, Arg::Sig(xk(&w.w))));
+    no("who enters does not sign (who leaves signs twice)", with_arg(&hb, 8, Arg::Sig(x.a_key)));
+    no("side B signs in the newcomer's place", with_arg(&hb, 8, Arg::Sig(x.b_key)));
+    // Another key named than the one that signs.
+    no("the key named is not the one that signed", with_arg(&hb, 5, bytes_arg(&xk(&w.f))));
+    // A margin taken out with the hand-over: the model refuses it, and the script.
+    assert!(hand(&account, xk(&w.w), -1).is_err());
+    let made = |acct: &OLive<Account>, base: &OBuilt, nkey: [u8; 32], da: i64| {
+        let mut t = with_arg(base, 6, int_arg(da));
+        let next = Account { a_key: nkey, a_margin: acct.s.a_margin + da, ..acct.s.clone() };
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &next.hash());
+        t.tx.outputs[0].value = (acct.value as i64 + da) as u64;
+        t
+    };
+    assert!(taken30(&made(&account, &hb, xk(&w.w), 2 * KAS1), &w.keys), "the control of the helper");
+    no("a sompi of margin taken out", made(&account, &hb, xk(&w.w), -1));
+    // Less than side B asked of whoever stands on side A (the account as B's ask of 30 KAS stands in it).
+    let asked = OLive { s: Account { b_min_counter: 30 * KAS1, ..x.clone() }, ..account.clone() };
+    assert!(hand(&asked, xk(&w.w), 10 * KAS1 - 1).is_err());
+    let (ab, _) = hand(&asked, xk(&w.w), 10 * KAS1).unwrap();
+    assert!(taken30(&ab, &w.keys), "who enters holds exactly what side B asked");
+    no("a sompi less than side B asked", made(&asked, &ab, xk(&w.w), 10 * KAS1 - 1));
+    // A shard handed over (it has no second key): refused. Built from the hand-over of the account: the object, its
+    // two parts and what it would become.
+    let s = &shard.s;
+    let (sf, sm) = (s.fixed_hash(), s.moving());
+    let mut t = with_arg(&with_arg(&hb, 3, bytes_arg(&sf)), 4, bytes_arg(&sm));
+    t.tx.inputs[0].previous_outpoint = shard.op;
+    t.entries[0].amount = shard.value;
+    object_made(&mut t, &w.lib, 0, &s.hash());
+    let m = s.held + KAS1;
+    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &blake2b(&[p33(&sf), p33(&xk(&w.w)), sm[33..67].to_vec(), sm8(m).to_vec(), sm[75..].to_vec()].concat()));
+    t.tx.outputs[0].value = shard.value + KAS1 as u64;
+    args_of(&mut t, 1)[7] = Arg::Sig(s.owner);
+    no("a shard is handed over by its owner", t);
+    // An account that no shard covers (138 bytes): refused.
+    let plain = w.account(vec![w.fut(0, 3, LONG, P10)], 20 * KAS1, 2 * KAS1);
+    let (pf, pm) = (plain.s.fixed_hash(), plain.s.moving());
+    let mut t = with_arg(&with_arg(&hb, 3, bytes_arg(&pf)), 4, bytes_arg(&pm));
+    t.tx.inputs[0].previous_outpoint = plain.op;
+    t.entries[0].amount = plain.value;
+    t.entries[0].covenant_id = plain.id;
+    object_made(&mut t, &w.lib, 0, &plain.s.hash());
+    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Account { a_key: xk(&w.w), a_margin: 21 * KAS1, ..plain.s.clone() }.hash());
+    t.tx.outputs[0].value = plain.value + KAS1 as u64;
+    t.tx.outputs[0].covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id: plain.id.unwrap() });
+    no("an account that no shard covers is handed over", t);
+    // To the same key: the script takes it (a margin added by another way), and nothing else changes.
+    let same = hand(&account, x.a_key, KAS1).map(|(b, n)| (taken30(&b, &w.keys), n.a_key == x.a_key));
+    // What who leaves is paid is the two parties' own: with a sompi less, signed again by both, it is taken.
+    let k = hb.tx.outputs.len();
+    let pay = (0..k).find(|i| hb.tx.outputs[*i].script_public_key == p2pk_spk(&x.a_key) && hb.tx.outputs[*i].value == 3 * KAS1 as u64).expect("the payment to who leaves");
+    let mut t = hb.clone();
+    t.tx.outputs[pay].value -= 1;
+    let less = taken30(&t, &w.keys);
+    println!("T1b R34 hand: a side handed over with 1 KAS more; {refused} hand-overs refused (a sompi short, a wrong signer, a margin taken out, less than side B asked, a shard, an account of 138 bytes); to the same key taken: {same:?}; the payment to who leaves a sompi less and signed again by both taken: {less} (no rule of the script: the two sign the whole transaction)");
+}
+
+/// Round 34, item 5. `KpfTLegMove`, at the engine: a leg moves between two covered accounts of one clearing party
+/// under one shard by three signatures, its entry as it was. Each signature by another key, an account of another
+/// shard or another side B, a chain that does not open the leg, legs after it that are no legs or more than six, a
+/// margin below zero and a sompi less in either account are refused. (Margin taken out of an account with the move
+/// is taken: every party of both accounts signs the whole transaction.)
+#[test]
+fn t1b_r34_a_leg_moves_between_two_accounts_of_one_clearing_party_by_three_signatures() {
+    let w = ow();
+    let shard = w.shard();
+    let x0 = w.covered(shard.s.sid, 20 * KAS1, 2 * KAS1);
+    let (x1, _) = w.added(&x0, w.fut(0, 3, LONG, P10));
+    let (x2, _) = w.added(&x1, w.opt(1, 2, CALL_HELD, P10, P10 * 11 / 10));
+    let (from, _) = w.added(&x2, w.fut(2, 1, SHORT, P10));
+    // The other account: another user (W) against the same clearing party under the same shard.
+    let y = Account { a_key: xk(&w.w), legs: vec![w.fut(3, 1, LONG, P10)], a_margin: 10 * KAS1, b_margin: KAS1, ..x0.s.clone() };
+    let to = OLive { value: y.pot() as u64, s: y.clone(), id: from.id, op: op(60), daa: 6_100 };
+    let f = [fund(xk(&w.a), 53, 1_000)];
+    let mv = |i: usize, to: &OLive<Account>, d: [i64; 4]| leg_move(&w.lib, &from, i, to, d, &w.script("KpfTLegMove"), w.payer(&w.a, &f));
+    let (mb, nx, ny) = mv(2, &to, [0; 4]).unwrap();
+    let ms = signed("a leg moved", &mb, &w.keys);
+    assert_eq!((nx.legs.len(), ny.legs.len(), ny.legs[1], nx.pot() + ny.pot()), (2, 2, from.s.legs[1], from.s.pot() + y.pot()), "the leg as it was, its entry too; the margins as they were");
+    assert_eq!((ms.tx.outputs[0].value, ms.tx.outputs[2].value), (from.value, to.value));
+    // Every leg of the account, moved from each place.
+    for i in [1usize, 3] {
+        assert!(taken30(&mv(i, &to, [0; 4]).unwrap().0, &w.keys), "the leg {i} moves");
+    }
+    let mut refused = 0;
+    let mut no = |what: &str, t: OBuilt| {
+        assert!(!taken30(&t, &w.keys), "{what}");
+        refused += 1;
+    };
+    // The three signatures (args 15, 16, 17: side A of each account, and side B), each by another of the keys.
+    for (i, what) in [(15usize, "side A of the account the leg leaves"), (16, "side A of the account it enters"), (17, "the clearing party")] {
+        for key in [xk(&w.a), xk(&w.w), xk(&w.b), xk(&w.f)] {
+            let Arg::Sig(own) = args_of(&mut mb.clone(), 1)[i].clone() else { panic!("a signature") };
+            if key != own {
+                no(&format!("{what} does not sign"), with_arg(&mb, i, Arg::Sig(key)));
+            }
+        }
+    }
+    // An account of another shard, or of another side B: the model refuses, and the script (the other account, its
+    // moving part and what it becomes put in the honest one's place).
+    for (what, other) in [("another shard", Account { shard: Some([0x77; 32]), ..y.clone() }), ("another side B", Account { b_key: xk(&w.f), ..y.clone() })] {
+        let o = OLive { s: other.clone(), ..to.clone() };
+        assert!(mv(2, &o, [0; 4]).is_err(), "the model moves a leg to an account of {what}");
+        let mut t = with_arg(&mb, 10, bytes_arg(&other.moving()));
+        object_made(&mut t, &w.lib, 2, &other.hash());
+        let mut after = other.clone();
+        after.legs.push(from.s.legs[1]);
+        t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &after.hash());
+        no(&format!("a leg moves to an account of {what}"), t);
+    }
+    // The chain before the leg, the leg, and the legs after it.
+    no("a chain that does not open the leg", with_arg(&mb, 4, bytes_arg(&[0x33; 32])));
+    no("another leg than the one at that place", with_arg(&mb, 5, bytes_arg(&kpf_protocol::thin::leg_bytes(&from.s.legs[0]))));
+    let Arg::V(ArtifactValue::Bytes(after)) = args_of(&mut mb.clone(), 1)[6].clone() else { panic!("the legs after") };
+    assert_eq!(after.len(), 111);
+    no("the legs after are not whole legs", with_arg(&mb, 6, bytes_arg(&[after.clone(), vec![0]].concat())));
+    no("no leg after where one stands", with_arg(&mb, 6, bytes_arg(&[])));
+    no("seven legs after", with_arg(&mb, 6, bytes_arg(&after.repeat(7))));
+    let eight = Account { legs: (0..8).map(|i| w.fut(i % 8, 1, LONG, P10)).collect(), ..from.s.clone() };
+    assert!(eight.leg_moved(1, &y, [0; 4]).is_err() && eight.leg_moved(2, &y, [0; 4]).is_ok(), "the model moves a leg with at most six after it");
+    // A margin below zero, by the model and by the script.
+    assert!(mv(2, &to, [-(from.s.a_margin + 1), 0, 0, 0]).is_err());
+    for (i, m) in [(11usize, from.s.a_margin), (12, from.s.b_margin), (13, y.a_margin), (14, y.b_margin)] {
+        no("a margin below zero", with_arg(&mb, i, int_arg(-(m + 1))));
+    }
+    // A sompi less in either account.
+    for o in [0usize, 2] {
+        let mut t = mb.clone();
+        t.tx.outputs[o].value -= 1;
+        no("an account a sompi short", t);
+    }
+    // The two accounts in each other's place in what is written.
+    let mut t = mb.clone();
+    let (a0, a2) = (t.tx.outputs[0].script_public_key.clone(), t.tx.outputs[2].script_public_key.clone());
+    t.tx.outputs[0].script_public_key = a2;
+    t.tx.outputs[2].script_public_key = a0;
+    no("the two accounts written in each other's place", t);
+    // Margin taken out with the move, by the three signatures: taken.
+    let (ob, ox, _) = mv(2, &to, [-5 * KAS1, 0, 0, 0]).unwrap();
+    let out = taken30(&ob, &w.keys);
+    assert_eq!(ox.a_margin, from.s.a_margin - 5 * KAS1);
+    println!("T1b R34 leg move: a leg moved from each place, its entry as it was; {refused} moves refused (a signature by another key, another shard, another side B, a wrong chain or leg, legs after that are none or seven, a margin below zero, a sompi short, the accounts swapped); 5 KAS of margin taken out with the move by the three signatures taken: {out}");
+}
+
+/// Round 34, item 6. (a) `KpfTNoteApply` empties a row whose net and gross return to 0. Whoever applies chooses the
+/// order: with two equal legs in a market, the second's leaving applied before its entering empties the row while
+/// the first leg stands. A draw stated on the shard as it then looks is ended by the entering's note, which landed
+/// before it and is not applied (`KpfTDrawNote`); once that note is applied the row is the market's again. (b) The
+/// head-form check of `KpfTChange` for kinds 2 to 4: a statement whose pushes at 24, 57, 90, 99 are others is not
+/// stated; and every statement the script states is one `ATake::read` reads.
+#[test]
+fn t1b_r34_a_row_emptied_out_of_order_is_guarded_and_what_is_stated_is_read() {
+    let w = ow();
+    let shard = w.shard();
+    let scale = w.markets[0].p.scale;
+    let x0 = w.covered(shard.s.sid, 30 * KAS1, 30 * KAS1);
+    let leg = w.fut(0, 5, LONG, P10);
+    let (x1, j1) = w.added(&x0, leg);
+    let (x2, j2) = w.added(&x1, leg);
+    let j2 = OLive { daa: 6_120, ..j2 };
+    let s1 = w.applied(&shard, &j1, "the first leg's join applied");
+    assert_eq!((s1.s.rows[0].net, s1.s.rows[0].gross), (-5 * scale, 5 * scale));
+    // The second leg leaves by A's statement; its settlement writes the note that it left.
+    let x = &x2.s;
+    let (st, tk, _) = x.step(KIND_ACCOUNT_LEAVE, SIDE_A, 2, &[P10, P10], T0, x2.value as i64, x.a_key).unwrap();
+    let live = w.stated(&x2, &st, &tk.said());
+    let fw = [fund(xk(&w.w), 54, 1_000)];
+    let ss = signed("the second leg's leaving applied", &stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &fw)).unwrap(), &w.keys);
+    let release = SNote { sid: shard.s.sid, kind: NOTE_RELEASE, head: Head::of(&leg), net: SNote::units(&leg), gross: leg.size, key: x.b_key, amount: 0 };
+    let at = (0..ss.tx.outputs.len()).find(|i| ss.tx.outputs[*i].script_public_key == hash_spk(&w.lib, &release.hash())).expect("the note that the leg left");
+    let rel = nth(&ss, at, release, 6_570);
+    // Applied before the second leg's entering: the row is empty, with one leg of 5 units standing.
+    let s2 = w.applied(&s1, &rel, "the leaving applied before the entering");
+    assert_eq!(s2.s.rows[0], ShardRow::EMPTY, "the row is emptied while a leg of the market stands");
+    assert_eq!(s2.s.requirement(&[P10, 0, 0, 0]), Some(0));
+    // A draw of everything on the shard as it looks: stated, and ended by the note that is not applied.
+    let fb = [fund(xk(&w.b), 55, 1_000)];
+    let (db, dst, _) = shard_draw(&w.lib, &s2, &w.script("KpfTChange"), s2.s.held, [0; 4], T0, w.payer(&w.b, &fb)).unwrap();
+    let ds = signed("a draw of everything stated on the emptied row", &db, &w.keys);
+    let dlive = nth(&ds, 0, dst, 6_600);
+    let nb = draw_note(&w.lib, &dlive, &dst, None, &s2.s, &j2, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    let ns = signed("the draw ended by the entering's note", &nb, &w.keys);
+    assert_eq!(ns.tx.outputs[0].script_public_key, hash_spk(&w.lib, &s2.s.hash()), "the shard again");
+    // The entering applied: the row is the market's again, with the leg that stands.
+    let s3 = w.applied(&s2, &j2, "the entering applied after");
+    assert_eq!((s3.s.rows[0].head, s3.s.rows[0].net, s3.s.rows[0].gross), (Head::of(&leg), -5 * scale, 5 * scale));
+    // A row is not emptied by a note of another market, nor by one of an account of another side B.
+    let other = SNote { head: Head::of(&w.fut(1, 5, LONG, P10)), ..rel.s };
+    assert!(s1.s.applied(&other, 0).is_err() && s1.s.applied(&SNote { key: xk(&w.w), ..rel.s }, 0).is_err());
+
+    // ---- (b) the head form of what a statement of kinds 2 to 4 says.
+    let account = w.account(vec![w.fut(0, 3, LONG, P10), w.fut(1, 2, SHORT, P10)], 50 * KAS1, 50 * KAS1);
+    let y = &account.s;
+    let held = account.value as i64;
+    let outs = Outs::of(&[Out { key: false, to: y.hash(), value: held }]).unwrap();
+    let stated = |kind: i64, said: &[u8]| -> bool {
+        let st = Stated { position: y.hash(), window: y.dispute_daa, late: y.t.late_daa, kind, t0: T0, arg: blake2b(said), outs, bond: y.bond(), claimer: y.a_key, held };
+        let f = [fund(y.a_key, 56, 1_000)];
+        account_state(&w.lib, &account, &w.script("KpfTChange"), &st, said, w.payer(&w.a, &f)).is_ok_and(|b| taken30(&b, &w.keys))
+    };
+    let honest = ATake { side: SIDE_A, amount: 0, rows: y.trace(&[P10, P10]), skip: 0, leave: None }.said();
+    let (mut bad, mut read) = (0, 0);
+    for kind in [KIND_ACCOUNT_TAKE, KIND_ACCOUNT_LIQ, KIND_ACCOUNT_LEAVE] {
+        assert!(stated(kind, &honest), "the control: kind {kind}");
+        for at in [24usize, 57, 90, 99] {
+            for v in [0u8, 0x21, 0x09, 0x4c] {
+                let mut s = honest.clone();
+                if s[at] != v {
+                    s[at] = v;
+                    assert!(!stated(kind, &s), "kind {kind}: the push at {at} is {v:#x}");
+                    bad += 1;
+                }
+            }
+        }
+        // Too short, a row not whole, a row more than whole.
+        for s in [honest[..115].to_vec(), honest[..honest.len() - 1].to_vec(), [honest.clone(), vec![0]].concat()] {
+            assert!(!stated(kind, &s), "kind {kind}: a length that is no head and rows");
+            bad += 1;
+        }
+    }
+    // Whatever else the bytes are, what the script states the reader reads.
+    let mut r = Rng(0x51ab_0c0f_fee0_3406);
+    for _ in 0..40 {
+        let mut s: Vec<u8> = (0..116 + 112 * r.range(0, 4) as usize).map(|_| r.next() as u8).collect();
+        (s[24], s[57], s[90], s[99]) = (0x20, 0x20, 0x08, 0x08);
+        let kind = [KIND_ACCOUNT_TAKE, KIND_ACCOUNT_LIQ, KIND_ACCOUNT_LEAVE][r.range(0, 3) as usize];
+        assert!(stated(kind, &s), "bytes of the form are stated");
+        assert!(ATake::read(&s).is_some_and(|t| t.said() == s), "what the script states the reader reads back as it is");
+        read += 1;
+    }
+    println!("T1b R34 notes and forms: a leaving applied before its entering empties the row while an equal leg stands, a draw stated then is ended by the entering's note, and the row is the market's again once it is applied; {bad} statements whose head is not of the form refused; {read} statements of random bytes in the form are stated and read back by ATake::read");
 }

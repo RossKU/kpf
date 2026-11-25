@@ -13,7 +13,7 @@ use serde::Deserialize;
 use silverscript_abi::SilAbiArtifact;
 
 const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
-const TEXTS: [(&str, &str); 30] = [
+const TEXTS: [(&str, &str); 55] = [
     ("KpfSlot", include_str!("../../../contracts/artifacts/KpfSlot.json")),
     ("KpfTAdd", include_str!("../../../contracts/artifacts/KpfTAdd.json")),
     ("KpfTBoth", include_str!("../../../contracts/artifacts/KpfTBoth.json")),
@@ -41,8 +41,33 @@ const TEXTS: [(&str, &str); 30] = [
     ("KpfTFold", include_str!("../../../contracts/artifacts/KpfTFold.json")),
     ("KpfTLeave", include_str!("../../../contracts/artifacts/KpfTLeave.json")),
     ("KpfTReplace", include_str!("../../../contracts/artifacts/KpfTReplace.json")),
+    ("KpfTNote", include_str!("../../../contracts/artifacts/KpfTNote.json")),
+    ("KpfTCite", include_str!("../../../contracts/artifacts/KpfTCite.json")),
+    ("KpfTChange", include_str!("../../../contracts/artifacts/KpfTChange.json")),
+    ("KpfTChangeSettle", include_str!("../../../contracts/artifacts/KpfTChangeSettle.json")),
+    ("KpfTChangeDispute", include_str!("../../../contracts/artifacts/KpfTChangeDispute.json")),
+    ("KpfTChangeLate", include_str!("../../../contracts/artifacts/KpfTChangeLate.json")),
+    ("KpfTTake", include_str!("../../../contracts/artifacts/KpfTTake.json")),
+    ("KpfTPoint", include_str!("../../../contracts/artifacts/KpfTPoint.json")),
+    ("KpfTStepRow", include_str!("../../../contracts/artifacts/KpfTStepRow.json")),
+    ("KpfTStepPrice", include_str!("../../../contracts/artifacts/KpfTStepPrice.json")),
+    ("KpfTStepEnd", include_str!("../../../contracts/artifacts/KpfTStepEnd.json")),
+    ("KpfTStepLiq", include_str!("../../../contracts/artifacts/KpfTStepLiq.json")),
+    ("KpfTKind", include_str!("../../../contracts/artifacts/KpfTKind.json")),
+    ("KpfTShardOpen", include_str!("../../../contracts/artifacts/KpfTShardOpen.json")),
+    ("KpfTOpenC", include_str!("../../../contracts/artifacts/KpfTOpenC.json")),
+    ("KpfTLegAdd", include_str!("../../../contracts/artifacts/KpfTLegAdd.json")),
+    ("KpfTAddC", include_str!("../../../contracts/artifacts/KpfTAddC.json")),
+    ("KpfTNoteApply", include_str!("../../../contracts/artifacts/KpfTNoteApply.json")),
+    ("KpfTAcctEnd", include_str!("../../../contracts/artifacts/KpfTAcctEnd.json")),
+    ("KpfTShardEnd", include_str!("../../../contracts/artifacts/KpfTShardEnd.json")),
+    ("KpfTShardPrice", include_str!("../../../contracts/artifacts/KpfTShardPrice.json")),
+    ("KpfTDrawNote", include_str!("../../../contracts/artifacts/KpfTDrawNote.json")),
+    ("KpfTHand", include_str!("../../../contracts/artifacts/KpfTHand.json")),
+    ("KpfTLegMove", include_str!("../../../contracts/artifacts/KpfTLegMove.json")),
     ("KpfTSweep", include_str!("../../../contracts/artifacts/KpfTSweep.json")),
     ("KpfTPay", include_str!("../../../contracts/artifacts/KpfTPay.json")),
+    ("KpfNote", include_str!("../../../contracts/artifacts/KpfNote.json")),
     ("KpfFeePool", include_str!("../../../contracts/artifacts/KpfFeePool.json")),
 ];
 
@@ -50,10 +75,12 @@ const TEXTS: [(&str, &str); 30] = [
 pub const SLOT: &str = "KpfSlot";
 /// Where a library's oracle fees gather: an object under the library's own id, written at its genesis.
 pub const FEE_POOL: &str = "KpfFeePool";
+/// A price the committee signed, written once under the library's id by `KpfTNote` and cited by `KpfTCite`.
+pub const NOTE: &str = "KpfNote";
 /// The scripts that take no oracle fees of their own use: they collect them.
 pub const COLLECTORS: [&str; 2] = ["KpfTSweep", "KpfTPay"];
 /// The scripts of a library, in the order its genesis writes them.
-pub const SCRIPTS: [&str; 28] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTSweep", "KpfTPay"];
+pub const SCRIPTS: [&str; 52] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTSweep", "KpfTPay"];
 
 /// (name, the artifact's text) of the pinned artifacts.
 pub fn artifact_texts() -> &'static [(&'static str, &'static str)] {
@@ -82,11 +109,19 @@ pub struct TSlot {
     pub sample_state: String,
 }
 
+/// Where the writer's key is in a price note's script (the state's hash is where an object's is).
+#[derive(Clone, Debug, Deserialize)]
+pub struct TNote {
+    pub owner_at: usize,
+    pub sample_owner: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TManifest {
     pub format: String,
     pub compiler: String,
     pub slot: TSlot,
+    pub note: TNote,
     pub contracts: BTreeMap<String, TContract>,
 }
 
@@ -119,6 +154,9 @@ pub struct TKit {
     scripts: BTreeMap<&'static str, Vec<u8>>,
     /// `KpfFeePool` with the manifest's sample state.
     fee_pool: Vec<u8>,
+    /// `KpfNote` with the manifest's sample state and writer.
+    note: Vec<u8>,
+    owner_at: usize,
 }
 
 pub fn kit() -> &'static TKit {
@@ -127,7 +165,7 @@ pub fn kit() -> &'static TKit {
         let m = manifest();
         let slot = code(&bases()[SLOT]);
         assert!(m.slot.lib_at + 32 <= slot.len() && m.slot.state_at + 32 <= slot.len() && (m.slot.lib_at >= m.slot.state_at + 32 || m.slot.state_at >= m.slot.lib_at + 32), "the slot's two values");
-        TKit { slot, lib_at: m.slot.lib_at, state_at: m.slot.state_at, scripts: SCRIPTS.iter().map(|n| (*n, code(&bases()[n]))).collect(), fee_pool: code(&bases()[FEE_POOL]) }
+        TKit { slot, lib_at: m.slot.lib_at, state_at: m.slot.state_at, scripts: SCRIPTS.iter().map(|n| (*n, code(&bases()[n]))).collect(), fee_pool: code(&bases()[FEE_POOL]), note: code(&bases()[NOTE]), owner_at: m.note.owner_at }
     })
 }
 
@@ -155,6 +193,24 @@ impl TKit {
         let mut s = self.fee_pool.clone();
         s[self.state_at..self.state_at + 32].copy_from_slice(state);
         s
+    }
+
+    /// The script of a price note whose state hashes to `state`, written by `owner` (the same in every library).
+    pub fn note(&self, state: &[u8; 32], owner: &[u8; 32]) -> Vec<u8> {
+        let mut s = self.note.clone();
+        s[self.state_at..self.state_at + 32].copy_from_slice(state);
+        s[self.owner_at..self.owner_at + 32].copy_from_slice(owner);
+        s
+    }
+
+    /// (the state's hash, the writer's key) of a script, if it is a price note's.
+    pub fn read_note(&self, script: &[u8]) -> Option<([u8; 32], [u8; 32])> {
+        if script.len() != self.note.len() {
+            return None;
+        }
+        let state: [u8; 32] = script[self.state_at..self.state_at + 32].try_into().ok()?;
+        let owner: [u8; 32] = script[self.owner_at..self.owner_at + 32].try_into().ok()?;
+        (self.note(&state, &owner) == script).then_some((state, owner))
     }
 
     /// The state's hash of a script, if it is a fee pool's.

@@ -1,0 +1,99 @@
+pragma silverscript ^0.1.0;
+
+// KpfTChangeLate: a stated change that landed before the time it prices at, or more than the position's lateness
+// after it, ends (KpfTChange): the position again, and the bond to whoever ends it. (A statement is of a time: one
+// that waits for the price to turn before it lands is not a statement of now.)
+//   late(who, ageb, slotLen, position, kind, t0, arg, outs, bond, claimer, window, late, ender)    anyone.
+contract KpfTChangeLate(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // The object named at place 0 of `who` (and at the other two places): its script, shown at the end of its
+    // signature script.
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // A stated change: the position it is of, its kind, the time its statement prices at, the hash of what the kind
+    // states, the hash of what the position becomes, the bond, who stated it, and the position's dispute period and
+    // lateness as they were (so that no later script is shown the position), and what the object held when it was
+    // stated (an answer counts from that: what the object holds since is anybody's to add to).
+    function changeHash(byte[32] position, int kind, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held) : byte[32] {
+        return blake2b(i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(arg) + p33(outs) + i9(bond) + p33(claimer) + i9(window) + i9(late) + i9(held));
+    }
+
+    // The single output of the object's id: its own script with another state's hash, holding at least v.
+    function becomes(int j, byte[] rs, int slotLen, byte[32] h, int v) {
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](h) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry late(byte[24] who, byte[8] ageb, int slotLen, byte[32] position, int kind, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] ender) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        require(changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int landed = OpTxInputDaaScore(j);
+        require(landed >= 0);
+        require(landed < t0 || landed - t0 > late);
+        int v = tx.inputs[j].value;
+        require(bond > 0);
+        require(v >= bond);
+        becomes(j, rs, slotLen, position, v - bond);
+        int m = tx.outputs.length - 1 - 4 * j;
+        require(m >= tx.inputs.length);
+        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(ender))));
+        require(tx.outputs[m].value >= bond);
+        require(int(ageb) >= 0);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

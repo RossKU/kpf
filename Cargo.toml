@@ -17,6 +17,9 @@ kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = 
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-addresses = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-hashes = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-seq-commit = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-smt = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0", features = ["test-utils"] }
 # KOB's vendored SilverScript v1.0.0 compiler and ABI, by path into the pinned clone.
 silverscript-lang = { path = "vendor/kob/vendor/silverscript/silverscript-lang" }
 silverscript-abi = { path = "vendor/kob/vendor/silverscript/silverscript-abi" }

@@ -1,0 +1,23 @@
+pragma silverscript ^0.1.0;
+
+// KpfNote: a price the committee signed, written once and cited by anyone (docs/ARCHITECTURE-CLEARING.md, 3). An
+// output under the library's id whose state is the hash of a committee, a market, a time, a price and the committee's
+// spread. Only KpfTNote writes one, beside the committee's epoch table spent by its attest: so that such an output
+// was written by an accepted transaction is the committee's word, and KpfTCite holds exactly that against the chain
+// block's commitment. A citation is of the transaction that wrote the note, not of this output: the output may be
+// taken back at once, and what it held returns to who wrote it.
+//   reclaim()   anyone: what the note holds goes to its writer's key, and nothing is written under the library's id.
+contract KpfNote(byte[32] init_stateHash, byte[32] init_owner) {
+    byte[32] stateHash = init_stateHash;
+    byte[32] owner = init_owner;
+
+    entry reclaim() {
+        int self = this.activeInputIndex;
+        // A note's spend writes nothing under the library's id (it could otherwise write a note nobody signed, or a
+        // script nobody pinned): so no script of the library is spent beside it either, each of which goes on.
+        require(OpCovOutputCount(OpInputCovenantId(self)) == 0);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(owner))));
+        require(tx.outputs[self].value >= tx.inputs[self].value);
+        require(byte[](stateHash).length == 32);
+    }
+}

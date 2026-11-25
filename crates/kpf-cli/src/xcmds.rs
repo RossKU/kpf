@@ -77,6 +77,7 @@ fn position_in(o: &TObj) -> Option<Position> {
         TObj::Disputed(d) => Some(d.claim.position),
         TObj::Liq(l) => Some(l.liq.position),
         TObj::ExitClaim(q) => Some(q.position),
+        TObj::Change(c) => Some(c.position),
         _ => None,
     }
 }
@@ -1450,6 +1451,7 @@ fn turn(st: &mut Loop, c: &Cfg, node: &mut N, registry: &mut Registry) -> R<()> 
                     TObj::Disputed(d) => (d.claim.position, false, if d.claim.position.key_of(d.claim.side) == Some(fk) { d.claim.bond } else { 0 } + if d.disputer == fk { d.claim.bond } else { 0 }),
                     TObj::Liq(q) => (q.liq.position, false, if q.liq.liquidator == fk { q.liq.bond } else { 0 } + if q.state == LiqState::Disputed(fk) { q.liq.bond } else { 0 }),
                     TObj::ExitClaim(q) => (q.position, false, if q.position.key_of(q.side) == Some(fk) { q.bond } else { 0 }),
+                    TObj::Change(k) => (k.position, false, if k.claimer == fk { k.bond } else { 0 } + if k.disputer == Some(fk) { k.bond } else { 0 }),
                     _ => continue,
                 };
                 held += bond;
@@ -1566,6 +1568,8 @@ fn turn(st: &mut Loop, c: &Cfg, node: &mut N, registry: &mut Registry) -> R<()> 
                             let id8 = i.f.op.transaction_id.to_string()[..8].to_string();
                             let (x, times) = match i.obj {
                                 TObj::Disputed(d) => (d.claim.position, vec![d.claim.t0]),
+                                // A disputed take: its answer is a note of the committee's price for its time.
+                                TObj::Change(k) if k.disputer.is_some() => (k.position, vec![k.t0]),
                                 TObj::Liq(q) if matches!(q.state, LiqState::Disputed(_)) => (q.liq.position, vec![q.liq.t0]),
                                 TObj::ExitClaim(q) => {
                                     // (Once the folder holds a quorum's prices of a time at or after `since`, the claim is
@@ -1881,6 +1885,39 @@ fn turn(st: &mut Loop, c: &Cfg, node: &mut N, registry: &mut Registry) -> R<()> 
                         r.send(node, &format!("order {id8} returned after its expiry"), "KpfTCancel", &[op], false, &|s, p| tb::order_expire(&lib, &l, s, p).map(|b| (b, vec![])).map_err(e));
                     }
                 }
+                // A stated change of a position (a take): judged as a claim is, by the committee's signed prices of
+                // its time where they are at hand and else by this executor's own. One that is not within the rule
+                // is disputed; one nobody disputed is applied after the dispute period; one that landed out of its
+                // time is ended. A disputed one is answered with a citation of a price note (`note-write`, then
+                // `take-answer`): this loop does not write notes yet, and ends its own dispute when nobody answered.
+                TObj::Change(k) => {
+                    let l = at(i, u, k);
+                    let held = k.held;
+                    let x = k.position;
+                    let within = |p: [i64; 2]| x.take_within(&k.take, &k.claimer, &k.outs, held, p);
+                    match k.disputer {
+                        None => {
+                            let (bad, _, why) = refuting(&x, k.t0, &within);
+                            if !k.in_time(u.daa) {
+                                if does("late") {
+                                    r.send(node, &format!("statement {id8} out of its time ended"), "KpfTChangeLate", &[op], true, &|s, p| tb::change_late(&lib, &l, s, fk, p).map(|(b, x)| (b, back(x))).map_err(e));
+                                }
+                            } else if bad && age + guard < x.dispute_daa {
+                                if does("dispute") {
+                                    r.send(node, &format!("take {id8} disputed ({why})"), "KpfTChangeDispute", &[op], false, &|s, p| tb::change_dispute(&lib, &l, s, fk, p).map(|(b, d)| (b, vec![Made::Obj(0, TObj::Change(d))])).map_err(e));
+                                }
+                            } else if !bad && age >= x.dispute_daa && does("settle") {
+                                let made = x.taken(&k.take).filter(|n| k.becomes(n)).map(back).unwrap_or_default();
+                                r.send(node, &format!("take {id8} applied"), "KpfTChangeSettle", &[op], false, &|s, p| tb::change_settle(&lib, &l, s, p).map(|b| (b, made.clone())).map_err(e));
+                            }
+                        }
+                        Some(d) => {
+                            if d == fk && age >= x.dispute_daa && does("lapse") {
+                                r.send(node, &format!("disputed take {id8} ended: nobody showed the committee's prices"), "KpfTChangeDispute", &[op], false, &|s, p| tb::change_lapse(&lib, &l, s, p).map(|(b, x)| (b, back(x))).map_err(e));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1934,6 +1971,162 @@ pub fn coins_cmd(a: &Args) -> R<()> {
 
 
 /// `send`: `--amount` KAS from the funder's key to `--to` (an address, a key or a key file), with `--text` as the
+/// `probe-seq-commit` (research, `docs/RESEARCH-UNIFIED-MARGIN.md`): is `OpChainblockSeqCommit` (KIP-21) live on the
+/// network? Without `--spend`: 1 KAS to a script that passes only when it is shown the sequencing commitment of a
+/// chain block (`OpChainblockSeqCommit OpEqual`). With `--spend TXID`: that output spent, the script shown the
+/// commitment this node's header gives for a block `--back` selected parents behind the sink (default 10). A node
+/// `node-call` (research): one call of the node by its name, with `--params JSON`, printed as it answers (cut to
+/// `--cut` characters, default 2,000).
+pub fn node_call_cmd(a: &Args) -> R<()> {
+    crate::ocmds::only(a, &["method", "params", "cut"])?;
+    let mut node = connect(a)?;
+    let n = node.as_mut().ok_or("--node URL")?;
+    let params: Value = serde_json::from_str(a.get("params").unwrap_or("{}")).map_err(|x| format!("--params: {x}"))?;
+    let r = n.raw(a.need("method")?, params)?;
+    let text = r.to_string();
+    let cut = int_or(a, "cut", 2_000)?.max(1) as usize;
+    println!("{} bytes: {}", text.len(), text.chars().take(cut).collect::<String>());
+    Ok(())
+}
+
+/// `probe-cite` (research, `docs/RESEARCH-UNIFIED-MARGIN.md`): does a citation hold against a real block? The funder
+/// sends itself a small payment, and once a chain block has accepted it the command reads what the node says of that
+/// block (its header, its merged blocks' transactions, the native lane's proof) and recomputes the block's
+/// sequencing commitment from the transaction up, as a citing script would (`kpf_protocol::cite`). It prints where the
+/// computation agrees with the node. With `--tx ID --from BLOCK` nothing is sent: a transaction accepted after the
+/// chain block `BLOCK` is looked for.
+pub fn probe_cite_cmd(a: &Args) -> R<()> {
+    use kaspa_consensus_core::Hash;
+    use kpf_protocol::cite;
+    crate::ocmds::only(a, &["tx", "from", "wait"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let h32 = |s: &str| crate::ocmds::hex32(s).map(Hash::from_bytes);
+    let (txid, from) = match (a.get("tx"), a.get("from")) {
+        (Some(t), Some(f)) => (t.to_string(), f.to_string()),
+        _ => {
+            let (_, sink) = node.as_mut().ok_or("--node URL")?.dag()?;
+            let (fk, keys, fu) = crate::ocmds::funding(a, net, &mut node)?;
+            let b = tb::send(&fk, 20_000_000, b"cite me".to_vec(), Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+            let sg = b.sign(&keys).map_err(e)?;
+            let id = sg.tx.id().to_string();
+            finish_signed(a, "probe: a payment to cite", &sg, net, &mut node, true)?;
+            let secs = int_or(a, "wait", 15)?.clamp(5, 120) as u64;
+            println!("waiting {secs} s for a chain block to accept it");
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+            (id, sink)
+        }
+    };
+    let n = node.as_mut().ok_or("--node URL")?;
+    // 1. The chain block that accepted it, and everything that block accepted, in its order.
+    let step = n.chain_ids(&from)?;
+    let (block, ids) = step.groups.iter().find(|(_, ids)| ids.iter().any(|i| *i == txid)).cloned().ok_or(format!("no chain block after {from} has accepted {txid} yet ({} blocks read)", step.groups.len()))?;
+    println!("accepted by the chain block {block}, the {} of {} transactions it accepted ({} bytes read of the chain's ids)", ids.iter().position(|i| *i == txid).unwrap_or(0) + 1, ids.len(), step.bytes);
+    // 2. The block: its context, its commitment, its merged blocks.
+    let (b, _) = n.block(&block, false)?;
+    let head = b.get("header").ok_or("a block without a header")?;
+    let hn = |k: &str| num(head.get(k)).ok_or(format!("a header without {k}"));
+    let (timestamp, daa, blue) = (hn("timestamp")?, hn("daaScore")?, hn("blueScore")?);
+    let commit = h32(head.get("acceptedIdMerkleRoot").and_then(Value::as_str).ok_or("no acceptedIdMerkleRoot")?)?;
+    let vd = b.get("verboseData").ok_or("a block without verbose data")?;
+    let parent = vd.get("selectedParentHash").and_then(Value::as_str).ok_or("no selected parent")?.to_string();
+    let list = |k: &str| vd.get(k).and_then(Value::as_array).map(|x| x.iter().filter_map(|h| h.as_str().map(str::to_owned)).collect::<Vec<_>>()).unwrap_or_default();
+    let merged = [list("mergeSetBluesHashes"), list("mergeSetRedsHashes")].concat();
+    // (The context of a block's lanes carries the timestamp of its selected parent, with its own DAA and blue scores.)
+    let (pb, _) = n.block(&parent, false)?;
+    let parent_timestamp = num(pb.get("header").and_then(|h| h.get("timestamp"))).ok_or("the selected parent's header has no timestamp")?;
+    let _ = timestamp;
+    // 3. The transactions of the merged blocks: the version and the lane of each accepted one.
+    let mut seen: HashMap<String, (kaspa_consensus_core::tx::Transaction, String)> = HashMap::new();
+    let mut read = 0usize;
+    for h in &merged {
+        let (mb, size) = n.block(h, true)?;
+        read += size;
+        for t in mb.get("transactions").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let subnet = t.get("subnetworkId").and_then(Value::as_str).unwrap_or("").to_string();
+            if let Ok(c) = crate::node::chain_tx(&t, daa) {
+                seen.insert(c.id.to_string(), (c.tx, subnet));
+            }
+        }
+    }
+    println!("{} merged blocks read ({read} bytes), {} transactions in them", merged.len(), seen.len());
+    let mut lane: Vec<(Hash, u16, u32)> = vec![];
+    let mut at = None;
+    for (i, id) in ids.iter().enumerate() {
+        let (t, subnet) = seen.get(id).ok_or(format!("the accepted transaction {id} is in none of the merged blocks read"))?;
+        if subnet.chars().all(|c| c == '0') && !subnet.is_empty() {
+            if *id == txid {
+                at = Some(lane.len());
+            }
+            lane.push((t.id(), t.version, i as u32));
+        }
+    }
+    let at = at.ok_or("the transaction is not of the native lane")?;
+    let cited = &seen[&txid].0;
+    println!("the native lane has {} of the {} accepted; the transaction is of version {} with {} inputs, {} bytes without its signature scripts and payload", lane.len(), ids.len(), cited.version, cited.inputs.len(), if cited.version >= 1 { kaspa_consensus_core::hashing::tx::transaction_v1_rest_preimage(cited).len() } else { 0 });
+    // 4. The lane's proofs at the block and at its selected parent.
+    let key = cite::native_lane_key();
+    let mut proof = |block: &str| -> R<(Option<(Hash, u64)>, Vec<u8>, Hash, Hash, Hash)> {
+        let r = n.raw("getSeqCommitLaneProof", serde_json::json!({ "blockHash": block, "laneKey": key.to_string() }))?;
+        let g = |k: &str| r.get(k).and_then(Value::as_str).ok_or(format!("the lane proof has no {k}")).and_then(|x| h32(x));
+        let lane = match r.get("lane") {
+            Some(l) if !l.is_null() => Some((h32(l.get("tip").and_then(Value::as_str).ok_or("a lane without a tip")?)?, num(l.get("blueScore")).ok_or("a lane without a blue score")?)),
+            _ => None,
+        };
+        let bytes = r.get("smtProof").and_then(Value::as_array).map(|x| x.iter().filter_map(|b| b.as_u64().map(|b| b as u8)).collect()).unwrap_or_default();
+        Ok((lane, bytes, g("payloadAndCtxDigest")?, g("parentSeqCommit")?, g("inactivityShortcut")?))
+    };
+    let (here, smt, payload_and_ctx, parent_commitment, inactivity_shortcut) = proof(&block)?;
+    let (tip, lane_blue) = here.ok_or("the node says the native lane is not active at the block")?;
+    let (before, ..) = proof(&parent)?;
+    let parent_ref = before.map(|x| x.0).ok_or("the node says the native lane is not active at the block's selected parent")?;
+    // 5. The witness, and the commitment recomputed.
+    let leaves = cite::activity_leaves(&lane);
+    let (_, activity_path) = cite::merkle(&leaves, at);
+    let w = cite::Witness { block: h32(&block)?, merge_idx: lane[at].2, activity_path, lane_key: key, parent_ref, context: cite::context(parent_timestamp, daa, blue), blue_score: lane_blue, lanes_path: cite::lanes_path(&smt, &key).map_err(e)?, inactivity_shortcut, payload_and_ctx, parent_commitment };
+    let (id, version) = (cited.id(), cited.version);
+    let my_tip = w.tip(&id, version);
+    println!("the lane's tip: the node says {tip}; recomputed {my_tip}: {}", if my_tip == tip { "AGREE" } else { "DIFFER" });
+    let mine = w.commitment(&id, version);
+    println!("the block's sequencing commitment: its header says {commit}; recomputed from the transaction {mine}: {}", if mine == commit { "AGREE" } else { "DIFFER" });
+    println!("the proof: {} steps in the lane's activity, {} in the lanes' tree, {} bytes beside the transaction's rest (the lane's leaf is of blue score {lane_blue}, the block's {blue})", w.activity_path.len(), w.lanes_path.len(), w.bytes());
+    if mine != commit {
+        return Err("the citation does not hold against this block: the form of the proof is not the node's".into());
+    }
+    Ok(())
+}
+
+/// that takes the spend runs the opcode and agrees on the value; one on which the opcode is not active refuses it.
+pub fn probe_seq_cmd(a: &Args) -> R<()> {
+    crate::ocmds::only(a, &["spend", "back"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let redeem = vec![0xd4u8, 0x87];
+    let (fk, keys, fu) = crate::ocmds::funding(a, net, &mut node)?;
+    let Some(txid) = a.get("spend") else {
+        let b = kpf_protocol::oracle_build::pay_script(&redeem, 100_000_000, &fu, &fk, rate(a)?).map_err(e)?;
+        let sg = b.sign(&keys).map_err(e)?;
+        println!("then, once it is accepted: probe-seq-commit --spend {} --funder ... --node ... --submit", sg.tx.id());
+        return finish_signed(a, "probe: 1 KAS to a script that asks for a chain block's sequencing commitment", &sg, net, &mut node, a.has("submit"));
+    };
+    let n = node.as_mut().ok_or("--node URL: the block and its commitment are read in the node's headers")?;
+    let (_, sink) = n.dag()?;
+    let mut hash = sink;
+    for _ in 0..int_or(a, "back", 10)?.max(1) {
+        let (b, _) = n.block(&hash, false)?;
+        hash = b.get("verboseData").and_then(|v| v.get("selectedParentHash")).and_then(Value::as_str).ok_or("a block without its selected parent")?.to_string();
+    }
+    let (b, _) = n.block(&hash, false)?;
+    let commit = b.get("header").and_then(|h| h.get("acceptedIdMerkleRoot")).and_then(Value::as_str).ok_or("a header without acceptedIdMerkleRoot")?.to_string();
+    let (block, commit) = (crate::ocmds::hex32(&hash)?, crate::ocmds::hex32(&commit)?);
+    println!("chain block {}: the header's acceptedIdMerkleRoot (the sequencing commitment, if KIP-21 is live) is {}", to_hex(&block), to_hex(&commit));
+    kpf_protocol::verify::set_chain_view(vec![(kaspa_consensus_core::Hash::from_bytes(block), kaspa_consensus_core::Hash::from_bytes(commit))]);
+    let sig: Vec<u8> = [vec![0x20], commit.to_vec(), vec![0x20], block.to_vec(), vec![0x02], redeem.clone()].concat();
+    let op = TransactionOutpoint { transaction_id: kaspa_consensus_core::Hash::from_bytes(crate::ocmds::hex32(txid)?), index: 0 };
+    let sg = kpf_protocol::oracle_build::raw_spend(op, 100_000_000, &redeem, sig, &fk, rate(a)?).map_err(e)?;
+    finish_signed(a, "probe: the script is shown the chain block's sequencing commitment (OpChainblockSeqCommit)", &sg, net, &mut node, a.has("submit"))
+}
+
 /// transaction's payload: a note that whoever reads the transaction reads. Plain KAS; nothing of the protocol.
 pub fn send_cmd(a: &Args) -> R<()> {
     crate::ocmds::only(a, &["to", "amount", "text"])?;

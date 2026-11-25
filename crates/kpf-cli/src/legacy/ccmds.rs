@@ -2569,7 +2569,7 @@ fn x_atts(a: &Args, x: &Cross, node: &mut N, net: Network) -> R<Vec<(OLive<Epoch
 /// tolerance is the larger g (review C9, C9-F3: each market's g is at least four times its committee's spread, and an
 /// account whose g is below that for a leg accepts no claim), the maintenance the larger, the times a claim has the
 /// shorter.
-fn terms_of(m: &CMarket, m2: Option<&CMarket>) -> XTerms {
+pub(crate) fn terms_of(m: &CMarket, m2: Option<&CMarket>) -> XTerms {
     let (p, q) = (&m.p, &m2.unwrap_or(m).p);
     XTerms {
         term: p.term.min(q.term),
@@ -2585,7 +2585,7 @@ fn terms_of(m: &CMarket, m2: Option<&CMarket>) -> XTerms {
     }
 }
 
-fn leg_of(m: &CMarket, size: i64, dir: i64, entry: i64) -> XLeg {
+pub(crate) fn leg_of(m: &CMarket, size: i64, dir: i64, entry: i64) -> XLeg {
     XLeg { market: m.id(), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max, size, dir, entry }
 }
 

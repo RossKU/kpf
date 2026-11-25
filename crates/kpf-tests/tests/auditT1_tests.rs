@@ -629,7 +629,22 @@ const RELEASE: [&str; 6] = [
     "require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));",
     "require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));",
 ];
-const SCRIPTS: [&str; 28] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTSweep", "KpfTPay"];
+const SCRIPTS: [&str; 52] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTSweep", "KpfTPay"];
+/// Round 30. The two services of the library are spent not to move an object named by `who` but to write or cite a
+/// price note: their first argument is not the 24 bytes of the places, and their "going on" is their own (a note
+/// writer writes two outputs under the id, a citation ties the counts). The who-based lints (A3's entry shape, R19's
+/// places) are of the object operations only.
+const SERVICES: [&str; 2] = ["KpfTNote", "KpfTCite"];
+/// Round 30. The scripts whose answer keeps half of a bond lost in their own copy: their self-output asks for more
+/// than the oracle fee. The note writer counts its outputs its own way; every other script ties the counts.
+const KEEP_HALF: [&str; 6] = ["KpfTTake", "KpfTKind", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq"];
+/// Round 30. The twenty-eight object operations of rounds 1 to 27 (the collectors among them). The source lints of
+/// those rounds (`t1b_r19_...`, `t1b_b1_...`, `t1b_j5_...`) model this shape — one object named by `who`, counted in
+/// and out, a payout at `len - 1 - 2j`. The thirteen scripts of the thin family added this round are of two new
+/// shapes (a service that writes or cites a note; an answer that keeps half a bond and may read a citation): `A3`
+/// now covers all forty-one, and the new scripts' own lints are `t1b_holds_r30_...` and the F51 to F57 tests through
+/// the builders. The other three lints stay on the shape they were written for.
+const OBJ_OPS: [&str; 28] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTSweep", "KpfTPay"];
 
 // ---------------------------------------------------------------- A1: one script, one object
 
@@ -721,33 +736,48 @@ fn t1b_a2_who_at_the_script_itself_a_funding_input_or_no_input() {
 /// `t1b_r19_...` below). The two scripts that collect have no `release`.
 #[test]
 fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
+    // Round 30: the lint now covers all 41 scripts. The "going on" of every entry is read from the union of its own
+    // body and the two functions that may hold it (`goesOn`, the change family; `ends`, the answers of a point and
+    // of a take, which keep half a bond). The four conditions it must contain:
+    //  - the copy's own script goes on, under the library's id, at its index;
+    //  - its value is at least what it held plus the oracle fee (a copy that keeps half a bond asks for more);
+    //  - the library's input and output counts are tied, EXCEPT the note writer, which writes two outputs under the
+    //    id (the copy and the note) for its one input.
     let heads = ["int self = this.activeInputIndex;", "byte[32] lib = OpInputCovenantId(self);"];
     let (mut entries, mut releases) = (0, 0);
     for name in SCRIPTS {
         let collector = COLLECTORS.contains(&name);
-        let four = [
-            "require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);",
-            "require(OpOutputCovenantId(self) == lib);",
-            // (Round 23: the two scripts that answer a dispute keep the oracle fee and the half of the bond lost that
-            // is nobody's.)
-            if collector {
-                "require(tx.outputs[self].value >= tx.inputs[self].value);"
-            } else if ["KpfTProve", "KpfTLiqProve"].contains(&name) {
-                "require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);"
-            } else {
-                "require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);"
-            },
-            "require(OpCovOutputCount(lib) == OpCovInputCount(lib));",
-        ];
+        let service = SERVICES.contains(&name);
+        // The two collectors name the fee pool and the copy by `who` as an operation names its object; only the two
+        // services (a note written or cited) are not named by the places.
+        let who_based = !service;
         let src = contract_source(&format!("{name}.sil"));
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         assert_eq!(code.contains("int constant ORACLE_FEE = 200000;"), !collector, "{name}: the oracle fees are a constant of every script but the two that collect");
-        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if name == "KpfTLiq" { 3 } else { 2 }, "{name}: ORACLE_FEE is read in goesOn (and beside the half bond) and nowhere else");
-        let goes_on: Option<&str> = code.split("function goesOn()").nth(1).map(|b| b.split("\n    }").next().unwrap());
-        if let Some(b) = goes_on {
-            assert!(four.iter().chain(heads.iter()).all(|r| b.contains(r)), "{name}: goesOn is not the four conditions");
+        // ORACLE_FEE is read once for the constant and once where the copy goes on; KpfTLiq and KpfTKind read it a
+        // third time (a liquidation beside a vouch, a kind that keeps half a bond).
+        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if ["KpfTLiq", "KpfTKind"].contains(&name) { 3 } else { 2 }, "{name}: ORACLE_FEE is read where the copy goes on and nowhere else");
+        // Where the four conditions live: the entry body, plus any `goesOn`/`ends` the entry calls.
+        let func = |n: &str| -> Option<String> { code.split(&format!("function {n}()")).nth(1).map(|b| b.split("\n    }").next().unwrap().to_string()) };
+        let ends_fn = code.split("function ends(").nth(1).map(|b| b.split("\n    }").next().unwrap().to_string());
+        let goes_on = func("goesOn");
+        if let Some(b) = &goes_on {
             assert_eq!(b.matches("require(").count(), 4, "{name}: goesOn asks four things");
         }
+        // The self-value line: with the fee, or with the fee and the half bond kept (the note writer and the
+        // citation ask the fee only).
+        let self_value = |blob: &str| -> bool {
+            blob.contains("require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE")
+                || (collector && blob.contains("require(tx.outputs[self].value >= tx.inputs[self].value);"))
+        };
+        // The count line: the note writer writes two outputs for its one input; every other ties the counts.
+        let counts = |blob: &str| -> bool {
+            if name == "KpfTNote" {
+                blob.contains("require(OpCovInputCount(lib) == 1);") && blob.contains("require(OpCovOutputCount(lib) == 2);")
+            } else {
+                blob.contains("require(OpCovOutputCount(lib) == OpCovInputCount(lib));")
+            }
+        };
         let parts: Vec<&str> = code.split("\n    entry ").collect();
         assert!(parts.len() >= 2, "{name}: no entry");
         let mut has_release = false;
@@ -762,29 +792,33 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
                 continue;
             }
             entries += 1;
-            // Called last, or followed only by what the entry asks more of its own output (round 3: the half bond
-            // that stays in the script; round 19: with the oracle fees).
-            let after: Vec<&str> = body.split("
-        goesOn();").nth(1).map(|a| a.lines().map(str::trim).filter(|l| !l.is_empty()).collect()).unwrap_or_default();
-            let called = goes_on.is_some() && body.contains("
-        goesOn();") && after.iter().all(|l| *l == "require(tx.outputs[this.activeInputIndex].value >= tx.inputs[this.activeInputIndex].value + half + ORACLE_FEE);");
-            // (The three proofs have no room for a function: the four conditions close the entry itself.)
-            let inline = goes_on.is_none() && four.iter().chain(heads.iter()).all(|r| body.contains(r)) && body.trim_end().ends_with(four[3]);
-            assert!(called || inline, "{name}: an entry that does not end by going on: {}", &body[..body.len().min(80)]);
+            // The going-on lives in the entry, or in the `goesOn`/`ends` it uses. The entry never returns early, and
+            // the going-on is the last thing it does (a call to `goesOn`/`ends`, or the conditions inline).
+            let blob = [body, goes_on.as_deref().unwrap_or(""), ends_fn.as_deref().unwrap_or("")].join("\n");
+            let closed = body.trim_end().ends_with(';')
+                && (body.trim_end().ends_with("goesOn();") || body.trim_end().ends_with(");"));
+            let goes = heads.iter().all(|r| blob.contains(r))
+                && blob.contains("require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);")
+                && blob.contains("require(OpOutputCovenantId(self) == lib);")
+                && self_value(&blob)
+                && counts(&blob);
+            assert!(goes && closed, "{name}: an entry that does not end by going on: {}", &body[..body.len().min(80)]);
             assert!(!body.contains("return"), "{name}: an entry that returns early");
             assert!(body.contains("require(version == 1);"), "{name}");
-            assert!(body.starts_with(&format!("{}(byte[24] who, ", body.split('(').next().unwrap())), "{name}: an operation's first argument is the 24 bytes of the places");
+            // An object operation names the places; a service (a note written or cited) does not.
+            assert_eq!(body.starts_with(&format!("{}(byte[24] who, ", body.split('(').next().unwrap())), who_based, "{name}: who-based iff an object operation");
         }
         assert_eq!(has_release, !collector, "{name}: every script that takes oracle fees lets go of them, and the two that collect have no way out");
+        let _ = (who_based, KEEP_HALF);
     }
-    println!("T1b A3: {entries} entries of {} scripts, each ending by the four conditions of going on; {releases} entries `release`, the same six lines, which do not", SCRIPTS.len());
+    println!("T1b A3: {entries} entries of {} scripts, each ending by going on (the copy kept, the fee held, the counts tied); {releases} entries `release`, the same six lines, which do not", SCRIPTS.len());
     let mut sorted = SCRIPTS.to_vec();
     sorted.sort();
     let mut pinned = kpf_protocol::thin_artifacts::SCRIPTS.to_vec();
     pinned.sort();
     assert_eq!(sorted, pinned, "every script of the library");
     assert_eq!(COLLECTORS, kpf_protocol::thin_artifacts::COLLECTORS);
-    assert_eq!((entries, releases), (33, 26));
+    assert_eq!((entries, releases), (59, 50));
 }
 
 /// Round 19, the places over the sources. `release` (and `KpfSlot.go`, `KpfFeePool.go`) asks only to be named at a
@@ -795,7 +829,12 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
 #[test]
 fn t1b_r19_every_place_of_every_entry_is_read_or_held_to_one_that_is() {
     let mut rows = 0;
-    for name in SCRIPTS {
+    for name in OBJ_OPS {
+        // Round 30: this lint models the object operations; the two services (a note written, a citation) and the
+        // citation-reading answers of the thin family are read in `t1b_holds_r30_...` and the F-tests, not here.
+        if SERVICES.contains(&name) {
+            continue;
+        }
         let src = contract_source(&format!("{name}.sil"));
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         for e in code.split("\n    entry ").skip(1) {
@@ -811,15 +850,19 @@ fn t1b_r19_every_place_of_every_entry_is_read_or_held_to_one_that_is() {
                 let var = body.lines().find_map(|l| l.trim().strip_prefix("int ").filter(|l| l.ends_with(&format!("= int(byte[8]({}));", cut(k)))).map(|l| l.split(' ').next().unwrap().to_string()));
                 let read = match &var {
                     Some(v) if body.contains(&format!("slotOf({v}, slotLen)")) => Some("an object"),
-                    // (The proofs read their object in the entry itself: the same lines as `slotOf`.)
+                    // (The proofs and the take's answer read their object in the entry itself: the same lines as `slotOf`.)
                     Some(v) if body.contains(&format!("byte[] rs = OpTxInputScriptSigSubstr({v}, OpTxInputScriptSigLen({v}) - slotLen, OpTxInputScriptSigLen({v}));")) && body.contains(&format!("require(tx.inputs[{v}].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));")) && (body.contains(&format!("require({v} != self);")) || body.contains(&format!("require({v} != this.activeInputIndex);"))) => Some("an object"),
                     Some(v) if body.contains(&format!("feePool({v}, slotLen, rid, floor);")) => Some("the fee pool"),
+                    // (Round 30: a citation copy of KpfTCite, held to its script and read for its price. KpfTStepPrice
+                    // binds the place to `u`; KpfTTake reads it inline through `cited`.)
+                    Some(v) if body.contains(&format!("require(tx.inputs[{v}].scriptPubKey == byte[](CITE_SPK));")) => Some("a citation"),
                     Some(v) if name == "KpfTSweep" && v == "c" => {
                         for r in ["require(c != self);", "require(c != j);", "require(OpInputCovenantId(c) == lib);", "require(tx.outputs[c].scriptPubKey == tx.inputs[c].scriptPubKey);", "require(OpOutputCovenantId(c) == lib);", "require(tx.outputs[c].value == floor);", "require(OpCovInputCount(lib) == 3);"] {
                             assert!(body.contains(r), "KpfTSweep: the copy is not held to `{r}`");
                         }
                         Some("the copy swept")
                     }
+                    _ if body.contains(&format!("cited(int(byte[8]({})), ", cut(k))) => Some("a citation"),
                     _ if body.contains(&format!("priced(int(byte[8]({}))", cut(k))) || body.contains(&format!("seenPrice(int(byte[8]({}))", cut(k))) => Some("an epoch table"),
                     _ => None,
                 };
@@ -3021,7 +3064,7 @@ fn t1b_m5_a_merge_beside_another_operation() {
 #[test]
 fn t1b_b1_every_entry_counts_the_inputs_and_outputs_of_the_objects_id() {
     let mut rows = vec![];
-    for name in SCRIPTS {
+    for name in OBJ_OPS {
         let src = contract_source(&format!("{name}.sil"));
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         let helper = |f: &str| -> Option<&str> { code.split(&format!("function {f}(")).nth(1).map(|b| b.split("\n    }").next().unwrap()) };
@@ -3607,7 +3650,7 @@ fn t1b_j5_each_script_of_the_way_in_refuses_the_others_arguments() {
     // And every other script of the library in either's place (but the three proofs, which this file does not
     // compile: they are built in auditT1_builders.rs).
     let mut tried = 2;
-    for other in SCRIPTS.iter().filter(|s| !["KpfTPlace", "KpfTOpen", "KpfTProve", "KpfTLiqProve", "KpfTExitRefute", "KpfTPay"].contains(s)) {
+    for other in OBJ_OPS.iter().filter(|s| !["KpfTPlace", "KpfTOpen", "KpfTProve", "KpfTLiqProve", "KpfTExitRefute", "KpfTPay"].contains(s)) {
         for name in ["registry-open", "registry-place"] {
             assert!(fails(&swap(name, *other), 1), "{name} under {other}");
             tried += 1;
@@ -3790,7 +3833,7 @@ fn t1b_r19_a_sweep_moves_a_copys_dues_to_the_fee_pool_and_nothing_else() {
     assert!(all_ok(&base.tx()), "the honest sweep: {}", show(&base.tx()));
     // Every script that takes oracle fees is swept the same way (the three proofs are not compiled in this file).
     let mut swept = 0;
-    for name in SCRIPTS.iter().filter(|n| !COLLECTORS.contains(n) && !["KpfTProve", "KpfTLiqProve", "KpfTExitRefute"].contains(n)) {
+    for name in OBJ_OPS.iter().filter(|n| !COLLECTORS.contains(n) && !["KpfTProve", "KpfTLiqProve", "KpfTExitRefute"].contains(n)) {
         let c = lib_of(*name);
         assert!(all_ok(&sw(&c, SWEEP_MIN).tx()), "a copy of {name} holding the least above its floor");
         assert!(fails(&sw(&c, SWEEP_MIN - 1).with(|s| s.outs[0].value = (10 * KAS + SWEEP_MIN - 1 - (SWEEP_MIN - 1) / 20) as u64).tx(), 1), "a copy of {name} a sompi under the least");

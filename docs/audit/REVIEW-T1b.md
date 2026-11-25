@@ -3342,3 +3342,845 @@ The whole workspace, run once with `--no-fail-fast` after my last change: 122 su
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli -- --nocapture
 CARGO_BUILD_JOBS=2 cargo test -q --workspace --jobs 2 --no-fail-fast
 ```
+
+# Round 30
+
+Scope: the fourteen new silverscript contracts of the "thin family" (`contracts/KpfNote.sil`, `KpfTNote`, `KpfTCite`,
+`KpfTChange`, `KpfTChangeSettle`, `KpfTChangeDispute`, `KpfTChangeLate`, `KpfTTake`, `KpfTKind`, `KpfTPoint`,
+`KpfTStepRow`, `KpfTStepPrice`, `KpfTStepEnd`, `KpfTStepLiq`): price notes and their citation, a change of a position
+stated and answered, and accounts of any number of legs answered a point at a time
+(`docs/ARCHITECTURE-CLEARING.md` 3, 4a, 4b). Only my three test files and this file were changed; no node, no network,
+nothing committed. I kept the author's three edits in my files (the `TObj::Change` arm in `auditT1_builders.rs`, the
+two script counts in `auditT1_cli.rs`).
+
+**Five new findings: F51 (High), F52 (High) and F54 (High), F53 (Medium), F55 (Low). F50 of round 29 is now fixed in
+the code; its three round-29 command-line tests were stale and I reworked them. The A3 table is extended to all 41
+scripts.**
+
+## Findings
+
+### F51 (High, open). A sompi more in the object at the dispute refutes a take that is within the rule
+
+`KpfTTake` (and every answer of a point) reads what the object holds from the live input it answers
+(`held = tx.inputs[j].value - bond - disputed * bond`) and asks the statement's `outs` to be exactly the rule's with
+that number. `KpfTChangeDispute.dispute` writes the disputed object with `>= its value + bond`: a disputer may write
+**one sompi more**. Then `held` is one sompi larger than at the statement, the stored `outs` (the position holds
+`held - amount`) no longer match, the verdict is "not within the rule", and the honest take is reverted: the claimer
+loses its bond and its take, the disputer has its bond back and half of the claimer's.
+
+- Test: `t1b_finding_f51_a_sompi_more_at_the_dispute_refutes_a_true_take` (builders, engine-run). A take of 54 KAS on
+  a position (within the rule at the committee's 12.0) and a take on an account of three legs, each disputed with a
+  sompi more, are answered "not within": the claimer is paid nothing, the disputer takes its bond and half the
+  claimer's, and the forced "within" verdict is refused. The control (disputed as the builder writes it) is answered
+  within, as it must be.
+- What is lost and by whom: the claimer, a bond (a tenth of the pot in the sample, 10 KAS) and its legitimate take;
+  the attacker, +half the claimer's bond. The claimer cannot rescue it: once the object holds the extra sompi, no
+  answer of that statement is "within". It is a dispute-step attack (the direct answer of an undisputed statement
+  reads the fixed state output, which nobody can inflate).
+- Fix I would accept: the answer derives `held` from the position's own committed value (the pot the moving part
+  carries) plus the carrier it may hold, not from the live input less the bonds; or the dispute writes the object
+  with `==`, not `>=`, so no carrier can be added at the dispute.
+
+### F52 (High, open). A trace whose middle chain is of no leg has no answerable point, and is applied
+
+A statement of kind 2 or 3 is a trace of 88-byte rows. `KpfTStepEnd`/`KpfTStepLiq` (the end, point 0) check only the
+**last** row's first chain against the account's root and trust the last row's gain and worth; `KpfTStepRow` and
+`KpfTStepPrice` (the middle points) require the shown leg to hash onto the row's chain, and take **neither verdict**
+otherwise. So a trace whose rows before the last carry a chain of no real leg, with the last row's chain the true
+root and its gain and worth chosen by the claimer, has an end that is answered right and middle points that no leg
+can answer. Nobody disputed within the dispute period applies it (`KpfTChangeSettle`): the whole of the chosen
+side's margin to a key that is no party's.
+
+- Test: `t1b_finding_f52_a_trace_whose_chain_is_of_no_leg_has_no_wrong_point` (builders, engine-run). A step of a
+  liquidation stated by a stranger on an account of three legs, its trace saying B is below its maintenance and the
+  fee is B's whole 180 KAS: applied if nobody disputes (B's margin to the stranger). Its end is answered right (the
+  disputer's bond lost); of its six points, two are answered right and four (the fabricated rows and their prices)
+  have **no answer of either verdict** over every leg of the account (24 answers tried). A point with no answer
+  lapses: the account again, both bonds back.
+- What is lost and by whom: the counterparty loses its whole margin if it does not dispute within the dispute
+  period, and `exec-run` does not watch accounts' statements at all (`RESEARCH-UNIFIED-MARGIN.md` 13.3), so nothing
+  disputes it by default. The counterparty's only defence is to dispute one of the unanswerable middle points (not
+  the end: the end is right, and disputing it loses the bond); that dispute lapses, restoring the account at the cost
+  of a dispute period and both bonds returned — so the attacker can re-state at no cost (a free lock), for ever.
+- Fix I would accept: the end's answer is shown the whole trace and holds every row's chain to the one before it (or
+  the trace is a tree the end's root commits to), so that a middle row the claimer fabricated makes the end wrong;
+  and/or an executor watches account statements.
+
+### F54 (High, open). A statement the settlement applies but the reader cannot read
+
+`KpfTChangeSettle` reads the first output's flag as "the object goes on" when it is `0x00` and as **a payment** for
+any other byte. The model and the chain reader (`Outs`, `Outs::read`, which `thin_read` and so `exec-run` use) write
+and accept the flags `0` and `1` only. A statement whose first output's flag is `2` (or `3`, `0x7f`, `0x80`, `0xff`)
+is one the script applies and the reader does not read: the position is seen as spent, no change object is made, no
+executor disputes it, and after the dispute period the position's whole value is paid to the key it names.
+
+- Test: `t1b_finding_f54_a_statement_the_scripts_apply_and_the_reader_does_not_read` (builders, engine-run). "The
+  position ends, 100 KAS to a key that is no party's": with the flag `1` the reader reads it as a change and it is
+  within the rule at no price (an executor disputes it); with the flag `2` the reader returns it unread (the position
+  read as spent, no object made), and the settlement pays the whole value and the bond to that key. Four other flags
+  are applied the same way.
+- What is lost and by whom: the counterparty's whole position, taken by a statement its tooling never surfaces. A
+  party reading the raw transaction could still dispute (the dispute scripts hash the `outs` bytes whole, flag and
+  all), so it is tooling-blindness rather than an unanswerable statement — but the default watch does not see it.
+- Fix I would accept: the settlement refuses a first flag other than `0` or `1` (it already treats `>= 2` as a
+  payment, which `Outs::read` would never have produced); or the reader accepts the same bytes the script does.
+
+### F53 (Medium, open). A point answered right can leave a true statement out of its time
+
+A point answered right puts the statement back **as stated** and restarts its dispute period, but every script asks
+the statement's **landing** against the time it prices at: more than the position's lateness after `t0` it can no
+longer be settled or disputed, and `KpfTChangeLate` ends it, the claimer's bond to whoever ends it. So a disputer who
+disputes a true point late in the dispute period, and whose right answer lands past the lateness, kills an honest
+statement: the claimer's take is reverted and its bond is lost to the ender (which the disputer may be).
+
+- Test: `t1b_finding_f53_a_point_answered_right_leaves_the_statement_out_of_its_time` (builders, engine-run). A true
+  take on an account (time 6,500, lateness 100), row 1 disputed at 6,555 and answered right at 6,601: the statement
+  that stands again is refused by the settlement and by a further dispute, and is ended as late, its bond to the
+  disputer. (The settlement had the same statement landed in time is accepted — the control.)
+- What is lost and by whom: the claimer its bond and its take; the attacker breaks about even (it loses its own bond
+  at the right answer, half to the claimer, and recovers the claimer's whole bond as the ender). It costs the
+  attacker the delay and risks the right answer landing in time, so Medium.
+- Fix I would accept: a statement that stands again after a right answer keeps its original landing for the lateness
+  rule (the restart is of the dispute period only), or the lateness is measured against the dispute, not `t0`.
+
+### F55 (Low, open). A library of one copy answers no take on a two-leg position
+
+`KpfTTake` reads one citation a leg at the places 1 and 2 of `who`, and asks that the two are two inputs — two copies
+of `KpfTCite` co-spent. A library made with `--copies 1` (`lib_check` accepts it) holds one copy of each script, so a
+disputed take on a position of two legs cannot be answered: it lapses, both bonds back, the taker's legitimate take
+reverted. The tool's default is two copies, so default libraries are unaffected.
+
+- Test: `t1b_finding_f55_a_library_of_one_copy_answers_no_take_on_two_legs` (builders, engine-run). A take on a
+  two-leg position answered beside two copies of `KpfTCite`; the same with one copy named at both places is refused by
+  the script (the two places are two inputs); `lib_check` takes a one-copy genesis.
+- Fix I would accept: `lib_check` (or `lib-create`) requires at least two copies of `KpfTCite` (or the answer reads
+  one copy twice), so a two-leg take is always answerable.
+
+## F50 and the three round-29 tests (lead 9)
+
+**The code is right and the three tests were stale.** Round 29 recorded F50 (Low) as open: a member signs every grid
+time of an exit claim that stands, also after a quorum signed one. Since then the thin-family commit added the fix
+the round-29 write-up recommended (`xcmds.rs`: "Once the folder holds a quorum's prices of a time at or after
+`since`, the claim is ended by them and no further time is signed"). That fix makes a member stop signing a claim's
+times once a quorum of one of them is in the folder it writes to — which the three round-29 tests, written before the
+fix, did not expect (they let three members sign into one folder and counted every signature):
+
+- `t1b_finding_f50...` asserted the hole open (member 0 signing four more times after a quorum). Its own message said
+  it would fail once fixed; the code closed it. I rewrote it as
+  `t1b_fixed_f50_a_member_signs_no_grid_time_once_a_quorum_of_one_stands`: members 0 and 1 give 33,600 a quorum (52 of
+  67 KAS), member 2 and then member 0 (run on to 34,900) sign no further time, and the 33,600 quorum ends the claim;
+  the key's journal still refuses another price for a time it signed.
+- `t1b_fixed_f47...` and `t1b_fixed_f48...` wrote three members into one folder; the quorum-completing member is now
+  skipped. I updated their counts (the folder stays at the four signatures members 0 and 1 leave; member 2 adds
+  nothing) and their comments. Both still end the claim by a time a quorum signed, which is the fix those tests
+  verify.
+
+## A3 and the other source lints (lead 9)
+
+`t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on` failed because its table was 28 scripts and the pinned
+library is 41. I extended it to all 41 and generalised its per-entry check to the three shapes of the family: the
+object operations (go on via `goesOn`), the answers that keep half a bond (go on via `ends`, or inline, with
+`+ ORACLE_FEE + bond - half`), and the two services (`KpfTNote`, whose `note` writes two outputs under the id for its
+one input; `KpfTCite`, which ties the counts). The lint now reads the four conditions of "going on" from the union of
+each entry and the `goesOn`/`ends` it uses, and confirms every object operation is named by `who` and the two services
+are not. Counts: 48 entries, 39 `release` across the 41.
+
+The three other source lints (`t1b_r19_...` the places, `t1b_b1_...` the id counts, `t1b_j5_...` the way-in
+arguments) model the object-operation shape (one object named by `who`, counted in and out, a payout at
+`len - 1 - 2j`). The thin family's services and citation-reading answers are of other shapes, so I left those three
+on the 28 operations they were written for (a new const `OBJ_OPS`) and cover the new scripts' own shapes through
+`t1b_holds_r30_...` and the F51 to F55 tests. Extending those three lints to the new shapes is not reached.
+
+## What holds (run)
+
+- `t1b_holds_r30_nothing_but_a_note_of_the_attest_is_written_under_the_librarys_id` (builders, engine-run): 32
+  mutations refused. A note is written only by `KpfTNote` beside the committee's attest; a note of another price,
+  time, market, spread, writer, or an object or a script of the family in the note's place, or a second note, or an
+  output more under the id (by any authorizing input), or the change under the id, is refused. A note taken back
+  (`KpfNote.reclaim`) pays its writer and writes nothing under the id; one that writes under the id or pays another
+  key is refused. A genesis that writes a note (in a script's place or one more) is no library (`lib_check`). A
+  citation is refused by the builder for another library or another note, and by the script when told another chain
+  block, committee, market, time, price, spread or writer than the note's (the parse of `rest`, lead 3).
+- The places of a citation copy at `KpfTTake` and `KpfTStepPrice` (lead 2): the citation stands at place 1/2 of
+  `who`, held to `KpfTCite`'s script and read for its price; a coin or another script there is refused (the author's
+  `thin_change.rs` shows the swap, and F55 shows two copies are two inputs).
+
+## Read, not run
+
+- F51 on the undisputed (direct) answer: the state output cannot be inflated, so only the dispute step carries it;
+  read, not built.
+- F52's end trusting the last row's gain and worth: read in `KpfTStepEnd`/`KpfTStepLiq` (`row.slice(8, 16)`,
+  `row.slice(16, 24)`), run through the fabricated trace.
+- `KpfTCite`'s depth limits (14 and 12), `mergeIdx`, and the lane/subnetwork bytes of `rest`: the builder refuses a
+  proof beyond the limits (`Cited::of`); the deeper parse is the author's `cite.rs` and `thin_notes.rs`, read only.
+- Lead 4's payout-index collisions between a new script's `len - 1 - 4j` and an old one's `len - 1 - 2j`: I built one
+  (a take applied beside a close settled) and it did not collide as I modelled it — a plain settle pays A at output 0
+  and B at the last, not from the `2j` slot — so I withdrew it (no finding). Whether a new script woven beside an old
+  one that does pay from `len - 1 - 2j` (a late-end, a lapse) collides is not reached.
+- Leads 6 (`take_within`/`end_right` rounding and floors), 7 (today's scripts on an account), 8 (the executor's
+  `by_own` judgement of a take) beyond what F51 to F55 touch: not reached.
+
+## Not reached
+
+- Anything at a node, a real price source, the testnet; `take` placing an order.
+- The reserve (no script), the cover/call/draw (a model).
+- A close or an exit's refutation on an account (not built; the author notes an exit claim on an account can be ended
+  by nobody — confirmed by absence, not rated this round).
+- Extending `t1b_r19`, `t1b_b1`, `t1b_j5` to the thin family's new shapes.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F51 | High | open: a sompi more at the dispute refutes a take within the rule |
+| F52 | High | open: a trace whose middle chain is of no leg has no answerable point; applied, or a free lock |
+| F54 | High | open: a statement the settlement applies but the reader does not read (flag not 0 or 1) |
+| F53 | Medium | open: a point answered right can leave a true statement out of its time |
+| F55 | Low | open: a library of one copy answers no take on a two-leg position |
+| F50 | | fixed in the thin-family commit, verified; the round-29 tests reworked |
+| F41 | High | open, with the owner (the coordinator recommends leaving the re-strike as it is) |
+| F47, F48, F49 | | fixed in round 29, verified |
+| F42 to F46 | | fixed in round 28, verified |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design for a source of one number; closed for one that says low and high |
+| F5 | Low | changed by round 23 |
+| F7, F8, F9 | Low | by design |
+| all others (F1-F4, F6, F10-F12, F14-F31, F33-F38, F40) | | fixed in earlier rounds |
+
+## Counts and commands
+
+My three files: 55 engine (A3 extended to 41, R19/B1/J5 kept on the 28 object-ops), 88 builders (six new: F51 to F55
+and `t1b_holds_r30`), 47 command line (F47, F48, F50 reworked for the F50 fix). Five are new `t1b_finding_fNN` tests
+(F51 to F55), each engine-run and passing while the hole is open.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli
+```
+
+Results: builders 88 passed, engine 55 passed, command line 47 passed; 0 failed in each.
+
+# Round 31
+
+Scope: the author's fixes of F51 to F55 in the thin-family contracts (regenerated), with the model and builder changes
+the coordinator listed (`Stated.held`, `Change.held`, `Stated::again()`, `LATE_AGAIN`, `row_judged`,
+`wrong_point_of`, `step_row_at`, the flag checks, the second `KpfTCite`). Only my three test files and this file were
+changed; no node, no network, no commits, no artifact regeneration. I brought my round-30 tests up to the changed
+interfaces (the `held` field, the `prev`/`at` arguments) and verified each fix; no new finding.
+
+**All five fixes hold. The five `t1b_finding_f5x` tests are now `t1b_fixed_f5x`. Two command-line count assertions
+were updated for the second `KpfTCite` the F55 fix writes. No new findings (F56+): the leads the coordinator named
+are closed.**
+
+## Fix verdicts (each verified, engine-run)
+
+| | Fix | Verdict | Test |
+|---|---|---|---|
+| F51 | the statement's hash carries `held`; answers count from it, not the live input | holds | `t1b_fixed_f51_held_is_committed_so_more_value_at_the_dispute_does_not_turn_the_verdict` |
+| F52 | the row/price answer opens the chain with `prev` (a require); `wrong_point_of` names the row after the bad chain; `at != point => verdict 0` | holds | `t1b_fixed_f52_a_fabricated_trace_has_a_wrong_point_anyone_can_answer` |
+| F53 | a point answered right restores the statement with `LATE_AGAIN`: not held to its time again | holds | `t1b_fixed_f53_a_point_answered_right_restores_the_statement_not_held_to_its_time` |
+| F54 | `KpfTChange.state` holds the outputs' flags (first 0/1, others 1); `KpfTChangeSettle` asks flag 1 for a payment | holds | `t1b_fixed_f54_a_statement_states_only_flags_0_and_1` |
+| F55 | a library writes two `KpfTCite` even at `--copies 1`; `lib_check` refuses fewer than two | holds | `t1b_fixed_f55_a_library_holds_two_cite_copies` |
+
+- **F51**: a take of 54 KAS on a position and a take on an account, both within the rule, disputed with a sompi more
+  in the object, are still answered within the rule and applied (the claimer paid its amount, its bond and half the
+  disputer's). The committed `held` is used, so extra value at the dispute no longer turns the verdict; the forced
+  opposite verdict is refused.
+- **F52**: the same fabricated liquidation trace (a middle row's chain of no leg, the fee B's whole margin) now has a
+  wrong point `wrong_point_of` names (the row after the fabricated chain, opened by the account's own chain).
+  Disputing the (still-right) end does not save it: with `at != point => verdict 0`, that wrong row is answered
+  though the end was disputed, the account is restored and the claimer loses its bond. The forced "right" verdict of
+  the wrong row is refused.
+- **F53**: a true take, one point disputed at 6,555 and answered right at 6,601 (past the 100-DAA lateness of 6,500),
+  stands again with `LATE_AGAIN` in its hash; it is then applied by the settlement and cannot be ended as late
+  (`KpfTChangeLate` asks the statement's own lateness, which no landing exceeds), and may be disputed again.
+- **F54**: a statement with any first-output flag other than 0 or 1 (five tried), or a later payment output with flag
+  0, is refused by `KpfTChange.state` (the forged `outs` hash matches the object, but the flag check fails the
+  script), so it can no longer be stated unread; the honest flag-1 form is stated and read.
+- **F55**: a one-copy library holds two `KpfTCite` and passes `lib_check`; a genesis with only one is refused; the
+  two copies answer a take on a two-leg position, and one copy named at both places is still refused (two inputs).
+
+## What holds (the leads, read or run)
+
+1. The opening rule (`blake2b(prev + leg) == row.g`, a require) cannot be turned against an honest row: the only
+   `(prev, leg)` opening a real `row.g` is the real one (a second would be a blake2b collision), and for it
+   `prev == before.g`, so the verdict is the real one. A point beyond the trace is answered right only with
+   `at == point` (its `ok` is 1, so `verdict` must be 1). A right point cannot be answered with verdict 0
+   (`ok == verdict`), so `at != point` ends a statement only by a point that is genuinely wrong. The price answer
+   with a `prev` that is not the row before's is wrong whatever the price (`if prev != before.g { ok = 0 }`). Run in
+   F52; the rest read.
+2. `held` is set only by `KpfTChange.state` (to `tx.inputs[j].value`) and carried unchanged through `again()` and
+   every step script's `c0`/`c1`; no path re-sets it. The settlement pays the committed `outs` with `>=`, so surplus
+   above `held + bonds` goes to whoever builds the settlement (the standard carrier), not the claimer. Read, with F51
+   confirming the committed `held` governs the answer.
+3. A first statement cannot carry `LATE_AGAIN`: `state` takes `late` from the position's moving part, not an
+   argument. A restored `LATE_AGAIN` statement is never ended by `KpfTChangeLate` (for any landing below the lock-time
+   threshold, `landed - t0 <= LATE_AGAIN`), by design: it must be settled or refuted. A false statement that stands
+   again still has an answerable wrong point (lead 4), so an accomplice cannot keep it alive for free. Read; F53 runs
+   the late-end refusal.
+4. Every false account statement has a wrong point some honest party can answer: if the last row's chain is not the
+   root, the end is wrong; otherwise the row after the last fabricated chain is opened by the account's real chain and
+   is wrong there. Reasoned through (the single-leg and first-row edges included) and run for the three-leg case in
+   F52.
+5. `lib_check` requires two `KpfTCite`; a one-copy library now writes two (42 script outputs, or 43 with a fee pool),
+   which the two command-line count assertions were updated to expect.
+
+## Not reached
+
+- A node, a real price source, the testnet; `take` placing an order; an executor watching account statements (still
+  not built).
+- The reserve, cover, call, draw (a model, no script).
+- A close or an exit's refutation on an account (still not built).
+- The author's own `review_30_*` random-trace tests (25 pass, per the coordinator); I did not re-run them.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F51, F52, F54 | High | fixed in round 31, verified |
+| F53 | Medium | fixed in round 31, verified |
+| F55 | Low | fixed in round 31, verified |
+| F50 | | fixed, verified (round 30) |
+| F41 | High | open, with the owner |
+| F42 to F49 | | fixed in rounds 28, 29, verified |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design for a source of one number |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+My three files: 55 engine, 88 builders (the five fixed tests and `t1b_holds_r30`), 47 command line (two count
+assertions updated for the second `KpfTCite`). No `t1b_finding_` tests remain for the thin family: F51 to F55 are now
+`t1b_fixed_` and pass.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests     --jobs 2 --test auditT1_tests
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli       --jobs 2 --test auditT1_cli
+```
+
+Results: builders 88 passed, engine 55 passed, command line 47 passed; 0 failed in each.
+
+# Round 32
+
+Scope: the reserve (`docs/ARCHITECTURE-CLEARING.md` 6a, both parts) — the nine new scripts (`KpfTShardOpen`,
+`KpfTOpenC`, `KpfTLegAdd`, `KpfTAddC`, `KpfTNoteApply`, `KpfTAcctEnd`, `KpfTShardEnd`, `KpfTShardPrice`,
+`KpfTDrawNote`) and the seven of 4a/4b changed since round 31 (`KpfTChange` kinds 4/5 and the 171-byte moving part,
+`KpfTChangeSettle` note outputs, `KpfTPoint` kinds 2–5, `KpfTStepRow`/`KpfTStepPrice`/`KpfTStepEnd`/`KpfTStepLiq`).
+Read against the model (`reserve.rs`, `thin.rs`) and builders (`thin_build.rs`) and the author's tests
+(`thin_reserve.rs`, `thin_draw.rs`). Only my four files changed; no node, no commits, nothing under `kpf-out`
+touched. The author's mechanical edit in my builders file (genesis funded with 3,000 KAS) is kept.
+
+**No new finding. The three closures the author listed hold as model↔script, the round-31 answer machinery extends
+correctly to kinds 4 and 5, and the objects of 171 bytes are out of reach of the 138-byte scripts. The one failing
+test (`t1b_a3_...`) is mended: the table is extended to all fifty scripts. What I did not reach is listed plainly;
+the strongest unexamined risk is integer overflow in the draw's requirement at testnet scale.**
+
+## The one test mended (lead 9 equivalent)
+
+`t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on` failed because its table held 41 scripts and the
+library is now 50. Extended `SCRIPTS` with the nine new names and the counts to `(57 entries, 48 releases)`. The nine
+all fit the existing shape the A3 lint already models (each a `who`-based object operation with `goesOn` or `ends`,
+each a `release` of the six lines, each `ORACLE_FEE` twice), so no change to the lint body was needed; it passes.
+
+## The three closures (checked, hold)
+
+1. **An owed note is paid only to the shard owner's own account.** `KpfTNoteApply` kind 4 requires
+   `head[0..33] == push(shard owner)`; `KpfTStepLiq` writes an owed note with `head[0..33] = push(the account's B
+   key)` and pays the account's A. The model agrees: `Shard::applied` for `NOTE_OWED` refuses unless
+   `n.head.market == self.owner`, and `Head`/`SNote::owed` put B's key there. A covered account whose B is not the
+   owner cannot be opened without the owner's own signature (`KpfTOpenC` signs both sides), so a stranger cannot
+   mint an owed note the shard pays. Read, not newly tested (the author's `thin_reserve.rs` exercises the honest
+   path and one forged-note refusal).
+2. **A trace beginning with a seed-chain row is answered wrong with no leg.** `KpfTStepRow` now sets `ok = 0` when
+   `row.g == 32 zero bytes` before opening the chain, so the seed row is a genuine wrong point. Verified as part of
+   round 31's F52 (the same machinery), now with the `prev`/`wrong_point_of`/`at != point` rule covering kinds 3 and
+   4 too.
+3. **Only a draw is stated on a shard, and no take/leave on one.** `KpfTChange.state` detects a shard as the
+   171-byte object whose B key is 32 zero bytes (`shard == 1`), requires kind 5 for it, and requires `shard == 0`
+   for kinds 2/3/4. A shard's B key is zero only because `KpfTShardOpen` wrote it so; a covered account always has a
+   real B key (signed), so `shard == 0` for accounts. Kind 5 is confined to real shards.
+
+## A fourth door looked for, not found
+
+Attacked, each held:
+- **A note to the wrong shard / applied twice.** A note binds the shard's `sid` in its hash (`mv.slice(138,171)`),
+  and `KpfTNoteApply` requires the note's covenant id to equal the shard's; `sid` is the hash of the anchor outpoint,
+  unique. A note is a UTXO spent on application (kind 4 goes on only with the unpaid remainder, which shrinks), so it
+  cannot be applied twice for more than its amount.
+- **A leg-note applied to another market's row.** `KpfTNoteApply` kinds 1/2 require the row's 84-byte market head to
+  equal the note's (an empty row is claimed only by a non-empty head). A join/release of market X cannot touch
+  market Y's row.
+- **The leaving leg's market/units forged in the release note.** `KpfTStepRow` ties them at the `skip` row
+  (`lg.slice(0,84) == said.slice(24,108)` and the signed units), so a release note of a market or size other than the
+  leg that leaves has a wrong point.
+- **Cross-kind answers.** Each answer script commits its kind in the statement hash (`KpfTStepEnd` hardcodes
+  `i9(2)`, `KpfTStepLiq` requires kind 3 or 4, `KpfTShardEnd`/`KpfTShardPrice` `i9(5)`), so a draw cannot be answered
+  by a take's script or the reverse.
+- **A deposit note (kind 3) has no owner check**, but it only adds value the note itself must carry (the engine's
+  balance forces it), so it cannot drain a shard; `KpfTDrawNote` also refuses it as a draw-ending note.
+- **A covered account or shard spent by a 138-byte script.** The old position scripts take `byte[138] moving`; a
+  171-byte object's state hash is `blake2b(push(fixed) + moving[171])`, which no 138-byte reconstruction matches, so
+  they cannot open these objects.
+- **Value across note outputs.** A deposit note is written holding `amount + NOTE_MIN` (`KpfTStepEnd`, `KpfTAcctEnd`)
+  and credits the shard `amount` on apply; an owed note holds `NOTE_MIN` and is paid from the shard, not the note.
+  The 1 KAS carrier (`SHARD_CARRIER`) is beside what the shard holds and no note pays it out.
+
+## What I did not reach (said plainly)
+
+- **Integer overflow in the draw's requirement** (`KpfTShardEnd`/`reserve.rs::requirement`): `worth = net * price`
+  over four rows, with `net` up to `MARGIN_MAX` (~1.15e18) and `price` up to a market's limit (1e14). A large row
+  could overflow i64 and wrap the requirement small, letting an owner over-draw. I did not determine whether
+  silverscript traps or wraps on overflow, nor build a case; this is the strongest unexamined risk and should be
+  checked (does the engine trap `*`/`+` overflow, and is `net`/`gross` bounded below the overflow threshold?).
+- **The full note-ordering state space**: applying a release before its join, interleavings across four rows, and
+  whether any order lets the shard's rows misstate the net so the requirement is understated (I argued `abs()` tends
+  to overstate, not a proof).
+- **An exhaustive model↔builder↔script three-way diff** of every reserve function (rounding in `requirement`,
+  `draw_max`, the owed split). I read the arithmetic but did not random-test it as rounds 30/31 did for takes.
+- **The draw end's requirement when a shard row's market is present but `net`/`gross` were driven negative** by a
+  misordered release; and `KpfTShardPrice` with two rows of the same market.
+- **`KpfTAcctEnd` and `KpfTAddC` edge cases** (a legless account A ends while B's margin is zero; adding to a
+  shard's absent B side) beyond reading.
+- **Anything at a node or testnet; the tools** (`exec-run` does not watch covered accounts or shards).
+
+## Findings ledger (unchanged this round)
+
+| | Severity | State |
+|---|---|---|
+| reserve (6a) | — | reviewed, no new finding; three closures hold; overflow in the draw requirement not reached |
+| F41 | High | open, with the owner |
+| F50–F55 | — | fixed in rounds 29–31, verified |
+| F42–F49 | — | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | — | fixed in earlier rounds |
+
+## Counts and commands
+
+My files this round: one line table change in `auditT1_tests.rs` (the fifty scripts). No new `t1b_finding_` or
+`t1b_holds_` tests were added (no new hole found and the closures are the author's own, exercised by `thin_reserve.rs`
+and `thin_draw.rs`, which I did not modify).
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests     --jobs 2 --test auditT1_tests      # 55 passed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol  --jobs 2 --test auditT1_builders   # 88 passed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli        --jobs 2 --test auditT1_cli        # 47 passed
+```
+
+Results: engine 55 passed, builders 88 passed, command line 47 passed; 0 failed in each.
+
+# Round 33
+
+Scope: options as legs (ARCHITECTURE 4b "An option is a leg", 6a, 10), the 112-byte trace row, and the scripts not
+reviewed since round 32 (`KpfTStepRow`/`KpfTStepPrice`/`KpfTStepEnd`/`KpfTStepLiq` with the five-worth row and
+options, `KpfTChange` rows of 112, `KpfTLegAdd` options and the option-market note, `KpfTShardPrice` the `under`
+argument, `KpfTHand`, `KpfTLegMove`). Read against the model (`thin.rs`, `reserve.rs`) and builders, and the
+author's `thin_option.rs`. Only my two test files changed; no contracts/src touched, no commit, nothing under
+`kpf-out`. One finding (Medium).
+
+**F56 (Medium): a leg whose worth at a price within its market's limit overflows i64 enters a covered account,
+because `KpfTLegAdd` and `Account::check` dropped the size bound the position path (`XLeg::check`) enforces. The
+account's statements then cannot be computed. The A3 table is extended to the 52 scripts; the F52 test still tests
+what I meant.**
+
+## Finding
+
+### F56 (Medium, open). A leg whose worth overflows i64 enters a covered account, and locks it
+
+Every step script values a leg's row with `quoteAt(size, scale, price)`; the model's `q` panics and the on-chain
+`quoteAt` overflows when `size/scale * price` does not fit 63 bits. The position path refuses such a leg:
+`XLeg::check` requires `size/scale <= (i64::MAX/8)/price_max - 1`. The covered-account path dropped it —
+`KpfTLegAdd` asks only `size <= MARGIN_MAX` (~1.15e18) and `entry <= price_max`, and `Account::check` asks only
+`size > 0`. So a leg whose worth at the market's price limit overflows i64 enters a covered account. No take, leave
+or liquidation of that account can then be built (the model's `q` panics) nor answered (`quoteAt` overflows on the
+chain), and a one-leg account cannot be ended (`KpfTAcctEnd` needs no leg): the margins and the cover are locked.
+
+- Test: `t1b_finding_f56_a_leg_whose_worth_overflows_enters_a_covered_account` (builders, engine-run). A leg of size
+  `MARGIN_MAX` on a market of limit `1e14`: `XLeg`'s bound rejects it and `payoff::q_checked` returns `None` at the
+  limit (it overflows), yet `Account::check` is `Ok` and the engine accepts `KpfTLegAdd` of it into a covered
+  account.
+- What is lost and by whom: both parties sign the leg (`KpfTLegAdd` needs both), so it is a consent-gated footgun
+  rather than a one-sided theft; but a clearing party B whose tool co-signs a leg A proposes (the builder does no
+  size sanity-check beyond `MARGIN_MAX`) locks its own and A's margin and the account's shard cover, with no path
+  out. The position path treats the identical leg as out of range, so this is a validation inconsistency, not a
+  design choice.
+- Not resolved (decides lock vs worse): whether the silverscript engine traps or wraps on the i64 overflow in
+  `quoteAt`. Traps -> the row is unanswerable, honest statements lapse (both bonds back) and the account is locked
+  (availability). Wraps -> a hand-built statement could pass with wrong margins (a step script's floor/fee computed
+  on a wrapped worth), which would be a theft, not a lock. I did not reach a hand-built answer to settle this; the
+  same question was open from round 32's requirement arithmetic.
+- Fix I would accept: `KpfTLegAdd` (and `Account::check`, `leg_added`) apply `XLeg::check`'s size bound
+  (`size/scale <= (i64::MAX/8)/price_max - 1`), so no leg whose worth overflows can enter.
+
+## What held (read, or via the author's tests)
+
+- **The option row's five worths.** `leg_adds` (model) and `KpfTStepRow` (script) agree on the reading: a futures
+  leg adds its worth to both sides' worth and nothing to what they keep; an option adds to the gain `va - ve`
+  (negated where A wrote it), its underlying's worth to the writer's worth, and what it is worth exercised to the
+  holder's `e`. Checked line by line against `thin_option.rs`'s eight tests (which include 3,000- and 4,000-account
+  random model-vs-script runs).
+- **The kind bits.** A direction `>= 3` whose last three bits are 3–6 is an option; bits 0/1/2/7, or a direction
+  below 3, or a negative one, are a futures direction (long only for 1, short otherwise) — `option_of`, the script's
+  `if dir >= 3 { if dir%8 in 3..6 }`, and `leg_kind_ok` agree, and `leg_kind_ok`/`KpfTLegAdd` reject anything that is
+  neither a clean long/short nor an option with a strike in `1..=price_max`. A bad-bits or negative leg cannot
+  enter an account, so no trace carries one.
+- **The writer cannot end its own option.** `KpfTStepRow` at `i == skip` requires `side == holder` (the holder is
+  side A for an odd kind, B for an even one), so a kind-4 leave or a kind-3 liquidation stated by the side that
+  wrote the option makes the leaving row wrong — an answerable wrong point. The author's
+  `an_option_leaves_by_its_holder_s_side_alone` runs it.
+- **The seed-chain row (F52 class) for options.** `row_judged_of` returns `Some(false)` for a row whose chain is 32
+  zero bytes, and `KpfTStepRow` sets `ok = 0` before opening it: a fabricated leading row is a wrong point whatever
+  leg is shown. My `t1b_fixed_f52` (its `worth` split into `wa`/`wb` by the author's mechanical edit) still
+  exercises this on a liquidation trace; I confirmed it.
+- **The option note head.** `KpfTLegAdd` and `KpfTStepRow` name an option's shard row `blake2b(push8(13) +
+  push(market))` with units `+size` either way, and `KpfTShardPrice`'s new `under` cites the underlying market where
+  the tagged hash is the row's: options cannot net against futures or one another, and a futures row cannot pass as
+  an options row (the head differs by the tag). Read; the author's `thin_option.rs`/`thin_reserve.rs` exercise it.
+
+## What I did not reach
+
+- **The engine's overflow behaviour (trap vs wrap)** in `quoteAt` — the open question that sets F56's true
+  severity, and the same question left from round 32's draw requirement. Reaching it needs a hand-built step answer,
+  which I did not construct.
+- **An exhaustive model-vs-script verdict comparison** over random option accounts (the author runs 3,000/4,000; I
+  read the arithmetic and relied on those rather than re-running a comparison in my files).
+- **`KpfTHand` and `KpfTLegMove`** beyond the A3 structural check (both are `who`-based, one entry and a release,
+  the going-on shape): the hand-over's margin-vs-ask rule and the three-signature leg move between two covered
+  accounts of one clearing party were read only, not attacked with a test.
+- **`KpfTNoteApply` emptying a row whose net and gross return to 0**, the `said` head-form offsets (24/57/90/99) in
+  `KpfTChange` for kinds 2–4, and the commands `acmds.rs`/`aobj.rs` (`clearing_cli.rs`): not examined.
+- Anything at a node or testnet.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F56 | Medium | open: a leg whose worth overflows i64 enters a covered account and locks it |
+| F41 | High | open, with the owner |
+| F50–F55 | — | fixed in rounds 29–31, verified |
+| F42–F49 | — | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | — | fixed in earlier rounds |
+
+## Counts and commands
+
+My files: the A3 table in `auditT1_tests.rs` now lists the 52 scripts (`(59 entries, 50 releases)`), and
+`auditT1_builders.rs` gains `t1b_finding_f56_...`. The F52 test, which the author edited mechanically, was read and
+still tests the fabricated-chain wrong point.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests     --jobs 2 --test auditT1_tests      # 55 passed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol  --jobs 2 --test auditT1_builders   # 89 passed
+```
+
+Results: engine 55 passed, builders 89 passed; 0 failed in each. (The command-line suite I did not change or run
+this round.)
+
+# Round 34
+
+Scope: the fix of F56, and what round 33 read and did not attack: options at the row and at the end
+(`KpfTStepRow`, `KpfTStepEnd`, `KpfTStepLiq`), `KpfTShardPrice`'s `under`, `KpfTHand`, `KpfTLegMove`,
+`KpfTNoteApply` emptying a row, the head form in `KpfTChange`. Everything below is engine-run (`verify::verify`)
+unless it says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file changed; no contracts, no
+`src`, no commit, nothing under `kpf-out`.
+
+**F56 is fixed and verified. Three new findings: F57 (Medium) and F59 (Medium), F58 (Low). The model and the scripts
+gave the same verdict on every one of 3,017 rows and ends I put to the engine.**
+
+## Findings
+
+### F59 (Medium, open). A futures leg named as the options' row nets against the options
+
+A shard counts the options on a market in a row of their own, named `blake2b(push8(13) + push(market))`, with the
+size whichever way an option stands: "options never net against futures or one another". A row's name is the first
+84 bytes of a leg, and a futures leg's market is any 32 bytes its two parties sign: `KpfTLegAdd` asks nothing of a
+market's name. A futures leg whose market IS that hash enters a covered account, its note carries the options'
+row's own head, and its units are signed as a futures leg's (long: the size below zero). So it sets the options'
+net against itself.
+
+- Test: `t1b_finding_f59_a_futures_leg_named_as_the_options_row_nets_against_the_options`. A shard of 50 KAS whose
+  owner wrote a call on 10 units (and is short 4 units of another market) is asked 7.7385 KAS (the options' row:
+  net 10, gross 10). A long "futures" leg of 10 units
+  on the market named by the hash enters the same account by both signatures (`Account::check` and `leg_kind_ok`
+  take it); its join is applied to the options' row: net 0, gross 20. The shard is asked 3.216 KAS. Its owner
+  states a draw of 46.784 KAS where the rule gave 42.2615: the draw has no wrong point by the model, its end is
+  answered right, and it is applied.
+- Who and what: the owner needs nobody. Side A of such an account is a key of its own, and a leg enters by the two
+  signatures of that account. It lowers its own shard's requirement where the design says it cannot, and draws the
+  difference out of what covers its users. (Dressing the net of futures rows with an account of one's own is in the
+  research, 9a; for options the design ruled it out, and the claim of round 33 was "nobody can make a futures row
+  pass as an options row".) The made leg costs its owner nothing: its price is never asked (no committee signs for
+  a market of that name; a dispute of that price lapses), which matters only inside its own account.
+- Fix I would accept: an options row and a futures row cannot share a name. For instance the note of a futures leg
+  is named by a tagged hash too (another tag), so that no leg's own bytes are a row's name; or `KpfTLegAdd` writes a
+  word of the leg's kind into the note's head.
+
+### F57 (Medium, open). The holder of an option alone is liquidated where the pot is short
+
+The design: "A holder that keeps nothing else in the account is below no maintenance at any price, and nobody
+liquidates it." A side's `lo` is the maintenance of the worth it is asked and what it keeps whole (`e`: what its
+options are worth exercised). The margin it is compared with is what the side is owed, capped at the pot. Where the
+option has come to be worth more than the pot holds (its writer cannot pay), the holder's capped margin is below
+what it keeps whole, and a step of ITS liquidation is within the rule: the option leaves, and whoever stated the
+step has the liquidation fee of the underlying's worth out of the holder's margin.
+
+- Test: `t1b_finding_f57_a_holder_of_an_option_alone_is_liquidated_where_the_pot_is_short`. A holds a call on 10
+  units struck and entered at 10 and nothing else (margin 5 KAS; the writer's 20). At 11 no step of A's liquidation
+  is the rule's. At 14 the option is worth 40 and the pot 25: a stranger's step is the rule's (`wrong_point_of`
+  gives none; the end, the row and the price are answered right, and not wrong), it is applied, and the stranger has
+  0.7 KAS of A's margin. By A's own statement (kind 4) the same leaving costs no fee. The same on a covered account
+  (fee 0.7 KAS, 20 KAS owed by the shard).
+- What is lost and by whom: the holder, the liquidation rate of its option's underlying (50 basis points here), to
+  whoever states first, at the moment its counterparty is short. The writer's own second key is such a stranger:
+  the side that cannot pay takes a fee from the side it owes. The holder avoids it only by exercising first.
+- Fix I would accept: a side is below only by what it is asked (the maintenance of its worth), and what it keeps
+  whole is compared with its margin before the cap; or a step of a liquidation is refused where the side's worth
+  asked is zero.
+
+### F58 (Low, open). The sums of many legs make a row nobody answers, at the committee's own prices
+
+After F56 each leg's worth fits; the sums over the legs are not bounded, and the author's claim is that a false
+statement still has an answerable wrong point: "the first row whose sum is false is computed from a true row before
+it, or the price points are wrong". That holds while the true sums fit 64 bits. Where they do not, the first row
+whose TRUE sum would not fit is a row the script cannot compute whatever it says (the addition fails the script),
+and the claimer writes there what it likes.
+
+- Test: `t1b_finding_f58_the_sums_of_many_legs_make_a_row_nobody_answers_at_true_prices`. Seventeen legs, each the
+  largest a leg's bound allows on a market whose limit is twice the price; `Account::check` takes the account.
+  Stated at the committee's price: rows 1, 2 and 16 are answered right, the end right (by its numbers: no worth
+  asked, a gain of B's whole margin), the price of row 17 right, and row 17 by neither verdict. Its dispute lapses
+  with both bonds back; undisputed, the statement pays A the pot.
+- Bound, and why Low: both parties signed seventeen legs of 5.76 x 10^9 KAS each (9.8 x 10^10 KAS in all); the
+  author named this gap. What the test adds is that the claim made for it does not hold there: such an account has
+  no statement anybody can answer, true or false. (It also shows the engine's integers are checked: the row is
+  refused both ways, and the same helper takes row 16 as right.)
+- Fix I would accept: the model and `KpfTLegAdd` bound the sum (a count of legs with the per-leg bound divided by
+  it, or the running worth carried in the account's state).
+
+## Fixed and verified
+
+**F56.** `t1b_fixed_f56_a_leg_whose_worth_overflows_does_not_enter_a_covered_account`: the leg of round 33 (size
+`MARGIN_MAX`) is refused by `Account::check`, by the builder, and, built past the model (`leg_add_as`), by
+`KpfTLegAdd`. The largest size the bound allows (1,152,899,999,999 on the test market) enters and one more does not,
+for a long and a short leg, a written call struck at the limit and a held put struck at 1; a scale beyond
+`SCALE_MAX` is refused.
+
+## What held under attack (all engine-run)
+
+| Item | Test | What was put to the engine |
+|---|---|---|
+| 1. A row's answer | `t1b_r34_a_rows_answer_is_the_models_for_every_kind_of_leg` | 27 legs: long, short, the four kinds of option with the entry above and below the strike, a strike of 0 and one above the limit, and directions' places that are no kind (0, below zero, the bits 0, 1, 2, 7 above a strike, 7, 8). For each: a row that stays and one that leaves, by each side, in a statement of each kind; what is said of the leaving leg as the model makes it, of another market, of other units; each of the six numbers of the row a sompi up and down, and the second chain another. 1,755 rows: the engine takes the model's verdict (314 right, 1,441 wrong) and refuses the other; a chain or a leg that does not open the row is taken with neither |
+| 2. An end's answer | `t1b_r34_an_ends_answer_is_the_models_for_takes_and_legs_that_leave` | 36 random accounts of one to five legs (a third covered) and 6 of options held alone. Takes of the most, a sompi more, the most and what the side's options were counted at, nothing, less than nothing, by the side's key and by a stranger (a deposit on a covered account); the last row with `wa`, `wb`, `ea`, `eb` below zero; every leg leaving by kind 3 and kind 4, of each side, written as the rule would write it whether or not it allows it, with the fee a sompi more and less, and kind 4 by a stranger. 1,262 ends: the model's verdict each time (321 right, 941 wrong), 284 leavings the rule allows and 60 it does not. In numbers: a side that takes the most keeps what its options were counted at; a side all of whose legs are options it holds (struck where they were entered, the other party able to pay) is liquidated at none of 504 prices and legs |
+| 3. `under` | in the F59 test | the options' row is answered right only with its underlying named (and not with no market, another market, the row's own name, the futures row's market, or another market's citation); the futures row has one answer whatever `under` is; a row with no market is right with no citation whatever `under` is. 24 answers, one verdict a row |
+| 4. `KpfTHand` | `t1b_r34_a_side_is_handed_over_by_the_two_and_holds_what_was_asked` | 9 refused: the account a sompi short; who leaves, or who enters, not signing (another key's signature in its place, side B's too); a key named that did not sign; a sompi of margin taken out; a sompi less than side B asked; a shard handed over; an account of 138 bytes |
+| 5. `KpfTLegMove` | `t1b_r34_a_leg_moves_between_two_accounts_of_one_clearing_party_by_three_signatures` | a leg moved from each place, its entry as it was. 23 refused: each of the three signatures by each other key; an account of another shard, of another side B; a chain that does not open the leg, another leg; legs after that are not whole, none, seven; each of the four margins below zero; a sompi less in either account; the two written in each other's place |
+| 6. Notes and forms | `t1b_r34_a_row_emptied_out_of_order_is_guarded_and_what_is_stated_is_read` | a leaving applied before its entering empties the row while an equal leg stands (the order is the applier's); a draw of everything stated then is ended by the entering's note (`KpfTDrawNote`), and once it is applied the row is the market's again. 57 statements of kinds 2 to 4 whose pushes at 24, 57, 90, 99 are others, or whose length is no head and rows, are not stated; 40 statements of random bytes in the form are stated and read back by `ATake::read` as they are |
+
+Three things the scripts take, said so that nobody takes them for rules:
+- A side handed over to the same key is taken (it is a margin added). What who leaves is paid is no rule of
+  `KpfTHand`: with a sompi less and both signatures again it is taken; the two sign the whole transaction.
+- A leg's move may take margin out of either account (5 KAS in the test): the three signatures are every party of
+  both.
+- A row emptied out of order (item 6) shows a requirement of nothing until the pending note is applied; what guards
+  it is `KpfTDrawNote`, so a watcher that holds the unapplied note is what ends a draw stated in that window.
+
+## Read, not run
+
+- `KpfTShardPrice` with a citation of a market whose own name is the tagged hash: a second right answer for an
+  options row would need a committee to sign for that name; no committee's market is one.
+- An uncovered account (138 bytes) is opened by two signatures over its hash: no script sees its legs, so the bound
+  of F56 is the tool's there (`Account::check`), not a script's.
+
+## Not reached
+
+- The commands (`acmds.rs`, `aobj.rs`, `clearing_cli.rs`) and anything at a node.
+- `KpfTShardEnd` with a row dressed as in F59 across two accounts (the test uses one account, whose two parties
+  sign; the owner's own second account is the same two signatures).
+- F57 on an account with other legs beside the option (the cap applies the same way; not run).
+- A model-against-script comparison of the notes' application over random orders of many notes and four rows.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F57 | Medium | open: the holder of an option alone is liquidated, for a fee, where the pot is short |
+| F59 | Medium | open: a futures leg named as the options' row nets against the options in a shard |
+| F58 | Low | open: the sums of many legs make a row nobody answers at true prices |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 97 tests pass (8 new or changed this round: the F56 test turned into its closure's, three
+findings F57, F58, F59, and four `t1b_r34_...`). A finding's test passes while the hole is open and says "is closed"
+where it would fail. `auditT1_tests.rs`: 55 pass, unchanged this round. The command-line file was neither changed
+nor run.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 97 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+```
+
+# Round 35
+
+Scope: the changes for F57, F58 and F59 (`KpfTStepLiq`, `KpfTLegAdd`, `KpfTStepRow`, `KpfTShardPrice`;
+`thin.rs` `stepped` and `Account::check`, `reserve.rs` `Head::of`, `futures_market`, `option_market`,
+`thin_build.rs` `shard_price`), each closure verified and each change attacked. Everything below is engine-run
+(`verify::verify`) unless it says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file
+changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**F57 and F59 are closed and verified. F58 is closed where the model writes a statement and is not closed where
+the model adds or moves a leg (`leg_added` and `leg_moved` do not go through `check`); in the scripts it is open by
+decision. No new finding. The three finding tests of round 34 are now tests of the closures; the 2,979 rows and
+ends of round 34's two comparisons still get the model's verdict from the changed scripts.**
+
+## Findings
+
+None new this round.
+
+### F58 (Low): what is closed and what is not
+
+`t1b_open_f58_the_tool_states_on_no_account_whose_sums_do_not_fit_and_still_adds_its_legs`
+
+- Closed: `Account::check` refuses an account whose legs together are worth more at their markets' limits than
+  64 bits hold. With the largest leg the bound of F56 allows, eight are an account and nine, sixteen, seventeen and
+  sixty-four are not. On the account of seventeen the model writes no take (`take_by`), no leaving and no step of
+  a liquidation (`step_any`).
+- Not closed, and asked for by the coordinator: `leg_added` does **not** go through `check`. It holds the leg that
+  enters to its own bound and returns the account of nine legs, which `check` then refuses. `leg_add` builds from
+  it and `KpfTLegAdd` takes the transaction. `leg_moved` is the same: it moves a leg into the account of eight and
+  returns an account that `check` refuses. So the tool still makes the account it then states on nothing of. A
+  call of `check` on what `leg_added` and `leg_moved` return (both accounts, for a move) closes it in the tool.
+- Open by decision (the scripts have no count of legs): a statement signed past the tool on the account of
+  seventeen has its seventeenth row answered by neither verdict at the committee's own prices, the sixteenth
+  right. Unchanged from round 34. What it costs is as it was: a dispute of that row lapses, with both bonds back
+  and the account as it stood; it is the account of the two who signed those legs.
+
+The test passes while `leg_added` adds the ninth leg and says "F58 is closed where a leg is added" where it would
+fail; the same for the move.
+
+## Fixed and verified
+
+**F57.** `t1b_fixed_f57_a_holder_of_an_option_alone_is_not_liquidated_for_what_the_pot_did_not_pay`. The step of
+round 34 (an option worth 40 KAS, a pot of 25) is refused by the model and, written as the rule would write it,
+its end is answered wrong and not right at the engine: for A and for B as the holder, a call and a put, on an
+account that is covered and on one that is not (8 cases), and on 12 random accounts of a holder alone. By its own
+statement the holder exercises at no fee and that end is answered right.
+
+**F59.** `t1b_fixed_f59_a_row_is_named_by_the_kind_and_the_market_of_its_legs`. The leg of round 34 (a futures leg
+whose market's name is the old name of the options' row) now has the head `blake2b(push8(14) + push(that name))`,
+which is not the options' row's. Its note is not applied to the options' row nor to the futures row, by the model
+and by `KpfTNoteApply` with the row told (2 refused); it takes a row of its own, the options' row stays at net 10
+and gross 10, and the shard is asked no less with it at any price stated for it.
+
+**F58.** In part, above.
+
+## What held under attack (all engine-run)
+
+| Attack | Test | What was put to the engine |
+|---|---|---|
+| F57: a holder alone at any price | the F57 test | 500 accounts of one to three options held by one side (A, B; calls, puts; any strike and any entry; half covered), the holder's margin at least what its options were counted at when they entered, the other party's anything: liquidated at none of 19,680 prices and legs (the model), and 12 of them at the engine. The condition is exact: see the holder that was paid, below |
+| F57: other legs beside the option | the F57 test | 1,200 sides of 600 random accounts of one to five legs (futures and the four kinds of option, a third covered). 696 are liquidated and none that was not before the change. 83 are no longer liquidated: each is a side the pot did not pay in full, stands at the maintenance of its worth, and counted in full (its margin and what the pot could not pay it) stands at all it is asked. All 560 below the maintenance of their worth alone are liquidated whatever they keep whole. 120 steps of sides the pot did not pay, liquidated or not, are answered at the engine as the model says |
+| F57: a writer | the F57 test | 719 sides that hold no option are judged exactly as before the change (the reduction is of what a side keeps whole, and stops at zero) |
+| F57: the holder paid through a note of what is owed | the F57 test | below |
+| F59: a note that names another row when a leg enters | the F59 test | 8 built past the model (`leg_add_as`) and refused by `KpfTLegAdd`: a futures leg noted in its market's options' row, in another market's futures row, under its market's bare name; the leg of round 34 in the options' row; an option in its market's futures row (with its own units and with a futures leg's), in another market's options' row; the right row with the units the other way |
+| F59: a note that names another row when a leg leaves | `t1b_r35_a_leaving_legs_note_names_the_legs_own_row_or_its_row_is_answered_wrong` | for a futures leg and for an option leaving a covered account, 20 statements that say of the leg the other kind's row of its market, the market's bare name, another market's row, another committee, scale or limit, no market, the units the other way, none, one more. Each has an end that is answered right (`KpfTStepLiq` makes the note of what is said) and the row of the leg answered wrong and not right (`KpfTStepRow`), the model agreeing on both. Units of the least 64-bit number are read as none: wrong at the end and at the row |
+| F59: the end right, the note wrong, the row without an answer | same test | the row of the leaving leg given a chain of the claimer's making, so that nobody opens it, the note naming the other kind's row. Three ways of writing the chains: the last leg leaves (the end is wrong: the last chain is not the account's); the first leaves and the second row follows the made chain (the second row is right, the end wrong); the first leaves and the second row carries the account's own chain (the end is right, the second row is wrong: the chain that opens it is not the row before's). In each exactly one other point is wrong and it is answered so. With a chain that opens, the row itself is wrong (the 20 above). I found no path where every wrong point is without an answer |
+| F59: a row two markets price | the F59 test | the options' row and the futures row are each answered right with their own market's citation and not wrong; 20 answers with `under` put as no market, the other market, the market's tagged names of either kind, a third market, are refused with both verdicts, and the builder takes no other market's citation for a row. A second market for a row is a second preimage of its name |
+| F59: a row nobody prices | the F59 test | the made row (its name the hash of a name no committee signs for): 8 answers of its price, with either market's citation and four values of `under`, are refused with both verdicts. Its dispute lapses: output 0 is the shard again holding what it held, both bonds back, nothing drawn |
+| F59: what the owner gets from that row | the F59 test | the requirement sums each row's own net and gross, so a row only adds: at four prices stated for the made row the shard is asked no less than without it. At the least price (1) it is asked 3 sompi more than without the row, and the end of that draw is answered right and not wrong. So the owner draws as if the row were not there while nobody disputes that row's price, and where somebody does the draw lapses at no cost to either. The other rows keep their answers (a false price in one of them is answered wrong whichever point was disputed) |
+
+**The holder that was paid (the coordinator's claim: verified).** A covered account, A with 5 KAS, B with 20; A holds
+a call of 10 units struck and entered at 10 and is long 10 units of another market at 10. At 14 for both, A states
+that the futures leg leaves: it is owed 85, the pot holds 25, the note of what is owed is of 60, and the account
+that is left has A's margin 25, B's 0 and the option counted at 14. That end is answered right. Then A's margin
+is the pot and what it keeps whole (40) was paid out: it is below at 14 (fee 0.7 KAS), at 16 (0.8), at 30 (1.5),
+at 11 and at a sompi above the strike (no fee: its margin is gone), that is wherever the option is worth anything.
+A step of its liquidation at 14 exercises the option and is answered right; A's own statement does it at no fee.
+At the strike nothing is stepped and A's margin lacks 15 of the 40 it was paid for the option. So the claim
+holds: A is below at once and a step exercises the option, and what the clearing party bears of the time between
+is its own shortfall in the account, at most what the options that stay were counted at less the pot (15 KAS
+here), not a rate of their worth. Two things to know about it. A starts it alone (the leaving is A's statement)
+and the clearing party's answer is the step, which cannot be stated before A's statement is settled. And it is
+the one way I found for a holder alone to be below: the 19,680 cases above say a holder whose margin covers what
+its options were counted at is never below, and this is the state where it does not.
+(Read, not run: the same leaving was allowed before the change, by the other clause, B being below with nothing in
+the pot. The change did not open it.)
+
+## The three things round 34 said the scripts take
+
+I agree that all three are by the rule and not findings.
+
+- A side handed over to the same key: who leaves and who enters are one signer, the legs and entries stay, the
+  margin can only grow and must hold what side B asked. It is a margin added. Nothing of side B's or of the
+  shard's changes without them.
+- What who leaves is paid in `KpfTHand`: it is between the two who sign, each signs the whole transaction and
+  sees the output. A script that held it would need the price said somewhere both had agreed, which is the
+  signature again.
+- Margin leaving during a leg's move: the three signatures are every party of both accounts, and the clearing
+  party is also the owner of the shard that stands behind what either account cannot pay. The rows of the shard
+  do not change by a move, so no other account's cover does.
+
+## Read, not run
+
+- `KpfTLegAdd`, `KpfTStepRow` and `KpfTShardPrice` build a row's name the same way (`blake2b(i9(tag) +
+  push(market))`, the tag by the leg's kind), and so does `Head::of`. `KpfTLegAdd` is the only script that puts a
+  leg into a covered account; `KpfTLegMove` moves one between two accounts of one shard and writes no note.
+- `KpfTStepPrice` cites a leg's own market (an account's rows carry legs, not names). Only a shard's rows are
+  named by the hash.
+- For a row with no market `under` is not read by `KpfTShardPrice`: an answer is taken with anything there. It
+  changes nothing the script holds.
+- `KpfTStepEnd` (a take) is unchanged: what a side keeps whole is not reduced there, so where the pot is short a
+  holder takes nothing before it exercises. That is the careful side.
+
+## Not reached
+
+- The commands (`acmds.rs`, `aobj.rs`, `clearing_cli.rs`) and anything at a node: whether a command adds the ninth
+  leg of F58 was not run. The command-line audit file ran unchanged (47 pass).
+- The holder that was paid, as one sequence of objects: the account after the first step is built from the
+  model's `after`, not from the settled statement's output.
+- A model-against-script comparison of the notes' application over random orders of many notes and four rows
+  (round 34's item, still open).
+- A draw from a shard with a row nobody prices where the other rows' prices are also disputed in the same window
+  by several parties.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F58 | Low | closed where the model writes a statement; not where it adds or moves a leg (`leg_added`, `leg_moved`); open in the scripts by decision |
+| F57 | | fixed in round 35, verified |
+| F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 98 tests pass (4 new or changed this round: the F57 and F59 tests turned into their
+closures', the F58 test into what is closed and what is not, and `t1b_r35_...`; two helpers, `step_said35` and
+`step_as_if35`). The F58 test passes while the model adds the leg and says "is closed" where it would fail.
+`auditT1_tests.rs`: 55 pass, unchanged. `auditT1_cli.rs`: 47 pass, unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 98 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```

@@ -170,7 +170,8 @@ fn t1b_fixed_the_command_line_opens_no_position_in_a_library_it_cannot_check() {
     let outs = outputs(&mut v).clone();
     let scripts: Vec<usize> = (0..outs.len()).filter(|i| !outs[*i]["covenant"].is_null()).collect();
     let plain: Vec<usize> = (0..outs.len()).filter(|i| outs[*i]["covenant"].is_null()).collect();
-    assert_eq!(scripts.len(), 28, "one copy of each of the 28 scripts");
+    // (Round 31, F55 fix: a one-copy library writes a second KpfTCite, so one more script output than the count.)
+    assert_eq!(scripts.len(), kpf_protocol::thin_artifacts::SCRIPTS.len() + 1, "one copy of each of the scripts, and a second KpfTCite");
     assert!(!plain.is_empty(), "the funder's change");
     let cov = outs[scripts[0]]["covenant"].clone();
     let key_spk = outs[plain[0]]["scriptPublicKey"].clone();
@@ -1211,7 +1212,8 @@ fn t1b_r19_a_library_with_a_fee_pool_at_the_command_line() {
     let outs = outputs(&mut v).clone();
     let bound: Vec<usize> = (0..outs.len()).filter(|i| !outs[*i]["covenant"].is_null()).collect();
     let plain: Vec<usize> = (0..outs.len()).filter(|i| outs[*i]["covenant"].is_null()).collect();
-    assert_eq!(bound.len(), 29, "one copy of each of the 28 scripts, and the fee pool");
+    // (Round 31, F55 fix: a one-copy library writes a second KpfTCite, so the scripts, that extra copy, and the fee pool.)
+    assert_eq!(bound.len(), kpf_protocol::thin_artifacts::SCRIPTS.len() + 2, "one copy of each of the scripts, a second KpfTCite, and the fee pool");
     let fee_pool = *bound.last().unwrap();
     assert_eq!(outs[fee_pool]["value"].as_u64(), Some(5 * KAS), "the fee pool holds what a copy holds");
     let key_spk = outs[plain[0]]["scriptPublicKey"].clone();
@@ -2605,10 +2607,13 @@ fn t1b_fixed_f47_an_exit_claim_is_asked_every_grid_time_while_it_stands() {
             assert_eq!(times(&prices), ["33600", "33900", "34200", "34200"]);
         }
     }
-    assert_eq!(times(&prices), ["33600", "33600", "33900", "33900", "34200", "34200"], "each member signs the two times it can");
+    // (Round 30: after members 0 and 1, 34,200 already holds a quorum (52 of 67 KAS). The F50 fix of round 29 stops a
+    // member signing further times of a claim once a quorum of one of its times is in the folder it writes to, so
+    // member 2 signs nothing more: the folder stays at the four signatures members 0 and 1 left.)
+    assert_eq!(times(&prices), ["33600", "33900", "34200", "34200"], "member 2 adds nothing: 34,200 already has a quorum (F50)");
     let out = end(&g, "end");
     assert!(out.contains("ended: the committee signed after DAA 33380") && out.contains("1 sent"), "a time a quorum signed ends the claim: {out}");
-    println!("T1b F47 fixed: a member that cannot sign 33,600 signs 33,900; one started at 33,700 signs 33,900; three members that each miss a different one of three times leave two signatures a time, and the claim is ended by a time a quorum signed");
+    println!("T1b F47 fixed: a member that cannot sign 33,600 signs 33,900; one started at 33,700 signs 33,900; three members that each miss a different one of three times give 34,200 a quorum by members 0 and 1, after which member 2 signs nothing more (F50); the claim is ended by a time a quorum signed");
 }
 
 /// F48 (Low in round 28), fixed in round 29. An exit claim that landed before its own `since` is ended by a quorum's
@@ -2634,9 +2639,12 @@ fn t1b_fixed_f48_an_exit_claim_that_landed_before_its_since_is_ended_by_a_price_
         let mut out = String::new();
         for daa in ["33900", "34100", "34300"] {
             out = g.h.ok(&["exec-run", "--dir", &folder, "--lib", &g.genesis, "--registry", &g.registry, "--funder", &g.members[i], "--funding", &f, "--daa", daa, "--do", "answer", "--market1", &market, "--price", "11", "--signed-prices", &prices, "--epoch-table", &table, "--member-key", &g.members[i]]);
-            assert_eq!(out.contains("answer: signed"), daa == "34300", "no time before the claim's since is asked: {daa}: {out}");
+            // No time before the claim's since (34,200) is ever asked. Members 0 and 1 sign 34,200; by the time
+            // member 2 runs, 34,200 holds a quorum (52 of 67 KAS) and the F50 fix of round 29 stops it signing any
+            // further time of the claim, so it signs nothing at all.
+            assert_eq!(out.contains("answer: signed"), daa == "34300" && i < 2, "no time before since, and member 2 skipped once a quorum stands: {daa}, member {i}: {out}");
         }
-        assert!(out.contains("answer: signed 11 KAS for DAA 34200"), "{out}");
+        assert_eq!(out.contains("answer: signed 11 KAS for DAA 34200"), i < 2, "members 0 and 1 sign 34,200; member 2 is skipped by the F50 fix: {out}");
     }
     for does in ["watch", "dispute"] {
         let out = round(&g, &format!("n-{does}"), does, &none);
@@ -2705,18 +2713,22 @@ fn t1b_fixed_f49_take_answers_only_orders_of_the_templates_it_was_started_with()
     println!("T1b F49 fixed: an executor started for a dispute period of 50 DAA answers the order of that template and leaves those of a dispute period of 1 DAA, an exit time of 1 DAA and a bond of 1 basis point; started for each of those it answers it; started for 1 DAA or for the default it leaves the order of 50; of a flag given twice the later counts; with two markets it has no price of its own and answers nothing");
 }
 
-/// Round 29, what the fix of F47 opens. A member signs EVERY grid time its readings allow while an exit claim stands:
-/// it does not stop when it has signed one, nor when the folder it signs into already holds a quorum's prices of one
-/// of the claim's times (which is all that ending the claim takes). Shown: the three members sign 33,600 (a quorum);
-/// nobody ends the claim; member 0, run on, signs 33,900, 34,200, 34,500 and 34,800 as well. Each is a signed price
-/// its stake answers for, a line in its key's journal and a file every watchtower reads. A claim that stands its
-/// whole exit time (864,000 DAA by default) is 2,880 times a member (counted, not run). And the journal holds: the
-/// same key run from a second folder with other readings is refused the time it signed; the same price it signs
-/// again into another folder of signed prices.
+/// F50 (Low in round 29), fixed since (the thin-family commit added the skip of `xcmds.rs`, "Once the folder holds a
+/// quorum's prices of a time at or after `since`, the claim is ended by them and no further time is signed"). A
+/// member signed EVERY grid time while an exit claim stood, also after a quorum of one time was at hand. Now, once
+/// the folder it writes to holds a quorum's prices of one of the claim's times, the member signs no further time.
+/// Shown: members 0 and 1 give 33,600 a quorum (52 of 67 KAS); member 2, seeing it, signs nothing; member 0 run on
+/// to DAA 34,900 signs nothing more; and the claim is ended by the 33,600 quorum. The journal still holds: into a
+/// folder with no quorum of the claim the member signs every grid time (the same price again where it signed one),
+/// and from a second folder with another reading it is refused a time it signed.
+///
+/// (Round 30: the round-29 `t1b_finding_f50` asserted the hole open — member 0 signing four more times. That is the
+/// behaviour the fix removed, so the test's own body said it would fail once fixed; the code is right and the test
+/// was stale. Rewritten here to verify the fix.)
 #[test]
-fn t1b_finding_f50_a_member_signs_every_grid_time_of_a_claim_that_stands_also_after_a_quorum_signed_one() {
+fn t1b_fixed_f50_a_member_signs_no_grid_time_once_a_quorum_of_one_stands() {
     let mut g = gsetup("answermany", "1");
-    let (me, position, table, market) = (g.me.clone(), g.position.clone(), g.epoch_table.clone(), g.market.clone());
+    let (me, exec, position, table, market) = (g.me.clone(), g.exec.clone(), g.position.clone(), g.epoch_table.clone(), g.market.clone());
     let s_exit = g.script("KpfTExit");
     let d = g.h.build(&me, &["pos-exit", "--position", &position, "--script", &s_exit, "--side", "a", "--since", "33380"]);
     let exit = g.h.obj(&d, "exit claim", 33_400);
@@ -2730,19 +2742,20 @@ fn t1b_finding_f50_a_member_signs_every_grid_time_of_a_claim_that_stands_also_af
     let files = |dir: &str| std::fs::read_dir(dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("price-")).count();
     for i in 0..3 {
         round(&g, i, "33500", &prices);
-        assert!(round(&g, i, "33700", &prices).contains("answer: signed 11 KAS for DAA 33600"));
+        // Members 0 and 1 sign 33,600; member 2, by then seeing a quorum of 33,600, signs nothing (the fix).
+        assert_eq!(round(&g, i, "33700", &prices).contains("answer: signed 11 KAS for DAA 33600"), i < 2, "member {i} at 33,700");
     }
-    assert_eq!(files(&prices), 3, "a quorum's prices of one of the claim's times");
+    assert_eq!(files(&prices), 2, "a quorum of 33,600 from members 0 and 1; member 2 added nothing");
     let mut signed = 0;
     for daa in ["33800", "34000", "34100", "34300", "34400", "34600", "34700", "34900"] {
         signed += round(&g, 0, daa, &prices).matches("answer: signed").count();
     }
-    assert_eq!((signed, files(&prices)), (4, 7), "FINDING F50 (if this fails the finding is fixed: a member signs no further time of a claim once a quorum's prices of one of its times are at hand)");
-    // The journal. Into another folder of signed prices the same member signs the same prices again, all five in one
-    // round (the journal refuses another price for a time, not the same one).
-    let elsewhere = g.dir("elsewhere");
-    let out = round(&g, 0, "35000", &elsewhere);
-    assert_eq!((out.matches("answer: signed 11 KAS").count(), files(&elsewhere)), (5, 5), "{out}");
+    assert_eq!((signed, files(&prices)), (0, 2), "F50 is open again: member 0 signs a further time of a claim whose 33,600 already has a quorum");
+    // The 33,600 quorum ends the claim.
+    let folder = g.dir("ender");
+    put_in(&folder, &exit);
+    let out = g.h.ok(&["exec-run", "--dir", &folder, "--lib", &g.genesis, "--registry", &g.registry, "--funder", &exec, "--funding", &f, "--daa", "34900", "--do", "dispute", "--signed-prices", &prices, "--epoch-table", &table]);
+    assert!(out.contains("ended: the committee signed after DAA 33380") && out.contains("1 sent"), "the 33,600 quorum ends the claim: {out}");
     // The same key run from a second folder with other readings (11.005) is refused the time it signed at 11.
     let (second, third) = (g.dir("second"), g.dir("third"));
     put_in(&second, &exit);
@@ -2751,5 +2764,5 @@ fn t1b_finding_f50_a_member_signs_every_grid_time_of_a_claim_that_stands_also_af
         out = g.h.ok(&["exec-run", "--dir", &second, "--lib", &g.genesis, "--registry", &g.registry, "--funder", &g.members[0], "--funding", &f, "--daa", daa, "--do", "answer", "--market1", &market, "--price", "11.005", "--signed-prices", &third, "--epoch-table", &table, "--member-key", &g.members[0]]);
     }
     assert!(out.contains("answer: not signed for DAA 33600") && files(&third) == 0, "the key's journal refuses another price for a time it signed: {out}");
-    println!("T1b FINDING F50: with a quorum's prices of 33,600 at hand and the claim not ended, member 0 signs 33,900, 34,200, 34,500 and 34,800 too; into another folder it signs the same five again in one round; from a second folder with another reading it is refused 33,600 by its key's journal");
+    println!("T1b F50 fixed: members 0 and 1 give 33,600 a quorum; member 2 and then member 0 (run on to 34,900) sign no further time of the claim, and the 33,600 quorum ends it; from a second folder with another reading member 0 is refused 33,600 by its key's journal");
 }

@@ -1,0 +1,211 @@
+pragma silverscript ^0.1.0;
+
+// An account is a position of any number of legs (docs/ARCHITECTURE-CLEARING.md, 4b). Its state is a position's, with
+// another fixed part: the hash of the ten terms (90 bytes) and the root of its legs, a chain
+//   g_0 = 32 zero bytes, g_i = blake2b(g_(i-1) + leg_i)      (a leg: 111 bytes, as a position's)
+// so that every script that is shown a position's fixed part as its hash serves an account as it is (KpfTOpen,
+// KpfTAdd, KpfTBoth, KpfTChange and what applies, disputes or ends a statement).
+// A take on an account (kind 2 of KpfTChange) is stated with a trace, a row of 112 bytes a leg:
+//   a_i    the price stated for leg i
+//   G_i    A's gain over the legs 1..i at the prices stated
+//   WA_i   the worth side A is asked the maintenance of: the futures legs', and the underlyings' of the options A wrote
+//   WB_i   the same of side B
+//   EA_i   what side A keeps whole beside its maintenance: what the options it holds were counted at (it cannot lose
+//          more than that by them, and does not take it out before it exercises)
+//   EB_i   the same of side B
+//   g_i    the chain of the legs up to i                          h_i    the same chain with each entry at its a
+// and what it states is the side, the amount and the leg left out (0: none), 8 bytes each, then the rows: shown
+// whole when it is stated, as every statement is, so that whoever watches has the trace. A step of a
+// liquidation (kind 3) is stated the same way: skip is the leg that leaves the account (the second chain passes it
+// by), amount the liquidator's fee. Nobody computes the whole: a dispute
+// names one point of the trace (KpfTPoint), and the answer is of that point alone:
+//   point 2i - 1   row i follows from row i - 1 and the leg (KpfTStepRow)
+//   point 2i       the price of row i is within the tolerance of the committee's (KpfTStepPrice, one citation)
+//   point 0        the last row is the account's, and the statement keeps its kind's rule (KpfTStepEnd for a take,
+//                  KpfTStepLiq for a step of a liquidation)
+// A leg is a futures leg or an option on its market, said in its direction's place: 1, A is long; 3 to 6 in the last
+// three bits of a number from 3 on, an option whose strike stands above those bits (3 a call A holds, 4 a call A
+// wrote, 5 a put A holds, 6 a put A wrote); anything else, A is short. An option's entry is the price it was last
+// counted at: its row adds to A's gain what the option is worth if exercised at the price stated less what it was
+// worth at its entry (the other way where A wrote it); its underlying's worth is added to the worth of whoever wrote
+// it alone, and what it is worth exercised at the price stated to what its holder keeps whole. So a take moves an
+// option's gain as it moves a futures leg's, once; the maintenance of the underlying covers whoever wrote it (an
+// option moves by no more than its underlying); and its holder is asked no maintenance for it.
+//
+// KpfTStepPrice: the answer of a point 2i. The price of row i is right when it is within the account's tolerance g
+// of the committee's price for the leg's market at the statement's time, which is read in a citation: at place 1 of
+// `who` stands a copy of KpfTCite spent by `cite` (held to its script and to that entry by the head of its signature
+// script).
+//   answer(who, ageb, slotLen, terms, root, moving, kind, t0, said, outs, bond, claimer, dkey,
+//          point, at, rkey, verdict, prev, leg)                                                                              anyone.
+contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
+    int version = init_version;
+
+    int constant BPS = 10000;
+    int constant SPREAD_MARGIN = 4;
+    int constant G_AT = 19;
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+    int constant POINT_TAG = 11;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // The lateness of a statement that stands again after a point of it was answered right: it was held to its time
+    // when it was disputed, and is not held to it again.
+    int constant LATE_AGAIN = 499999999999;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // The answer of a point. The point is right (1): the statement stands again (its dispute period begins again:
+    // another point of it may be disputed; it is not held to its time again), and the disputer's bond is lost, half
+    // to the claimer.
+    // The point is wrong (0): the position again, the disputer's bond back (the output before the last) and half of
+    // the claimer's to whoever answered (the last). The other half of the bond lost stays in this script's copy.
+    function ends(int j, byte[] rs, int slotLen, int verdict, byte[32] c0, byte[32] position, int bond, byte[32] claimer, byte[32] dkey, byte[32] rkey) {
+        require(verdict == 0 || verdict == 1);
+        require(bond > 0);
+        int v = tx.inputs[j].value;
+        require(v >= bond + bond);
+        int half = bond / 2;
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        int m = tx.outputs.length - 1 - 4 * j;
+        if (verdict == 1) {
+            require(rkey == claimer);
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond);
+            require(m >= tx.inputs.length);
+        } else {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond - bond);
+            require(m - 1 >= tx.inputs.length);
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m - 1].value >= bond);
+        }
+        if (half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= half);
+        }
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] prev, byte[111] leg) {
+        byte[] mv = moving;
+        require(mv.length == 138 || mv.length == 171);
+        byte[32] position = blake2b(p33(blake2b(byte[](terms) + p33(root))) + mv);
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        byte[] rs = slotOf(j, slotLen);
+        // What was stated, as it was shown: the side, the amount and the leg left out, 8 bytes each; that leg's market
+        // (its first 84 bytes) and side B's units in it, for the note of a leg that leaves a covered account; then the
+        // trace.
+        require(said.length >= 116);
+        int side = int(byte[8](said.slice(0, 8)));
+        int amount = int(byte[8](said.slice(8, 16)));
+        int skip = int(byte[8](said.slice(16, 24)));
+        byte[] rows = said.slice(116, said.length);
+        byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
+        byte[32] c0 = blake2b(pre + i9(late) + i9(held));
+        byte[32] c1 = blake2b(pre + i9(LATE_AGAIN) + i9(held));
+        require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The point answered is the one disputed; or any other, where the answer is that it is wrong (a statement
+        // with a wrong point is not kept by a dispute of a point nobody can answer).
+        require(at == point || verdict == 0);
+        int n = rows.length / 112;
+        require(rows.length == 112 * n);
+        require(kind >= 2);
+        require(kind <= 4);
+        require(at >= 2);
+        require(at % 2 == 0);
+        int i = at / 2;
+        // Row i and the chain before it (row 0 is nothing: zero sums, zero chains).
+        require(i >= 1);
+        require(i <= n);
+        byte[] row = rows.slice(112 * (i - 1), 112 * i);
+        byte[] before = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        if (i > 1) {
+            before = rows.slice(112 * (i - 2), 112 * (i - 1));
+        }
+        // The row's chain is opened: a chain before it and a leg that hash to it (where that chain is not the row
+        // before's, the row is wrong whatever its price).
+        byte[] lg = byte[](leg);
+        require(blake2b(byte[](prev) + lg) == byte[32](row.slice(48, 80)));
+        int a = int(byte[8](row.slice(0, 8)));
+        int g = int(byte[8](byte[](terms).slice(G_AT, G_AT + 8)));
+        // The committee's price: input u is a copy of KpfTCite spent by `cite` for the leg's committee and market and
+        // the statement's time (the head of its signature script: the chain block, the committee, the market, the
+        // time, the price, the spread, the note's writer).
+        int u = int(byte[8](who.slice(8, 16)));
+        require(who.slice(16, 24) == who.slice(8, 16));
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        require(u != j);
+        require(tx.inputs[u].scriptPubKey == byte[](CITE_SPK));
+        require(OpInputCovenantId(u) == OpInputCovenantId(this.activeInputIndex));
+        require(OpTxInputScriptSigSubstr(u, 0, 1) == byte[](0x20));
+        require(OpTxInputScriptSigSubstr(u, 33, 99) == lg.slice(33, 66) + lg.slice(0, 33));
+        require(OpTxInputScriptSigSubstr(u, 99, 108) == i9(t0));
+        require(OpTxInputScriptSigSubstr(u, 108, 109) == byte[](0x08));
+        int c = int(byte[8](OpTxInputScriptSigSubstr(u, 109, 117)));
+        require(c >= 0);
+        require(OpTxInputScriptSigSubstr(u, 117, 118) == byte[](0x08));
+        int spread = int(byte[8](OpTxInputScriptSigSubstr(u, 118, 126)));
+        require(spread >= 0);
+        require(spread * SPREAD_MARGIN <= g);
+        require(OpTxInputScriptSigSubstr(u, 126, 127) == byte[](0x20));
+        int pm = int(byte[8](lg.slice(76, 84)));
+        if (c > pm) { c = pm; }
+        int hi = (c * (BPS + g) + BPS - 1) / BPS;
+        if (hi > pm) { hi = pm; }
+        int ok = 1;
+        if (byte[](prev) != before.slice(48, 80)) { ok = 0; }
+        if (a <= 0) { ok = 0; }
+        if (a < c * (BPS - g) / BPS) { ok = 0; }
+        if (a > hi) { ok = 0; }
+        require(ok == verdict);
+        ends(j, rs, slotLen, verdict, c1, position, bond, claimer, dkey, rkey);
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

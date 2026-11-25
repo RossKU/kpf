@@ -14,7 +14,7 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 const KAS1: i64 = 100_000_000;
 const T0: i64 = 6_500;
 /// What the genesis gives each copy and the fee pool, and so what each keeps.
-const FLOOR: i64 = 5 * KAS1;
+const FLOOR: i64 = 10 * KAS1;
 
 fn kp(seed: u8) -> Keypair {
     Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[seed; 32]).expect("a secret key"))
@@ -94,7 +94,7 @@ fn world() -> World {
     for (i, wt) in [30i64, 22, 15].iter().enumerate() {
         table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
     }
-    let funds = vec![fund(xk(&f), 200)];
+    let funds = vec![fund(xk(&f), 200), fund(xk(&f), 202)];
     let (g, lib) = lib_genesis_for(2, FLOOR as u64, Some(rid.as_bytes()), Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis with a fee pool", &g, &keys);
     assert_eq!(lib_check(&gs.tx).unwrap(), lib);

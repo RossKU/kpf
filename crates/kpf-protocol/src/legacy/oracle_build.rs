@@ -606,6 +606,41 @@ impl OBuilt {
     }
 }
 
+/// A plain payment to a script: output 0 holds `amount` under the hash of `redeem`, the payer's change follows.
+/// (Research probes.)
+pub fn pay_script(redeem: &[u8], amount: u64, funds: &[KeyUtxo], change_to: &[u8; 32], rate: u64) -> Result<OBuilt> {
+    let mut d = ODraft::new(rate, FeeMode::Relay);
+    d.out(amount, kaspa_txscript::pay_to_script_hash_script(redeem), None, "to the script", None);
+    d.fund(funds, change_to);
+    d.finish()
+}
+
+/// The spend of a pay-to-script-hash output by a signature script given whole (its last push is the redeem script),
+/// everything but the fee paid to `to`: one input, one output, no signature. The input is metered here, so a script
+/// that reads the chain needs `verify::set_chain_view` first. (Research probes.)
+pub fn raw_spend(op: TransactionOutpoint, value: u64, redeem: &[u8], sig_script: Vec<u8>, to: &[u8; 32], rate: u64) -> Result<OSigned> {
+    let entries = vec![UtxoEntry::new(value, kaspa_txscript::pay_to_script_hash_script(redeem), 0, false, None)];
+    let out = TransactionOutput { value, script_public_key: p2pk_spk(to), covenant: None };
+    let mut tx = Transaction::new(TX_VERSION, vec![TransactionInput::new_with_compute_budget(op, sig_script, 0, 0)], vec![out], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+    let units = match crate::verify::run_inputs(&tx, &entries, crate::verify::Meter::Unlimited).remove(0) {
+        Ok(u) => u,
+        Err(e) => return invalid(format!("the script does not pass in this machine's engine: {e}")),
+    };
+    tx.inputs[0].compute_commit = ComputeBudget(budget_for_units(units)).into();
+    for _ in 0..6 {
+        let fee = target_fee(&masses(&tx, &entries), rate, FeeMode::Relay);
+        if fee >= value {
+            return invalid("the output holds less than the fee of its spend");
+        }
+        tx.outputs[0].value = value - fee;
+    }
+    let rep = masses(&tx, &entries);
+    tx.set_storage_mass(rep.storage);
+    tx.finalize();
+    let mass = masses(&tx, &entries);
+    Ok(OSigned { fee: value - tx.outputs[0].value, tx, entries, mass, units: vec![units], input_labels: vec!["the script's output".into()], output_labels: vec!["back".into()], created: vec![] })
+}
+
 // ---------------------------------------------------------------- arguments
 
 pub(crate) fn iv(v: i64) -> Arg {

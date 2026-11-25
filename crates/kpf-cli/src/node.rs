@@ -163,6 +163,11 @@ impl<T: Transport> Node<T> {
         Ok((daa, sink))
     }
 
+    /// Any call of the node, by its name and parameters (research probes read what no command reads yet).
+    pub fn raw(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.t.call(method, params)
+    }
+
     pub fn sink_blue(&mut self) -> Result<u64, String> {
         let p = self.t.call("getSinkBlueScore", json!({}))?;
         num(p.get("blueScore")).ok_or_else(|| format!("no blueScore in {p}"))

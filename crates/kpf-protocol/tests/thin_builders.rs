@@ -171,7 +171,7 @@ fn world() -> World {
     for k in [&a, &b, &w, &f] {
         keys.add_keypair(*k);
     }
-    let funds = vec![fund(xk(&f), 200, 1_000)];
+    let funds = vec![fund(xk(&f), 200, 3_000)];
     let (g, lib) = lib_genesis(2, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis (11 scripts, 2 copies)", &g, &keys);
     let scripts = lib_scripts(&gs.tx, 6_000);
@@ -537,7 +537,7 @@ fn a_library_is_read_from_its_genesis_and_one_output_more_is_refused() {
     let gs = g.sign(&keys).unwrap();
     // The genesis the tool builds is a library, and its id is the one the check computes.
     assert_eq!(lib_check(&gs.tx).unwrap(), lib);
-    assert_eq!(lib_scripts(&gs.tx, 0).len(), kpf_protocol::thin_artifacts::SCRIPTS.len());
+    assert_eq!(lib_scripts(&gs.tx, 0).len(), kpf_protocol::thin_artifacts::SCRIPTS.len() + 1, "one copy of each, and a second of the citing script");
     let binding = gs.tx.outputs[1].covenant;
     // One output more under the id, of any other script (review T1b, F4): refused, whatever the id.
     let mut more = gs.tx.clone();

@@ -659,3 +659,74 @@ a price by hand. Four of the six scenes ran; the run stopped at the fifth.
    and were stopped by hand.
 
 The executor sent 7 transactions; the node refused none. Left on testnet: the executor long 4 against s.
+
+## Fifteenth part: a price note, its citation, and a take (run 17)
+
+Live run 17 (25 November 2026, `run/live4/t17.sh`, the binary `run/live17/kpf-live17.exe`): a new library of 41
+scripts (genesis `74ad84ded8cd1d2b097f6a9a6fc74992b5bcc383da0db2874710b405ca9e7d69`, 4,084 bytes, 4 KAS a copy: the
+storage mass of its 42 outputs is 419,994 of the 500,000 a block allows) and a registry of it. The members signed by
+`price-sign`; every other step was a command of `docs/ARCHITECTURE-CLEARING.md` 3 and 4a. Every transaction was
+accepted at the first try.
+
+1. u long 4 against s at 10, by two orders an executor matched.
+2. **A take answered at once.** u stated that the entries move to 10.5 and that it takes 8 KAS (all it had above
+   what s asked of its margin). The members signed 10.5 for that time; the executor's key wrote the note; a citation
+   of it was sent alone; and u answered its own statement with a citation: within the rule, applied in that
+   transaction, 8 KAS and the bond to u. The position went on from 10.5 with 6 and 10 KAS.
+3. **A take that waits.** u stated a take of 1.2 KAS at 10.8; nobody disputed; after the dispute period (900 DAA)
+   the executor's key applied it.
+4. **A take that is not the rule's.** u stated a take at 11.2. The members signed 10.8 for that time, the note was
+   written, and s answered with a citation: not within the rule (the price stated is beyond the tolerance of the
+   committee's), the position again, and half of u's bond, 0.74 KAS, to s.
+5. What the two notes held (1 KAS each) returned to their writer.
+
+| What | Bytes | Fee (KAS) | Id |
+|---|---|---|---|
+| a take stated | 1,997 | 0.005197 | `89c94bc3a201c0ec156e911216eacbbe22388a75e3681f89aedb8ac7e5df477a` |
+| a note written (three members) | 6,131 | 0.015001 | `9cfad65466c13133a261be98ea6ec487c093a796e5383ad99cc516bee96c6110` |
+| **a citation alone** | 5,587 | 0.011174 | `6a9770531c169f999caa2f431983b805fc5207ed58bcdd7b51077a4312040aa1` |
+| the take answered at once: within | 10,390 | 0.02078 | `ae3afeaf7fd13bd23ceecfcf9176d8aa227eb06b768574b6baead56ff21d0b44` |
+| a take stated, and applied after the dispute period | 2,117; 2,706 | 0.006317; 0.009706 | `f2dfa6060f8af34e2368e5f7e6623722b7a4890f5fc563b1ab204794fe82d61a`, `7b76ddce350577ef955e6c7029d5174d19c49ddb96b6ccebf317891e24b6990e` |
+| a take stated against the rule, and answered: not within | 2,237; 10,279 | 0.007437; 0.020558 | `2ea2c509982b15b210593d3c7576e3f02df9ff53cda19248571b70f2e3840f66`, `3c74d5286a31a3ffa63168cb876b1238f607b214f14b9b610e8cde74b8e76915` |
+| a note's value returned | 861 | 0.005581 | `93ba04bd7c9e29eb3d84c98929eb7a8543094c91e8766e41dc0d4ff6a3bab707` |
+
+What this settles: **the citing script passes on testnet-10 against real chain blocks**, three times (alone, and
+inside two answers), with the proof made from what the node says of the block (6 and 1 steps in the lane's
+activity, 4 in the lanes' tree: 608 and 448 bytes). A citation alone costs 10,517 grams of compute mass.
+
+What it does not: the scripts of this run were given a statement by its hashes. After the run `KpfTChange` was
+changed to take what is stated and what the position becomes as they are (so that whoever watches reads them on the
+chain), and `KpfTTake` to read its numbers there: the scripts in the repository are not those of this library.
+
+## Sixteenth part: statements that show what they state, and an executor that watches them (run 18, partly)
+
+Live run 18 (25 November 2026, `run/live4/t18.sh`, the binary `run/live18/kpf-live18.exe`): the scripts as the
+repository has them (genesis `c4187df4919288f31c491e1f8140f3b67334a8d602fe6312be07531607b319c1`, 3,964 bytes), and an
+executor running `exec-run --do match,dispute,settle,late,lapse` with a price file of its own. Three of four scenes
+ran.
+
+1. **A take answered at once**, as in run 17: u stated a take of 7.79104476 KAS at 10.5 (what it takes whatever the
+   committee's price within the tolerance of its own: `pos-take`'s default now), the members signed, s wrote the
+   note, and u answered with a citation: within the rule, applied.
+2. **The executor applied a take.** u stated a take at 10.8; the executor read the statement on the chain, judged it
+   by its own price, and after the dispute period applied it (`2614073a3e9c620877e88be22460b74c54b45dd5880ae404235d8118b431e4e9`).
+3. **The executor disputed a take.** u stated a take at 11.2 while the price was 10.8: "not within the rule at any
+   price near this executor's own" (`81f69397a6a84e47251325093f8c91cd196f61547ed6128f7dde98f54b145164`).
+4. **Not done: the answer of that dispute with a citation.** The committee's epoch had ended since the run began
+   and the script did not roll the committee again, so no epoch table served the statement's time and no note was
+   written. Nobody answered; after the dispute period the executor ended its own dispute, and both bonds returned
+   (`1de825aa6042067b62a1cbded953596eeb257e098ac3a35a51045ece3c3f1045`): the path of a committee that does not
+   speak, which is what it was. The refutation by a citation ran in run 17 with the statement script of before.
+
+| What | Bytes | Fee (KAS) | Id |
+|---|---|---|---|
+| a take stated, shown whole | 2,140 | 0.00534 | `669434cb9825d54273b2183f810d189629a959c3727507aca84f32ab4d04a9f3` |
+| a note written by s | 5,771 | 0.011641 | `d15dcf739158ffc4d4eb519de80b2dd9819d5f69e2b983b2b86763babd8f4ae5` |
+| the take answered at once: within | 10,127 | 0.020254 | `aebcccfa2732918cc586a92221dd4f36e697fa7283276782ca1765e961d1d740` |
+| x: `take 7ede5200 applied` | 2,190 | 0.00511 | `2614073a3e9c620877e88be22460b74c54b45dd5880ae404235d8118b431e4e9` |
+| x: `take c293d3b0 disputed` | 2,271 | 0.004542 | `81f69397a6a84e47251325093f8c91cd196f61547ed6128f7dde98f54b145164` |
+| x: `disputed take 81f69397 ended: nobody showed the committee's prices` | 2,375 | 0.005195 | `1de825aa6042067b62a1cbded953596eeb257e098ac3a35a51045ece3c3f1045` |
+
+The executor sent 4 transactions (the match among them); the node refused none. Left on testnet: u long 4 against s
+from 10.8, and the two libraries of runs 17 and 18 (about 168 KAS each in their scripts).
+

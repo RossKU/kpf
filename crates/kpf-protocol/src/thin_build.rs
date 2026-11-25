@@ -14,8 +14,8 @@ use silverscript_abi::ArtifactValue;
 use crate::error::{invalid, Error, Result};
 use crate::oracle_build::{OBuilt, ODraft, OLive, OPartial, OPlan, OWhich};
 use crate::state::sm8;
-use crate::thin::{folded, joined, left, match_orders, merged, novated, turned_legs, turned_users, Position, Leaving, Novation, Claim, Disputed, Liq, LiqObj, LiqState, Matched, Order, ExitClaim, Rest, TObj, Template, ORACLE_FEE, MERGE_TIP, ORDER_MIN};
-use crate::thin_artifacts::{self as pinned, COLLECTORS, FEE_POOL, SCRIPTS, SLOT};
+use crate::thin::{folded, joined, left, match_orders, merged, novated, turned_legs, turned_users, Position, Leaving, Novation, Claim, Disputed, Liq, LiqObj, LiqState, Matched, Order, ExitClaim, Rest, TObj, Template, Note, Change, Take, Account, ATake, Pointed, Stated, NOTE_VALUE, ORACLE_FEE, MERGE_TIP, ORDER_MIN};
+use crate::thin_artifacts::{self as pinned, COLLECTORS, FEE_POOL, NOTE, SCRIPTS, SLOT};
 use crate::tx::{Arg, FeeMode, KeySet, KeyUtxo};
 
 /// What an opening's payload begins with, before the position's fixed and moving parts.
@@ -109,6 +109,11 @@ pub fn lib_genesis_for(copies: usize, script_value: u64, committee: Option<[u8; 
             d.genesis_script(script_spk(n)?, script_value, 0, true, n);
         }
     }
+    // A take on a position of two legs is answered with two citations in one transaction, each a copy of its own:
+    // a library of one copy of each script has a second of this one.
+    if copies == 1 {
+        d.genesis_script(script_spk("KpfTCite")?, script_value, 0, true, "KpfTCite");
+    }
     if let Some(r) = committee {
         d.genesis_script(fee_pool_spk(&FeePoolOf { committee: r, floor: script_value as i64 }), script_value, 0, true, FEE_POOL);
         d.payload = [GENESIS_MAGIC.to_vec(), r.to_vec(), sm8(script_value as i64).to_vec()].concat();
@@ -141,12 +146,14 @@ pub fn lib_check(tx: &kaspa_consensus_core::tx::Transaction) -> Result<[u8; 32]>
         return invalid("the transaction writes outputs under more than one covenant id: not a library's genesis alone");
     }
     let mut seen = std::collections::BTreeSet::new();
+    let mut cites = 0;
     let fee_pool = genesis_fee_pool(tx).map(|of| fee_pool_spk(&of));
     let mut fee_pools = 0;
     for (i, o) in &bound {
         match script_named(&o.script_public_key) {
             Some(n) => {
                 seen.insert(n);
+                cites += (n == "KpfTCite") as usize;
             }
             None if fee_pool.as_ref() == Some(&o.script_public_key) && fee_pools == 0 => fee_pools = 1,
             None => return invalid(format!("REFUSED: output {i} under the library's id is not one of the family's scripts. Whoever can spend it can take every object of this library")),
@@ -154,6 +161,9 @@ pub fn lib_check(tx: &kaspa_consensus_core::tx::Transaction) -> Result<[u8; 32]>
     }
     if let Some(missing) = SCRIPTS.into_iter().find(|n| !seen.contains(n)) {
         return invalid(format!("the library has no copy of {missing}: an object in it could not use that operation"));
+    }
+    if cites < 2 {
+        return invalid("the library has one copy of KpfTCite: a take on a position of two legs, answered with two citations, could not be answered in it");
     }
     let from = tx.inputs.get(auth as usize).ok_or_else(|| Error::Invalid("the authorizing input of the library's outputs is not in the transaction".into()))?.previous_outpoint;
     let bare: Vec<(u32, kaspa_consensus_core::tx::TransactionOutput)> = bound.iter().map(|(i, o)| (*i, kaspa_consensus_core::tx::TransactionOutput { covenant: None, ..(*o).clone() })).collect();
@@ -1478,6 +1488,1024 @@ pub fn pay(lib: &[u8; 32], fee_pool: &FeePool, script: &LibScript, t: Attested, 
     }
     d.fund(p.funds, &p.change_to);
     Ok((d.finish()?, shares))
+}
+
+// ---------------------------------------------------------------- price notes and their citation
+
+/// The address of a price note (the same in every library; the output is under a library's id).
+pub fn note_spk(n: &Note) -> ScriptPublicKey {
+    pay_to_script_hash_script(&pinned::kit().note(&n.hash(), &n.owner))
+}
+
+/// A copy of the script `name` of the library `lib` as the next input, spent by `entry`.
+fn copy_in(d: &mut ODraft, lib: &[u8; 32], script: &LibScript, name: &'static str, entry: &'static str, args: Vec<Arg>) -> Result<(usize, Hash)> {
+    if script.s != name || script.id.map(|h| h.as_bytes()) != Some(*lib) {
+        return invalid(format!("the script given is not a copy of {name} in this library"));
+    }
+    let code = script_of(name)?.to_vec();
+    let i = d.input(script.op, kaspa_consensus_core::tx::UtxoEntry::new(script.value, pay_to_script_hash_script(&code), script.daa, false, script.id), OPlan::Contract { which: OWhich::T(name), redeem: code, entry, args }, name, 0);
+    Ok((i, Hash::from_bytes(*lib)))
+}
+
+/// `KpfTNote`: the committee's price for a market and a time written once, as a note under the library's id that any
+/// number of transactions cite (`cite`). Input 0 is the payer's first coin, input 1 the script, input 2 the
+/// committee's epoch table spent by its attest; output 0 is the note (a citation reads the first output of the
+/// transaction it cites), outputs 1 and 2 the script and the epoch table as they go on. What the note holds returns
+/// to `owner` (`note_reclaim`).
+pub fn note_write(lib: &[u8; 32], script: &LibScript, t: Attested, owner: [u8; 32], p: Payer) -> Result<(OBuilt, Note)> {
+    let (epoch_table, att) = t;
+    let [coin, more @ ..] = p.funds else {
+        return invalid("a note's transaction begins with a coin of its payer");
+    };
+    let Some(committee) = epoch_table.id.map(|h| h.as_bytes()) else {
+        return invalid("the epoch table carries no covenant id");
+    };
+    let note = Note { committee, market: att.market, t0: att.t0, price: att.p, spread_bps: epoch_table.s.spread_bps, owner };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    d.key(coin, "funding");
+    let (_, lid) = copy_in(&mut d, lib, script, "KpfTNote", "note", vec![iv(2), iv(0), bv(committee.to_vec()), bv(att.market.to_vec()), iv(att.t0), bv(owner.to_vec())])?;
+    d.lock(att.t0 as u64);
+    let rid = crate::committee_build::attest_input(&mut d, epoch_table, att, att.t0 as u64)?;
+    d.out(NOTE_VALUE as u64, note_spk(&note), Some((1, lid)), "price note", None);
+    keep(&mut d, script, lid)?;
+    d.obj(crate::oracle_build::OObj::C(crate::committee_build::CObj::EpochTable(epoch_table.s)), epoch_table.value, Some((2, rid)), "epoch table");
+    d.fund(more, &p.change_to);
+    Ok((d.finish()?, note))
+}
+
+/// `KpfNote.reclaim`: what a note holds returns to its writer's key (output 0). Anyone sends it, at any time: a
+/// citation is of the transaction that wrote the note, not of its output.
+pub fn note_reclaim(note: &OLive<Note>, p: Payer) -> Result<OBuilt> {
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    d.contract(note, OWhich::T(NOTE), pinned::kit().note(&note.s.hash(), &note.s.owner), "reclaim", vec![], "price note", 0);
+    d.plain(note.value as i64, &note.s.owner, "back to the note's writer");
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// The most steps `KpfTCite` follows in a lane's activity and in the lanes' tree.
+pub const CITE_ACTIVITY_MAX: usize = 14;
+pub const CITE_LANES_MAX: usize = 12;
+
+/// What a citation is shown: the note, the transaction that wrote it (without its payload and signature scripts),
+/// and what leads from it to the commitment of the chain block that accepted it.
+#[derive(Clone, Debug)]
+pub struct Cited {
+    pub note: Note,
+    pub id: Hash,
+    pub rest: Vec<u8>,
+    pub inputs: usize,
+    pub payload_digest: Hash,
+    pub witness: crate::cite::Witness,
+}
+
+impl Cited {
+    /// The citation of the note `note` as the transaction `tx` wrote it under the library `lib`, by the witness of
+    /// the chain block that accepted `tx`. Refused when `tx` is not a note's writing as the script reads one.
+    pub fn of(tx: &kaspa_consensus_core::tx::Transaction, lib: &[u8; 32], note: Note, witness: crate::cite::Witness) -> Result<Cited> {
+        let first = tx.outputs.first().ok_or_else(|| Error::Invalid("the transaction has no output".into()))?;
+        if tx.version != 1 || first.script_public_key != note_spk(&note) || first.covenant.map(|c| c.covenant_id.as_bytes()) != Some(*lib) {
+            return invalid("the transaction's first output is not this note under this library's id");
+        }
+        if witness.activity_path.len() > CITE_ACTIVITY_MAX || witness.lanes_path.len() > CITE_LANES_MAX {
+            return invalid(format!("the block's proof is {} steps in the lane's activity and {} in the lanes' tree: the citation follows {CITE_ACTIVITY_MAX} and {CITE_LANES_MAX} (the note is written again, in another block)", witness.activity_path.len(), witness.lanes_path.len()));
+        }
+        Ok(Cited { note, id: tx.id(), rest: kaspa_consensus_core::hashing::tx::transaction_v1_rest_preimage(tx), inputs: tx.inputs.len(), payload_digest: kaspa_consensus_core::hashing::tx::payload_digest(&tx.payload), witness })
+    }
+
+    /// The commitment the citation leads to: the chain block's, if the citation holds.
+    pub fn commitment(&self) -> Hash {
+        self.witness.commitment(&self.id, 1)
+    }
+
+    fn args(&self) -> Vec<Arg> {
+        let pack = |path: &[crate::cite::Step]| -> (Vec<u8>, i64) { (path.iter().flat_map(|(h, _)| h.as_bytes()).collect(), path.iter().enumerate().map(|(i, (_, right))| (*right as i64) << i).sum()) };
+        let (w, n) = (&self.witness, &self.note);
+        let (act, act_bits) = pack(&w.activity_path);
+        let (smt, smt_bits) = pack(&w.lanes_path);
+        let h = |x: &Hash| bv(x.as_bytes().to_vec());
+        vec![
+            h(&w.block), bv(n.committee.to_vec()), bv(n.market.to_vec()), bv(sm8(n.t0).to_vec()), bv(sm8(n.price).to_vec()), bv(sm8(n.spread_bps).to_vec()), bv(n.owner.to_vec()),
+            bv(self.rest.clone()), iv(self.inputs as i64), h(&self.payload_digest), iv(w.merge_idx as i64),
+            bv(act), iv(act_bits), iv(w.activity_path.len() as i64),
+            h(&w.parent_ref), h(&w.lane_key), h(&w.context), iv(w.blue_score as i64),
+            bv(smt), iv(smt_bits), iv(w.lanes_path.len() as i64),
+            h(&w.inactivity_shortcut), h(&w.payload_and_ctx), h(&w.parent_commitment),
+        ]
+    }
+}
+
+/// A copy of `KpfTCite` as the next input, holding the citation `c`; the caller writes the copy's output at the same
+/// index (`cite_out`). Refused here when this thread's chain view (`verify::set_chain_view`) does not give the
+/// citation's block the commitment the citation leads to.
+pub fn cite_in(d: &mut ODraft, lib: &[u8; 32], script: &LibScript, c: &Cited) -> Result<(usize, Hash)> {
+    match crate::verify::chain_commitment(&c.witness.block) {
+        None => return invalid("the citation's chain block is not in the chain view: its commitment is read in a node's header first"),
+        Some(seen) if seen != c.commitment() => return invalid("the citation does not lead to the commitment of its chain block"),
+        _ => {}
+    }
+    copy_in(d, lib, script, "KpfTCite", "cite", c.args())
+}
+
+/// The copy of `KpfTCite` goes on, as the next output (which the caller has brought to the copy's input index).
+pub fn cite_out(d: &mut ODraft, script: &LibScript, at: usize, lid: Hash) -> Result<()> {
+    let i = d.out(script.value + ORACLE_FEE as u64, script_spk(script.s)?, Some((at as u16, lid)), script.s, None);
+    if i != at {
+        return invalid("the citing script's output is not at its input's index");
+    }
+    Ok(())
+}
+
+/// `KpfTCite` alone: a transaction that holds a citation and nothing else (what a node charges for one, and whether
+/// it agrees). Input 0 and output 0 are the script's copy.
+pub fn cite(lib: &[u8; 32], script: &LibScript, c: &Cited, p: Payer) -> Result<OBuilt> {
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let (at, lid) = cite_in(&mut d, lib, script, c)?;
+    cite_out(&mut d, script, at, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+// ---------------------------------------------------------------- a stated change
+
+/// The arguments of the scripts that are shown a stated change and not its position: the inputs they serve, the age
+/// they ask, the object's length, then the statement (its outputs as their hash, or as they are for the settlement).
+fn change_head(age: u64, c: &Change, outs_whole: bool) -> Vec<Arg> {
+    let a = &c.position;
+    vec![
+        bv(vec![0; 24]), bv(sm8(age as i64).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.hash().to_vec()), iv(c.kind), iv(c.t0), bv(c.arg().to_vec()),
+        bv(if outs_whole { c.outs.bytes() } else { c.outs.hash().to_vec() }), iv(c.bond), bv(c.claimer.to_vec()), iv(a.dispute_daa), iv(a.x.t.late_daa), iv(c.held),
+    ]
+}
+
+/// `KpfTChange` for a take: the owner of `tk.side` states that the position's entries move to the prices `tk.a` and
+/// that it takes `tk.amount` out, and posts the bond. It signs; nothing is computed on the chain. After the
+/// position's dispute period anyone applies it (`change_settle`); before, anyone disputes it (`change_dispute`) or,
+/// holding citations of the committee's prices for `t0`, answers it at once (`take_answer`).
+pub fn take(lib: &[u8; 32], position: &OLive<Position>, script: &LibScript, tk: Take, t0: i64, p: Payer) -> Result<(OBuilt, Change)> {
+    let c = position.s.take(tk, t0, position.value as i64)?;
+    Ok((change_state(lib, position, script, &c, p)?, c))
+}
+
+/// `KpfTChange.state`: the change `c` of the position is stated as it is given (its claimer signs, and the bond is
+/// the position's). The script computes nothing: what is stated here against the rule is disputed and refuted.
+pub fn change_state(lib: &[u8; 32], position: &OLive<Position>, script: &LibScript, c: &Change, p: Payer) -> Result<OBuilt> {
+    let a = &position.s;
+    if c.position != *a || c.bond != a.bond() || c.disputer.is_some() || c.kind != crate::thin::KIND_TAKE || c.held != position.value as i64 {
+        return invalid("the change is not a statement on this position (its position, its bond or its kind)");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = head(0, a);
+    // (A position shows no form: kind 1 is of a position.)
+    args.extend([iv(c.kind), iv(c.t0), bv(c.take.said()), bv(c.outs.bytes()), bv(c.claimer.to_vec()), bv(vec![]), Arg::Sig(c.claimer)]);
+    let (id, lid) = enter(&mut d, lib, position, TObj::Position(*a), script, "KpfTChange", "state", args, 0)?;
+    d.lock(c.t0 as u64);
+    d.out(position.value + c.bond as u64, object_spk(lib, &TObj::Change(*c)), Some((0, id)), "stated change", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTChangeSettle`: anyone applies a stated change nobody disputed, once it is a dispute period old: its outputs
+/// as it stated them (the position as it goes on at output 0, the payments from the end), and the claimer's bond.
+/// `next` is the position the change's first output states, for whoever keeps it.
+pub fn change_settle(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let c = &change.s;
+    if c.disputer.is_some() {
+        return invalid("the change is disputed: it is answered or lapses, not settled");
+    }
+    if !c.in_time(change.daa) {
+        return invalid("the statement landed outside the position's lateness of its time: it is ended as late, not settled");
+    }
+    let outs = c.outs.list();
+    let w = c.position.dispute_daa as u64;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTChangeSettle", "settle", change_head(w, c, true), w)?;
+    if outs[0].key {
+        d.payout(outs[0].value, &outs[0].to, "payment 0");
+    } else {
+        d.out(outs[0].value as u64, pay_to_script_hash_script(&pinned::kit().object(lib, &outs[0].to)), Some((0, id)), "position", None);
+    }
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    // From the end: the bond first (the lowest place), then the payments, the first of them last.
+    d.last(c.bond, &c.claimer, "the claimer's bond", &p.change_to);
+    for o in outs[1..].iter().rev() {
+        d.payout(o.value, &o.to, "payment");
+    }
+    d.finish()
+}
+
+/// `KpfTChangeDispute.dispute`: `disputer` asks for the proof of a stated change that landed in time, with a bond as
+/// large as the claimer's.
+pub fn change_dispute(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, disputer: [u8; 32], p: Payer) -> Result<(OBuilt, Change)> {
+    let c = &change.s;
+    if c.disputer.is_some() || !c.in_time(change.daa) || c.kind != crate::thin::KIND_TAKE {
+        return invalid("the change is disputed already, or its statement landed outside the position's lateness of its time (it is ended as late), or it is of a kind that is disputed by a point");
+    }
+    let next = c.disputed(disputer);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = change_head(0, c, false);
+    args.push(bv(disputer.to_vec()));
+    let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTChangeDispute", "dispute", args, 0)?;
+    d.out(change.value + c.bond as u64, object_spk(lib, &TObj::Change(next)), Some((0, id)), "disputed change", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next))
+}
+
+/// `KpfTChangeDispute.lapse`: a disputed change nobody answered within the dispute period: the position again, and
+/// both bonds back.
+pub fn change_lapse(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, p: Payer) -> Result<(OBuilt, Position)> {
+    let c = &change.s;
+    let Some(disputer) = c.disputer else {
+        return invalid("the change is not disputed");
+    };
+    let w = c.position.dispute_daa as u64;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = change_head(w, c, false);
+    args.push(bv(disputer.to_vec()));
+    let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTChangeDispute", "lapse", args, w)?;
+    d.out(change.value - 2 * c.bond as u64, object_spk(lib, &TObj::Position(c.position)), Some((0, id)), "position", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.last(c.bond, &c.claimer, "the claimer's bond", &p.change_to);
+    d.payout(c.bond, &disputer, "the disputer's bond");
+    Ok((d.finish()?, c.position))
+}
+
+/// `KpfTChangeLate`: `ender` ends a statement that landed before its time or more than the position's lateness
+/// after it: the position again, the bond to `ender`.
+pub fn change_late(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, ender: [u8; 32], p: Payer) -> Result<(OBuilt, Position)> {
+    let c = &change.s;
+    if c.disputer.is_some() || c.in_time(change.daa) {
+        return invalid("the statement landed in time (or is disputed): it is settled, disputed or answered, not ended as late");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = change_head(0, c, false);
+    args.push(bv(ender.to_vec()));
+    let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTChangeLate", "late", args, 0)?;
+    d.out(change.value - c.bond as u64, object_spk(lib, &TObj::Position(c.position)), Some((0, id)), "position", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.last(c.bond, &ender, "the bond, to who ended the statement", &p.change_to);
+    Ok((d.finish()?, c.position))
+}
+
+/// `KpfTTake.answer`: a stated take is answered by the committee's prices for its time, read in citations (`cites`: a copy
+/// of `KpfTCite` and the citation of each used leg's note, in the legs' order). The verdict is the rule's
+/// (`Position::take_within`): within, the take is applied and the claimer has its amount, its bond and, disputed,
+/// half of the disputer's; not within, the position again, the disputer's bond back and half of the claimer's to
+/// `rkey`. A statement nobody disputed is answered the same way, at once. Returns the verdict and the position that
+/// is left. Inputs: the object, the script, the citing copies; the chain view is set first (`verify::set_chain_view`).
+pub fn take_answer(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, cites: &[(&LibScript, &Cited)], rkey: [u8; 32], p: Payer) -> Result<(OBuilt, bool, Position)> {
+    take_answer_with(lib, change, script, cites, rkey, p, None)
+}
+
+/// As `take_answer`; with `force` the transaction says that verdict whatever the rule gives (for whoever tests that
+/// the script refuses it).
+#[allow(clippy::too_many_arguments)]
+pub fn take_answer_with(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, cites: &[(&LibScript, &Cited)], rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool, Position)> {
+    let c = &change.s;
+    let a = &c.position;
+    let tk = c.take;
+    if c.kind != crate::thin::KIND_TAKE {
+        return invalid("the change is not a take on a position");
+    }
+    if c.disputer.is_none() && !c.in_time(change.daa) {
+        return invalid("the statement landed outside the position's lateness of its time: it is ended as late, not answered");
+    }
+    let two = a.x.legs[1].size > 0;
+    if cites.len() != 1 + two as usize {
+        return invalid("an answer holds one citation for each leg the position has");
+    }
+    let mut prices = [0i64; 2];
+    for (i, (_, cited)) in cites.iter().enumerate() {
+        let (l, n) = (&a.x.legs[i], &cited.note);
+        if n.committee != l.committee || n.market != l.market || n.t0 != c.t0 {
+            return invalid(format!("citation {} is not of the committee, the market and the time of leg {}", i + 1, i + 1));
+        }
+        if n.spread_bps * 4 > a.x.t.g_bps {
+            return invalid("the committee's spread leaves the position's tolerance g no margin");
+        }
+        prices[i] = n.price;
+    }
+    let held = c.held;
+    let within = force.unwrap_or_else(|| a.take_within(&tk, &c.claimer, &c.outs, held, prices));
+    let disputed = c.disputer.is_some();
+    let rkey = if within { if disputed { c.disputer.expect("disputed") } else { c.claimer } } else { rkey };
+    let half = c.bond / 2;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, if two { 3 } else { 2 }].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.fixed()), bv(a.moving()), iv(c.t0), bv(tk.said()),
+        bv(c.outs.hash().to_vec()), iv(c.bond), iv(c.held), bv(c.claimer.to_vec()), iv(disputed as i64), bv(c.disputer.unwrap_or([0; 32]).to_vec()), bv(rkey.to_vec()), iv(within as i64),
+    ];
+    let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTTake", "answer", args, 0)?;
+    let mut copies = vec![];
+    for (copy, cited) in cites {
+        copies.push((*copy, cite_in(&mut d, lib, copy, cited)?.0));
+    }
+    let after = if within { a.taken(&tk).unwrap_or(*a) } else { *a };
+    let kept = if within { if disputed { c.bond - half } else { 0 } } else { c.bond - half };
+    d.out((held - if within { tk.amount } else { 0 }) as u64, object_spk(lib, &TObj::Position(after)), Some((0, id)), "position", None);
+    keep_with(&mut d, script, lid, kept)?;
+    for (copy, at) in copies {
+        cite_out(&mut d, copy, at, lid)?;
+    }
+    d.fund(p.funds, &p.change_to);
+    if within {
+        d.last(tk.amount + c.bond + if disputed { half } else { 0 }, &c.claimer, "the claimer: its amount and its bond", &p.change_to);
+    } else {
+        match c.disputer {
+            Some(dk) => d.last(c.bond, &dk, "the disputer's bond", &p.change_to),
+            None => d.last(100_000_000, &p.change_to, "filler", &p.change_to),
+        };
+        d.payout(half, &rkey, "half of the bond lost, to who answered");
+    }
+    Ok((d.finish()?, within, after))
+}
+
+// ---------------------------------------------------------------- accounts of any number of legs
+
+/// The address of an object of the library `lib` whose state hashes to `h`.
+pub fn hash_spk(lib: &[u8; 32], h: &[u8; 32]) -> ScriptPublicKey {
+    pay_to_script_hash_script(&pinned::kit().object(lib, h))
+}
+
+/// Inputs 0 and 1 of an operation on an object known by its state's hash: the object and a copy of the script.
+#[allow(clippy::too_many_arguments)]
+fn enter_hash<T>(d: &mut ODraft, lib: &[u8; 32], obj: &OLive<T>, h: &[u8; 32], label: &str, script: &LibScript, name: &'static str, entry: &'static str, args: Vec<Arg>, age: u64) -> Result<(Hash, Hash)> {
+    let id = obj.id.ok_or_else(|| Error::Invalid(format!("the {label} carries no covenant id")))?;
+    d.contract(obj, OWhich::T(SLOT), pinned::kit().object(lib, h), "go", vec![iv(1), iv(0)], label, age);
+    let (_, lid) = copy_in(d, lib, script, name, entry, args)?;
+    Ok((id, lid))
+}
+
+fn stated_head(age: u64, c: &Stated, outs_whole: bool) -> Vec<Arg> {
+    vec![
+        bv(vec![0; 24]), bv(sm8(age as i64).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.kind), iv(c.t0), bv(c.arg.to_vec()),
+        bv(if outs_whole { c.outs.bytes() } else { c.outs.hash().to_vec() }), iv(c.bond), bv(c.claimer.to_vec()), iv(c.window), iv(c.late), iv(c.held),
+    ]
+}
+
+/// `KpfTChange.state` on an account: the statement `st` as it is given (its claimer signs).
+pub fn account_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, st: &Stated, said: &[u8], p: Payer) -> Result<OBuilt> {
+    let a = &account.s;
+    if st.position != a.hash() || st.bond != a.bond() || st.window != a.dispute_daa || st.late != a.t.late_daa {
+        return invalid("the statement is not one on this account (its hash, its bond, its dispute period or its lateness)");
+    }
+    state_raw(lib, account, &a.fixed_hash(), &a.moving(), st, said, if st.kind >= 2 { a.form() } else { vec![] }, script, p)
+}
+
+/// `KpfTChange.state` on any object whose state is a fixed part's hash and a moving part: the statement and the form
+/// as they are given. Nothing is checked here: what the script refuses is refused when the transaction is run.
+#[allow(clippy::too_many_arguments)]
+pub fn state_raw<T>(lib: &[u8; 32], obj: &OLive<T>, fixed: &[u8; 32], moving: &[u8], st: &Stated, said: &[u8], form: Vec<u8>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    if crate::committee::blake2b(said) != st.arg {
+        return invalid("what is shown as stated is not what the statement's argument is the hash of");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
+    let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, 0)?;
+    d.lock(st.t0 as u64);
+    d.out(obj.value + st.bond as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTChangeDispute.dispute` on a statement known by its hashes (the script takes kind 1 only). Returns the hash
+/// of the disputed statement's state.
+pub fn stated_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], p: Payer) -> Result<(OBuilt, [u8; 32])> {
+    let c = &obj.s;
+    let next = crate::committee::blake2b(&[&[0x20][..], &c.hash(), &[0x20], &disputer].concat());
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = stated_head(0, c, false);
+    args.push(bv(disputer.to_vec()));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &c.hash(), "stated change", script, "KpfTChangeDispute", "dispute", args, 0)?;
+    d.out(obj.value + c.bond as u64, hash_spk(lib, &next), Some((0, id)), "disputed change", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next))
+}
+
+/// `KpfTChange` for a take on an account: the owner of `side` states the prices `a` (one a leg) and what it takes
+/// out, with the trace of that (kept by whoever watches: an answer is shown it).
+pub fn account_take(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, amount: i64, a: &[i64], t0: i64, p: Payer) -> Result<(OBuilt, Stated, ATake)> {
+    let (st, tk) = account.s.take(side, amount, a, t0, account.value as i64)?;
+    Ok((account_state(lib, account, script, &st, &tk.said(), p)?, st, tk))
+}
+
+/// `KpfTChange` for a step of a liquidation of an account: `liquidator` states that `side` stands below its
+/// maintenance at the prices `a` and that the leg `skip` leaves the account, for the fee the rule gives.
+#[allow(clippy::too_many_arguments)]
+pub fn account_liq(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, skip: i64, a: &[i64], t0: i64, liquidator: [u8; 32], p: Payer) -> Result<(OBuilt, Stated, ATake)> {
+    let (st, tk) = account.s.liq_step(side, skip, a, t0, account.value as i64, liquidator)?;
+    Ok((account_state(lib, account, script, &st, &tk.said(), p)?, st, tk))
+}
+
+/// `KpfTKind.wrong`: a take of kind 1 stated on an account, which no script could answer, ends as one that is not
+/// within the rule: the account again, the disputer's bond back (`disputer`: who disputed it, if anyone), half of
+/// the claimer's to `rkey`.
+pub fn kind_wrong<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, disputer: Option<[u8; 32]>, account: &Account, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    if st.kind != crate::thin::KIND_TAKE || st.position != account.hash() {
+        return invalid("the statement is not of kind 1 on this account");
+    }
+    let h = match disputer {
+        None => st.hash(),
+        Some(dk) => crate::committee::blake2b(&[&[0x20][..], &st.hash(), &[0x20], &dk].concat()),
+    };
+    let half = st.bond / 2;
+    let bonds = st.bond * (1 + disputer.is_some() as i64);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()), iv(st.bond), iv(st.held), bv(st.claimer.to_vec()), iv(disputer.is_some() as i64), bv(disputer.unwrap_or([0; 32]).to_vec()), bv(rkey.to_vec())];
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated change", script, "KpfTKind", "wrong", args, 0)?;
+    d.out(obj.value - bonds as u64, hash_spk(lib, &st.position), Some((0, id)), "account", None);
+    keep_with(&mut d, script, lid, st.bond - half)?;
+    d.fund(p.funds, &p.change_to);
+    match disputer {
+        Some(dk) => d.last(st.bond, &dk, "the disputer's bond", &p.change_to),
+        None => d.last(100_000_000, &p.change_to, "filler", &p.change_to),
+    };
+    d.payout(half, &rkey, "half of the bond lost, to who showed the account");
+    d.finish()
+}
+
+/// `KpfTChangeSettle` on a statement known by its hashes: applied once it is a dispute period old.
+pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let c = &obj.s;
+    if !c.in_time(obj.daa) {
+        return invalid("the statement landed outside the lateness of its time: it is ended as late, not settled");
+    }
+    let outs = c.outs.list();
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &c.hash(), "stated change", script, "KpfTChangeSettle", "settle", stated_head(c.window as u64, c, true), c.window as u64)?;
+    if outs[0].key {
+        d.payout(outs[0].value, &outs[0].to, "payment 0");
+    } else {
+        d.out(outs[0].value as u64, hash_spk(lib, &outs[0].to), Some((0, id)), "account", None);
+    }
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.last(c.bond, &c.claimer, "the claimer's bond", &p.change_to);
+    for (i, o) in outs.iter().enumerate().skip(1).rev() {
+        if c.outs.is_note(i) {
+            d.out(o.value as u64, hash_spk(lib, &o.to), Some((0, id)), "note", None);
+        } else {
+            d.payout(o.value, &o.to, "payment");
+        }
+    }
+    d.finish()
+}
+
+/// `KpfTPoint.dispute`: `disputer` disputes one point of a stated take on an account (0 the end, 2i - 1 row i, 2i
+/// the price of row i), with a bond as large as the claimer's.
+pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
+    let c = &obj.s;
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::thin::KIND_DRAW).contains(&c.kind) || point < 0 {
+        return invalid("the statement is not one on an account that landed in time, or the point is below zero");
+    }
+    let next = Pointed { st: *c, disputer, point };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = stated_head(0, c, false);
+    args.extend([bv(disputer.to_vec()), iv(point)]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &c.hash(), "stated change", script, "KpfTPoint", "dispute", args, 0)?;
+    d.out(obj.value + c.bond as u64, hash_spk(lib, &next.hash()), Some((0, id)), "disputed point", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next))
+}
+
+/// `KpfTPoint.lapse`: a disputed point nobody answered within the dispute period: the account again, both bonds back.
+pub fn point_lapse(lib: &[u8; 32], obj: &OLive<Pointed>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let q = &obj.s;
+    let c = &q.st;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = stated_head(c.window as u64, c, false);
+    args.extend([bv(q.disputer.to_vec()), iv(q.point)]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTPoint", "lapse", args, c.window as u64)?;
+    d.out(obj.value - 2 * c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.last(c.bond, &c.claimer, "the claimer's bond", &p.change_to);
+    d.payout(c.bond, &q.disputer, "the disputer's bond");
+    Ok(d.finish()?)
+}
+
+/// How the answer of a point ends (`ends` of the three scripts): right, the statement stands again and half of the
+/// disputer's bond is the claimer's; wrong, the account again, the disputer's bond back and half of the claimer's to
+/// `rkey`. `more` adds what stands between the script's output and the funding (a citing copy's output).
+#[allow(clippy::too_many_arguments)]
+fn point_ends(d: &mut ODraft, lib: &[u8; 32], obj: &OLive<Pointed>, script: &LibScript, id: Hash, lid: Hash, right: bool, rkey: [u8; 32], cite: Option<(&LibScript, usize)>, p: Payer) -> Result<()> {
+    let q = &obj.s;
+    let c = &q.st;
+    let half = c.bond / 2;
+    if right {
+        d.out(obj.value - c.bond as u64, hash_spk(lib, &c.again().hash()), Some((0, id)), "stated change", None);
+    } else {
+        d.out(obj.value - 2 * c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "account", None);
+    }
+    keep_with(d, script, lid, c.bond - half)?;
+    if let Some((copy, at)) = cite {
+        cite_out(d, copy, at, lid)?;
+    }
+    d.fund(p.funds, &p.change_to);
+    if right {
+        d.last(half, &c.claimer, "half of the bond lost, to the claimer", &p.change_to);
+    } else {
+        d.last(c.bond, &q.disputer, "the disputer's bond", &p.change_to);
+        d.payout(half, &rkey, "half of the bond lost, to who answered");
+    }
+    Ok(())
+}
+
+/// The arguments the three answers of a point share after the object's opening.
+fn point_args(q: &Pointed, tk: &ATake, at: i64, rkey: [u8; 32], verdict: bool) -> Vec<Arg> {
+    point_args_said(q, tk.said(), at, rkey, verdict)
+}
+
+fn point_args_said(q: &Pointed, said: Vec<u8>, at: i64, rkey: [u8; 32], verdict: bool) -> Vec<Arg> {
+    let c = &q.st;
+    vec![iv(c.t0), bv(said), bv(c.outs.hash().to_vec()), iv(c.bond), bv(c.claimer.to_vec()), iv(c.window), iv(c.late), iv(c.held)]
+        .into_iter()
+        .chain([bv(q.disputer.to_vec()), iv(q.point), iv(at), bv(rkey.to_vec()), iv(verdict as i64)])
+        .collect()
+}
+
+fn point_open(obj: &OLive<Pointed>, tk: &ATake, at: i64, want: impl Fn(i64) -> bool) -> Result<usize> {
+    let q = &obj.s;
+    if q.st.arg != tk.arg() || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::thin::KIND_ACCOUNT_LEAVE).contains(&q.st.kind) || !want(at) {
+        return invalid("the statement is not the one given, or the point is not one this script answers");
+    }
+    Ok(((at + 1) / 2) as usize)
+}
+
+/// `KpfTStepRow.answer`: the point 2i - 1 of a stated take is answered with the leg the trace has at i. Returns the
+/// verdict (the model's, `row_right`; with `force` the one given, for whoever tests that the script refuses it).
+#[allow(clippy::too_many_arguments)]
+pub fn step_row(lib: &[u8; 32], obj: &OLive<Pointed>, tk: &ATake, leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    let i = ((obj.s.point + 1) / 2) as usize;
+    let prev = if i >= 2 && i <= tk.rows.len() { tk.rows[i - 2].g } else { [0; 32] };
+    step_row_at(lib, obj, tk, obj.s.point, &prev, leg, script, rkey, p, force)
+}
+
+/// As `step_row`, of the point `at` (the one disputed, or any other that is answered wrong), the row's chain opened
+/// by `prev` and the leg: where `prev` is not the chain of the row before, the row is wrong.
+#[allow(clippy::too_many_arguments)]
+pub fn step_row_at(lib: &[u8; 32], obj: &OLive<Pointed>, tk: &ATake, at: i64, prev: &[u8; 32], leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    let n = tk.rows.len();
+    // (A point beyond the trace, odd or even, is answered here: right.)
+    let i = point_open(obj, tk, at, |pt| pt >= 1 && (pt % 2 == 1 || pt > 2 * n as i64))?;
+    let q = &obj.s;
+    let right = if i > n {
+        force.unwrap_or(true)
+    } else {
+        let before = if i == 1 { crate::thin::Row::ZERO } else { tk.rows[i - 2] };
+        let leave = (tk.skip == i as i64).then(|| tk.leave.unwrap_or((crate::reserve::Head::EMPTY, 0)));
+        // (A row that carries the seed of every chain is wrong whatever chain and leg are shown.)
+        match (force, crate::thin::row_judged_of(prev, leg, &before, &tk.rows[i - 1], leave, tk.side)) {
+            (Some(v), _) => v,
+            (None, Some(v)) => v,
+            (None, None) => return invalid("the chain and the leg given do not open the row's chain: the row is answered by neither verdict"),
+        }
+    };
+    if force.is_none() && at != q.point && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { q.st.claimer } else { rkey };
+    let c = &q.st;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.kind)];
+    args.extend(point_args(q, tk, at, rkey, right));
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg))]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepRow", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTStepPrice.answer`: the point 2i is answered with the committee's price for the leg's market at the
+/// statement's time, in a citation (the chain view is set first).
+#[allow(clippy::too_many_arguments)]
+pub fn step_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, tk: &ATake, script: &LibScript, cite: (&LibScript, &Cited), rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    let at = obj.s.point;
+    let i = point_open(obj, tk, at, |pt| pt >= 2 && pt % 2 == 0)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if account.hash() != c.position || i > account.legs.len() || i > tk.rows.len() {
+        return invalid("the account is not the one the statement is on");
+    }
+    let (l, n) = (&account.legs[i - 1], &cite.1.note);
+    if n.committee != l.committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
+        return invalid("the citation is not of the leg's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
+    }
+    // (The row's chain is opened by the account's own chain before the leg: where the trace's is another, wrong.)
+    let prev = account.legs[..i - 1].iter().fold([0u8; 32], |g, x| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(x)].concat()));
+    let before_g = if i >= 2 { tk.rows[i - 2].g } else { [0; 32] };
+    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right(l, &tk.rows[i - 1], n.price, account.t.g_bps));
+    let rkey = if right { c.claimer } else { rkey };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
+    args.extend(point_args(q, tk, at, rkey, right));
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
+    let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTStepEnd.answer`: the point 0 is answered: whether the last row is the account's and the take keeps the rule.
+#[allow(clippy::too_many_arguments)]
+pub fn step_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, tk: &ATake, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    point_open(obj, tk, 0, |pt| pt == 0)?;
+    let q = &obj.s;
+    let other = q.point != 0;
+    let c = &q.st;
+    if account.hash() != c.position {
+        return invalid("the account is not the one the statement is on");
+    }
+    let liq = c.kind != crate::thin::KIND_ACCOUNT_TAKE;
+    let held = c.held;
+    let right = force.unwrap_or_else(|| if liq { account.step_end_right(c.kind, tk, &c.claimer, &c.outs, held) } else { account.end_right(tk, &c.claimer, &c.outs, held) });
+    if force.is_none() && other && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { c.claimer } else { rkey };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving())];
+    if liq {
+        args.push(iv(c.kind));
+    }
+    args.extend(point_args(q, tk, 0, rkey, right));
+    // (The end of a take by `KpfTStepEnd`, of a liquidation step by `KpfTStepLiq`: the script given is the kind's.)
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, if liq { "KpfTStepLiq" } else { "KpfTStepEnd" }, "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+// ---------------------------------------------------------------- the reserve
+
+/// Through an anchor of the registry: the object of the state hash `h` enters holding `value`, the script goes on,
+/// and the anchor is written again.
+#[allow(clippy::too_many_arguments)]
+fn enters_hash(d: &mut ODraft, lib: &[u8; 32], anchor: &Anchor, script: &LibScript, name: &'static str, entry: &'static str, args: Vec<Arg>, h: &[u8; 32], value: u64, label: &str) -> Result<Hash> {
+    let (id, lid) = enter(d, lib, anchor, TObj::Anchor, script, name, entry, args, 0)?;
+    d.out(value, hash_spk(lib, h), Some((0, id)), label, None);
+    keep(d, script, lid)?;
+    d.out(anchor.value, object_spk(lib, &TObj::Anchor), Some((0, id)), "anchor", None);
+    Ok(id)
+}
+
+fn slot_head() -> Vec<Arg> {
+    vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64)]
+}
+
+/// The id of the shard a `KpfTShardOpen` through `anchor` opens: the hash of the anchor's outpoint.
+pub fn shard_id(anchor: &Anchor) -> [u8; 32] {
+    crate::committee::blake2b(&[&anchor.op.transaction_id.as_bytes()[..], &sm8(anchor.op.index as i64)].concat())
+}
+
+/// `KpfTShardOpen`: `owner` opens a shard of the terms `t` through an anchor, holding `held`.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_open(lib: &[u8; 32], anchor: &Anchor, script: &LibScript, t: crate::cross::XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, p: Payer) -> Result<(OBuilt, crate::reserve::Shard)> {
+    let shard = crate::reserve::Shard::opened(t, owner, held, expiry, dispute_daa, bond_bps, shard_id(anchor));
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(shard.terms()), bv(shard.moving()), Arg::Sig(owner)]);
+    enters_hash(&mut d, lib, anchor, script, "KpfTShardOpen", "open", args, &shard.hash(), (held + crate::reserve::SHARD_CARRIER) as u64, "shard")?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, shard))
+}
+
+/// `KpfTOpenC`: the two parties open the covered account `a` (no leg yet; its shard named) through an anchor.
+pub fn account_open_c(lib: &[u8; 32], anchor: &Anchor, script: &LibScript, a: &Account, p: Payer) -> Result<OBuilt> {
+    if a.shard.is_none() || !a.legs.is_empty() || a.a_margin < 0 || a.b_margin < 0 || a.pot() <= 0 {
+        return invalid("a covered account is opened with its shard named, no leg, and margins that hold something");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(a.terms()), bv(a.moving()), Arg::Sig(a.a_key), Arg::Sig(a.b_key)]);
+    enters_hash(&mut d, lib, anchor, script, "KpfTOpenC", "open", args, &a.hash(), a.pot() as u64, "account")?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTLegAdd`: the two parties add a leg to a covered account, and to their margins `da` and `db`. Output 0 is
+/// the account, output 2 the note that the leg entered. Returns the account and the note.
+pub fn leg_add(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, leg: crate::cross::XLeg, da: i64, db: i64, p: Payer) -> Result<(OBuilt, Account, crate::reserve::SNote)> {
+    let (next, note) = account.s.leg_added(leg, da, db)?;
+    leg_add_as(lib, account, script, leg, da, db, next, note, p)
+}
+
+/// As `leg_add`, with the account and the note the outputs are said to be (for whoever tests what the script
+/// refuses: a leg the model does not add).
+#[allow(clippy::too_many_arguments)]
+pub fn leg_add_as(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, leg: crate::cross::XLeg, da: i64, db: i64, next: Account, note: crate::reserve::SNote, p: Payer) -> Result<(OBuilt, Account, crate::reserve::SNote)> {
+    let a = &account.s;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(crate::thin::leg_bytes(&leg)), iv(da), iv(db), Arg::Sig(a.a_key), Arg::Sig(a.b_key)]);
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTLegAdd", "add", args, 0)?;
+    d.out(account.value + (da + db) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.out(note.value() as u64, hash_spk(lib, &note.hash()), Some((0, id)), "note", None);
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next, note))
+}
+
+/// `KpfTAddC` on any object of a moving part of 171 bytes: `side`'s key adds `delta` to its margin.
+#[allow(clippy::too_many_arguments)]
+fn add_c<T>(lib: &[u8; 32], obj: &OLive<T>, script: &LibScript, fixed: [u8; 32], moving: Vec<u8>, side: i64, key: [u8; 32], delta: i64, next: [u8; 32], label: &str, p: Payer) -> Result<OBuilt> {
+    if delta <= 0 {
+        return invalid("what is added is above zero");
+    }
+    let h = crate::committee::blake2b(&[&[0x20][..], &fixed, &moving].concat());
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(fixed.to_vec()), bv(moving), iv(side), iv(delta), Arg::Sig(key)]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, 0)?;
+    d.out(obj.value + delta as u64, hash_spk(lib, &next), Some((0, id)), label, None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTAddC`: a shard's owner adds `delta` to what it holds.
+pub fn shard_fund(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: &LibScript, delta: i64, p: Payer) -> Result<(OBuilt, crate::reserve::Shard)> {
+    let s = &shard.s;
+    let next = crate::reserve::Shard { held: s.held + delta, ..*s };
+    Ok((add_c(lib, shard, script, s.fixed_hash(), s.moving(), crate::cross::SIDE_A, s.owner, delta, next.hash(), "shard", p)?, next))
+}
+
+/// `KpfTAddC`: a party of a covered account adds `delta` to its margin.
+pub fn account_add(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, delta: i64, p: Payer) -> Result<(OBuilt, Account)> {
+    let a = &account.s;
+    let (key, next) = match side {
+        crate::cross::SIDE_A => (a.a_key, Account { a_margin: a.a_margin + delta, ..a.clone() }),
+        crate::cross::SIDE_B => (a.b_key, Account { b_margin: a.b_margin + delta, ..a.clone() }),
+        _ => return invalid("a margin is added by side a (1) or b (2)"),
+    };
+    if a.shard.is_none() {
+        return invalid("this account is not covered: its margin is added to by the script of a position");
+    }
+    Ok((add_c(lib, account, script, a.fixed_hash(), a.moving(), side, key, delta, next.hash(), "account", p)?, next))
+}
+
+/// `KpfTNoteApply`: anyone applies a note to its shard. Input 0 is the shard, input 2 the note; output 0 the shard,
+/// output 2 the note that goes on (the rest of what a user is owed); the payment of what is owed is the last output.
+/// Returns the shard as it then is and the note that goes on.
+pub fn note_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::SNote>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::SNote>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let leg = n.kind == crate::reserve::NOTE_JOIN || n.kind == crate::reserve::NOTE_RELEASE;
+    let r = if leg { s.row_for(&n.head).ok_or_else(|| Error::Invalid("the shard has no row for the note's market: its four are other markets'".into()))? } else { 0 };
+    let (next, paid, rest) = s.applied(n, r)?;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()),
+        iv(n.kind), bv(n.head.bytes()), iv(n.net), iv(n.gross), bv(n.key.to_vec()), iv(n.amount), iv(r as i64),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTNoteApply", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    let deposit = if n.kind == crate::reserve::NOTE_DEPOSIT { n.amount } else { 0 };
+    d.out((shard.value as i64 + deposit - paid) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is owed", &p.change_to);
+    }
+    Ok((d.finish()?, next, rest))
+}
+
+/// `KpfTAcctEnd`: `side`'s key ends a covered account that has no leg: A's margin to A (output 0), B's as a deposit
+/// to the account's shard. Returns the deposit's note.
+pub fn acct_end(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, p: Payer) -> Result<(OBuilt, Option<crate::reserve::SNote>)> {
+    let a = &account.s;
+    let (to_a, note) = a.ended()?;
+    let key = match side {
+        crate::cross::SIDE_A => a.a_key,
+        crate::cross::SIDE_B => a.b_key,
+        _ => return invalid("an account is ended by side a (1) or b (2)"),
+    };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(a.terms()), bv(a.moving()), iv(side), Arg::Sig(key)]);
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTAcctEnd", "end", args, 0)?;
+    if to_a > 0 {
+        d.payout(to_a, &a.a_key, "party a");
+        keep(&mut d, script, lid)?;
+        d.fund(p.funds, &p.change_to);
+    } else {
+        d.fund(p.funds, &p.change_to);
+        keep(&mut d, script, lid)?;
+    }
+    if let Some(n) = &note {
+        d.out(n.value() as u64, hash_spk(lib, &n.hash()), Some((0, id)), "note", None);
+    }
+    Ok((d.finish()?, note))
+}
+
+/// `KpfTChange` for a leg that leaves an account by its party's own statement (kind 4): the owner of `side` states
+/// the prices `a` and that the leg `skip` leaves. On a covered account the settlement writes the note that it left,
+/// and the note of what A is owed where the pot is short.
+#[allow(clippy::too_many_arguments)]
+pub fn account_leave(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, skip: i64, a: &[i64], t0: i64, p: Payer) -> Result<(OBuilt, Stated, ATake, crate::thin::Stepped)> {
+    let x = &account.s;
+    let claimer = if side == crate::cross::SIDE_A { x.a_key } else { x.b_key };
+    let (st, tk, stepped) = x.step(crate::thin::KIND_ACCOUNT_LEAVE, side, skip, a, t0, account.value as i64, claimer)?;
+    Ok((account_state(lib, account, script, &st, &tk.said(), p)?, st, tk, stepped))
+}
+
+/// `KpfTChange` for a take stated by `claimer`: the side's key, or anyone for side B of a covered account (the
+/// amount is then a deposit to the account's shard).
+#[allow(clippy::too_many_arguments)]
+pub fn account_take_by(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, amount: i64, a: &[i64], t0: i64, claimer: [u8; 32], p: Payer) -> Result<(OBuilt, Stated, ATake)> {
+    let (st, tk) = account.s.take_by(side, amount, a, t0, account.value as i64, claimer)?;
+    Ok((account_state(lib, account, script, &st, &tk.said(), p)?, st, tk))
+}
+
+/// `KpfTHand.hand`: side A of a covered account is handed over to `nkey`, which adds `da` KAS of margin; who
+/// leaves is paid `pay` by the payer in the same transaction (what the place is worth is between the two). Both
+/// sign the whole transaction; side B signs nothing.
+pub fn account_hand(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, nkey: [u8; 32], da: i64, pay: i64, p: Payer) -> Result<(OBuilt, Account)> {
+    let a = &account.s;
+    let next = a.handed(nkey, da)?;
+    let h = a.hash();
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(a.fixed_hash().to_vec()), bv(a.moving()), bv(nkey.to_vec()), iv(da), Arg::Sig(a.a_key), Arg::Sig(nkey)]);
+    let (id, lid) = enter_hash(&mut d, lib, account, &h, "account", script, "KpfTHand", "hand", args, 0)?;
+    d.out(account.value + da as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    if pay > 0 {
+        d.payout(pay, &a.a_key, "to who leaves, for its place");
+    }
+    Ok((d.finish()?, next))
+}
+
+/// `KpfTLegMove.move`: the leg `i` (from 1) of `from` moves to `to`, an account of the same clearing party under
+/// the same shard, its entry as it was; the margins move by `d` (`from`'s A and B, then `to`'s). Side A of each
+/// and the clearing party sign the whole transaction. Input 0 is `from`, input 2 `to`.
+pub fn leg_move(lib: &[u8; 32], from: &OLive<Account>, i: usize, to: &OLive<Account>, d: [i64; 4], script: &LibScript, p: Payer) -> Result<(OBuilt, Account, Account)> {
+    let (x, y) = (&from.s, &to.s);
+    let (nx, ny) = x.leg_moved(i, y, d)?;
+    let prev = x.legs[..i - 1].iter().fold([0u8; 32], |g, l| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(l)].concat()));
+    let after: Vec<u8> = x.legs[i..].iter().flat_map(crate::thin::leg_bytes).collect();
+    let mut dr = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(x.terms()), bv(prev.to_vec()), bv(crate::thin::leg_bytes(&x.legs[i - 1])), bv(after), bv(x.moving()),
+        bv(y.terms()), bv(y.legs_root().to_vec()), bv(y.moving()), iv(d[0]), iv(d[1]), iv(d[2]), iv(d[3]), Arg::Sig(x.a_key), Arg::Sig(y.a_key), Arg::Sig(x.b_key),
+    ];
+    let (id, lid) = enter_hash(&mut dr, lib, from, &x.hash(), "account", script, "KpfTLegMove", "move", args, 0)?;
+    dr.contract(to, OWhich::T(SLOT), pinned::kit().object(lib, &y.hash()), "go", vec![iv(1), iv(1)], "the other account", 0);
+    dr.out((from.value as i64 + d[0] + d[1]) as u64, hash_spk(lib, &nx.hash()), Some((0, id)), "account", None);
+    keep(&mut dr, script, lid)?;
+    dr.out((to.value as i64 + d[2] + d[3]) as u64, hash_spk(lib, &ny.hash()), Some((0, id)), "the other account", None);
+    dr.fund(p.funds, &p.change_to);
+    Ok((dr.finish()?, nx, ny))
+}
+
+// ---------------------------------------------------------------- the draw
+
+/// `KpfTChange` for a draw: the shard's owner states that it draws `amount` at the prices `prices` (one a row).
+/// After the dispute period anyone applies it (`stated_settle`); before, anyone disputes its end or the price of a
+/// row (`point_dispute`: the points 0 and 1 to 4), or ends it by a note to the shard that is not applied
+/// (`draw_note`).
+pub fn shard_draw(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: &LibScript, amount: i64, prices: [i64; 4], t0: i64, p: Payer) -> Result<(OBuilt, Stated, crate::reserve::Draw)> {
+    let s = &shard.s;
+    let (st, d) = s.draw(amount, prices, t0, shard.value as i64)?;
+    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
+}
+
+fn draw_open(obj: &OLive<Pointed>, shard: &crate::reserve::Shard, d: &crate::reserve::Draw) -> Result<()> {
+    let c = &obj.s.st;
+    if c.kind != crate::thin::KIND_DRAW || c.arg != d.arg() || c.position != shard.hash() {
+        return invalid("the statement is not this draw on this shard");
+    }
+    Ok(())
+}
+
+fn shard_args(shard: &crate::reserve::Shard, who: Vec<u8>) -> Vec<Arg> {
+    vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.terms()), bv(shard.rows_bytes()), bv(shard.moving())]
+}
+
+/// `KpfTShardEnd.answer`: the point 0 of a draw is answered: whether the shard holds its requirement at the prices
+/// stated once the amount is drawn, and the outputs are that.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, dr)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if force.is_none() && shard.draw_end_judged(dr, &c.claimer).is_none() {
+        return invalid("the shard's rows at these prices are beyond what a script computes: nobody answers this point, and the dispute lapses");
+    }
+    let right = force.unwrap_or_else(|| shard.draw_end_right(dr, &c.claimer, &c.outs, c.held));
+    if force.is_none() && q.point != 0 && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { c.claimer } else { rkey };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = shard_args(shard, vec![0; 24]);
+    args.extend(point_args_said(q, dr.said(), 0, rkey, right));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardEnd", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTShardPrice.answer`: the point `at` (1 to 4, or beyond) of a draw is answered with the committee's price for
+/// the row's market at the statement's time, in a citation; a row with no market and a point beyond the fourth are
+/// answered right with none. A row is named by the hash of its kind and its market: the citation is of that market.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, dr)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if at < 1 {
+        return invalid("a row's price is a point from 1");
+    }
+    let row = shard.rows.get(at as usize - 1).filter(|r| r.head.market != [0; 32]);
+    // The market the citation is of: the row carries the hash of its kind and of that market's name.
+    let mut under = [0u8; 32];
+    let right = match (row, cite) {
+        (Some(row), Some((_, cited))) => {
+            let n = &cited.note;
+            under = n.market;
+            let named = crate::reserve::futures_market(&n.market) == row.head.market || crate::reserve::option_market(&n.market) == row.head.market;
+            if n.committee != row.head.committee || !named || n.t0 != c.t0 || n.spread_bps * 4 > shard.t.g_bps {
+                return invalid("the citation is not of the row's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
+            }
+            force.unwrap_or_else(|| shard.draw_price_right(dr, at as usize, n.price))
+        }
+        (Some(_), None) => return invalid("the row has a market: its price is answered with a citation"),
+        (None, Some(_)) => return invalid("the row has no market (or the point is beyond the fourth): it is answered with no citation"),
+        (None, None) => force.unwrap_or(true),
+    };
+    if force.is_none() && at != q.point && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { c.claimer } else { rkey };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, if cite.is_some() { 2 } else { 0 }, if cite.is_some() { 2 } else { 0 }].iter().flat_map(|w| sm8(*w)).collect();
+    let mut args = shard_args(shard, who);
+    args.extend(point_args_said(q, dr.said(), at, rkey, right));
+    args.push(bv(under.to_vec()));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardPrice", "answer", args, 0)?;
+    let cited = match cite {
+        Some((copy, cited)) => Some((copy, cite_in(&mut d, lib, copy, cited)?.0)),
+        None => None,
+    };
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, cited, p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTDrawNote.end`: a stated draw (`pointed`: disputed at a point, by whom and which) is ended by a note to its
+/// shard that landed before the statement and is not applied. Input 0 is the statement, input 2 the note, which
+/// goes on as output 2; output 0 is the shard again; the claimer's bond is lost, half to `rkey`.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_note<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::SNote>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    let n = &note.s;
+    if st.kind != crate::thin::KIND_DRAW || st.position != shard.hash() || n.sid != shard.sid {
+        return invalid("the statement is not a draw on this shard, or the note is to another");
+    }
+    let of_owner = match n.kind {
+        crate::reserve::NOTE_JOIN | crate::reserve::NOTE_RELEASE => n.key == shard.owner,
+        crate::reserve::NOTE_OWED => n.head.market == shard.owner,
+        _ => false,
+    };
+    if !of_owner || note.daa >= obj.daa {
+        return invalid("the note is not one that ends a draw (a leg's or what is owed, of an account whose side B is the owner), or it landed at or after the statement");
+    }
+    let h = match pointed {
+        None => st.hash(),
+        Some((disputer, point)) => Pointed { st: *st, disputer, point }.hash(),
+    };
+    let bonds = st.bond * (1 + pointed.is_some() as i64);
+    let half = st.bond / 2;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.fixed_hash().to_vec()), bv(shard.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()),
+        iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held), iv(pointed.is_some() as i64), bv(pointed.map(|x| x.0).unwrap_or([0; 32]).to_vec()), iv(pointed.map(|x| x.1).unwrap_or(0)),
+        iv(n.kind), bv(n.head.bytes()), iv(n.net), iv(n.gross), bv(n.key.to_vec()), iv(n.amount), bv(rkey.to_vec()),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated draw", script, "KpfTDrawNote", "end", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    d.out(obj.value - bonds as u64, hash_spk(lib, &st.position), Some((0, id)), "shard", None);
+    keep_with(&mut d, script, lid, st.bond - half)?;
+    d.out(note.value, hash_spk(lib, &n.hash()), Some((0, id)), "note", None);
+    d.fund(p.funds, &p.change_to);
+    match pointed {
+        Some((disputer, _)) => d.last(st.bond, &disputer, "the disputer's bond", &p.change_to),
+        None => d.last(100_000_000, &p.change_to, "filler", &p.change_to),
+    };
+    d.payout(half, &rkey, "half of the bond lost, to who showed the note");
+    d.finish()
 }
 
 // ---------------------------------------------------------------- an executor's coins

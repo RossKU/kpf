@@ -476,8 +476,13 @@ fn generate_committee(r: &Path) -> Vec<(String, String)> {
 /// and `SHA256SUMS`: `KpfSlot`, the one script of every object, and the scripts of the operations, each compiled as the
 /// library holds it (version 1). An object's script is the slot's with two values of 32 bytes in it, the library's id
 /// and the hash of the object's state: the manifest says where they are, found here by compiling with other values.
+/// What stands after the state's hash in a price note's script (`byte[N] NOTE_SUF` of KpfTNote and KpfTCite).
+const NOTE_SUF_LEN: usize = 55;
+/// What stands between the state's hash and the writer's key there.
+const NOTE_MID_LEN: usize = 1;
+
 fn generate_thin(r: &Path) -> Vec<(String, String)> {
-    let names = ["KpfSlot", "KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTSweep", "KpfTPay", "KpfFeePool"];
+    let names = ["KpfSlot", "KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTSweep", "KpfTPay", "KpfNote", "KpfFeePool"];
     let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/{n}.sil")))).collect();
     let code = |a: &SilAbiArtifact| a.contracts.values().next().expect("one contract").compiled.bytecode.clone();
     let (lib, state) = ([0x4c_u8; 32], [0x5a_u8; 32]);
@@ -497,13 +502,38 @@ fn generate_thin(r: &Path) -> Vec<(String, String)> {
     // The proofs read the committee's epoch table by its pinned template (the committee family's artifacts on disk).
     let tk = &kpf_protocol::committee_artifacts::xkit().consts;
     let epoch_table = [ArtifactValue::Bytes(tk.epoch_table_tpl.to_vec()), ArtifactValue::Int(tk.epoch_table_pre), ArtifactValue::Int(tk.epoch_table_suf), ArtifactValue::Bytes(tk.attest_tag.to_vec()), ArtifactValue::Int(1)];
+    // A price note is an object with two values, the hash of its state (where an object's is) and its writer's key:
+    // its writer and its citation hold an output to its script by what stands before, between and after them.
+    let note_src = &srcs[names.iter().position(|n| *n == "KpfNote").expect("KpfNote")];
+    let owner = [0x6f_u8; 32];
+    let note_with = |h: [u8; 32], o: [u8; 32]| code(&compile("KpfNote", note_src, &[ArtifactValue::Bytes(h.to_vec()), ArtifactValue::Bytes(o.to_vec())]));
+    let note_code = note_with(state, owner);
+    let note_at = |other: Vec<u8>| -> usize {
+        assert_eq!(other.len(), note_code.len(), "KpfNote's length does not depend on its values");
+        let d: Vec<usize> = (0..note_code.len()).filter(|i| note_code[*i] != other[*i]).collect();
+        assert!(d.len() == 32 && d[31] - d[0] == 31, "a value of KpfNote is one run of 32 bytes");
+        d[0]
+    };
+    let owner_at = note_at(note_with(state, [0x70; 32]));
+    assert_eq!(note_at(note_with([0x5b; 32], owner)), state_at, "the note's state is where an object's is");
+    assert_eq!((owner_at - state_at - 32, note_code.len() - owner_at - 32), (NOTE_MID_LEN, NOTE_SUF_LEN), "the note's script: KpfTNote and KpfTCite are written for these lengths");
+    let note_parts = [ArtifactValue::Bytes(note_code[..state_at].to_vec()), ArtifactValue::Bytes(note_code[state_at + 32..owner_at].to_vec()), ArtifactValue::Bytes(note_code[owner_at + 32..].to_vec())];
+    let note_writer = [epoch_table[0].clone(), epoch_table[1].clone(), epoch_table[2].clone(), epoch_table[3].clone(), note_parts[0].clone(), note_parts[1].clone(), note_parts[2].clone(), ArtifactValue::Int(1)];
+    let cite = [note_parts[0].clone(), note_parts[1].clone(), note_parts[2].clone(), ArtifactValue::Int(1)];
+    let note_ctor = [ArtifactValue::Bytes(state.to_vec()), ArtifactValue::Bytes(owner.to_vec())];
+    // What reads a citation holds the citing input to KpfTCite's script (compiled before it in the list).
+    let mut cite_spk: Vec<ArtifactValue> = vec![];
     for i in 1..names.len() {
         // The merge is compiled with what its sender keeps (the library's, the same for every account in it).
         let merge = [ArtifactValue::Int(kpf_protocol::thin::MERGE_TIP), ArtifactValue::Int(1)];
         let novate = [ArtifactValue::Int(kpf_protocol::thin::NOVATE_TIP), ArtifactValue::Int(1)];
         let purse = [ArtifactValue::Bytes(state.to_vec())];
-        let ctor: &[ArtifactValue] = if names[i] == "KpfFeePool" { &purse } else if names[i].ends_with("Prove") || names[i].ends_with("Refute") || names[i] == "KpfTPay" { &epoch_table } else if names[i] == "KpfTMerge" || names[i] == "KpfTJoin" || names[i] == "KpfTFold" { &merge } else if names[i] == "KpfTLeave" { &novate } else if names[i] == "KpfTNovate" { &novate } else { &[ArtifactValue::Int(1)] };
+        let ctor: &[ArtifactValue] = if names[i] == "KpfFeePool" { &purse } else if names[i] == "KpfNote" { &note_ctor } else if names[i] == "KpfTNote" { &note_writer } else if names[i] == "KpfTCite" { &cite } else if names[i] == "KpfTTake" || names[i] == "KpfTStepPrice" || names[i] == "KpfTShardPrice" { &cite_spk } else if names[i].ends_with("Prove") || names[i].ends_with("Refute") || names[i] == "KpfTPay" { &epoch_table } else if names[i] == "KpfTMerge" || names[i] == "KpfTJoin" || names[i] == "KpfTFold" { &merge } else if names[i] == "KpfTLeave" { &novate } else if names[i] == "KpfTNovate" { &novate } else { &[ArtifactValue::Int(1)] };
         arts.push(compile(names[i], &srcs[i], ctor));
+        if names[i] == "KpfTCite" {
+            let spk = kpf_protocol::tx::p2sh_spk(&code(arts.last().expect("KpfTCite")));
+            cite_spk = vec![ArtifactValue::Bytes([&spk.version().to_le_bytes()[..], spk.script()].concat()), ArtifactValue::Int(1)];
+        }
     }
     // The purse is an object as KpfSlot is, with one value: the scripts read its state's hash where they read an
     // object's.
@@ -529,6 +559,7 @@ fn generate_thin(r: &Path) -> Vec<(String, String)> {
         "compiler": format!("silverscript-lang (vendor/kob @ {KOB_COMMIT}, SilverScript v1.0.0), CompileOptions::default(); {}", arts[0].compiler_version),
         "regenerate": "CARGO_BUILD_JOBS=2 cargo run -p kpf-artifacts --jobs 2 -- write",
         "slot": { "lib_at": lib_at, "state_at": state_at, "sample_lib": hex(&lib), "sample_state": hex(&state) },
+        "note": { "owner_at": owner_at, "sample_owner": hex(&owner) },
         "contracts": contracts,
     });
     let manifest_text = format!("{}\n", serde_json::to_string_pretty(&manifest).expect("manifest"));

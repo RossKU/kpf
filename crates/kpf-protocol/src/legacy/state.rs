@@ -52,6 +52,16 @@ pub(crate) enum F {
     B([u8; 32]),
 }
 
+/// The number 8 bytes read as (`int(byte[8](..))` of the scripts): little-endian, the top bit the sign.
+pub fn int8(b: &[u8]) -> i64 {
+    let mut m = [0u8; 8];
+    m.copy_from_slice(&b[..8]);
+    let neg = m[7] & 0x80 != 0;
+    m[7] &= 0x7f;
+    let v = i64::from_le_bytes(m);
+    if neg { -v } else { v }
+}
+
 /// Script-number form of an int padded to 8 bytes (what 8-byte state pushes and `byte[8]` arguments carry).
 pub fn sm8(x: i64) -> [u8; 8] {
     let mut b = x.unsigned_abs().to_le_bytes();

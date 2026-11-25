@@ -32,7 +32,7 @@ fn the_manifest_and_the_checksums_agree_with_the_sources() {
         assert_eq!(h, sha(text.as_bytes()), "{path}");
         seen += 1;
     }
-    assert_eq!(seen, 2 * (kpf_protocol::thin_artifacts::SCRIPTS.len() + 2) + 1, "a source and an artifact of every script, of the object and of the fee pool, and the manifest");
+    assert_eq!(seen, 2 * (kpf_protocol::thin_artifacts::SCRIPTS.len() + 3) + 1, "a source and an artifact of every script, of the object, of the price note and of the fee pool, and the manifest");
     let k = pinned::kit();
     assert_eq!(k.object_len(), m.contracts[pinned::SLOT].script_len);
     for n in pinned::SCRIPTS {

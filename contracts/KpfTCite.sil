@@ -1,0 +1,109 @@
+pragma silverscript ^0.1.0;
+
+// KpfTCite: a service of the library (docs/ARCHITECTURE-CLEARING.md, 3). It holds that a price note (KpfNote, written
+// by KpfTNote beside the committee's attest) was accepted by a chain block within the finality depth, by recomputing
+// that block's sequencing commitment (KIP-21) from the note's transaction up and comparing it with the engine's
+// (OpChainblockSeqCommit). It spends nothing of what it cites: any number of transactions cite one note at once.
+// A script of an operation spent beside it reads, at the head of this input's signature script, what was held: the
+// chain block, the committee, the market, the time, the price and the spread (six pushes of fixed length), and holds
+// this input to this script by its hash and to this entry by that head (the other entry, `release`, begins with a
+// number).
+//   every H is BLAKE3 keyed with the hasher's name:
+//   the transaction's id  = H_v1id(payload digest, H_rest(rest))   rest: the transaction without payload and
+//                                                                   signature scripts; its first output is the note
+//   its activity leaf     = H_leaf(id, version, merge index)
+//   the lane's activity   = a Merkle root over the leaves of the lane's transactions the block accepted
+//   the lane's tip        = H_tip(parent ref, lane key, activity, context)
+//   the lane's leaf       = H_collapsed(lane key, H_active(tip, blue score)), under the lanes' sparse tree
+//   the commitment        = H(parent commitment, H(H_activity(inactivity shortcut, lanes' root), payload and context))
+//   cite(block, rid, mkt, t0b, priceb, spreadb, owner, rest, nIn, payloadDigest, mergeIdx, actPath, actBits, actLen,
+//        parentRef, laneKey, ctx, blueScore, smtPath, smtBits, smtLen, inactivity, payloadCtx, parentSeq)
+contract KpfTCite(byte[2] NOTE_PRE, byte[1] NOTE_MID, byte[55] NOTE_SUF, int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant NOTE_TAG = 9;
+    // The first output of a version-1 transaction's rest: after the version (2 bytes), the inputs' count (8) and 52
+    // bytes an input (outpoint 36, an empty signature script's length 8, sequence 8), and the outputs' count (8).
+    int constant HEAD = 18;
+    int constant INPUT = 52;
+
+    entry cite(byte[32] block, byte[32] rid, byte[32] mkt, byte[8] t0b, byte[8] priceb, byte[8] spreadb, byte[32] owner, byte[] rest, int nIn, byte[32] payloadDigest, int mergeIdx, byte[] actPath, int actBits, int actLen, byte[32] parentRef, byte[32] laneKey, byte[32] ctx, int blueScore, byte[] smtPath, int smtBits, int smtLen, byte[32] inactivity, byte[32] payloadCtx, byte[32] parentSeq) {
+        int self = this.activeInputIndex;
+        require(version == 1);
+        byte[32] lib = OpInputCovenantId(self);
+        // The note this is about, and the script it has.
+        byte[32] h = blake2b(byte[](0x08) + byte[](NOTE_TAG as byte[8]) + byte[](0x20) + byte[](rid) + byte[](0x20) + byte[](mkt) + byte[](0x08) + byte[](t0b) + byte[](0x08) + byte[](priceb) + byte[](0x08) + byte[](spreadb));
+        byte[] note = byte[](new ScriptPubKeyP2SHFromRedeemScript(byte[](NOTE_PRE) + byte[](h) + byte[](NOTE_MID) + byte[](owner) + byte[](NOTE_SUF)));
+        // The transaction: version 1, nIn inputs; its first output is under the library's id with the note's script.
+        require(nIn >= 1);
+        require(rest.slice(0, 2) == byte[](0x0100));
+        require(int(byte[8](rest.slice(2, 10))) == nIn);
+        int o = HEAD + INPUT * nIn;
+        require(int(byte[8](rest.slice(o - 8, o))) >= 1);
+        require(rest.slice(o + 8, o + 10) == byte[](0x0000));
+        require(int(byte[8](rest.slice(o + 10, o + 18))) == note.length - 2);
+        require(rest.slice(o + 18, o + 16 + note.length) == note.slice(2, note.length));
+        require(rest.slice(o + 16 + note.length, o + 17 + note.length) == byte[](0x01));
+        require(rest.slice(o + 19 + note.length, o + 51 + note.length) == byte[](lib));
+        byte[32] id = blake3WithKey(byte[](payloadDigest) + byte[](blake3WithKey(rest, byte[32](0x5472616e73616374696f6e526573740000000000000000000000000000000000))), byte[32](0x5472616e73616374696f6e563149640000000000000000000000000000000000));
+        // Its leaf among the lane's transactions the block accepted, and the path to their root.
+        require(mergeIdx >= 0);
+        byte[32] a = blake3WithKey(byte[](id) + byte[](0x0100) + byte[](mergeIdx as byte[4]), byte[32](0x536571436f6d6d697441637469766974794c6561660000000000000000000000));
+        require(actLen >= 0);
+        require(actLen <= 14);
+        require(actPath.length == 32 * actLen);
+        byte[32] kb = byte[32](0x536571436f6d6d69746d656e744d65726b6c654272616e636848617368000000);
+        int b = actBits;
+        for (i, 0, actLen, 14) {
+            byte[] s = actPath.slice(32 * i, 32 * i + 32);
+            if (b % 2 == 1) {
+                a = blake3WithKey(s + byte[](a), kb);
+            } else {
+                a = blake3WithKey(byte[](a) + s, kb);
+            }
+            b = b / 2;
+        }
+        // The lane's tip, its leaf, and the path to the lanes' root.
+        require(blueScore >= 0);
+        byte[32] tip = blake3WithKey(byte[](parentRef) + byte[](laneKey) + byte[](a) + byte[](ctx), byte[32](0x536571436f6d6d69744c616e6554697000000000000000000000000000000000));
+        byte[32] n = blake3WithKey(byte[](laneKey) + byte[](blake3WithKey(byte[](tip) + byte[](blueScore as byte[8]), byte[32](0x536571436f6d6d69744163746976654c65616600000000000000000000000000))), byte[32](0x536571436f6d6d6974416374697665436f6c6c61707365644e6f646500000000));
+        require(smtLen >= 0);
+        require(smtLen <= 12);
+        require(smtPath.length == 32 * smtLen);
+        byte[32] kn = byte[32](0x536571436f6d6d69744163746976654e6f646500000000000000000000000000);
+        int c = smtBits;
+        for (j, 0, smtLen, 12) {
+            byte[] t = smtPath.slice(32 * j, 32 * j + 32);
+            if (c % 2 == 1) {
+                n = blake3WithKey(t + byte[](n), kn);
+            } else {
+                n = blake3WithKey(byte[](n) + t, kn);
+            }
+            c = c / 2;
+        }
+        // Up to the commitment of the block.
+        byte[32] st = blake3WithKey(byte[](blake3WithKey(byte[](inactivity) + byte[](n), byte[32](0x536571436f6d6d69744163746976697479526f6f740000000000000000000000))) + byte[](payloadCtx), kb);
+        require(blake3WithKey(byte[](parentSeq) + byte[](st), kb) == OpChainblockSeqCommit(block));
+        // The copy goes on.
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

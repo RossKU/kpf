@@ -518,6 +518,8 @@ pub enum TObj {
     Disputed(Disputed),
     Liq(LiqObj),
     ExitClaim(ExitClaim),
+    /// A stated change of a position (`KpfTChange`), disputed or not.
+    Change(Change),
     Order(Order),
     /// An anchor of the library's registry: the way in (`KpfTPlace`). Its state is nothing but its kind.
     Anchor,
@@ -532,6 +534,7 @@ impl TObj {
             TObj::Disputed(d) => d.hash(),
             TObj::Liq(l) => l.hash(),
             TObj::ExitClaim(q) => q.hash(),
+            TObj::Change(c) => c.hash(),
             TObj::Order(o) => o.hash(),
             TObj::Anchor => blake2b(&i9(7)),
         }
@@ -548,6 +551,7 @@ impl TObj {
                 LiqState::Proved => "proved liquidation",
             },
             TObj::ExitClaim(_) => "exit claim",
+            TObj::Change(c) => if c.disputer.is_some() { "disputed change" } else { "stated change" },
             TObj::Order(_) => "order",
             TObj::Anchor => "anchor",
         }
@@ -575,6 +579,10 @@ impl TObj {
                 [vec![4], position(&q.position), said, q.liquidator.to_vec(), tail].concat()
             }
             TObj::ExitClaim(q) => [vec![5], position(&q.position), i9(q.side), i9(q.since), i9(q.bond)].concat(),
+            // Kind 8, a stated change: the position, the kind and the time (two pushed integers), the 32 bytes stated,
+            // the count of its outputs and their 41 bytes each, the bond (a pushed integer), the claimer's key, and
+            // the disputer's if it is disputed.
+            TObj::Change(c) => [vec![8], position(&c.position), i9(c.kind), i9(c.t0), c.take.said(), vec![c.outs.list().len() as u8], c.outs.bytes(), i9(c.bond), i9(c.held), c.claimer.to_vec(), c.disputer.map(|d| d.to_vec()).unwrap_or_default()].concat(),
             TObj::Order(o) => [vec![6], o.tpl.to_vec(), o.owner.to_vec(), i9(o.dir), i9(o.size), i9(o.limit), i9(o.margin), i9(o.tip), i9(o.expiry), i9(o.min_fill), i9(o.min_counter)].concat(),
             TObj::Anchor => vec![7],
         }
@@ -596,6 +604,33 @@ impl TObj {
             let o = Order { tpl: rest[..32].try_into().map_err(|_| bad("the template's hash"))?, owner: rest[32..64].try_into().map_err(|_| bad("the owner's key"))?, dir, size, limit, margin, tip, expiry, min_fill, min_counter };
             o.check().map_err(|_| bad("an order out of its bounds"))?;
             return Ok(TObj::Order(o));
+        }
+        if *kind == 8 {
+            let at = FIXED_LEN + MOVING_LEN;
+            if rest.len() < at + 18 + 32 + 1 {
+                return Err(bad("wrong length"));
+            }
+            let position = Position::from_parts(&rest[..FIXED_LEN], &rest[FIXED_LEN..at])?;
+            let mut c = Cursor { b: &rest[at..at + 18], at: 0 };
+            let (kind, t0) = (c.int()?, c.int()?);
+            let take = Take::read(&rest[at + 18..at + 50]).ok_or_else(|| bad("what is stated"))?;
+            let n = rest[at + 50] as usize;
+            let end = at + 51 + 41 * n;
+            if n == 0 || n > OUTS_MAX || (rest.len() != end + 18 + 32 && rest.len() != end + 18 + 64) {
+                return Err(bad("wrong length"));
+            }
+            let outs: Vec<Out> = rest[at + 51..end].chunks(41).map(|e| Out { key: e[0] != 0, to: e[1..33].try_into().expect("32 bytes"), value: i64::from_le_bytes(e[33..41].try_into().expect("8 bytes")) }).collect();
+            if outs.iter().any(|o| o.value < 0) || rest[at + 51..end].chunks(41).any(|e| e[0] > 1) {
+                return Err(bad("an output of a change"));
+            }
+            let mut c = Cursor { b: &rest[end..end + 18], at: 0 };
+            let (bond, held) = (c.int()?, c.int()?);
+            let claimer: [u8; 32] = rest[end + 18..end + 50].try_into().map_err(|_| bad("the claimer's key"))?;
+            let disputer = if rest.len() == end + 82 { Some(rest[end + 50..].try_into().map_err(|_| bad("the disputer's key"))?) } else { None };
+            if bond != position.bond() || !(0..LOCK_TIME_THRESHOLD).contains(&t0) || kind != KIND_TAKE {
+                return Err(bad("a change the position could not carry (its kind, its time or its bond)"));
+            }
+            return Ok(TObj::Change(Change { position, kind, t0, take, outs: Outs::of(&outs).ok_or_else(|| bad("the outputs of a change"))?, bond, claimer, held, disputer }));
         }
         if *kind == 5 {
             let at = FIXED_LEN + MOVING_LEN;
@@ -660,6 +695,7 @@ impl TObj {
             TObj::Disputed(d) => d.claim.position.pot() + 2 * d.claim.bond,
             TObj::Liq(l) => l.liq.position.pot() + l.bonds(),
             TObj::ExitClaim(q) => q.position.pot() + q.bond,
+            TObj::Change(c) => c.position.pot() + c.bonds(),
             TObj::Order(o) => o.value(),
             TObj::Anchor => 0,
         }
@@ -668,6 +704,966 @@ impl TObj {
     /// The object's script in the library `lib`.
     pub fn script(&self, lib: &[u8; 32]) -> Vec<u8> {
         crate::thin_artifacts::kit().object(lib, &self.hash())
+    }
+}
+
+// ---------------------------------------------------------------- a stated change
+
+/// The kinds a change is stated of (`KINDS` of `KpfTChange`): each has a script that answers its dispute.
+pub const KINDS: i64 = 5;
+/// A take (`KpfTTake`).
+pub const KIND_TAKE: i64 = 1;
+/// The most outputs a change states.
+pub const OUTS_MAX: usize = 4;
+
+/// An output a change states: the position as it goes on with the state of the hash `to` (the first only), or a
+/// payment to the key `to`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Out {
+    pub key: bool,
+    pub to: [u8; 32],
+    pub value: i64,
+}
+
+/// The outputs a change states, one to four.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Outs {
+    n: usize,
+    e: [Out; OUTS_MAX],
+    /// Which of them are notes to a shard: objects under the object's own id, of the state hash `to`.
+    note: [bool; OUTS_MAX],
+}
+
+impl Outs {
+    pub fn of(v: &[Out]) -> Option<Outs> {
+        let all: Vec<(Out, bool)> = v.iter().map(|o| (*o, false)).collect();
+        Outs::with_notes(&all)
+    }
+
+    /// The outputs, each with whether it is a note (a note is not the first, and its `to` is a state's hash).
+    pub fn with_notes(v: &[(Out, bool)]) -> Option<Outs> {
+        if v.is_empty() || v.len() > OUTS_MAX || v[0].1 || v[1..].iter().any(|(o, note)| !o.key && !note) || v.iter().any(|(o, note)| o.key && *note) {
+            return None;
+        }
+        let mut e = [Out { key: true, to: [0; 32], value: 0 }; OUTS_MAX];
+        let mut note = [false; OUTS_MAX];
+        for (i, (o, is_note)) in v.iter().enumerate() {
+            e[i] = *o;
+            note[i] = *is_note;
+        }
+        Some(Outs { n: v.len(), e, note })
+    }
+
+    pub fn list(&self) -> &[Out] {
+        &self.e[..self.n]
+    }
+
+    /// Whether the output `i` is a note to a shard.
+    pub fn is_note(&self, i: usize) -> bool {
+        i < self.n && self.note[i]
+    }
+
+    /// The outputs a statement shows, read back.
+    pub fn read(b: &[u8]) -> Option<Outs> {
+        if b.is_empty() || b.len() % 41 != 0 || b.chunks(41).any(|e| e[0] > 2) {
+            return None;
+        }
+        let v: Vec<(Out, bool)> = b.chunks(41).map(|e| (Out { key: e[0] == 1, to: e[1..33].try_into().expect("32 bytes"), value: crate::state::int8(&e[33..41]) }, e[0] == 2)).collect();
+        Outs::with_notes(&v).filter(|o| o.bytes() == b)
+    }
+
+    /// 41 bytes an output: a flag (0 the object, 1 a key, 2 a note), the 32 bytes, the value.
+    pub fn bytes(&self) -> Vec<u8> {
+        self.list().iter().enumerate().flat_map(|(i, o)| [&[if self.note[i] { 2 } else { o.key as u8 }][..], &o.to, &sm8(o.value)].concat()).collect()
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&self.bytes())
+    }
+
+    pub fn total(&self) -> i64 {
+        self.list().iter().map(|o| o.value).sum()
+    }
+}
+
+/// A change of a position as it was stated (`KpfTChange`): what the position becomes (`outs`), why (`kind`, and
+/// `arg`, the hash of what that kind states), the time the statement prices at, the bond and who stated it. Nothing
+/// of it is checked when it is stated: it is disputed (`disputer`) and answered by the kind's script, applied after
+/// the position's dispute period, or ended as late.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub position: Position,
+    pub kind: i64,
+    pub t0: i64,
+    /// What is stated: a take (kind 1 is of a position, and whatever 32 bytes were shown read as one).
+    pub take: Take,
+    pub outs: Outs,
+    pub bond: i64,
+    pub claimer: [u8; 32],
+    /// What the position held when the change was stated.
+    pub held: i64,
+    pub disputer: Option<[u8; 32]>,
+}
+
+impl Change {
+    /// The hash of what is stated.
+    pub fn arg(&self) -> [u8; 32] {
+        self.take.arg()
+    }
+
+    /// The hash of the statement (`changeHash` of the scripts).
+    pub fn stated_hash(&self) -> [u8; 32] {
+        let a = &self.position;
+        blake2b(&[i9(10), p33(&a.hash()), i9(self.kind), i9(self.t0), p33(&self.arg()), p33(&self.outs.hash()), i9(self.bond), p33(&self.claimer), i9(a.dispute_daa), i9(a.x.t.late_daa), i9(self.held)].concat())
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        match self.disputer {
+            None => self.stated_hash(),
+            Some(d) => blake2b(&[p33(&self.stated_hash()), p33(&d)].concat()),
+        }
+    }
+
+    /// The bonds the object holds above the position's value.
+    pub fn bonds(&self) -> i64 {
+        if self.disputer.is_some() { 2 * self.bond } else { self.bond }
+    }
+
+    /// Whether the statement landed at its time or within the position's lateness after it.
+    pub fn in_time(&self, landed: u64) -> bool {
+        (0..=self.position.x.t.late_daa).contains(&(landed as i64 - self.t0))
+    }
+
+    pub fn disputed(&self, disputer: [u8; 32]) -> Change {
+        Change { disputer: Some(disputer), ..*self }
+    }
+
+    /// The position the change's first output states, if `next` is it.
+    pub fn becomes(&self, next: &Position) -> bool {
+        self.outs.list().first().is_some_and(|o| !o.key && o.to == next.hash())
+    }
+}
+
+/// What a take states (kind 1): the position's entries move to the prices `a`, so that what `side` gained since is
+/// margin of its own, and `side` takes `amount` out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Take {
+    pub side: i64,
+    pub a: [i64; 2],
+    pub amount: i64,
+}
+
+impl Take {
+    /// What the statement shows: the side, the two prices and the amount, 8 bytes each.
+    pub fn said(&self) -> Vec<u8> {
+        [sm8(self.side), sm8(self.a[0]), sm8(self.a[1]), sm8(self.amount)].concat()
+    }
+
+    pub fn arg(&self) -> [u8; 32] {
+        blake2b(&self.said())
+    }
+
+    /// The take a statement shows, read back (any 32 bytes read as one: a take that is nonsense is answered wrong).
+    pub fn read(said: &[u8]) -> Option<Take> {
+        if said.len() != 32 {
+            return None;
+        }
+        let int = |i: usize| crate::state::int8(&said[8 * i..8 * i + 8]);
+        Some(Take { side: int(0), a: [int(1), int(2)], amount: int(3) })
+    }
+}
+
+/// The outputs of a take on a position holding `held`: the position after it holding the amount less, and the
+/// amount to the claimer.
+pub fn take_outs(after: &Position, claimer: &[u8; 32], held: i64, amount: i64) -> Option<Outs> {
+    let mut v = vec![Out { key: false, to: after.hash(), value: held - amount }];
+    if amount > 0 {
+        v.push(Out { key: true, to: *claimer, value: amount });
+    }
+    Outs::of(&v)
+}
+
+impl Position {
+    /// The position once a take is applied, with `KpfTTake`'s arithmetic: every used leg's entry is the price stated,
+    /// A's gain there has moved to A's margin, and the taker's margin is the amount less. `None` when a margin would
+    /// fall below zero.
+    pub fn taken(&self, tk: &Take) -> Option<Position> {
+        let legs = self.x.legs;
+        let moved: i64 = (0..2).map(|i| { let l = &legs[i]; let d = l.worth(tk.a[i]) - l.worth(l.entry); if l.dir == crate::state::LONG { d } else { -d } }).sum();
+        let (mut am, mut bm) = (self.x.a_margin + moved, self.x.b_margin - moved);
+        if tk.side == SIDE_A {
+            am -= tk.amount;
+        } else {
+            bm -= tk.amount;
+        }
+        if am < 0 || bm < 0 {
+            return None;
+        }
+        let mut c = self.x;
+        c.legs[0].entry = tk.a[0];
+        if c.legs[1].size > 0 {
+            c.legs[1].entry = tk.a[1];
+        }
+        c.a_margin = am;
+        c.b_margin = bm;
+        Some(Position { x: c, ..*self })
+    }
+
+    /// `KpfTTake`'s rule: whether a take stated by `claimer` with the outputs `outs`, on this position holding
+    /// `held`, is within the rule at the committee's prices `c`.
+    pub fn take_within(&self, tk: &Take, claimer: &[u8; 32], outs: &Outs, held: i64, c: [i64; 2]) -> bool {
+        let (legs, g) = (self.x.legs, self.x.t.g_bps);
+        let near = |a: i64, c: i64, pm: i64| {
+            let p = c.min(pm);
+            a > 0 && a >= p * (BPS - g) / BPS && a <= ((p * (BPS + g) + BPS - 1) / BPS).min(pm)
+        };
+        if !near(tk.a[0], c[0], legs[0].price_max) || (legs[1].size > 0 && !near(tk.a[1], c[1], legs[1].price_max)) || (legs[1].size <= 0 && tk.a[1] != 0) {
+            return false;
+        }
+        let p = [c[0].min(legs[0].price_max), c[1].min(legs[1].price_max)];
+        let pot = self.pot();
+        let gain: i64 = (0..2).map(|i| { let l = &legs[i]; let d = l.worth(p[i]) - l.worth(l.entry); if l.dir == crate::state::LONG { d } else { -d } }).sum();
+        let due_a = (self.x.a_margin + gain).clamp(0, pot);
+        let m = self.x.maint(legs[0].worth(p[0]) + legs[1].worth(p[1]));
+        let (key, ask, due) = match tk.side {
+            SIDE_A => (self.x.a_key, self.b_min_counter, due_a),
+            SIDE_B => (self.x.b_key, self.a_min_counter, pot - due_a),
+            _ => return false,
+        };
+        let floor = m.max(ask).min(due);
+        if key != *claimer || tk.amount < 0 || due - tk.amount < floor {
+            return false;
+        }
+        match self.taken(tk) {
+            Some(after) => take_outs(&after, claimer, held, tk.amount).is_some_and(|o| o == *outs),
+            None => false,
+        }
+    }
+
+    /// The most `side` takes out at the prices `c` (the committee's, or its own reading of them): what it is owed
+    /// there above its floor.
+    pub fn take_max(&self, side: i64, c: [i64; 2]) -> i64 {
+        let legs = self.x.legs;
+        let p = [c[0].min(legs[0].price_max), c[1].min(legs[1].price_max)];
+        let pot = self.pot();
+        let due_a = self.owed_gain(p).clamp(0, pot);
+        let m = self.x.maint(legs[0].worth(p[0]) + legs[1].worth(p[1]));
+        let (ask, due) = if side == SIDE_A { (self.b_min_counter, due_a) } else { (self.a_min_counter, pot - due_a) };
+        (due - m.max(ask)).max(0)
+    }
+
+    /// The most `side` takes out when it states the prices `a`, whatever the committee's prices within the
+    /// tolerance of them turn out to be: the least of `take_max` at the ends of that band (what a tool states by
+    /// default: a take of more is refuted when the committee's price is a little worse for the taker than its own).
+    pub fn take_safe(&self, side: i64, a: [i64; 2]) -> i64 {
+        let g = self.x.t.g_bps;
+        let ends = |p: i64| if p > 0 { vec![p * BPS / (BPS + g), p, p * BPS / (BPS - g) + 1] } else { vec![0] };
+        let mut least = i64::MAX;
+        for p0 in ends(a[0]) {
+            for p1 in ends(a[1]) {
+                least = least.min(self.take_max(side, [p0, p1]));
+            }
+        }
+        least.max(0)
+    }
+
+    fn owed_gain(&self, p: [i64; 2]) -> i64 {
+        let legs = self.x.legs;
+        self.x.a_margin + (0..2).map(|i| { let l = &legs[i]; let d = l.worth(p[i]) - l.worth(l.entry); if l.dir == crate::state::LONG { d } else { -d } }).sum::<i64>()
+    }
+
+    /// The statement of a take on this position holding `held`, by the owner of `side`: what `KpfTChange` is told.
+    /// Refused when the take could not be applied at its own prices (a margin below zero, a side that is none).
+    pub fn take(&self, tk: Take, t0: i64, held: i64) -> Result<Change> {
+        let claimer = self.key_of(tk.side).ok_or_else(|| Error::Invalid("a take is by side a (1) or b (2)".into()))?;
+        let after = self.taken(&tk).filter(|_| tk.amount >= 0 && tk.amount <= held).ok_or_else(|| Error::Invalid("the take leaves a margin below zero at the prices it states".into()))?;
+        after.check()?;
+        let outs = take_outs(&after, &claimer, held, tk.amount).ok_or_else(|| Error::Invalid("the take's outputs".into()))?;
+        if !(0..LOCK_TIME_THRESHOLD).contains(&t0) || self.bond() <= 0 {
+            return Err(Error::Invalid("the take's time is out of range, or the position's pot is too small for a bond".into()));
+        }
+        Ok(Change { position: *self, kind: KIND_TAKE, t0, take: tk, outs, bond: self.bond(), claimer, held, disputer: None })
+    }
+}
+
+// ---------------------------------------------------------------- accounts of any number of legs
+
+/// A take on an account (`KpfTPoint` and the three answers of a point).
+pub const KIND_ACCOUNT_TAKE: i64 = 2;
+/// A step of a liquidation of an account: one leg leaves it, for a fee (`KpfTStepLiq`).
+pub const KIND_ACCOUNT_LIQ: i64 = 3;
+/// A leg that leaves an account by its party's own statement (`KpfTStepLiq`).
+pub const KIND_ACCOUNT_LEAVE: i64 = 4;
+/// A draw from a shard by its owner (`KpfTShardEnd`, `KpfTShardPrice`, `KpfTDrawNote`; `crate::reserve`).
+pub const KIND_DRAW: i64 = 5;
+/// The most legs the tools give an account (no script counts them: an answer is of one leg).
+pub const LEGS_MAX: usize = 64;
+
+/// A statement on an object that is shown as its hash (a position or an account): what `KpfTChange` wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stated {
+    pub position: [u8; 32],
+    pub window: i64,
+    pub late: i64,
+    pub kind: i64,
+    pub t0: i64,
+    pub arg: [u8; 32],
+    pub outs: Outs,
+    pub bond: i64,
+    pub claimer: [u8; 32],
+    /// What the object held when the change was stated (an answer counts from this, not from what it holds since).
+    pub held: i64,
+}
+
+/// The lateness of a statement that stands again after a point of it was answered right: it was held to its time
+/// when it was disputed, and is not held to it again.
+pub const LATE_AGAIN: i64 = 499_999_999_999;
+
+impl Stated {
+    pub fn hash(&self) -> [u8; 32] {
+        self.hash_with_outs(&self.outs.hash())
+    }
+
+    /// The statement's hash with the hash of its outputs given (outputs as bytes that are not the model's).
+    pub fn hash_with_outs(&self, outs: &[u8; 32]) -> [u8; 32] {
+        blake2b(&[i9(10), p33(&self.position), i9(self.kind), i9(self.t0), p33(&self.arg), p33(outs), i9(self.bond), p33(&self.claimer), i9(self.window), i9(self.late), i9(self.held)].concat())
+    }
+
+    /// The statement as it stands again after a point of it was answered right.
+    pub fn again(&self) -> Stated {
+        Stated { late: LATE_AGAIN, ..*self }
+    }
+
+    pub fn in_time(&self, landed: u64) -> bool {
+        (0..=self.late).contains(&(landed as i64 - self.t0))
+    }
+}
+
+/// A statement one point of which is disputed (`KpfTPoint`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pointed {
+    pub st: Stated,
+    pub disputer: [u8; 32],
+    pub point: i64,
+}
+
+impl Pointed {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(11), p33(&self.st.hash()), p33(&self.disputer), i9(self.point)].concat())
+    }
+}
+
+impl Change {
+    /// The statement as the scripts that are not shown the position read it.
+    pub fn as_stated(&self) -> Stated {
+        let a = &self.position;
+        Stated { position: a.hash(), window: a.dispute_daa, late: a.x.t.late_daa, kind: self.kind, t0: self.t0, arg: self.arg(), outs: self.outs, bond: self.bond, claimer: self.claimer, held: self.held }
+    }
+}
+
+/// An account: a position of any number of legs. Its state is a position's with another fixed part, the hash of the
+/// terms and of the root of its legs' chain, so that every script that is shown a position's fixed part as its hash
+/// serves it as it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    pub t: crate::cross::XTerms,
+    pub legs: Vec<crate::cross::XLeg>,
+    pub a_key: [u8; 32],
+    pub b_key: [u8; 32],
+    pub a_margin: i64,
+    pub b_margin: i64,
+    pub expiry: i64,
+    pub dispute_daa: i64,
+    pub bond_bps: i64,
+    pub a_min_counter: i64,
+    pub b_min_counter: i64,
+    /// The shard that covers it (`docs/ARCHITECTURE-CLEARING.md` 6a): its moving part then ends with the push of the
+    /// shard's id, 171 bytes in all, and side B is the clearing party.
+    pub shard: Option<[u8; 32]>,
+}
+
+/// A row of a take's trace, 112 bytes: the price stated for a leg; over the legs up to it at the prices stated, A's
+/// gain, the worth each side is asked the maintenance of (`wa`, `wb`: the futures legs', and the underlyings' of the
+/// options the side wrote) and what each side keeps whole beside its maintenance (`ea`, `eb`: what the options it
+/// holds were counted at); the chain of the legs up to it, and the same chain with every entry at its price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub a: i64,
+    pub gain: i64,
+    pub wa: i64,
+    pub wb: i64,
+    pub ea: i64,
+    pub eb: i64,
+    pub g: [u8; 32],
+    pub h: [u8; 32],
+}
+
+/// The length of a row of a trace.
+pub const ROW_LEN: usize = 112;
+
+impl Row {
+    /// What stands before the first row.
+    pub const ZERO: Row = Row { a: 0, gain: 0, wa: 0, wb: 0, ea: 0, eb: 0, g: [0; 32], h: [0; 32] };
+
+    pub fn bytes(&self) -> Vec<u8> {
+        [&sm8(self.a)[..], &sm8(self.gain), &sm8(self.wa), &sm8(self.wb), &sm8(self.ea), &sm8(self.eb), &self.g, &self.h].concat()
+    }
+
+    /// (The worth `side` is asked the maintenance of, what it keeps whole beside it.)
+    pub fn asked(&self, side: i64) -> (i64, i64) {
+        if side == SIDE_A {
+            (self.wa, self.ea)
+        } else {
+            (self.wb, self.eb)
+        }
+    }
+}
+
+fn rate_up(w: i64, rate: i64) -> i64 {
+    (w / BPS) * rate + ((w % BPS) * rate + BPS - 1) / BPS
+}
+
+pub fn rows_bytes(rows: &[Row]) -> Vec<u8> {
+    rows.iter().flat_map(|r| r.bytes()).collect()
+}
+
+/// The 111 bytes of a leg, as a position's fixed part has them.
+pub fn leg_bytes(l: &crate::cross::XLeg) -> Vec<u8> {
+    [p33(&l.market), p33(&l.committee), i9(l.scale), i9(l.price_max), i9(l.size), i9(l.dir), i9(l.entry)].concat()
+}
+
+/// The tag of the name a market's options have in a shard's row and in a note (`OPTION_TAG` of the scripts).
+pub const OPTION_TAG: i64 = 13;
+/// The tag of the name a market's futures legs have there (`FUTURES_TAG`).
+pub const FUTURES_TAG: i64 = 14;
+/// What an option is, in the last three bits of its direction's place: a call side A holds.
+pub const CALL_HELD: i64 = 3;
+/// A call side A wrote (side B holds it).
+pub const CALL_WRITTEN: i64 = 4;
+/// A put side A holds.
+pub const PUT_HELD: i64 = 5;
+/// A put side A wrote.
+pub const PUT_WRITTEN: i64 = 6;
+
+/// The direction's place of an option leg: its kind (3 to 6) in the last three bits, its strike above them.
+pub fn option_dir(kind: i64, strike: i64) -> i64 {
+    kind + 8 * strike
+}
+
+/// The kind and the strike of a leg that is an option (`None`: a futures leg), read as the scripts read it: a
+/// number from 3 on whose last three bits are 3 to 6. Its entry is the price it was last counted at.
+pub fn option_of(l: &crate::cross::XLeg) -> Option<(i64, i64)> {
+    (l.dir >= 3 && (3..=6).contains(&(l.dir % 8))).then(|| (l.dir % 8, l.dir / 8))
+}
+
+/// The side that holds an option leg (`None`: a futures leg). An option leaves by its holder's side alone.
+pub fn holder_of(l: &crate::cross::XLeg) -> Option<i64> {
+    option_of(l).map(|(c, _)| if c % 2 == 1 { SIDE_A } else { SIDE_B })
+}
+
+/// Whether the direction's place of a leg says what a leg is: a direction, or an option whose strike is within its
+/// market's limit (what `KpfTLegAdd` asks).
+pub fn leg_kind_ok(l: &crate::cross::XLeg) -> bool {
+    l.dir == crate::state::LONG || l.dir == crate::state::SHORT || option_of(l).is_some_and(|(_, k)| k >= 1 && k <= l.price_max)
+}
+
+/// Whether what a leg is worth at any price within its market's limit is computed without overflow: the bound a
+/// position's leg is held to (`KpfTLegAdd` asks it of a leg that enters a covered account).
+pub fn leg_size_ok(l: &crate::cross::XLeg) -> bool {
+    l.scale > 0 && l.scale <= crate::state::SCALE_MAX && l.price_max > 0 && l.size > 0 && l.size <= MARGIN_MAX && l.size / l.scale <= MARGIN_MAX / l.price_max - 1
+}
+
+/// Whether the sums of a trace over these legs, at any prices within their markets' limits, stay within 64 bits.
+/// The scripts hold a leg to its own bound and have no count of legs: this is held by the tool, which states on no
+/// account beyond it and adds or moves no leg into one (review 34, F58).
+pub fn legs_sum_ok(legs: &[crate::cross::XLeg]) -> bool {
+    legs.iter().try_fold(0i64, |s, l| if l.scale > 0 { s.checked_add((l.size / l.scale).checked_add(1)?.checked_mul(l.price_max)?) } else { None }).is_some()
+}
+
+/// What a leg's row adds at the price `a`: to A's gain, to the worth of side A and of side B, and to what A and B
+/// keep whole. A futures leg: its worth at the price less at its entry to the gain (the other way where A is
+/// short), and its worth to both sides'. An option: to the gain what it is worth if exercised at the price less
+/// what it was at its entry (the other way where A wrote it); its underlying's worth to the worth of whoever wrote
+/// it; and what it is worth exercised at the price to what its holder keeps whole.
+fn leg_adds(l: &crate::cross::XLeg, a: i64) -> [i64; 5] {
+    let w = l.worth(a);
+    let we = l.worth(l.entry);
+    match option_of(l) {
+        None => [if l.dir == crate::state::LONG { w - we } else { we - w }, w, w, 0, 0],
+        Some((c, strike)) => {
+            let wk = l.worth(strike);
+            let (va, ve) = if c >= PUT_HELD { ((wk - w).max(0), (wk - we).max(0)) } else { ((w - wk).max(0), (we - wk).max(0)) };
+            if c % 2 == 1 {
+                [va - ve, 0, w, va, 0]
+            } else {
+                [ve - va, w, 0, 0, va]
+            }
+        }
+    }
+}
+
+/// The row after `before` for the leg `l` at the price `a`; `left_out`: the statement leaves this leg out of what
+/// the account becomes (its second chain passes it by).
+pub fn row_after(before: &Row, l: &crate::cross::XLeg, a: i64, left_out: bool) -> Row {
+    let [d, ua, ub, xa, xb] = leg_adds(l, a);
+    let h = if left_out { before.h } else { blake2b(&[&before.h[..], &leg_bytes(&crate::cross::XLeg { entry: a, ..*l })].concat()) };
+    Row { a, gain: before.gain + d, wa: before.wa + ua, wb: before.wb + ub, ea: before.ea + xa, eb: before.eb + xb, g: blake2b(&[&before.g[..], &leg_bytes(l)].concat()), h }
+}
+
+/// `KpfTStepRow`: a row is opened by a chain `prev` and a leg that hash to the row's chain (`None` where they do
+/// not: the script then takes neither verdict). The row is wrong where `prev` is not the chain of the row before
+/// it, and else right exactly when it follows from that row and the leg.
+pub fn row_judged(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, left_out: bool) -> Option<bool> {
+    row_judged_of(prev, l, before, row, left_out.then(|| (crate::reserve::Head::of(l), crate::reserve::SNote::units(l))), holder_of(l).unwrap_or(SIDE_A))
+}
+
+/// As `row_judged`; `leave`: the row is of the leg that leaves, and this is what the statement says of that leg (its
+/// market and side B's units in it), which the row holds to the leg; `side`: the side the statement is of (an
+/// option leaves by its holder's side alone: the row of an option that leaves by the other is wrong).
+pub fn row_judged_of(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, leave: Option<(crate::reserve::Head, i64)>, side: i64) -> Option<bool> {
+    // (A chain of 32 zero bytes is the seed of every chain and of no leg: nobody opens it, and a row that carries it
+    // is wrong whatever is shown.)
+    if row.g == [0; 32] {
+        return Some(false);
+    }
+    if blake2b(&[&prev[..], &leg_bytes(l)].concat()) != row.g {
+        return None;
+    }
+    let said = leave.is_none_or(|(head, units)| head == crate::reserve::Head::of(l) && units == crate::reserve::SNote::units(l) && holder_of(l).is_none_or(|h| h == side));
+    Some(*prev == before.g && row.a > 0 && row.a <= l.price_max && said && *row == row_after(before, l, row.a, leave.is_some()))
+}
+
+/// As `row_judged`, opened by the chain of the row before (what an honest trace is opened by).
+pub fn row_right(l: &crate::cross::XLeg, before: &Row, row: &Row, left_out: bool) -> Option<bool> {
+    row_judged(&before.g, l, before, row, left_out)
+}
+
+/// `KpfTStepPrice`: whether the price of a row is within the tolerance `g_bps` of the committee's `c`.
+pub fn price_right(l: &crate::cross::XLeg, row: &Row, c: i64, g_bps: i64) -> bool {
+    let p = c.min(l.price_max);
+    row.a > 0 && row.a >= p * (BPS - g_bps) / BPS && row.a <= ((p * (BPS + g_bps) + BPS - 1) / BPS).min(l.price_max)
+}
+
+/// What a leg's leaving leaves: the account, the claimer's fee, and what the pot could not pay A.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stepped {
+    pub after: Account,
+    pub fee: i64,
+    pub owed: i64,
+}
+
+/// What a take on an account states, or a step of its liquidation, or a leg that leaves: the side, the amount (the
+/// liquidator's fee), the trace of the prices stated, the leg that leaves the account (0: none, a take), and of that
+/// leg its market and side B's units in it (what the note of its leaving is made of; `None`: no market, no units).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ATake {
+    pub side: i64,
+    pub amount: i64,
+    pub rows: Vec<Row>,
+    pub skip: i64,
+    pub leave: Option<(crate::reserve::Head, i64)>,
+}
+
+impl ATake {
+    /// The 92 bytes of the leg that leaves: its market's 84 and side B's units.
+    fn leave_bytes(&self) -> Vec<u8> {
+        let (head, units) = self.leave.unwrap_or((crate::reserve::Head::EMPTY, 0));
+        [head.bytes(), sm8(units).to_vec()].concat()
+    }
+
+    /// What the statement shows: the side, the amount and the leg left out, 8 bytes each; the 92 bytes of that
+    /// leg; then the trace.
+    pub fn said(&self) -> Vec<u8> {
+        [sm8(self.side).to_vec(), sm8(self.amount).to_vec(), sm8(self.skip).to_vec(), self.leave_bytes(), rows_bytes(&self.rows)].concat()
+    }
+
+    pub fn arg(&self) -> [u8; 32] {
+        blake2b(&self.said())
+    }
+
+    /// The statement a transaction shows, read back (`None`: bytes that are no statement of an account's, or whose
+    /// 92 bytes of the leaving leg are not a market's as a leg has it).
+    pub fn read(said: &[u8]) -> Option<ATake> {
+        if said.len() < 116 || (said.len() - 116) % ROW_LEN != 0 {
+            return None;
+        }
+        let int = |b: &[u8]| crate::state::int8(b);
+        let h = &said[24..108];
+        if h[0] != 0x20 || h[33] != 0x20 || h[66] != 0x08 || h[75] != 0x08 {
+            return None;
+        }
+        let head = crate::reserve::Head { market: h[1..33].try_into().expect("32 bytes"), committee: h[34..66].try_into().expect("32 bytes"), scale: int(&h[67..75]), price_max: int(&h[76..84]) };
+        let units = int(&said[108..116]);
+        let rows = said[116..].chunks(ROW_LEN).map(|r| Row { a: int(&r[..8]), gain: int(&r[8..16]), wa: int(&r[16..24]), wb: int(&r[24..32]), ea: int(&r[32..40]), eb: int(&r[40..48]), g: r[48..80].try_into().expect("32 bytes"), h: r[80..112].try_into().expect("32 bytes") }).collect();
+        let leave = if head == crate::reserve::Head::EMPTY && units == 0 { None } else { Some((head, units)) };
+        Some(ATake { side: int(&said[..8]), amount: int(&said[8..16]), skip: int(&said[16..24]), rows, leave })
+    }
+}
+
+impl Account {
+    /// A position with this account's terms and moving part, and no leg: what the bytes are taken from.
+    fn shell(&self) -> Position {
+        let none = crate::cross::XLeg::none();
+        Position { x: Cross { t: self.t, legs: [none, none], a_key: self.a_key, b_key: self.b_key, a_margin: self.a_margin, b_margin: self.b_margin, expiry: self.expiry }, dispute_daa: self.dispute_daa, bond_bps: self.bond_bps, a_min_counter: self.a_min_counter, b_min_counter: self.b_min_counter }
+    }
+
+    /// The ten terms, 90 bytes.
+    pub fn terms(&self) -> Vec<u8> {
+        self.shell().fixed()[..90].to_vec()
+    }
+
+    pub fn moving(&self) -> Vec<u8> {
+        match self.shard {
+            None => self.shell().moving(),
+            Some(sid) => [self.shell().moving(), p33(&sid)].concat(),
+        }
+    }
+
+    /// The root of the legs' chain: `g_0` = 32 zero bytes, `g_i = blake2b(g_(i-1) + leg_i)`.
+    pub fn legs_root(&self) -> [u8; 32] {
+        self.legs.iter().fold([0u8; 32], |g, l| blake2b(&[&g[..], &leg_bytes(l)].concat()))
+    }
+
+    pub fn fixed_hash(&self) -> [u8; 32] {
+        blake2b(&[self.terms(), p33(&self.legs_root())].concat())
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[p33(&self.fixed_hash()), self.moving()].concat())
+    }
+
+    pub fn pot(&self) -> i64 {
+        self.a_margin + self.b_margin
+    }
+
+    pub fn bond(&self) -> i64 {
+        self.shell().bond()
+    }
+
+    pub fn check(&self) -> Result<()> {
+        let no = |why: &str| Err(Error::Invalid(format!("not an account: {why}")));
+        if self.legs.is_empty() || self.legs.len() > LEGS_MAX {
+            return no("it has one to sixty-four legs");
+        }
+        if self.legs.iter().any(|l| !leg_size_ok(l) || l.entry <= 0 || l.entry > l.price_max || !leg_kind_ok(l)) {
+            return no("a leg has no size or one beyond what is computed at its market's limit, no scale, an entry out of its market's limit, or neither a direction nor an option's kind and strike");
+        }
+        // (The scripts hold a leg to its own bound and have no count of legs: the sums of a trace at the markets'
+        // limits are held within 64 bits here, by the tool. Review 34, F58.)
+        if !legs_sum_ok(&self.legs) {
+            return no("its legs together are worth more at their markets' limits than a trace sums");
+        }
+        if self.a_margin < 0 || self.b_margin < 0 || self.a_margin > MARGIN_MAX || self.b_margin > MARGIN_MAX || self.bond() <= 0 {
+            return no("a margin is out of range, or the pot is too small for a bond");
+        }
+        if !(1..=WINDOW_MAX).contains(&self.dispute_daa) || !(1..=BPS).contains(&self.bond_bps) {
+            return no("the dispute period or the bond rate is out of range");
+        }
+        Ok(())
+    }
+
+    /// The trace of a take at the prices `a`, one a leg.
+    pub fn trace(&self, a: &[i64]) -> Vec<Row> {
+        self.trace_without(a, 0)
+    }
+
+    /// The trace at the prices `a` of a statement that leaves the leg `skip` out (0: none).
+    pub fn trace_without(&self, a: &[i64], skip: i64) -> Vec<Row> {
+        let mut rows: Vec<Row> = vec![];
+        for (i, (l, p)) in self.legs.iter().zip(a).enumerate() {
+            rows.push(row_after(rows.last().unwrap_or(&Row::ZERO), l, *p, skip == i as i64 + 1));
+        }
+        rows
+    }
+
+    /// The form a statement of kind 2 or 3 shows: the terms and the root of the legs.
+    pub fn form(&self) -> Vec<u8> {
+        [self.terms(), self.legs_root().to_vec()].concat()
+    }
+
+    /// What is asked of the side that takes, by the last row of the trace: the maintenance of the worth it is asked
+    /// it of and the tolerance of it (the prices stated are only near the committee's), and what the options it
+    /// holds were counted at; or what the other party asked of its margin.
+    fn floor(&self, side: i64, last: &Row) -> i64 {
+        let (w, e) = last.asked(side);
+        (rate_up(w, self.t.mmr_bps + self.t.g_bps) + e).max(if side == SIDE_A { self.b_min_counter } else { self.a_min_counter })
+    }
+
+    /// The account once a take with this last row is applied (`KpfTStepEnd`'s arithmetic): `None` when a margin
+    /// would fall below zero.
+    pub fn taken(&self, side: i64, amount: i64, rows: &[Row]) -> Option<Account> {
+        let last = rows.last()?;
+        let (mut am, mut bm) = (self.a_margin + last.gain, self.b_margin - last.gain);
+        if side == SIDE_A {
+            am -= amount;
+        } else {
+            bm -= amount;
+        }
+        if am < 0 || bm < 0 || rows.len() != self.legs.len() {
+            return None;
+        }
+        let legs = self.legs.iter().zip(rows).map(|(l, r)| crate::cross::XLeg { entry: r.a, ..*l }).collect();
+        Some(Account { legs, a_margin: am, b_margin: bm, ..self.clone() })
+    }
+
+    /// The most `side` takes out at the prices `a` it states.
+    pub fn take_max(&self, side: i64, a: &[i64]) -> i64 {
+        let rows = self.trace(a);
+        let Some(last) = rows.last() else { return 0 };
+        let due_a = (self.a_margin + last.gain).clamp(0, self.pot());
+        let due = if side == SIDE_A { due_a } else { self.pot() - due_a };
+        (due - self.floor(side, last)).max(0)
+    }
+
+    /// `KpfTStepEnd`: whether the end of a take's trace is right for this account holding `held`.
+    pub fn end_right(&self, tk: &ATake, claimer: &[u8; 32], outs: &Outs, held: i64) -> bool {
+        let Some(last) = tk.rows.last() else { return false };
+        if tk.skip != 0 {
+            return false;
+        }
+        let key = match tk.side {
+            SIDE_A => self.a_key,
+            SIDE_B => self.b_key,
+            _ => return false,
+        };
+        let pot = self.pot();
+        let due_a = (self.a_margin + last.gain).clamp(0, pot);
+        let due = if tk.side == SIDE_A { due_a } else { pot - due_a };
+        let floor = self.floor(tk.side, last).min(due);
+        // A covered account pays its side B nothing: a take for B is stated by anyone, and is a deposit.
+        let deposit = self.shard.filter(|_| tk.side == SIDE_B);
+        if last.g != self.legs_root() || last.wa < 0 || last.wb < 0 || (deposit.is_none() && key != *claimer) || tk.amount < 0 || due - tk.amount < floor {
+            return false;
+        }
+        let (mut am, mut bm) = (self.a_margin + last.gain, self.b_margin - last.gain);
+        if tk.side == SIDE_A {
+            am -= tk.amount;
+        } else {
+            bm -= tk.amount;
+        }
+        if am < 0 || bm < 0 {
+            return false;
+        }
+        // The next state by the last row's second chain (the script has no legs to rebuild).
+        let next = Account { a_margin: am, b_margin: bm, ..self.clone() };
+        let h = blake2b(&[p33(&blake2b(&[self.terms(), p33(&last.h)].concat())), next.moving()].concat());
+        let mut v = vec![(Out { key: false, to: h, value: held - tk.amount }, false)];
+        if tk.amount > 0 {
+            v.push(match deposit {
+                Some(sid) => {
+                    let n = crate::reserve::SNote::deposit(sid, self.b_key, tk.amount);
+                    (Out { key: false, to: n.hash(), value: n.value() }, true)
+                }
+                None => (Out { key: true, to: *claimer, value: tk.amount }, false),
+            });
+        }
+        Outs::with_notes(&v).is_some_and(|o| o == *outs)
+    }
+
+    /// The first point of a stated take that is wrong at the committee's prices `c` (one a leg), for whoever
+    /// disputes: 0 the end, 2i - 1 row i, 2i the price of row i. `None`: the statement is the rule's.
+    pub fn wrong_point(&self, tk: &ATake, claimer: &[u8; 32], outs: &Outs, held: i64, c: &[i64]) -> Option<i64> {
+        self.wrong_point_of(KIND_ACCOUNT_TAKE, tk, claimer, outs, held, c)
+    }
+
+    /// As `wrong_point`, for a statement of the kind given (a take, or a step of a liquidation).
+    pub fn wrong_point_of(&self, kind: i64, tk: &ATake, claimer: &[u8; 32], outs: &Outs, held: i64, c: &[i64]) -> Option<i64> {
+        let end = if kind == KIND_ACCOUNT_TAKE { self.end_right(tk, claimer, outs, held) } else { self.step_end_right(kind, tk, claimer, outs, held) };
+        if !end {
+            return Some(0);
+        }
+        // The end is right: the last row's chain is the legs' root. Counted from the end, row k of n stands against
+        // the account's chain of its leg m - (n - k): the last row against the root, the one before against the
+        // chain before the last leg, and so on (a trace of more rows than legs runs out of legs: its first rows stand
+        // against nothing). The last row that does not carry its chain is of no leg anybody can show. If it carries
+        // the seed of every chain (32 zero bytes) it is wrong by that alone; else the row after it, which carries
+        // the account's own chain, is opened by that chain's own opening, which is not the row before it: wrong.
+        let (n, m) = (tk.rows.len(), self.legs.len());
+        let mut chain = vec![[0u8; 32]];
+        for l in &self.legs {
+            chain.push(blake2b(&[&chain[chain.len() - 1][..], &leg_bytes(l)].concat()));
+        }
+        let own = |k: usize| -> Option<[u8; 32]> { (k + m >= n + 1).then(|| chain[k + m - n]) };
+        if let Some(k) = (1..=n).rev().find(|k| own(*k) != Some(tk.rows[k - 1].g) || tk.rows[k - 1].g == [0; 32]) {
+            return Some(if tk.rows[k - 1].g == [0; 32] || k == n { 2 * k as i64 - 1 } else { 2 * k as i64 + 1 });
+        }
+        // Every row carries the chain of its own leg (so the trace has a row a leg): each is held to its leg and to
+        // the committee's price.
+        for (i, l) in self.legs.iter().enumerate() {
+            let before = if i == 0 { Row::ZERO } else { tk.rows[i - 1] };
+            let leave = (tk.skip == i as i64 + 1).then(|| tk.leave.unwrap_or((crate::reserve::Head::EMPTY, 0)));
+            if row_judged_of(&before.g, l, &before, &tk.rows[i], leave, tk.side) != Some(true) {
+                return Some(2 * i as i64 + 1);
+            }
+            if !price_right(l, &tk.rows[i], c[i], self.t.g_bps) {
+                return Some(2 * i as i64 + 2);
+            }
+        }
+        None
+    }
+
+    /// A leg leaves the account, with `KpfTStepLiq`'s arithmetic: by a step of a liquidation (`kind` 3: `side` stands
+    /// below its maintenance once the entries stand at the trace's prices; the claimer has the liquidation fee of
+    /// the leg's worth) or by its party's own statement (`kind` 4: the claimer is the side's key, no fee, and the
+    /// side stands at its maintenance, or the other party below its own). `None` where the rule does not allow it.
+    pub fn stepped(&self, kind: i64, side: i64, skip: i64, rows: &[Row], claimer: &[u8; 32]) -> Option<Stepped> {
+        let last = rows.last()?;
+        if rows.len() != self.legs.len() || skip < 1 || skip as usize > rows.len() || (side != SIDE_A && side != SIDE_B) || last.wa < 0 || last.wb < 0 {
+            return None;
+        }
+        let k = skip as usize;
+        // The worth of the leg that leaves: what its row added to either side's worth (a futures leg adds it to
+        // both, an option to whoever wrote it).
+        let before = if k > 1 { rows[k - 2] } else { Row::ZERO };
+        let (wka, wkb) = (rows[k - 1].wa - before.wa, rows[k - 1].wb - before.wb);
+        if wka < 0 || wkb < 0 {
+            return None;
+        }
+        let wk = wka.max(wkb);
+        let other = if side == SIDE_A { SIDE_B } else { SIDE_A };
+        let ((ws, es), (wo, eo)) = (last.asked(side), last.asked(other));
+        let pot = self.pot();
+        let raw = self.a_margin + last.gain;
+        // What the pot cannot pay A, the entries standing at the prices stated; and what A's margin cannot pay B.
+        let owed = (raw - pot).max(0);
+        let lack = (-raw).max(0);
+        let mut am = raw.clamp(0, pot);
+        let mut bm = pot - am;
+        let mine = if side == SIDE_A { am } else { bm };
+        // The maintenance counted the tolerance less, and the tolerance more: the prices are only near the committee's.
+        // And what the options a side holds were counted at is kept whole beside it.
+        // less what of it the pot could not pay: a side is not below its maintenance for what it was not paid.
+        let (es, eo) = if side == SIDE_A { ((es - owed).max(0), (eo - lack).max(0)) } else { ((es - lack).max(0), (eo - owed).max(0)) };
+        let rate_lo = (self.t.mmr_bps - self.t.g_bps).max(0);
+        let lo = rate_up(ws, rate_lo) + es;
+        let lo_other = rate_up(wo, rate_lo) + eo;
+        let fee = match kind {
+            KIND_ACCOUNT_LIQ if mine < lo => ((wk / BPS) * self.t.liq_fee_bps + ((wk % BPS) * self.t.liq_fee_bps) / BPS).min(mine),
+            KIND_ACCOUNT_LEAVE => {
+                let key = if side == SIDE_A { self.a_key } else { self.b_key };
+                if key != *claimer || (mine < rate_up(ws, self.t.mmr_bps + self.t.g_bps) + es && pot - mine >= lo_other) {
+                    return None;
+                }
+                0
+            }
+            _ => return None,
+        };
+        if side == SIDE_A {
+            am -= fee;
+        } else {
+            bm -= fee;
+        }
+        let legs = self.legs.iter().zip(rows).enumerate().filter(|(i, _)| *i + 1 != k).map(|(_, (l, r))| crate::cross::XLeg { entry: r.a, ..*l }).collect();
+        Some(Stepped { after: Account { legs, a_margin: am, b_margin: bm, ..self.clone() }, fee, owed })
+    }
+
+    /// A step of a liquidation (`stepped` of kind 3, by anyone): the account that is left and the liquidator's fee.
+    pub fn liq_stepped(&self, side: i64, skip: i64, rows: &[Row]) -> Option<(Account, i64)> {
+        self.stepped(KIND_ACCOUNT_LIQ, side, skip, rows, &[0; 32]).map(|s| (s.after, s.fee))
+    }
+
+    /// The outputs of a leg that left: the account by the last row's second chain holding the fee less, the fee to
+    /// the claimer, and on a covered account the note that the leg left (made of what the statement says of the leg)
+    /// and the note of what A is owed beyond the pot.
+    fn step_outs(&self, st: &Stepped, tk: &ATake, claimer: &[u8; 32], held: i64) -> Option<Outs> {
+        let last = tk.rows.last()?;
+        let h = blake2b(&[p33(&blake2b(&[self.terms(), p33(&last.h)].concat())), st.after.moving()].concat());
+        let mut v = vec![(Out { key: false, to: h, value: held - st.fee }, false)];
+        if st.fee > 0 {
+            v.push((Out { key: true, to: *claimer, value: st.fee }, false));
+        }
+        if let Some(sid) = self.shard {
+            let (head, units) = tk.leave.unwrap_or((crate::reserve::Head::EMPTY, 0));
+            let release = crate::reserve::SNote { sid, kind: crate::reserve::NOTE_RELEASE, head, net: units, gross: units.abs(), key: self.b_key, amount: 0 };
+            v.push((Out { key: false, to: release.hash(), value: release.value() }, true));
+            if st.owed > 0 {
+                let owed = crate::reserve::SNote::owed(sid, self.a_key, self.b_key, st.owed);
+                v.push((Out { key: false, to: owed.hash(), value: owed.value() }, true));
+            }
+        }
+        Outs::with_notes(&v)
+    }
+
+    /// `KpfTStepLiq`: whether the end of a liquidation step's trace is right for this account holding `held`.
+    pub fn liq_end_right(&self, tk: &ATake, claimer: &[u8; 32], outs: &Outs, held: i64) -> bool {
+        self.step_end_right(KIND_ACCOUNT_LIQ, tk, claimer, outs, held)
+    }
+
+    /// `KpfTStepLiq`: whether the end of the trace of a leg that leaves (by a step of a liquidation, `kind` 3, or by
+    /// its party's own statement, 4) is right for this account holding `held`.
+    pub fn step_end_right(&self, kind: i64, tk: &ATake, claimer: &[u8; 32], outs: &Outs, held: i64) -> bool {
+        let Some(last) = tk.rows.last() else { return false };
+        if last.g != self.legs_root() {
+            return false;
+        }
+        let Some(st) = self.stepped(kind, tk.side, tk.skip, &tk.rows, claimer) else { return false };
+        tk.amount == st.fee && self.step_outs(&st, tk, claimer, held).is_some_and(|o| o == *outs)
+    }
+
+    /// The statement that the leg `skip` leaves this account holding `held`, at the prices `a`: by a step of a
+    /// liquidation of `side` (`kind` 3, `claimer` anyone) or by the statement of `side`'s own key (`kind` 4).
+    #[allow(clippy::too_many_arguments)]
+    pub fn step(&self, kind: i64, side: i64, skip: i64, a: &[i64], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, ATake, Stepped)> {
+        // (An option leaves by its holder's side alone: the end's arithmetic does not see the leg, its row does.)
+        if skip >= 1 && self.legs.get(skip as usize - 1).and_then(holder_of).is_some_and(|h| h != side) {
+            return Err(Error::Invalid("an option leaves by its holder's side alone: by the holder's statement, or by a step of the liquidation of the holder".into()));
+        }
+        self.step_any(kind, side, skip, a, t0, held, claimer)
+    }
+
+    /// As `step`, whoever holds the leg: the statement whose end is right by its arithmetic and whose row of the
+    /// leg is wrong where the leg is an option of the other side (for whoever tests that the row is answered so).
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_any(&self, kind: i64, side: i64, skip: i64, a: &[i64], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, ATake, Stepped)> {
+        self.check()?;
+        if a.len() != self.legs.len() || !(0..LOCK_TIME_THRESHOLD).contains(&t0) {
+            return Err(Error::Invalid("a leg leaves by a statement of one price a leg, and a time".into()));
+        }
+        let rows = self.trace_without(a, skip);
+        let st = self.stepped(kind, side, skip, &rows, &claimer).ok_or_else(|| Error::Invalid("the rule does not let this leg leave at the prices stated: the side is not below its maintenance (a step of a liquidation), or the claimer is not the side's key, or it stands below its maintenance while the other party does not (its own statement); or the leg is none of the account's".into()))?;
+        let l = &self.legs[skip as usize - 1];
+        let tk = ATake { side, amount: st.fee, rows, skip, leave: Some((crate::reserve::Head::of(l), crate::reserve::SNote::units(l))) };
+        let outs = self.step_outs(&st, &tk, &claimer, held).ok_or_else(|| Error::Invalid("the step's outputs".into()))?;
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind, t0, arg: tk.arg(), outs, bond: self.bond(), claimer, held }, tk, st))
+    }
+
+    /// The statement of a liquidation step on this account holding `held`: `liquidator` states that `side` stands
+    /// below its maintenance at the prices `a` and that the leg `skip` leaves.
+    pub fn liq_step(&self, side: i64, skip: i64, a: &[i64], t0: i64, held: i64, liquidator: [u8; 32]) -> Result<(Stated, ATake)> {
+        self.step(KIND_ACCOUNT_LIQ, side, skip, a, t0, held, liquidator).map(|(st, tk, _)| (st, tk))
+    }
+
+    /// The statement of a take on this account holding `held`, by the owner of `side`, at the prices `a`.
+    pub fn take(&self, side: i64, amount: i64, a: &[i64], t0: i64, held: i64) -> Result<(Stated, ATake)> {
+        let claimer = match side {
+            SIDE_A => self.a_key,
+            SIDE_B => self.b_key,
+            _ => return Err(Error::Invalid("a take is by side a (1) or b (2)".into())),
+        };
+        self.take_by(side, amount, a, t0, held, claimer)
+    }
+
+    /// As `take`, stated by `claimer`: the side's key; or anyone, for side B of a covered account, whose amount is
+    /// then a deposit to the account's shard.
+    pub fn take_by(&self, side: i64, amount: i64, a: &[i64], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, ATake)> {
+        self.check()?;
+        if (side != SIDE_A && side != SIDE_B) || a.len() != self.legs.len() || !(0..LOCK_TIME_THRESHOLD).contains(&t0) {
+            return Err(Error::Invalid("a take is by side a (1) or b (2), and states one price a leg, and a time".into()));
+        }
+        let tk = ATake { side, amount, rows: self.trace(a), skip: 0, leave: None };
+        let after = self.taken(side, amount, &tk.rows).filter(|_| amount >= 0 && amount <= held).ok_or_else(|| Error::Invalid("the take leaves a margin below zero at the prices it states".into()))?;
+        let mut v = vec![(Out { key: false, to: after.hash(), value: held - amount }, false)];
+        if amount > 0 {
+            v.push(match self.shard.filter(|_| side == SIDE_B) {
+                Some(sid) => {
+                    let n = crate::reserve::SNote::deposit(sid, self.b_key, amount);
+                    (Out { key: false, to: n.hash(), value: n.value() }, true)
+                }
+                None => (Out { key: true, to: claimer, value: amount }, false),
+            });
+        }
+        let outs = Outs::with_notes(&v).ok_or_else(|| Error::Invalid("the take's outputs".into()))?;
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_ACCOUNT_TAKE, t0, arg: tk.arg(), outs, bond: self.bond(), claimer, held }, tk))
     }
 }
 
@@ -889,6 +1885,34 @@ pub const ORACLE_FEE_CUT: i64 = 20;
 pub const ORACLE_FEE_UNIT: i64 = 1_000_000;
 /// The most one payment shares (`KpfTPay.POT_MAX`).
 pub const ORACLE_FEE_POT_MAX: i64 = 30_000_000_000_000;
+
+/// The least a price note holds (`NOTE_VALUE` of `KpfTNote`); its writer takes it back (`KpfNote.reclaim`).
+pub const NOTE_VALUE: i64 = 100_000_000;
+
+/// A price the committee signed, as a note under a library's id states it (`KpfNote`, written by `KpfTNote` beside
+/// the committee's attest and cited by `KpfTCite`): the committee, the market, the time, the price and the
+/// committee's spread. `owner` is the key what the note holds returns to; it is in the note's script, not in its state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub committee: [u8; 32],
+    pub market: [u8; 32],
+    pub t0: i64,
+    pub price: i64,
+    pub spread_bps: i64,
+    pub owner: [u8; 32],
+}
+
+impl Note {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(9), p33(&self.committee), p33(&self.market), i9(self.t0), i9(self.price), i9(self.spread_bps)].concat())
+    }
+
+    /// What a reader of a citation finds at the head of the citing input's signature script after the chain block:
+    /// the committee, the market, the time, the price and the spread, each as its push.
+    pub fn served(&self) -> Vec<u8> {
+        [p33(&self.committee), p33(&self.market), i9(self.t0), i9(self.price), i9(self.spread_bps)].concat()
+    }
+}
 
 /// The state of the fee pool whose oracle fees are the committee `committee`'s, in a library whose copies (and the fee pool) go on
 /// holding `floor`: what its genesis gave each.
@@ -1287,6 +2311,60 @@ pub struct Novation {
     pub to_leaver: i64,
     /// What S is paid when S and L are one user (else 0).
     pub to_stayer: i64,
+}
+
+/// What a re-mark leaves (research R2, `docs/RESEARCH-UNIFIED-MARGIN.md`; no script runs it yet).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Marked {
+    /// The position struck again: every leg's entry is the price, and the gain since the old entries has moved
+    /// between the two margins.
+    pub position: Position,
+    /// What moved from B's margin to A's (A's gain at the prices; negative: from A's to B's).
+    pub moved: i64,
+    /// What each party took out.
+    pub to_a: i64,
+    pub to_b: i64,
+}
+
+/// A re-mark: the position's entries are moved to the prices `p` (the committee's, cited), so that what a party
+/// gained since the old entries is margin of its own, and each party takes out `take_a`, `take_b` of what it then
+/// has above its floor. At every price each party is worth exactly what it was, less what it took out.
+///
+/// A side that would stand below its maintenance at `p` is not re-marked (it is liquidated, or it adds). A party's
+/// floor is the maintenance at `p` or what its counterparty asked of its margin when the position was made, whichever
+/// is more: what is above it is the gain that is usable.
+pub fn marked(x: &Position, p: [i64; 2], take_a: i64, take_b: i64) -> Result<Marked> {
+    let no = |why: &str| Err(Error::Invalid(format!("the position is not re-marked: {why}")));
+    x.check()?;
+    let legs = x.x.legs;
+    for (i, l) in legs.iter().enumerate() {
+        if l.size > 0 && (p[i] <= 0 || p[i] > l.price_max) {
+            return no("a price is not above zero and within its market's limit");
+        }
+    }
+    let moved: i64 = legs.iter().enumerate().filter(|(_, l)| l.size > 0).map(|(i, l)| l.gain(p[i])).sum();
+    let notional: i64 = legs.iter().enumerate().filter(|(_, l)| l.size > 0).map(|(i, l)| l.worth(p[i])).sum();
+    let m = x.x.maint(notional);
+    let (a1, b1) = (x.x.a_margin + moved, x.x.b_margin - moved);
+    if a1 < m || b1 < m {
+        return no(&format!("a side would stand below its maintenance at these prices (a {a1}, b {b1}, the maintenance {m}): it is liquidated or adds margin, not re-marked"));
+    }
+    // What a party keeps: the maintenance there, and what its counterparty asked of it.
+    let (floor_a, floor_b) = (m.max(x.b_min_counter), m.max(x.a_min_counter));
+    if take_a < 0 || take_b < 0 || a1 - take_a < floor_a.min(a1) || b1 - take_b < floor_b.min(b1) {
+        return no(&format!("a party takes out more than it has above its floor (a has {a1} and keeps {floor_a}; b has {b1} and keeps {floor_b})"));
+    }
+    let mut c = x.x;
+    for (i, l) in c.legs.iter_mut().enumerate() {
+        if l.size > 0 {
+            l.entry = p[i];
+        }
+    }
+    c.a_margin = a1 - take_a;
+    c.b_margin = b1 - take_b;
+    let position = Position { x: c, ..*x };
+    position.check()?;
+    Ok(Marked { position, moved, to_a: take_a, to_b: take_b })
 }
 
 /// What `KpfTReplace` leaves: two orders matched into a position, the owner of one leaving it and the owner of the
