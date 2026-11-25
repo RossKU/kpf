@@ -9301,3 +9301,35 @@ fn t1b_finding_f67_a_put_entered_and_left_at_the_two_ends_of_the_tolerance_is_as
     assert_eq!(cs2.owed, 0, "a call the other way");
     println!("T1b F67: a put on {units} units struck and entered at 20.1 and left at 19.9, the committee saying 20, every point answered right: {} sompi gained, {} of it the band, and the shard pays {} on a margin of 30 KAS that comes back whole", gained, band, sd.owed);
 }
+
+/// Round 42 (the lock, M1, as a fact of the scripts as they are; what section 12's claim rests on is that an
+/// account is stepped in time). A statement that changes nothing is right on an account at its maintenance: a take
+/// of nothing, by side A or by anyone for side B; its end is answered right at the engine and it is applied into
+/// the account as it was. On an account whose side A is below its maintenance a take of nothing is not stated by
+/// the model; but a step of its liquidation that lets a leg of next to nothing leave is right (its fee a sompi or
+/// so) and leaves the leg that matters standing. While any of these stands the account takes no other statement.
+#[test]
+fn t1b_r42_a_statement_that_changes_nothing_is_right_and_holds_the_account_for_a_dispute_period() {
+    let w = ow();
+    let dust = XLeg { size: 1, ..w.fut(1, 1, LONG, P10) };
+    let mut results = vec![];
+    for (what, am, price) in [("at its maintenance", 20 * KAS1, P10), ("side A below its maintenance", 6 * KAS1, P10 * 97 / 100), ("side A's loss beyond its margin", 6 * KAS1, P10 * 9 / 10)] {
+        let mut account = w.account(vec![w.fut(0, 10, LONG, P10), dust], am, 0);
+        account.s.shard = Some([0x5d; 32]);
+        let x = &account.s;
+        let held = account.value as i64;
+        let p = [price, P10];
+        let right = |st: &Stated, tk: &ATake| end_taken(&w, &account, st, tk) == (true, false);
+        let a0 = x.take_by(SIDE_A, 0, &p, T0, held, x.a_key).is_ok_and(|(st, tk)| right(&st, &tk));
+        let b0 = x.take_by(SIDE_B, 0, &p, T0, held, xk(&w.f)).is_ok_and(|(st, tk)| right(&st, &tk));
+        // A step of side A's liquidation by its own second key, of the leg of next to nothing.
+        let step = x.step(KIND_ACCOUNT_LIQ, SIDE_A, 2, &p, T0, held, xk(&w.f));
+        let stepped = step.as_ref().is_ok_and(|(st, tk, sd)| right(st, tk) && sd.after.legs.len() == 1 && sd.after.legs[0].size == x.legs[0].size && sd.fee <= 1);
+        let due = x.stepped(KIND_ACCOUNT_LIQ, SIDE_A, 1, &x.trace_without(&p, 1), &xk(&w.f)).is_some();
+        results.push((what, a0, b0, stepped, due));
+    }
+    println!("T1b R42 statements that hold an account and change next to nothing: (the account, a take of nothing by A is right, one for B by anyone is right, a step that lets a leg of a sompi leave is right, a step of the leg that matters is due) {results:?}");
+    assert_eq!((results[0].1, results[0].2, results[0].4), (true, true, false), "at its maintenance: the two takes of nothing are right");
+    assert!(results[1].4 && results[2].4, "below: a step is due");
+    assert!(results[1].3 || results[1].1 || results[1].2, "F-M1 is closed where a step is due: no statement that changes nothing is right there ({results:?})");
+}

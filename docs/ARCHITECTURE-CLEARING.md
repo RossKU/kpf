@@ -911,6 +911,40 @@ terms.
    hold is the move over it. And the account that carries a statement takes no other change meanwhile (M1).
 7. **The band and the gate together**: the gate is asked at prices within the tolerance, as everything is.
 
-Order: this section attacked on paper by review; then 1, since without it the rest is of no use; then the model
-with notes that arrive late and in any order.
+**Review 42 attacked this section on paper and in numbers** (`tests/auditT1_solvency.rs`, the reviewer's copy
+and extension of the model; `docs/audit/REVIEW-T1b.md`). In the model's own terms the claim held (3,000 paths,
+the owner acting again after the price moved and before whoever watches; several accounts both ways). It breaks
+on what the model took for granted:
+
+| Found | What it is | Decided (on paper) |
+|---|---|---|
+| H1 (high): the books count a loss the shard does not have | The bound assumes that whoever watches can step an account that lost. An account that carries a statement takes no other change, and a take of nothing is right: its owner states one, settles it and states the next in the same breath, for as long as it likes. The owner holds a pair of its own accounts so; the price moves; the winner leaves and is paid, the loser stands unstepped with its loss counted as the shard's equity, and the owner draws against it. Users unpaid on 257 of 500 paths at ticks of 2 %. (This is M1, which stood as medium: here it is what the claim stands on.) | A step is stated over a statement that is none: the standing statement ends, its bond back to its claimer, and the step stands in its place. A step is right only where the leg that leaves is the account's largest, or the side stands at its maintenance after it (a step that lets a leg of one sompi leave is no step). Nobody but side A states on a covered account otherwise (the next row), so a stranger holds no user's account |
+| H2 (high): books that are whole | With notes as they are: a leg whose entry was never applied wins and is paid; and a leaving rides on another leg's entry, since a row is sums (a leg booked at 20; another of the same market, entered at 10 and never booked, leaves at 20 and is paid 10 a unit) | The rule of the notes, in four parts. The shard pays nothing for a leg whose entry it has not booked. Booking is the gate, asked at the booking's prices and counting what the leg gained since it entered. What is paid for a leg is counted from the entry booked. And a booked leg is unbooked by its own leaving alone: the booked entry goes on as an object of its own, and the note of a leaving is applied only with it beside. An account never reads the shard or waits on it; a leg's cover begins when it is booked, and a user is told so |
+| H3 (medium): the call at a hair | A shard drawn to its requirement is called rightly after any move, the fees are paid first and take what it holds, and the caller may be the owner | Two levels, as an account has: a draw leaves the equity at the requirement counted the tolerance more, a call is right only below it counted the tolerance less, at any price within the tolerance. The caller posts a bond. Fees after the users, and capped |
+| H4 (medium): coins and equity | Equity counts what accounts that lost owe, which stands in their margins until a statement brings it in; a draw of equity above the requirement pays coins against it | A draw is the smaller of the coins above what is owed and the equity above the requirement |
+
+And with them, what an account under a shard is changes (the reviewer's smallest first form, taken):
+
+- **Side B has no margin in a covered account.** The account holds its user's margin; the other side is the
+  shard's books. What went with side B's margin goes: its floor and its step by the account's own numbers, the
+  deposit of a take for side B, what `KpfTLegOut` and `KpfTLegMove` asked of it, and the band's twin (what a
+  clearing party and a user could move between them).
+- **A leg's entry is the entry booked, and does not move with a mark.** What a leg gained counts for its side's
+  standing in the account as it does today (a gain of one leg is margin for another); taken out, it is paid by
+  the shard from the entry booked, by a note. A mark then tells the books nothing.
+- **Futures legs only under a shard in the first form.** An option stands in an account no shard covers.
+- **At a call nothing is paid until every row is empty**; then every note the same share, fees after. Outside a
+  call a note is paid in full as it comes.
+
+What this costs: a leg is covered from its booking, a statement on the shard that takes many notes at once and
+has a dispute period; a late top-up closes every user of the shard at prices within the tolerance, the band taken;
+and against two-party margins (5.5 % of the worth, an account) a book that is set off is asked 0.5 % and a
+one-way book 6 %.
+
+Not decided: how many notes one statement on the shard takes, and what a booked object costs in bytes (one a
+leg, where a row was four numbers a market).
+
+Order: the model again with these (legs booked one by one, notes that arrive late and in any order, accounts
+held under statements, the two levels of the call, visits of whoever watches every k ticks); review of it; then
+scripts, the smallest form first.
 

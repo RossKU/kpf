@@ -5296,3 +5296,241 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builder
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
 ```
+
+# Round 42
+
+Scope: the design of `docs/ARCHITECTURE-CLEARING.md` section 12 (a shard held to its requirement all the time:
+books, a gate, a call) and its numbers model (`crates/kpf-protocol/tests/research_solvency.rs`), on paper and in
+numbers. No script changed and none is reviewed here. I copied the model into a file of my own and extended it
+(`crates/kpf-protocol/tests/auditT1_solvency.rs`, new, four tests), and ran one fact about the scripts as they
+are at the engine (`auditT1_builders.rs`, one test). No contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**In the model's own terms I could not break the claim: with every account stepped in time, no user is unpaid on
+any of 3,000 paths, whatever order the owner acts in. The claim breaks on two things the model takes for
+granted, and one it builds in: that an account is stepped when it is due (it is not, where its owner holds it
+under statements: H1, High, with the fact run at the engine and the model failing on 257 of 500 paths); that the
+books are whole (the first of the seven unknowns: H2, High, with the rule I think is the weakest sound one); and
+the call as the model has it, which is right at a hair and pays its fees before the users (H3, Medium).**
+
+## Holes in the claim
+
+### H1 (High). The books count a loss the shard does not have, for as long as the account's owner likes
+
+The books' equity counts every account's loss whole. The shard has it only when somebody steps that account, and
+only as far as its margin goes. The claim's bound ("the time it takes whoever watches to act") assumes whoever
+watches can act. On an account of the owner's own keys it cannot:
+
+- An account carries one statement at a time, and a statement that changes nothing is right. Run at the engine
+  (`t1b_r42_a_statement_that_changes_nothing_is_right_and_holds_the_account_for_a_dispute_period`): on an account
+  at its maintenance a take of nothing is answered right, by side A and by anyone for side B; on an account whose
+  side A is **below its maintenance** (a step of its liquidation is due) the same two takes of nothing are still
+  right, and so is a step that lets a leg of one sompi leave and the leg that matters stand; where side A's loss
+  is beyond its margin the takes are no longer stated, and the step of the one-sompi leg is still right.
+- Read, not run: whoever states such a statement settles it and states the next in the transaction after, so
+  nobody else gets the output between. (And a dispute of one's own statement, left to lapse, returns both bonds for kinds 2 to 5.)
+
+The sequence, in the model's terms (`an_account_its_owner_keeps_from_being_stepped_breaks_the_claim`):
+
+1. The owner enters two accounts of its own, one each way, as large as the gate lets a pair in (a pair is set
+   off: it is asked the rate on the gross alone, 1 % of one side's worth), and keeps both under statements.
+2. The price goes. The account that has won 8 % leaves and is paid in coins. The other stays; nobody steps it. Its
+   loss stands in the books as equity.
+3. Against that equity the owner draws, and no call is made: the books say the shard is sound.
+4. Users leave and are paid from what coins there are.
+
+With ticks of 2 % (well within the bound of 4.5 %), the rules on: users are unpaid on **257 of 500 paths** (12 KAS
+a path), on 185 of them with the books' equity at or above the requirement at the end, and the owner is ahead by
+169 KAS a path after giving up the margin of the account it left behind. The model's `run` has no such account:
+its watcher steps every account every tick.
+
+The same in one line: the bound is on the move of the price between two moments at which the losing account can
+be stepped, and its owner chooses those moments.
+
+What must be decided: a step must reach an account that carries a statement. Either a step of a liquidation (and a
+call's step) may be stated on an object that carries a take, a leaving or an entry, ending it; or a statement
+that changes nothing is no statement (a take is of something, a step is of a leg whose worth is not less than a
+share of the account's) and whoever settled a statement cannot state the next for a time the terms say. This is
+M1 of round 38, which I rated Medium on its own; under this section it is what the claim stands on.
+
+### H2 (High). Books that are whole (the first unknown): what must be true of the notes
+
+A script's books are what the notes that were applied say. Two sequences, on the notes as they are:
+
+- **A leg the books never had.** The owner's own account takes a leg; its note of entry is not applied (the gate,
+  wherever it is asked, is not asked of it). The leg wins and leaves; its note of what is owed is applied and
+  paid. The books never counted it. This is F66 again, through the books.
+- **A leaving that rides on another leg's entry.** A row is sums. The owner has leg 1 booked at an entry of 20.
+  Its leg 2, same market and size, entered earlier at 10; its note of entry is held back (or was refused by the
+  gate). Leg 2 leaves at 20: its release finds the row's units (leg 1's) and is applied; it is paid 10 a unit,
+  where the books expected to owe nothing for that slot. The row cannot tell whose units they were.
+
+The weakest rule I can see that is sound, in four parts:
+
+1. **The shard pays nothing for a leg whose entry it has not booked.**
+2. **Booking is the gate**, asked at the price of the booking and counting what the leg has gained since its
+   entry (a leg booked late and already in profit takes that much of the room, or does not get in).
+3. **What is paid for a leg is counted from the entry that was booked.**
+4. **A booked leg is unbooked by its own leaving and by nothing else**: identity, not sums.
+
+Under these, what is not applied only makes the books careful: an unbooked leg can lose to the shard and cannot
+be owed by it; a leg that left and whose note is not applied is still counted against the shard. One case is not
+careful: a leg that left at a **loss** and whose notes are not applied goes on moving in the books with the
+price, so its loss can read larger than what was paid in. The guard that exists for a draw (`KpfTDrawNote`: a
+statement on the shard is ended by a note that landed before it and is not applied) has to hold for a booking
+and for a draw alike.
+
+For part 4, with four rows and no list: the note of entry, once booked, goes on as an object that says so (the
+leg, its account, its entry), and the note that the leg left is applied only with that object beside it. One
+output a standing leg; the shard's rows stay sums.
+
+**Is there a form that keeps "an account touches the shard only at a default"?** Not with the gate. In the sense
+of an input, yes: an account never reads the shard and never waits for it; it writes the note of an entry and of
+a leaving as today. But a leg is the shard's to pay only once it is booked, and booking needs the prices of that
+time, so it is a statement on the shard (or a transaction with citations). The user's leg is in its account at
+once; its cover begins at the booking. That has to be said to the user.
+
+### H3 (Medium). The call: right at a hair, its fees before the users, and whoever calls may be the owner
+
+`a_call_at_a_hair_closes_every_user_of_a_shard_at_its_requirement_and_its_fees_are_all_it_has`
+
+- A shard whose owner has drawn all it may stands at its requirement exactly. Over a book that is set off (two
+  users of 1,000 units, one each way) the price need not move against it: the requirement is of worth, so a rise
+  of **0.01 %** puts the equity below it. The call is right; every leg leaves; the fees (the liquidation rate of
+  the gross) are **all 100 KAS the shard held**. In this run the users were owed next to nothing and were paid;
+  where they are owed more, the model pays the fees first.
+- Whoever calls may be the owner with another key. It then has the last of the requirement as fees, and its
+  users closed at the prices it states, within the tolerance and at the end that is against them, with the band
+  taken from what they are owed.
+- Over a book that is not set off, a call stated at the end of the tolerance that is against the shard is right
+  while the equity at the committee's price is above the requirement by less than the tolerance of the net
+  (0.25 % above in the run).
+- In my copy of the model's `run`, where the owner draws all it may every tick, the shard is called 44 times a
+  path of 80 ticks at ticks of 0.5 %: its users are closed every other tick.
+
+What a call must be, to be decided:
+
+- **When it is wrong**: where the equity is at or above the requirement at any price within the tolerance (so
+  counted at the end that favours the shard), as a step of a liquidation is today (the rate less the tolerance).
+  And the gate and the draw at the other end (the rate and the tolerance): between where the owner may stand and
+  where it is called there is then a move of twice the tolerance of the net, not a hair.
+- **What it costs its caller**: a bond, lost where the call is answered wrong.
+- **What it pays**: after the users, and not the whole of the gross's rate for a call nobody had to work for; an
+  owner that calls itself must not come out ahead.
+- **A set-off book**: the requirement of the gross grows with the price while the equity does not. Either the
+  draw leaves room for a move of the price's level, or the gross is counted at the price of the last booking.
+
+### H4 (Medium). Coins and equity are two things, and the draw is asked of one
+
+The books' equity counts what losing accounts owe, which is in their margins until a statement on each brings it
+in. A draw of "equity above the requirement" pays out coins against that. Users are then owed by a shard that is
+sound on its books and has no coins. In the model nothing waited (its users are small beside what the shard
+holds), and with every account stepped in time what waits is paid; with H1 it is not.
+
+Two decisions follow. A draw is of what the shard holds above its requirement **and** of its equity above it, the
+smaller of the two. And what side B has in an account must be the shard's to collect whole: today a take for side
+B leaves side B's own maintenance behind (round 36: 26.8 KAS of 40 could be deposited), which under this section
+has no meaning, since side B of a covered account stands by its shard.
+
+## What I could not break
+
+`the_claim_holds_in_the_models_terms_where_every_account_is_stepped_in_time`: my copy of the model with a user's
+unpaid claim waiting for what comes in (a note goes on with the rest) instead of being counted at once, the
+owner's own accounts paid after what users wait for, and the owner acting a second time **after the price moved
+and before whoever watches** (out of its accounts that won, and a draw). At ticks of 0.5 %, 2 % and 4.5 %, with
+and without that second turn: users unpaid at the end on 0 of 500 paths each, and nothing waited.
+
+- Several accounts, both ways, entering after a user, drawing before and after entering: the gate is asked of
+  the sum, and the order within a tick changed nothing I could find.
+- Leaving users' counterparts unhedged: the owner's own account that set a user off leaves; the requirement
+  jumps; the shard is called at the next visit and the user is paid. The user loses its position, not its money.
+- Accounts that lose more than their margin: within the bound an account is stepped before its loss passes its
+  margin (entered at 5.5 %, stepped below 4.5 %, a tick of at most 4.5 % between). Beyond the bound, or held from
+  being stepped, the books say more than is there: H1.
+- Whoever watches late (`the_bound_is_on_the_move_between_two_visits_of_whoever_watches`): every second tick at
+  ticks of half the bound, 0 of 500; at ticks of the bound, every 2nd, 4th, 8th, 16th tick: 0, 10, 29, 32 of 500.
+  The bound is on the move between two visits.
+
+## The seven things not known
+
+| | Detail, or does it break the claim? |
+|---|---|
+| 1. Books that are whole | breaks it: H2, with the four-part rule |
+| 2. What tells the books of a mark | a detail if the booked entry never moves: with nothing of side B's in an account, a mark moves nothing between the sides, a leg's gain is paid when it leaves and its loss when it leaves or is stepped, both counted from the booked entry. A take is then of side A's own margin above its floor and writes no note. If entries are to move with marks as today, every settled statement writes a note and part 3 of the rule needs the last booked entry: more notes, the same order problem |
+| 3. Options | stands beside it: an option's gain is no sum. The first form has no option under a shard; F67 stays open for as long as one can enter |
+| 4. How an account knows its shard is called | a detail: the call's settlement writes an object that a step of an account under the shard shows, as a draw is ended by a note. One thing to decide with it: that object is shown by many steps, so it goes on as it is |
+| 5. Who is paid first at a gap | decides who bears a gap, not whether the claim holds within the bound. My order below |
+| 6. What it costs | it bounds what can be built: a booking, a draw and a call are each a statement on the shard, and the shard carries one at a time. One booking a dispute period is no throughput; a booking has to take many notes |
+| 7. The band and the gate | part of H3: the gate and the draw at one end of the tolerance, the call at the other |
+
+**The order I would write for the fifth.** Outside a call a note of what is owed is paid in full as it comes: a
+sound shard has it. At a call nothing is paid until every row is empty. Each leaving's note is taken into a sum
+(what is owed in all); losses come in. When the rows are empty what the shard holds is final, and every note is
+paid the same share of itself, the fees after. Why: no order of applying then favours anybody, the owner's own
+accounts cannot be first, and a share needs one more number in the shard and no list. What it does not do is tell
+a user's account from the owner's: the owner's own winning account takes its share of a gap. The gate bounds how
+large it can be.
+
+## What the three rules do to an honest clearing party and its users
+
+- **Capital.** For users whose worth is W in all: with two-party margins side B stands by a margin in each
+  account, 5.5 % of W whichever way they are. Under this section, 5.5 % of the net and 0.5 % of the gross: for a book that is set
+  off, 0.5 % of W, eleven times less; for a book all one way, 6 % of W. So it is cheaper exactly where the owner
+  is hedged on the chain, and the owner who is hedged elsewhere pays the full rate here and must top up as the
+  price moves against its net here, in the time of a visit.
+- **A call because the owner was late.** Every user is closed, at prices within the tolerance, the band taken
+  from what it is owed. In the model an owner that draws to its requirement is called every other tick. An honest
+  owner keeps room; how much is the move it means to sit through, of its net. The user has to read that room as
+  it reads the shard's terms today.
+- **The gate filled by the owner's own accounts.** Its own business. A stranger cannot fill it: an entry takes
+  side B's signature.
+- **A stranger draining a sound shard by calls.** As the model has it, yes, wherever the shard is within the
+  tolerance of its requirement: H3.
+
+## Are F66 and F67 covered?
+
+- **F66**: covered, where H1 and H2 are closed. An own account's leg passes the gate, so the shard holds the
+  rate on it; what it wins in a visit is less than that; the call replaces the step of side B that nobody was
+  paid for. Without H2 it is not (the leg the books never had).
+- **F67**: stands beside it. The books are of futures legs. If an option is let in counted at the whole of its
+  underlying, the gate bounds how many puts enter (6 % of their underlying's worth each), and what the two ends
+  of the tolerance make of them is 0.005 % of that worth a round: it takes the owner's own room and brings a
+  call, not a user's money. If options are not in the books at all, F67 is as it is.
+
+## A first, smallest form on what exists
+
+- Futures legs only under a shard; one committee, the terms in the id, as now.
+- A shard's row gets one number more (what its legs were entered at); the draw's end (`KpfTShardEnd`) counts the
+  equity from it and from the prices it already has answered for.
+- A booking: a statement on the shard that takes notes of entry at prices answered for, asks the requirement
+  with them, and leaves each as a booked object. `KpfTNoteApply` no longer takes a note of entry by itself.
+- A leaving's note is applied with the booked object, pays from the booked entry, and takes a loss in.
+- A call: a statement on the shard with the draw's trace and the other inequality; its settlement leaves the
+  object a step shows. A step of an account under a called shard lets a leg leave at the call's prices.
+- A step reaches an account that carries a statement (H1).
+
+What it removes: side B's margin in a covered account and everything written to keep it there (side B's floor
+and its step in `KpfTStepLiq`, the deposit of a take for B, `payb` and `addb` of `KpfTLegOut`, the two changes of
+B's margin in `KpfTLegMove`, `KpfTAddC` for side B); entries that move with marks, if the second unknown is
+decided that way; options under a shard; the note of what is owed paid "whatever the shard is asked to hold".
+
+## To be decided before anything is built
+
+1. How a step reaches an account its owner holds under statements (H1). Without it the bound is not a bound.
+2. The rule of the notes (H2): the four parts, the booked object, and that a leg's cover begins at its booking.
+3. The call (H3): when it is wrong, what it costs, what it pays and after whom; the two ends of the tolerance.
+4. The draw of coins and of equity, and that what side B has in an account is the shard's whole (H4).
+5. Whether entries move with marks (the second unknown).
+6. The order at a gap (the fifth).
+7. Throughput: how many notes one statement on the shard takes (the sixth).
+8. Options: out of the first form, and F67 with them.
+
+## Counts and commands
+
+`auditT1_solvency.rs` (new): 4 tests pass; the two whose names end in the claim being broken or the call at a
+hair pass while that is so in the model. `auditT1_builders.rs`: 116 pass (one new, `t1b_r42_...`).
+`auditT1_tests.rs` and `auditT1_cli.rs` were not run this round (no script changed).
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 4 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 116 passed, 0 failed
+```
