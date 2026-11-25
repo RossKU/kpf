@@ -151,6 +151,20 @@ fn a_shard_a_covered_account_a_leg_that_leaves_and_a_draw() {
     let out = h.ok(&["acct-show", "--object", &shard1, "--prices", "13,0,0,0"]);
     assert!(out.contains("KAS can be drawn"), "{out}");
 
+    // The way out that waits for nobody: a second leg, short 4, enters and leaves at once by the two signatures, at
+    // its entry (nothing moves between the margins). Each writes its note, and the shard counts as before.
+    let (d, _) = h.build(&me, &["acct-leg", "--account", &account, "--script", &script(&h, "KpfTLegAdd"), "--key", &exec, "--market", &market, "--size", "4", "--dir", "short", "--x", "10"]);
+    let (account2, join2) = (h.obj(&d, "covered account", 33_132), h.obj(&d, "shard note", 33_132));
+    let (d, out) = h.build(&watch, &["shard-note", "--shard", &shard1, "--note", &join2, "--script", &script(&h, "KpfTNoteApply")]);
+    assert!(out.contains("net -6 units, gross 14"), "{out}");
+    let shard1 = h.obj(&d, "shard", 33_134);
+    let (d, out) = h.build(&me, &["acct-out", "--account", &account2, "--script", &script(&h, "KpfTLegOut"), "--key", &exec, "--leg", "2", "--x", "10"]);
+    assert!(out.contains("leaves at once") && !out.contains("leg 2:"), "{out}");
+    let (account, release2) = (h.obj(&d, "covered account", 33_136), h.obj(&d, "shard note", 33_136));
+    let (d, out) = h.build(&watch, &["shard-note", "--shard", &shard1, "--note", &release2, "--script", &script(&h, "KpfTNoteApply")]);
+    assert!(out.contains("net -10 units, gross 10"), "{out}");
+    let shard1 = h.obj(&d, "shard", 33_138);
+
     // The price is 13: the user states that its leg leaves. The leg gained 30 and the clearing side's margin is 2:
     // the pot pays 2 of the gain and the shard owes 28.
     let (d, out) = h.build(&me, &["acct-leave", "--account", &account, "--script", &script(&h, "KpfTChange"), "--side", "a", "--leg", "1", "--prices", "13", "--t0", "33150"]);

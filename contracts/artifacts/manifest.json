@@ -192,10 +192,17 @@
     },
     "KpfTLegMove": {
       "artifact": "KpfTLegMove.json",
-      "artifact_sha256": "bde42f08df4e992dcbbee06aa846a6fbe0eb959bbd64c505e3381c7e4f0fead0",
-      "script_len": 1449,
+      "artifact_sha256": "7477bf034d4eca85564d869b875a3849afcb47e70e79ea11a769aae43a7b72cf",
+      "script_len": 1459,
       "source": "contracts/KpfTLegMove.sil",
-      "source_sha256": "4a06da54378c722964e690cf468fc583fc300a8069881a4d1ec5db89adc009ce"
+      "source_sha256": "032148dd7cca5d1d3ed26150fd35467f3b421083d95899847acca6f57209a360"
+    },
+    "KpfTLegOut": {
+      "artifact": "KpfTLegOut.json",
+      "artifact_sha256": "33a483f885610e630057461a755095f4a0ae4ca9ac14b826f58c735cab61433d",
+      "script_len": 1294,
+      "source": "contracts/KpfTLegOut.sil",
+      "source_sha256": "da73d5fccb96d644a122343461845ac8b7b1a9d96e4d983a26c3dbd72205ed13"
     },
     "KpfTLiq": {
       "artifact": "KpfTLiq.json",

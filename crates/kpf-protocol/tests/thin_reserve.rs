@@ -606,6 +606,12 @@ fn a_leg_moves_between_two_accounts_of_one_clearing_party_or_nothing_does() {
         t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &moved.hash());
         assert!(!accepted(&t, &w.keys), "a leg moves under another shard with no note");
     }
+    // The clearing party's margin moves between its two accounts and does not leave them (review 36, F60): a
+    // sompi less in the two together is refused, and all of the one moved to the other is not.
+    assert!(leg_move(&w.lib, &account, 1, &to, [0, -1, 0, 0], &w.script("KpfTLegMove"), w.payer(&w.w, &f)).is_err());
+    assert!(leg_move(&w.lib, &account, 1, &to, [0, -x.b_margin, 0, x.b_margin - 1], &w.script("KpfTLegMove"), w.payer(&w.w, &f)).is_err());
+    let (b, nx, ny) = leg_move(&w.lib, &account, 1, &to, [0, -x.b_margin, 0, x.b_margin], &w.script("KpfTLegMove"), w.payer(&w.w, &f)).unwrap();
+    assert!(accepted(&b, &w.keys) && (nx.b_margin, ny.b_margin) == (0, x.b_margin));
     // A margin below zero: refused.
     assert!(leg_move(&w.lib, &account, 1, &to, [-(x.a_margin + 1), 0, 0, 0], &w.script("KpfTLegMove"), w.payer(&w.w, &f)).is_err());
 }

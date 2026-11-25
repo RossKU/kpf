@@ -256,8 +256,8 @@ tried before this one and dropped (both in numbers or at the engine, the same da
 | The option counted in the gain (as now), with one worth for both sides | whoever held an option was asked the maintenance of its underlying, and lost the option to a liquidation where it kept less, though it owed nothing |
 
 Not built: a last day (the price of a market that stands still from its last day gives one, with no script; a
-written option that is worth nothing then leaves only with its holder); a price for buying an option back (it is
-margin moved by both signatures). And a holder that stands below its own maintenance by its other legs does not
+written option that is worth nothing then leaves only with its holder, or by the two signatures: `KpfTLegOut`,
+section 11, which is also how an option is bought back, for the price the two sign). And a holder that stands below its own maintenance by its other legs does not
 exercise by its own statement while the other party stands at its own (the rule of any leg that leaves): a step of
 its liquidation exercises it.
 
@@ -332,6 +332,14 @@ between them but accounts.
 
 ### 6a. The reserve as scripts: the design (25 November 2026, before any script)
 
+**Open, high (review 37, F61; 26 November 2026): the owner of a shard takes all the shard holds, past the rule of
+the draw, with nobody else.** It opens a covered account whose other side is a key of its own, adds a leg at an
+entry far from the price (`KpfTLegAdd` reads no price), and states that the leg leaves at the committee's price:
+the statement has no wrong point, the pot cannot pay the gain, and the note of what is owed is paid by the shard
+in full, whatever the shard is asked to hold. One dispute period, a bond that comes back. Until this is closed the
+cover of this section protects a user only from a clearing party that does not do this. The closure is not built;
+its form is at the end of section 11.
+
 Written whole before anything is compiled, and walked through for each party that reads it. Nothing of this runs
 yet (D).
 
@@ -371,8 +379,15 @@ And one more way to end it: `KpfTDrawNote`, anyone shows a note to this shard th
 is not applied (the note goes on as it is): the shard again, the claimer's bond lost. A note counts for this only
 where it is of an account whose side B is the owner, and a deposit does not (it only adds). So an owner knows of
 every such note before it lands: a leg enters by its own signature, and a leg's leaving and what is owed are
-written by a statement that waited its dispute period. An owner settles what is ready, applies the notes, and
-draws.
+written by a statement that waited its dispute period, or by the owner's own signature (`KpfTLegOut`, section 11).
+An owner settles what is ready, applies the notes, and draws.
+
+What whoever watches a shard does not have since `KpfTLegOut` (review 36, to know): time. A leg's leaving no
+longer waits a dispute period, so an owner can add and remove an equal leg in an account with a key of its own, in
+two transactions and with no bond, apply the release alone, and state a draw over rows that count a user's leg no
+more. The draw is still ended by the join that is not applied (`KpfTDrawNote`; engine), but whoever watches has
+the draw's dispute period to find it, among all the notes to the shard. That is the work of an executor's loop
+for shards (section 11, item 3), which is not built.
 
 **No call.** The model had one; here it would only set a flag. A shard's rows and what it holds are public, a draw
 is the one transaction that takes value out, and a user's leg leaves by its own statement at any time (kind 4). A
@@ -501,6 +516,7 @@ builder, verifies it, and writes the files of what it made.
 | `acct-open`, `acct-leg` | the user and the clearing party | open a covered account; add a leg (and write its note) |
 | `acct-add` | a side | adds margin |
 | `acct-take` | a side (or anyone, for side B) | states a take |
+| `acct-out` | the user and the clearing party | a leg leaves at once, for what the two sign (and writes its note): section 11 |
 | `acct-leave` | a side | states that a leg leaves |
 | `acct-liq` | anyone | states a step of a liquidation |
 | `acct-end` | a side | ends an account with no leg |
@@ -514,7 +530,9 @@ builder, verifies it, and writes the files of what it made.
 Ran offline as one story (`crates/kpf-cli/tests/clearing_cli.rs`): a shard of 50 KAS; a covered account of 20 and
 2; a long leg of 10 units at 10 and its note applied; at 13 the leg leaves by statement, is disputed at its end,
 answered right, and applied; the shard pays the 28 KAS the pot could not; the account is ended; the owner draws
-the 22 KAS the shard has left; and a draw stated over a note that was not applied is ended by it.
+the 22 KAS the shard has left; and a draw stated over a note that was not applied is ended by it. And, between
+the first leg's note and its leaving: a second leg enters and leaves at once by the two signatures (`acct-out`),
+and the shard counts as before once its two notes are applied.
 
 Not built in the tools:
 
@@ -622,3 +640,85 @@ Order, if these are built (the handing over of a side, the move of a leg and the
 and ticket (the vault needs the token's scripts in the test bed; `KpfTStepRow` learns the token's leg, and the row
 is as it is).
 
+## 11. One form: the account (25 November 2026)
+
+Two families stand in this repository. A position (two legs at most; `DESIGN-COMMITTEE.md`) has orders, their
+match, the replacement of who leaves by who enters, an executor's loop (`exec-run`) and runs on testnet-10. An
+account (sections 4b, 6a, 10) has the shard, the liquidation in steps, options, the handing over of a side and the
+move of a leg, and has none of the first list. What the goal asks is in the second; what a user trades with is in
+the first. The decision of 25 November 2026: **the account is the one form**. What a position has is built for
+the account; a position is then an account of one or two legs, and its scripts go where the three families before
+it went.
+
+What an executor does for a user that finds nobody on the other side is not a rule in either family and does not
+become one. In the position family it is `exec-run --do take`: off unless asked, with a limit on the executor's
+own margin that has no default (`--take-max`), at a spread from its own price, by an order of its own that the
+next round matches as any two orders; no script knows of it. In an account the other side is a clearing party
+from the first leg, so there is nobody to find; what was missing is the way out at once.
+
+| Way out of a covered account | Who is needed | When | |
+|---|---|---|---|
+| The leg leaves by the user's statement (kind 4) | nobody | after the dispute period | E, reviewed |
+| The side is handed over (`KpfTHand`) | who enters | at once | E, reviewed |
+| The leg leaves by the two signatures (`KpfTLegOut`) | the clearing party's program | at once | E, reviewed (round 36: F60, closed in the scripts) |
+
+**`KpfTLegOut`** (1,294 bytes; a leg that leaves is a transaction of 2,728 to 2,955 bytes with none to two legs
+after it; `tests/thin_option.rs`, the last test; `acct-out`). What `KpfTLegAdd` does, the other way: the chain is
+hashed again without the leg (up to six legs after it), the other legs and their entries stay, and the note that
+the leg left is written for the shard as a statement's settlement writes it (the row of the leg's kind and
+market, side B's units, the size). No price is read: what the leg is worth is what the two sign for (the tool
+computes it from a price, or takes the amount: the price of an option bought back).
+
+| Who owes for the leg | How it is paid |
+|---|---|
+| The user | from its margin to the clearing party's, inside the account |
+| The clearing party | from its own coins, by an output of the transaction the user signs. Its margin in the account does not fall here, by any amount |
+
+The user may take margin out in the same transaction, and the clearing party may add. Refused at the engine:
+either signature missing; the clearing party's margin falling, to the user's margin or out; a margin below zero;
+the account that goes on keeping the leg or losing another; a note of other units, of the other kind's row, of
+another shard or clearing party, or of a leg that entered.
+
+**Review 37** verified F60 closed in both scripts (400 random amounts, none taken with side B's margin lower; 37
+mutations refused, 14 of them at the ends of 64 bits; the same object at both places of a move refused), and found
+F61, which is older than this script (the box at the head of section 6a, and the end of this section).
+
+**Review 36** found the first form wrong (F60, medium): it let the two move any amount from the clearing party's
+margin to the user's and the user take it out, so that with a user's signature, which costs the user nothing, a
+clearing party's margin left an account by another way than its shard; and `KpfTLegMove` let it leave directly by
+the three signatures. What a clearing party has in its accounts is what anyone deposits to its shard by a take for
+side B, for the users the shard owes: it leaves by the shard, or to the user by a statement at prices that are
+answered for. Now `KpfTLegOut` moves nothing out of side B's margin, and `KpfTLegMove` (1,459 bytes) asks that the
+two changes of side B's margin are together not below zero (it moves between the two accounts, and not out). The
+rest held at the engine: 400 random amounts taken or refused as the model says, 30 changes of a taken transaction
+refused, the note of every kind of leg equal to its join and to a settlement's, 20 other notes refused, 13 wrong
+chains, an object that carries a statement not opened.
+
+The clearing party's program signs or does not, as it chooses, with what limits it chooses: that is its tool's,
+as `--take-max` is. A user it does not answer is not held: the first two rows of the table need no signature of
+it.
+
+Order of what follows, each on paper before it is a script:
+
+1. A request the user signs and the clearing party's program completes: today both keys sign on one machine
+   (`acct-open`, `acct-leg`, `acct-out`), which no two parties do.
+2. An order into an account: what a user rests for any clearing party to fill (the position's order is a margin
+   and a tip that wait for the other side; an account's names the account or the terms of one to open).
+3. `exec-run` for accounts and shards: notes applied, statements settled, disputed and answered, the requests of 1
+   signed within the program's limits.
+4. The position's scripts to where the earlier families are, once 1 to 3 ran on testnet-10.
+
+**F61 and what closes it** (on paper; not built, not reviewed). Three things, each as designed, make it: an entry
+nobody checks, a gain the pot cannot pay written as owed, and an owed note paid before anything the shard is asked
+to hold. Paying an owed note only above the requirement would refuse users what they are owed, so the note's rule
+stays. What changes is where a gain that is owed can come from:
+
+| Change | Why |
+|---|---|
+| A leg that enters by `KpfTLegAdd` is marked as not yet counted (a mark in its direction's place). The first statement that counts it (any take, at prices that are answered for) moves its entry to the price and clears the mark | an entry is then a price somebody could dispute, without a citation at every entry and without making the entry wait |
+| What a leg not yet counted gained for side A is paid from the pot and is not owed by the shard (a row carries that sum: 120 bytes for 112) | a gain made of an entry of one's own choosing reaches nobody's cover. A user's cover of a new leg begins once the leg was counted: one dispute period after it entered, by a take of nothing that anyone states |
+| Side A adds, with a leg it is asked the maintenance of, at least that maintenance at the leg's entry | else two accounts of the owner's own keys, one long and one short at true entries and with no margin, are owed by the shard whatever way the price moves, and the side that lost has nothing to pay: the same taking, at the speed of the market. With the margin it is what any user's default is, and somebody is paid to liquidate it |
+
+What this costs a user: the cover of a new leg begins a dispute period after it enters; a leg that lowers the
+account's risk still asks its own maintenance when it enters (taken back by a take). What it does not cost: the
+entry and the way out stay at once.

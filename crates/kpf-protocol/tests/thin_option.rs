@@ -714,3 +714,121 @@ fn the_row_s_answer_agrees_with_the_model_on_random_accounts_with_options() {
     }
     assert!(options >= 3, "{options}");
 }
+
+/// `KpfTLegOut`: the way out that waits for nobody. A leg leaves a covered account at once by its two parties'
+/// signatures, for what the two sign; the note that it left is written as a statement's settlement writes it.
+#[test]
+fn a_leg_leaves_a_covered_account_at_once_by_its_two_parties_signatures() {
+    let w = world();
+    let mut shard = w.shard();
+    let mut account = w.covered(shard.s.sid);
+    // The user is long 10 of market 0, holds a call on 10 of market 1, and is short 4 of market 2.
+    for leg in [w.fut(0, 10, LONG, P10), w.opt(1, 10, CALL_HELD, P10, P10), w.fut(2, 4, SHORT, P10)] {
+        let (next, join) = w.added(&account, leg);
+        shard = w.applied(&shard, &join, "join applied");
+        account = next;
+    }
+    let x = &account.s;
+    let sid = shard.s.sid;
+    let script = w.script("KpfTLegOut");
+    let f = [fund(xk(&w.a), 50)];
+    // The futures leg of market 0 is closed at 10.1: it gained 1 KAS. The clearing party pays that from its own
+    // coins, by an output of the transaction the user signs; its margin in the account does not fall (review 36,
+    // F60: what it has in an account leaves by its shard alone).
+    let a_spk = kpf_protocol::tx::p2pk_spk(&xk(&w.a));
+    let gain = kpf_protocol::thin::leg_gain_at(&x.legs[0], P10 * 101 / 100);
+    assert_eq!(gain, KAS1);
+    let (b, next, note) = leg_out(&w.lib, &account, 1, 0, gain, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+    assert!(accepted(&b, &w.keys));
+    let s = b.sign(&w.keys).unwrap();
+    println!("a leg leaves at once, its gain paid: {} bytes", s.mass.size);
+    assert_eq!((&next.legs[..], next.a_margin, next.b_margin), (&x.legs[1..], 20 * KAS1, 2 * KAS1), "the other legs, their entries and the two margins stay");
+    assert_eq!(note, SNote::leg(NOTE_RELEASE, sid, &x.legs[0], xk(&w.b)));
+    assert_eq!((s.tx.outputs[0].value, &s.tx.outputs[0].script_public_key, &s.tx.outputs[2].script_public_key), (account.value, &hash_spk(&w.lib, &next.hash()), &hash_spk(&w.lib, &note.hash())));
+    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == a_spk && o.value == KAS1 as u64), "A is paid its gain");
+    // The note is applied as any release: the shard counts market 0's futures legs no more.
+    let m0 = futures_market(&w.markets[0].id());
+    assert!(shard.s.rows.iter().any(|r| r.head.market == m0));
+    let after = w.applied(&shard, &nth(&s, 2, note, 6_200), "the release of a leg that left at once, applied");
+    assert!(after.s.rows.iter().all(|r| r.head.market != m0));
+    // Without either signature it is no transaction.
+    for out in [&w.a, &w.b] {
+        let mut some = KeySet::new();
+        for k in [&w.a, &w.b, &w.w, &w.f] {
+            if xk(k) != xk(out) {
+                some.add_keypair(*k);
+            }
+        }
+        assert!(b.sign(&some).is_err() || !accepted(&b, &some), "a leg leaves without one of the two signatures");
+    }
+    // Any leg leaves (the first has two legs after it, the last none), with the note of its own row: the option's
+    // is the row of market 1's options, with its size.
+    for i in 1..=3usize {
+        let (b, next, note) = leg_out(&w.lib, &account, i, 0, 0, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+        signed(&format!("leg {i} of three leaves at once"), &b, &w.keys);
+        let mut rest = x.legs.clone();
+        let leg = rest.remove(i - 1);
+        assert_eq!((next.legs, next.a_margin, next.b_margin), (rest, 20 * KAS1, 2 * KAS1));
+        assert_eq!(note, SNote::leg(NOTE_RELEASE, sid, &leg, xk(&w.b)));
+    }
+    let scale = w.markets[1].p.scale;
+    let (_, _, note) = leg_out(&w.lib, &account, 2, 0, 0, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+    assert_eq!((note.head.market, note.net, note.gross), (option_market(&w.markets[1].id()), 10 * scale, 10 * scale));
+    // The option is bought back for 1.5 KAS (its price is what the two sign for: no script reads one), paid as a
+    // gain is.
+    let (b, next, _) = leg_out(&w.lib, &account, 2, 0, 150_000_000, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+    assert!(accepted(&b, &w.keys) && (next.a_margin, next.b_margin) == (20 * KAS1, 2 * KAS1));
+    // Closed at 9.5 the futures leg lost A 5 KAS: they move from A's margin to B's, inside the account.
+    let loss = -kpf_protocol::thin::leg_gain_at(&x.legs[0], P10 * 95 / 100);
+    assert_eq!(loss, 5 * KAS1);
+    let (b, next, _) = leg_out(&w.lib, &account, 1, loss, 0, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+    let s = signed("a leg leaves at once, its loss paid", &b, &w.keys);
+    assert_eq!((s.tx.outputs[0].value, next.a_margin, next.b_margin), (account.value, 15 * KAS1, 7 * KAS1));
+    // A takes 5 KAS out in the same transaction, and B adds 3: the account holds 2 less.
+    let (b, next, _) = leg_out(&w.lib, &account, 1, 0, 0, 5 * KAS1, 3 * KAS1, &script, w.payer(&w.a, &f)).unwrap();
+    assert!(accepted(&b, &w.keys));
+    let sg = b.sign(&w.keys).unwrap();
+    assert!(sg.tx.outputs.iter().any(|o| o.script_public_key == a_spk && o.value == 5 * KAS1 as u64), "A's 5 KAS are paid to its key");
+    assert_eq!((sg.tx.outputs[0].value, next.a_margin, next.b_margin), (account.value - 2 * KAS1 as u64, 15 * KAS1, 5 * KAS1));
+    let mut less = b.clone();
+    less.tx.outputs[0].value -= 1;
+    assert!(!accepted(&less, &w.keys), "the account holds a sompi less than its margins say");
+
+    // What is refused. B's margin in the account does not fall: not to A's margin (from where A would hand it on),
+    // and not out.
+    assert!(leg_out(&w.lib, &account, 1, -KAS1, 0, 0, 0, &script, w.payer(&w.a, &f)).is_err());
+    assert!(leg_out(&w.lib, &account, 1, 0, 0, 0, -KAS1, &script, w.payer(&w.a, &f)).is_err());
+    let (_, honest, release) = leg_out(&w.lib, &account, 1, 0, 0, 0, 0, &script, w.payer(&w.a, &f)).unwrap();
+    for (what, payb, take, addb, am, bm) in [
+        ("B's margin pays A inside the account", -KAS1, 0, 0, 21 * KAS1, KAS1),
+        ("B's margin pays A, who takes it out with the same transaction", -KAS1, KAS1, 0, 20 * KAS1, KAS1),
+        ("B takes out of the account", 0, 0, -KAS1, 20 * KAS1, KAS1),
+        ("all of B's margin is handed on", -2 * KAS1, 2 * KAS1, 0, 20 * KAS1, 0),
+    ] {
+        let r = leg_out_as(&w.lib, &account, 1, payb, 0, take, addb, Account { a_margin: am, b_margin: bm, ..honest.clone() }, release, &script, w.payer(&w.a, &f));
+        assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
+    }
+    // More than A's margin is not taken, nor paid to B.
+    assert!(leg_out(&w.lib, &account, 1, 0, 0, 21 * KAS1, 0, &script, w.payer(&w.a, &f)).is_err());
+    assert!(leg_out(&w.lib, &account, 1, 21 * KAS1, 0, 0, 0, &script, w.payer(&w.a, &f)).is_err());
+    let r = leg_out_as(&w.lib, &account, 1, 21 * KAS1, 0, 0, 0, Account { a_margin: -KAS1, b_margin: 23 * KAS1, ..honest.clone() }, release, &script, w.payer(&w.a, &f));
+    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "A's margin falls below zero");
+    // The account that goes on is the account without that leg, and no other; the note is the leg's own.
+    let wrongs: Vec<(&str, Account, SNote)> = vec![
+        ("the leg stays", Account { legs: x.legs.clone(), ..honest.clone() }, release),
+        ("another leg leaves too", Account { legs: x.legs[2..].to_vec(), ..honest.clone() }, release),
+        ("a note of the other way", honest.clone(), SNote { net: -release.net, ..release }),
+        ("a note of fewer units", honest.clone(), SNote { net: release.net / 2, gross: release.gross / 2, ..release }),
+        ("a note that the leg entered", honest.clone(), SNote { kind: NOTE_JOIN, ..release }),
+        ("a note of the options' row", honest.clone(), SNote { head: Head { market: option_market(&w.markets[0].id()), ..release.head }, ..release }),
+        ("a note of another shard", honest.clone(), SNote { sid: [0x44; 32], ..release }),
+        ("a note of another clearing party", honest.clone(), SNote { key: xk(&w.w), ..release }),
+    ];
+    for (what, next, note) in wrongs {
+        let r = leg_out_as(&w.lib, &account, 1, 0, 0, 0, 0, next, note, &script, w.payer(&w.a, &f));
+        assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
+    }
+    // An account no shard covers is not served (its two parties sign anything by KpfTBoth).
+    let plain = w.account(three_legs(&w), 100 * KAS1, 100 * KAS1);
+    assert!(leg_out(&w.lib, &plain, 1, 0, 0, 0, 0, &script, w.payer(&w.a, &f)).is_err());
+}

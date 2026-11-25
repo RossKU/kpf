@@ -4184,3 +4184,310 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builder
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
 ```
+
+# Round 36
+
+Scope: `KpfTLegOut` (a leg leaves a covered account at once by its two parties' signatures), its model
+(`Account::leg_out`) and builders (`leg_out`, `leg_out_as`); the script table extended to 53; the F58 test as the
+author edited it. Everything below is engine-run (`verify::verify`) unless it says "read". Only
+`crates/kpf-protocol/tests/auditT1_builders.rs`, `crates/kpf-tests/tests/auditT1_tests.rs` (the table) and this
+file changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**One finding: F60 (Medium), a covered account pays its side B, by `KpfTLegOut` with the user's signature and by
+`KpfTLegMove` with the three. Everything else asked held: value, the note, the chain, what the script opens. The
+model and the script agreed on each of 400 random amounts.**
+
+## Findings
+
+### F60 (Medium, open). A covered account pays its side B: by a leg that leaves, and by a leg that moves
+
+`t1b_finding_f60_a_covered_account_pays_its_side_b_by_a_leg_that_leaves_and_by_a_leg_that_moves`
+
+The design (section 6a): "A covered account pays its side B nothing by any path: a take for B is a deposit, the end
+of an account with no leg is a deposit, and what the clearing party has is drawn from the shard." `KpfTLegOut`
+says the same of itself and holds it for `addb` (not below zero) and for the object's value (what it held less
+`take`). But:
+
+- `pay` moves B's margin to A's and no price is read; `take` leaves A's margin for whatever output the two sign
+  (the script names none; the builder writes A's key). With `pay` and `take` both X, X of B's margin leaves the
+  account, A's margin as it was.
+- In the test an account of 20 KAS (A) and 40 (B) with three legs: the first leg leaves with `pay` 40 and `take`
+  40, the 40 KAS in an output to the clearing party's own key. Taken. The account goes on with A's 20, B's 0 and
+  two legs standing.
+- `KpfTLegMove` has it without the detour: the change of B's margin in either account may be below zero (the
+  script asks only that no margin ends below zero and that each object holds its changes). In the test B's margin
+  in the account the leg leaves falls by 30 KAS, which leave with the payer, the clearing party. Taken.
+
+What is lost, and by whom. What side B has in an account is what anyone deposits to the shard by a take for B
+(26.8 of the 40 KAS in the test, at the entries); after the transaction nothing is left to deposit. A clearing
+party draws from its shard only above what the shard is asked; out of an account it now takes without that
+limit. So the loss falls on the other users of the shard at the time it matters: when the shard holds less than
+it is asked or less than the notes of what it owes, and the clearing party's gains in other accounts would have
+filled it. The user who signs loses nothing (its margin and its leg's settlement are as it wanted), so it has no
+reason to refuse, and the clearing party's program can build every leaving this way. Where side A is a key of the
+clearing party's own it signs alone, but what is in such an account was its own to begin with.
+
+Why Medium: it needs the user's signature for anything the clearing party won from that user, and it breaks no
+user's own account. It does break a sentence the reserve's users are told to rely on.
+
+It is not closed by naming the output of `take` (A's key): A then hands the amount on. What a script can hold:
+`take` at most A's margin before the leg left and what A is paid kept in the account (`take <= A's margin +
+min(pay, 0)`), so that what B paid leaves only by A's own later take; and in `KpfTLegMove` the two changes of B's
+margin together not below zero. Or the sentence is narrowed to what it is now: nothing leaves side B of a covered
+account without the user's signature.
+
+A correction of round 35: I agreed there that margin leaving during a leg's move was by the rule, because every
+party of both accounts signs. For side A's margin that stands. For side B's it is this finding.
+
+## The F58 test as edited
+
+`t1b_open_f58_the_tool_states_on_no_account_whose_sums_do_not_fit_and_adds_no_leg_into_one` says what I mean.
+`leg_added` and `leg_moved` now refuse the ninth of the largest legs, the builder with them, and `KpfTLegAdd`
+still takes it built past the model (open by decision). I changed two things: the comment above it still said
+"NOT closed"; and I added the controls (the eighth leg is added to seven and moved into seven), so that a refusal
+for another reason would be seen. F58 is closed in the tool.
+
+## What held under attack (all engine-run)
+
+| Question | Test | What was put to the engine |
+|---|---|---|
+| 1. Value | `t1b_r36_a_leg_that_leaves_moves_what_the_two_sign_for_and_holds_the_account_to_it` | 400 random `pay`, `take`, `addb` (each also below zero and beyond the margins), built past the model where it refuses: 180 taken, 220 refused, each as `Account::leg_out` says. On a taken transaction, 30 changes refused: the account a sompi short; the note below its least; a third output under the id (to B's key, a second note, an account of B's making); the note or the account under no id; the two in each other's place; `pay`, `take` or `addb` a sompi off what the outputs say; either signature by another key; a margin in the state that the object does not hold (either side); a `take` below zero with the account holding 1 sompi, 3 KAS or 6 KAS less than it adds (it adds: it takes nothing); amounts at the ends of 64 bits |
+| 1. Whose consent | same | read: both signatures are held to `SIGHASH_ALL`, so each is over every output. Run: where the taken amount goes is theirs to say: re-addressed to a third key it is taken (this is the half of F60 that is by design) |
+| 2. The note | `t1b_r36_a_leg_that_leaves_writes_the_note_of_its_own_row_and_units` | for a long leg, a short leg and the four kinds of option the release is the join `KpfTLegAdd` wrote with the other kind, and has the hash of the note a statement's settlement writes; applied, the leg's row is no market's again and the others are as they were. 20 notes not written: fewer units, a unit off in the net or the gross alone, the other way, none, a join, a deposit, what is owed, the other kind's row, the market's bare name, another market's row, another committee, scale or limit, another shard, another side B, side A's key, an amount in it; an option with the futures row or a futures leg's units. No note (the note under no id) is in the row above |
+| 2. Two legs of one market | same | in one account (10 and 5 long beside another account's 10): the release of the 10 leaves the row at 15, and the 5 stand. The leg that left does not leave again (the account that goes on does not open for it). A release is applied once: the transaction that applies it takes no output for it to go on in |
+| 2. A release before its join | same | a second account of the clearing party (another key on side A) takes a leg equal to the first account's and lets it go at once; its release is applied and its join is not. The row is emptied while the first account's 10 stand and the shard is asked less. A draw stated then is ended by the join that is not applied (`KpfTDrawNote`: the shard again, the claimer's bond lost), and with the join applied the row is as it was. This is round 34's item with `KpfTLegOut` in the place of a statement: see the note below the table |
+| 2. Legs no script lets in | same | on an account of the model's making, a leg whose direction's place is 0, below zero, 7, 8, 9, 10, 15, 23 or the largest number leaves as a futures leg with the size as side B's units; 3, 4, 5, 6 (a strike of nothing) as an option. The script takes the model's note for each of the 14, and `KpfTStepRow` holds a statement to the same row and units (said with the other units, the row is wrong). A size below zero: the script writes the gross above zero, the model writes the size, so the model's note is refused and the note with the gross above zero is taken. No script lets such a leg into a covered account |
+| 3. The chain | `t1b_r36_a_leg_that_leaves_opens_the_chain_of_a_covered_account_and_nothing_else` | 13 refused on a taken transaction: another leg of the account in the leg's place (the first, the third), a leg that is not the account's, the leg with its entry or its size one off; no chain before it, a longer one; no leg after it, the leg after it twice, another, a byte short, a byte more; the first leg's place shown with the outputs of the second's. Of eight legs each of the second to the eighth leaves and the account that goes on has the chain without it; the first (seven after it) does not, by the model and, built past it, by the script |
+| 3. A statement stands | same | an object that carries a statement, and one that carries a disputed point: shown as the account it was, the output is not that; shown as it is, the script does not open it (4 refused). A leg does not leave under a statement |
+| 3. One leg | same | the only leg leaves (1 KAS paid to A): the account goes on with no leg and the chain of none, and then ends by `KpfTAcctEnd`, side B's margin a deposit to the shard |
+| 5. What the script opens | same | an account no shard covers (138 bytes) is not opened, by the model and built past it. A shard shown as an account with a leg: with its own side B (32 zero bytes) nothing is signed; with the clearing party's key in that place the object is not the shard |
+| The table | `t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on` | 53 scripts, 60 entries, 51 entries `release` |
+
+**A release before its join, now at once.** Section 6a says an owner knows of every note before it lands because
+"a leg's leaving and what is owed are written by a statement that waited its dispute period". With `KpfTLegOut` a
+leaving is written at once and for no bond, so the clearing party with a key of its own on side A makes a join
+and a release of any size in two transactions and applies the release alone. What guards the shard is what
+guarded it in round 34, `KpfTDrawNote` with the unapplied join, and it held. Two things follow for whoever
+watches. The watcher has the dispute period of the draw, no more, and must know the joins of every account under
+the shard that are not applied. And the sentence of 6a is no longer the reason the owner's own draws are safe
+from notes it did not expect: a user's program now co-signs leavings too. Not a finding; the window is the same
+and the guard is the same.
+
+**Question 4, whom it harms.**
+- The other users of the shard: by F60, and by nothing else I found. The release is the leaving leg's own row and
+  units, exactly what its join added; rows of one market split over two rows are asked no less together (each
+  row's net and gross are counted apart).
+- A holder of an option: in an account the holder is one of the two who sign. A writer with a key of its own on
+  side A is then both signers of that account, and what leaves the shard's row is that account's own leg.
+- A user left below by a `take` the clearing party co-signs: taken (A takes all 20 KAS, two legs standing), and A
+  is then below its maintenance at once, so anyone states a step of its liquidation. What A cannot pay after
+  that is what side B is not paid in this account. That is the clearing party's own risk; the other users are
+  touched only as far as side B's margin here would have been a deposit, and the shard is asked the same.
+
+## Read, not run
+
+- `acct-out` (`acmds.rs` `out_cmd`): it settles at a price (`leg_gain_at`) or at the amounts given, and builds
+  through `leg_out`; what is taken goes to A's key. A gain beyond B's margin is refused by the model, there is no
+  note of what is owed on this path: the two settle for what the account holds or the clearing party adds.
+- `KpfTLegOut` asks no time (no lease, no lateness): the two parties let a leg out of an account past its lease.
+- The script reads the leg's kind as `KpfTStepRow` does (line by line the same three conditions), and
+  `KpfTLegAdd` asks more of a leg that enters (a strike from 1 to the limit, a direction of 1 or 2).
+- `OpCovInputCount(id) == 1`: no other object of the registry's id is spent beside the account, so a leg does not
+  leave in the transaction that applies a note or moves a leg.
+
+## Not reached
+
+- The command at a node, and the user's request that the clearing party's program completes (not written yet).
+- F60 with a user's real loss behind B's margin as one sequence of settled objects (the test starts from an
+  account opened with B's 40 KAS).
+- A watcher's side of the release before its join: how a program finds the unapplied joins of every account
+  under a shard.
+- A model-against-script comparison of the notes' application over random orders (open since round 34).
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F60 | Medium | open: a covered account pays its side B, by `KpfTLegOut` (`pay` then `take`) and by `KpfTLegMove` (B's margin lower) |
+| F58 | Low | closed in the tool (rounds 35, 36); open in the scripts by decision |
+| F57, F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 102 tests pass (4 new: the finding F60 and three `t1b_r36_...`; the F58 test's comment
+and controls). The F60 test passes while the hole is open and says "F60 is closed" where it would fail.
+`auditT1_tests.rs`: 55 pass (the table at 53 scripts). `auditT1_cli.rs`: 47 pass, unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 102 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```
+
+# Round 37
+
+Scope: the changes for F60 (`KpfTLegOut`: `payb` from A's margin to B's and no movement from B's; `KpfTLegMove`:
+the two changes of B's margin together not below zero), their model and builders, and every other path by which
+side B's margin of a covered account falls or leaves. Everything below is engine-run (`verify::verify`) unless it
+says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file changed; no contracts, no `src`,
+no commit, nothing under `kpf-out`.
+
+**F60 is closed in the two scripts and verified. One new finding, and it is not of this round's changes: F61
+(High), the owner of a shard takes all the shard holds through an account whose other side is a key of its own,
+because a leg enters at an entry no script reads and the shard pays what is owed in full. It has been there since
+the reserve; I did not see it in rounds 32 to 36.**
+
+## Findings
+
+### F61 (High, open). The owner of a shard is owed by it, through an account of its own at an entry of its choosing
+
+`t1b_finding_f61_the_owner_of_a_shard_is_owed_by_it_through_an_account_of_its_own_at_an_entry_of_its_choosing`
+
+Three things that are each as designed:
+
+- `KpfTLegAdd` reads no price. The entry of a leg is what the two keys of the account sign for (above zero, within
+  the market's limit).
+- A leg leaves by its party's statement at the committee's price, and what the pot cannot pay side A is a note of
+  what is owed (`KpfTStepLiq`).
+- `KpfTNoteApply` pays that note from the shard, all the shard holds if the note is of more, where the account's
+  side B is the shard's owner. What the shard is asked to hold is not looked at (it cannot be: this is what the
+  reserve is for).
+
+Together, with both keys of the account the owner's own:
+
+1. A shard of 50 KAS; a user is long 10 units against the owner and the shard is asked 5.5275 KAS for it. By a
+   draw the owner gets 44.4725 and not a sompi more.
+2. The owner opens a covered account with a second key of its own on side A (25 KAS and 5), and adds a leg: long
+   10 units of another market at an entry of 0.1, where the committee says 10. Both signatures are its own.
+3. Side A states that the leg leaves at 10. The statement has no wrong point: by the model at the committee's
+   price, and at the engine the end and the row are answered right and not wrong. Nobody ends it; whoever disputes
+   it loses a bond.
+4. It is settled: side B's 5 KAS in that account are A's, and a note of 94 KAS owed is written to A's key.
+5. The note is applied: the shard pays all 50 KAS to the owner's second key and holds nothing. The user's leg
+   stands in its rows, and it is asked 11.055 KAS (the owner's own leg is still counted too).
+
+What is lost, and by whom: everything the shard holds, by the users whose accounts it covers. The requirement,
+the rule of a draw, `KpfTDrawNote` and the closures of F59 and F60 all guard a door beside this one. It needs no
+second party, one dispute period, and a bond that comes back.
+
+The same statement is also what remains of F60: what side B has in an account whose side A is its own key becomes
+A's (step 4), and A takes it. To bring margin there from a user's account still takes a leg's move with that
+user's signature.
+
+Why High and not Critical: the owner takes what was its own deposit, not a user's margin; what users lose is the
+cover the design promises them, at the owner's will.
+
+What would close it is a decision, not a line. The section 4 table already says "a cover asks what a mark asks:
+both sides at their maintenance at a cited price", and `KpfTLegAdd` asks no citation. With the entry of a leg that
+enters a covered account held to the committee's price (within the tolerance), a gain on entering is at most the
+tolerance, and what is left is the ordinary case: an account of the owner's own that gains as the market moves,
+which anyone ends by a step of a liquidation the moment its other side is below. I have not tested that form.
+A rule on `KpfTNoteApply` alone (pay only down to what the shard is asked) would refuse real users what they are
+owed, so it is not one.
+
+## Fixed and verified
+
+**F60.** `t1b_fixed_f60_side_bs_margin_does_not_leave_by_a_leg_that_leaves_or_moves`.
+
+- `KpfTLegOut`: the model has no amount that moves B's margin to A's. Round 36's transaction in its new form (a
+  `payb` below zero with the outputs it would ask for) is refused in 4 forms: all of B's margin paid and taken,
+  paid and kept, a sompi, 1 KAS. A leg's gain is paid from the clearing party's coins: 5 KAS to A's key, the
+  account holding what it held and both margins as they were.
+- `KpfTLegMove`: the model refuses B's margin lower in one account, lower with A's higher in the other, and a
+  sompi short of made up. Built past the model (the two changes are arguments 12 and 14), 6 refused: 30 KAS lower
+  in one; 30 lower and a sompi less than 30 higher; a sompi lower in either alone; 30 lower with A's margin in the
+  other account 30 higher; 1 KAS likewise. Taken: 30 lower and 30 higher (each object holds its change), 30 lower
+  and 31 higher, 1 higher alone, 30 higher in one and 1 lower in the other.
+- One object at both places of a move is refused. Another shard or another side B in the second account is
+  refused (round 34's test, still passing).
+
+## What held under attack (all engine-run)
+
+| Attack | Test | What was put to the engine |
+|---|---|---|
+| `KpfTLegOut`, the amounts | `t1b_r36_a_leg_that_leaves_moves_what_the_two_sign_for_and_holds_the_account_to_it` | 400 random `payb`, `take`, `addb` (each also below zero and beyond the margins), built past the model where it refuses: 152 taken, 248 refused, each as `Account::leg_out` says, and in none that is taken is B's margin below what it was. 37 changes of a taken transaction refused: those of round 36, and 14 sets of amounts at the ends of 64 bits and of what a margin counts: a `payb` or an `addb` below zero, down to the least number; a `payb` of the largest number, alone and with a `take` that makes A's margin stand; a `payb` that puts B's margin beyond what is counted (by 20 KAS, and by a sompi), made up by a `take` below zero; an `addb` of the largest and of the most a margin counts; a `take` at either end. Each also with the outputs it would ask for, where they can be written |
+| What B pays A | same | the output to A's key (what A takes and what it is paid) re-addressed, or a sompi less, is taken: the script does not know of it, as designed. A's signature of the whole is what holds it (read: `SIGHASH_ALL` is asked of both) |
+| `KpfTAddC` | `t1b_r37_side_bs_margin_falls_by_no_other_script_and_ends_as_a_deposit` | either side adds 1 KAS; an amount of minus 1 KAS, minus a sompi, nothing, the least number, with the outputs it would ask for: 8 refused |
+| `KpfTHand` | same | a side handed over with B's margin a sompi, 1 KAS or all of it lower: 3 refused |
+| `KpfTLegAdd` | same | a leg entering with what B adds a sompi or 1 KAS below zero, or the least number: 3 refused |
+| Margin that arrived by a move | same | a leg and 30 KAS of B's margin move into a second account (another key on side A); the leg leaves it by `KpfTLegOut`; the account ends by `KpfTAcctEnd`: the deposit is of 31 KAS (what was there and what moved in), no output of the end is to B's key, and applied the shard holds 31 KAS more. A take for B there stated by B's own key pays no key |
+| The fee of B's own liquidation | same | the one payment out of B's margin to a key that no price moved: where B is below its maintenance (half a KAS against 240 of worth), a step of its liquidation pays whoever states it half a KAS, all B has there and no more, and that end is answered right. With 40 KAS B is not below and nothing is stepped. This is path (a), a statement |
+| Round 36's notes and chain | the two `t1b_r36_...` tests | with the new arguments: as in round 36 (20 notes not written, 21 refused on the chain and on what is opened). The only leg leaves with its 1 KAS of gain paid from the payer's coins, and the account ends with B's 2 KAS a deposit |
+
+**Paths by which B's margin of a covered account falls, after the change.** A statement of kinds 2 to 4 (a take
+for B is a deposit; a step or a leaving moves what the prices say and, for B's own liquidation, the fee); a
+deposit; the account's end; a move to another account of the same B and shard. No other script lowers it: for
+`KpfTAddC`, `KpfTHand`, `KpfTLegAdd`, `KpfTLegOut` and `KpfTLegMove` that is engine-run above; `KpfTOpenC` makes
+an account and the scripts of a position are typed for 138 bytes (read). And then F61: "a statement at prices
+that are answered for" is itself a way out where the leg's entry was nobody's but the owner's.
+
+**Does the stricter form break anything a user needs?** Not that I found.
+
+- A user's gain on a leg that leaves at once is an ordinary output to its key in the same transaction; its
+  signature is over that output, so it is paid or nothing happens. It no longer rises in the account, so a user
+  who wants its gain as margin adds it after (or adds in the same transaction with a `take` below zero from coins
+  it already has).
+- A user's loss is `payb`, inside the account, as before.
+- The cost is the clearing party's: it pays gains from free coins while what it has in the account stays there
+  until a deposit and a draw. A clearing party without free coins does not sign, and the user leaves by its own
+  statement after the dispute period, paid from the pot and then by the shard. That is slower, not worse.
+- One thing for the tool: the builder takes what A is paid from the payer's coins. Where the user is the payer
+  it pays itself; the request the user signs and the clearing party's program completes (section 11, item 1) is
+  what makes this a payment.
+
+## Read, not run
+
+- `KpfTLegMove` asks one clearing party and one shard of the two accounts (`moving[33..66]` and
+  `moving[138..171]` equal) and that the second place is not the first; both objects are of one id and the
+  transaction has exactly two inputs and two outputs of it.
+- `KpfTStepEnd`, `KpfTAcctEnd`: unchanged since they were reviewed; the deposit paths are run above through the
+  builders.
+- F61 at entries held to the market: two accounts of the owner's own, long and short, with little margin. One
+  gains as the price moves and is owed by the shard; the other loses no more than it has. Anyone ends both by a
+  step of a liquidation as soon as a side is below, which is at once where the margins are that small. Not run.
+
+## Not reached
+
+- `acct-out` and the commands; anything at a node.
+- F61 with an option (a call held at a strike far below the market) and with a take in the place of a leaving:
+  the arithmetic is the same row; not run.
+- The citation at `KpfTLegAdd` as a closure of F61: not written, so not attacked.
+- A model-against-script comparison of the notes' application over random orders (open since round 34).
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F61 | High | open: the owner of a shard is owed by it through an account of its own at an entry of its choosing |
+| F60 | | fixed in round 37, verified (what remains of it is F61's statement) |
+| F58 | Low | closed in the tool (rounds 35, 36); open in the scripts by decision |
+| F57, F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 104 tests pass (the F60 test turned into its closure's; the three `t1b_r36_...` brought to
+the new arguments; new: `t1b_r37_...` and the finding F61). The F61 test passes while the hole is open and says
+"F61 is closed" where it would fail. `auditT1_tests.rs`: 55 pass, unchanged. `auditT1_cli.rs`: 47 pass,
+unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 104 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```

@@ -536,6 +536,7 @@ pub fn run(argv: &[String]) -> Result<(), String> {
         "acct-leg" => acmds::leg_cmd(&a),
         "acct-add" => acmds::add_cmd(&a),
         "acct-take" => acmds::take_cmd(&a),
+        "acct-out" => acmds::out_cmd(&a),
         "acct-leave" => acmds::leave_cmd(&a),
         "acct-liq" => acmds::liq_cmd(&a),
         "acct-end" => acmds::end_cmd(&a),

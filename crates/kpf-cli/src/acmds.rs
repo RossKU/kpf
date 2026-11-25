@@ -453,6 +453,41 @@ pub fn take_cmd(a: &Args) -> R<()> {
     adone(a, "acct-take", &b, &keys, net, &mut node, &l.lib, &[o], &["KpfTChange"])
 }
 
+/// `acct-out`: the leg `--leg` (1, 2, ...) leaves the covered account `--account` at once, by its two parties'
+/// signatures (`--key` twice): the way out that waits for nobody. What the leg is worth is what the two agreed: the
+/// price `--x` it is settled at (its gain from its entry; for an option, what it is worth exercised there less what
+/// it was counted at), or the amount itself, `--pay` KAS to A or `--pay-b` KAS to B (the price of an option bought
+/// back). What A owes moves from its margin to B's; what B owes it pays A from the funder's coins, in the same
+/// transaction (B's margin in the account does not fall here: it leaves by the shard). A takes `--take` KAS out of
+/// its margin with it and B adds `--b-add`. The note that the leg left is written beside it: apply it to the shard (`shard-note`).
+/// No script reads a price here, and the clearing party signs or does not: a user it does not answer leaves by
+/// `acct-leave` after the dispute period.
+pub fn out_cmd(a: &Args) -> R<()> {
+    only(a, &["account", "leg", "x", "pay", "pay-b", "take", "b-add", "script"])?;
+    let net = network(a)?;
+    let mut node = connect(a)?;
+    let (l, x) = account_of(a, &mut node, net)?;
+    let i = int_or(a, "leg", 1)?;
+    let Some(leg) = usize::try_from(i - 1).ok().and_then(|k| x.legs.get(k)) else { return Err(format!("--leg {i}: the account has {} legs", x.legs.len())) };
+    let pay = match (a.get("x").is_some(), a.get("pay").is_some() || a.get("pay-b").is_some()) {
+        (true, false) => {
+            let p = price(a, "x")?;
+            if p <= 0 || p > leg.price_max {
+                return Err("--x is a price above zero and within the market's limit".into());
+            }
+            kpf_protocol::thin::leg_gain_at(leg, p)
+        }
+        (false, true) => price_or(a, "pay", 0)? - price_or(a, "pay-b", 0)?,
+        _ => return Err("give --x, the price the leg is settled at, or what the two agreed: --pay KAS (to A, from the funder's coins) or --pay-b KAS (from A's margin to B's)".into()),
+    };
+    println!("{} leaves at once: {} KAS {}", leg_line(leg), fmt_kas(pay.abs() as i128), if pay >= 0 { "are paid to A from the funder's coins" } else { "move from A's margin to B's" });
+    let s = script_of(a, &l.lib, "KpfTLegOut", &mut node, net)?;
+    let (fk, keys, fu) = funding(a, net, &mut node)?;
+    let (b, next, note) = tb::leg_out(&l.lib, &alive(&l, x, false)?, i as usize, (-pay).max(0), pay.max(0), price_or(a, "take", 0)?, price_or(a, "b-add", 0)?, &s, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    show(&AObj::Account(next.clone()), net);
+    adone(a, "acct-out", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(next), AObj::Note(note)], &["KpfTLegOut"])
+}
+
 /// `acct-leave`: the owner of `--side` states that the leg `--leg` (1, 2, ...) leaves `--account` at the prices
 /// `--prices` of the time `--t0`: its gain or loss is settled between the margins, and on a covered account what
 /// the pot cannot pay side A is a note of what its shard owes.

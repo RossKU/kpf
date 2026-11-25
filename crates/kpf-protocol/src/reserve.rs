@@ -294,10 +294,31 @@ impl Account {
         }
         next.a_margin += d[2];
         next.b_margin += d[3];
-        if from.a_margin < 0 || from.b_margin < 0 || next.a_margin < 0 || next.b_margin < 0 {
-            return Err(Error::Invalid("a margin would fall below zero".into()));
+        if from.a_margin < 0 || from.b_margin < 0 || next.a_margin < 0 || next.b_margin < 0 || d[1].checked_add(d[3]).is_none_or(|v| v < 0) {
+            return Err(Error::Invalid("a margin would fall below zero, or the clearing side's margin would leave its two accounts (it moves between them, and leaves by its shard alone)".into()));
         }
         Ok((from, next))
+    }
+
+    /// `KpfTLegOut`: this account without its leg `i` (from 1), by its two parties' signatures: `payb` moves from
+    /// A's margin to B's, A takes `take` out (below zero: adds), B adds `addb`. And the note that the leg left.
+    /// B's margin does not fall (what B owes A for the leg it pays from its own coins). Refused where the account
+    /// names no shard, A's margin would fall below zero, B's would fall, or more than six legs stand after the leg.
+    pub fn leg_out(&self, i: usize, payb: i64, take: i64, addb: i64) -> Result<(Account, SNote)> {
+        let Some(sid) = self.shard else { return Err(Error::Invalid("a leg leaves by its note from a covered account: this one names no shard".into())) };
+        if i == 0 || i > self.legs.len() || self.legs.len() - i > 6 {
+            return Err(Error::Invalid("the leg is one of the account's, with at most six after it".into()));
+        }
+        let mut next = self.clone();
+        let leg = next.legs.remove(i - 1);
+        let (am, bm) = (self.a_margin.checked_sub(payb).and_then(|v| v.checked_sub(take)), self.b_margin.checked_add(payb).and_then(|v| v.checked_add(addb)));
+        let (Some(am), Some(bm)) = (am, bm) else { return Err(Error::Invalid("the margins are beyond what is counted".into())) };
+        if addb < 0 || payb < 0 || am < 0 || bm < 0 || am > crate::cross::MARGIN_MAX || bm > crate::cross::MARGIN_MAX {
+            return Err(Error::Invalid("A's margin would fall below zero, or the clearing side's margin in the account would fall (what it has there leaves by its shard alone; what it owes for the leg it pays from its own coins)".into()));
+        }
+        next.a_margin = am;
+        next.b_margin = bm;
+        Ok((next, SNote::leg(NOTE_RELEASE, sid, &leg, self.b_key)))
     }
 
     /// `KpfTAcctEnd`: (to A's key, the deposit to the shard) of a covered account with no leg that ends.

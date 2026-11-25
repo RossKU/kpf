@@ -19,7 +19,7 @@ pragma silverscript ^0.1.0;
 // KpfTLegMove: a leg moves from one covered account to another of the same clearing party under the same shard, in
 // one transaction: it leaves the one (the chain before it and the legs after it are shown, and the chain is hashed
 // again without it) and is appended to the other, with its entry as it was. The margins of the two accounts move by
-// what is stated. Three sign the whole transaction: side A of the one, side A of the other, and the clearing party
+// what is stated; the clearing party's may move from the one account to the other, and not out of the two. Three sign the whole transaction: side A of the one, side A of the other, and the clearing party
 // (somebody has to look at prices where one leg of several leaves; here it is the clearing party's program, at
 // once). What the shard is asked does not change (the same units of the same market stand against the same owner):
 // no note is written. Up to six legs stand after the leg that moves.
@@ -116,6 +116,9 @@ contract KpfTLegMove(int init_version) {
         int xb = int(byte[8](mv.slice(76, 84))) + dxb;
         int ya = int(byte[8](mw.slice(67, 75))) + dya;
         int yb = int(byte[8](mw.slice(76, 84))) + dyb;
+        // The clearing party's margin moves between its two accounts and does not leave them (what it has in an
+        // account leaves by its shard alone: review 36, F60).
+        require(dxb + dyb >= 0);
         require(xa >= 0);
         require(xb >= 0);
         require(ya >= 0);

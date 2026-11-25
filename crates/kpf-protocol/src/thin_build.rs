@@ -2371,6 +2371,45 @@ pub fn leg_move(lib: &[u8; 32], from: &OLive<Account>, i: usize, to: &OLive<Acco
     Ok((dr.finish()?, nx, ny))
 }
 
+/// `KpfTLegOut.out`: the leg `i` (from 1) leaves the covered account at once, by its two parties' signatures.
+/// `payb` moves from A's margin to B's; `paid` is what B pays A for the leg from the payer's coins (no margin of the
+/// account: the script does not know of it, A's signature of the whole holds it); A takes `take` out; B adds
+/// `addb`. Output 0 is the account, output 2 the note that the leg left; what A is paid and takes is one output to
+/// its key.
+#[allow(clippy::too_many_arguments)]
+pub fn leg_out(lib: &[u8; 32], account: &OLive<Account>, i: usize, payb: i64, paid: i64, take: i64, addb: i64, script: &LibScript, p: Payer) -> Result<(OBuilt, Account, crate::reserve::SNote)> {
+    let x = &account.s;
+    let (next, note) = x.leg_out(i, payb, take, addb)?;
+    leg_out_as(lib, account, i, payb, paid, take, addb, next, note, script, p)
+}
+
+/// As `leg_out`, with the account and the note the outputs are said to be (for whoever tests what the script
+/// refuses).
+#[allow(clippy::too_many_arguments)]
+pub fn leg_out_as(lib: &[u8; 32], account: &OLive<Account>, i: usize, payb: i64, paid: i64, take: i64, addb: i64, next: Account, note: crate::reserve::SNote, script: &LibScript, p: Payer) -> Result<(OBuilt, Account, crate::reserve::SNote)> {
+    let x = &account.s;
+    if i == 0 || i > x.legs.len() {
+        return invalid("the leg is one of the account's");
+    }
+    if paid < 0 {
+        return invalid("what the clearing party pays for the leg is not below zero");
+    }
+    let prev = x.legs[..i - 1].iter().fold([0u8; 32], |g, l| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(l)].concat()));
+    let after: Vec<u8> = x.legs[i..].iter().flat_map(crate::thin::leg_bytes).collect();
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(x.terms()), bv(prev.to_vec()), bv(crate::thin::leg_bytes(&x.legs[i - 1])), bv(after), bv(x.moving()), iv(payb), iv(take), iv(addb), Arg::Sig(x.a_key), Arg::Sig(x.b_key)]);
+    let (id, lid) = enter_hash(&mut d, lib, account, &x.hash(), "account", script, "KpfTLegOut", "out", args, 0)?;
+    d.out((account.value as i64 - take + addb) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.out(note.value() as u64, hash_spk(lib, &note.hash()), Some((0, id)), "note", None);
+    if take.max(0) + paid > 0 {
+        d.out((take.max(0) + paid) as u64, crate::tx::p2pk_spk(&x.a_key), None, "to A", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next, note))
+}
+
 // ---------------------------------------------------------------- the draw
 
 /// `KpfTChange` for a draw: the shard's owner states that it draws `amount` at the prices `prices` (one a row).

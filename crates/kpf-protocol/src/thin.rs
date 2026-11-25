@@ -1180,6 +1180,12 @@ pub fn legs_sum_ok(legs: &[crate::cross::XLeg]) -> bool {
     legs.iter().try_fold(0i64, |s, l| if l.scale > 0 { s.checked_add((l.size / l.scale).checked_add(1)?.checked_mul(l.price_max)?) } else { None }).is_some()
 }
 
+/// What a leg is worth to side A at the price `x`, from its entry: a futures leg's gain, or what an option is worth
+/// if exercised there less what it was counted at (what a row of a trace adds to A's gain).
+pub fn leg_gain_at(l: &crate::cross::XLeg, x: i64) -> i64 {
+    leg_adds(l, x)[0]
+}
+
 /// What a leg's row adds at the price `a`: to A's gain, to the worth of side A and of side B, and to what A and B
 /// keep whole. A futures leg: its worth at the price less at its entry to the gain (the other way where A is
 /// short), and its worth to both sides'. An option: to the gain what it is worth if exercised at the price less
