@@ -737,4 +737,61 @@ mod second {
         println!("a gap of 10 %, a user long 1,000 units owed 890 KAS: (the shard held, the user is short, the owner's accounts and draws took) alone {alone:?}; with an own pair of 100,000 each way {pair:?}; with an own account of 100,000 the user's way {beside:?}");
         assert!(pair.1 <= alone.1 && beside.1 <= alone.1 + 1, "the owner's own notes took from the user's share");
     }
+
+    /// Review 44, S2 (section 13: "a leaving settles the leg alone from its entry", "what its legs gained or lost
+    /// counts for the user's standing"). An account of the owner's keys with two legs of one market, 10,000 units
+    /// each way, and the maintenance of both as its coins (kept at its floor as the legs' worth grows). Whatever
+    /// the price does its standing is its coins: no step of it is ever due. In the books the two legs are a net of nothing. The price drifts up 2 % a tick for
+    /// 15 ticks (within the bound, a visit every tick); the owner tops its shard up to the upper level every tick,
+    /// so no call is due either. Then its long leaves, settled alone: the shard is asked what it gained and pays
+    /// all it holds. Its short is left with the account's coins, which are less than half of what it lost. A user long
+    /// 1,000 units beside it, owed 3,324 KAS, is paid nothing; the owner has back every coin it put into the shard.
+    #[test]
+    fn an_account_whose_legs_are_settled_alone_is_paid_for_the_one_that_won_and_pays_its_coins_for_the_one_that_lost() {
+        let gr = (MMR - 3 * G) / 2;
+        let upper = |w: &World, p: i64| rate(w.net().abs() * p, MMR + G) + rate(w.gross() * p, gr + G);
+        let lower = |w: &World, p: i64| rate(w.net().abs() * p, MMR - G) + rate(w.gross() * p, gr);
+        let p0 = 10 * KAS;
+        let mut w = World::new(0, gr);
+        w.legs.push(Leg { own: false, units: 1_000, entry: p0, margin: rate(1_000 * p0, MMR + G), booked: true });
+        // The owner's account: its coins (the maintenance of both legs) stand here with the short leg.
+        w.legs.push(Leg { own: true, units: 10_000, entry: p0, margin: 0, booked: true });
+        w.legs.push(Leg { own: true, units: -10_000, entry: p0, margin: rate(2 * 10_000 * p0, MMR + G), booked: true });
+        w.coins = upper(&w, p0);
+        let mut put_in = w.coins;
+        let mut own_coins = w.legs[2].margin;
+        let mut p = p0;
+        for tick in 0..15 {
+            p += p / BPS * 200;
+            // (The owner keeps its account at its floor as the legs' worth grows: coins of its own, into the account.)
+            let floor = rate(w.legs[1].worth(p) + w.legs[2].worth(p), MMR + G);
+            own_coins += (floor - w.legs[2].margin).max(0);
+            w.legs[2].margin = w.legs[2].margin.max(floor);
+            let (long, short) = (w.legs[1], w.legs[2]);
+            assert!(short.margin + long.gain(p) + short.gain(p) >= rate(long.worth(p) + short.worth(p), MMR - G), "tick {tick}: a step of the owner's account is due");
+            let need = upper(&w, p) - w.equity(p);
+            if need > 0 {
+                w.coins += need;
+                put_in += need;
+            }
+            assert!(w.equity(p) >= lower(&w, p), "tick {tick}: a call is due");
+        }
+        let held = w.coins;
+        // The long leaves, settled alone.
+        w.leave(1, p);
+        let asked = w.owed[0].1;
+        w.pay();
+        assert_eq!((w.coins, w.owner_took), (0, held), "the shard pays its owner's account all it holds");
+        // The short is alone with the account's coins: it pays what they are.
+        let lost = -w.legs[1].gain(p);
+        let coins = w.legs[1].margin;
+        w.leave(1, p);
+        w.pay();
+        // The user leaves.
+        w.leave(0, p);
+        w.pay();
+        let unpaid: i64 = w.owed.iter().filter(|o| !o.0).map(|o| o.1).sum();
+        println!("an own account of 10,000 units each way, the price up {} % in ticks of 2 %: no step and no call was due; its long is asked {} KAS and paid; its short lost {} KAS and pays {} KAS; the shard held {} KAS, of which the owner had put in {} KAS; the owner's account took {} KAS net of what its short paid; a user owed {} KAS is paid {}", (p - p0) * 100 / p0, asked / KAS, lost / KAS, coins / KAS, held / KAS, put_in / KAS, w.owner_took / KAS, unpaid / KAS, 0);
+        assert!(unpaid > 3_000 * KAS && w.owner_took >= put_in - KAS && lost > 2 * coins && coins == own_coins, "the user is short {unpaid}");
+    }
 }

@@ -1059,6 +1059,40 @@ an entry that does not wait a dispute period (a citation in place of the wait).
 
 **Sizes are not known.** The applying of an entry carries the shard's rows and terms beside the account's.
 
-Order: the model with these (no unbooked leg, the rate on the gross, an owner that sets its users off and
-leaves); review of this section on paper; then scripts.
+### Review 44, and what it changes of the form above
+
+Review 44 attacked this section on paper before any script. What round 43 asked is in (no leg is unbooked; the
+rate on the gross holds against both reviewers' owners). Two things would have made the scripts wrong:
+
+| Found | What it is | Decided |
+|---|---|---|
+| S2 (high): a leg settled alone, in an account whose standing counts its other legs | An account of the owner's keys holds 10,000 units each way, at its floor: its standing is its coins, the books show nothing, no step and no call is ever due. The price drifts up 34 %. The long leaves alone and is paid all the shard holds; the short pays its coins, which are less than it lost; a user owed 3,324 KAS is paid nothing | Two tests where there was one. **Standing** is of the net, as today (a gain of one leg is margin for another): it decides a step. **What leaves an account as coins** (a take; what a leg that leaves is paid) leaves the coins at the maintenance and at what the legs that stay have lost: a gain of a leg that stays is no coin. And a leaving is of one leg or of all: of all, the shard is asked the account's net, once. A step (of the user's liquidation, or under a call) lets every leg leave |
+| S1 (high): an entry stated at one time and its gate asked at another | Applied a dispute period after it was stated, at the prices of then against the rows of now, by whoever decides that the gate holds: the owner, whose room it is. It applies the entries that lost for the user and lets the ones that gained end; and while the shard carries a draw nothing is applied | **An entry is stated with the shard.** The transaction that states it spends the shard: the gate is asked there, at the prices stated and the rows as they stand, and the rows and the number take the leg at once. The statement then stands on the account as any does, and the shard is not held. Where the entry is answered wrong or its disputed point lapses, the script that ends it leaves the shard a note that the leg did not enter (a leaving at its entry, asking nothing). Nobody has a time to choose in |
+| S3 (medium): prices by a row's place | a row emptied and taken by another market between stating and applying | gone with S1: the rows are those of the transaction that states |
+| S4 (medium): a call that cannot empty | one account nobody steps keeps a row from emptying; with fees after the users nobody is paid to step; the steps' prices were not said | A call states a price a row, answered for as a draw's. A step under a call is no statement: one transaction in which the account's legs leave at the call's prices, over anything the account carries. A flat part of its fee is paid before the users. A call has a time: after it, what the legs nobody stepped would be owed at the call's prices is set aside at the same share, and the others are paid |
+| S5 (medium): the arithmetic | a row's units and the number are sums with no count, and a sum beyond 64 bits could be neither applied nor ended; rounding; a row no committee prices | a row is bounded before a leg is added, and beyond the bound the gate does not hold; rounding against the owner at the upper level and for the shard at the lower; a leg is counted by one quote where it enters and where it leaves; a price of a call that nobody answers leaves the call standing |
+
+The reviewer would build the entry otherwise: one transaction with the two signatures, the shard and the
+committee's citations, which asks the gate at the price and time of the entry and holds no account. It asks the
+committee at every entry and carries a citation a row (some 5 kB each). Stating with the shard gives what that
+gives but the wait (an entry is final a dispute period after it is stated), with a citation only where somebody
+disputes: it is the form taken. The other is kept in mind for a user who pays for no wait.
+
+What this makes of a covered account: one margin (its user's coins), legs whose entries stay, and three numbers a
+statement computes over them (the net gain, the worth, what the legs that stay have lost). Its scripts are not a
+position's with a longer moving part any more: they are written for it.
+
+**Order of the scripts** (the reviewer's, taken):
+
+1. The shard's arithmetic alone: rows with the number, the equity, the two levels, the bounds, the rounding.
+   Review: script against model on random books.
+2. The notes of a leaving and a deposit, and the guard of a note not applied. Review: the books are the model's
+   under any order of notes.
+3. The covered account with one margin, the two tests, a leaving of one leg or of all, the step. Review:
+   accounts of several legs.
+4. The entry stated with the shard.
+5. The call, the steps under it, its end.
+6. What goes.
+
+Before 3: the model with accounts of more than one leg.
 

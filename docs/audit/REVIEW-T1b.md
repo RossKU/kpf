@@ -5731,3 +5731,235 @@ none of those files changed).
 ```
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 10 passed, 0 failed
 ```
+
+# Round 44
+
+Scope: `docs/ARCHITECTURE-CLEARING.md` section 13 (the smallest form of a shard held to its requirement, as
+scripts, on paper) and the rewritten second model (`research_solvency_notes.rs`). Paper and numbers: no script
+changed and none is reviewed. One model test added to my own file (`auditT1_solvency.rs`, module `second`). No
+contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**Two things in section 13 would make the scripts wrong, and I would not write them before both are decided. S2:
+a leg is settled alone while the account's standing counts its other legs' gains, so an account is paid for the
+leg that won and pays only its coins for the leg that lost; in numbers a user is paid nothing of 3,324 KAS with
+ticks of 2 % and no step or call ever due. S1: an entry is stated at one time and its gate is asked at another,
+so whoever decides whether the gate holds has a free option on every entry for as long as the entry may wait,
+and there is no limit to that wait. Three smaller ones follow (S3 to S5). What review 43 asked for is in: there
+is no unbooked leg, and the rate on the gross holds against the owner that sets its users off.**
+
+## Holes
+
+### S2 (High). A leg is settled alone; the standing that lets it leave counts the others' gains
+
+`second::an_account_whose_legs_are_settled_alone_is_paid_for_the_one_that_won_and_pays_its_coins_for_the_one_that_lost`
+
+Section 13: a leg's gain or loss "counts for the user's standing and moves no coin until a leg leaves"; a leaving
+"is settled alone, from its entry to the price stated"; a gain is paid by the shard to the user's key, a loss is
+paid out of the user's margin. So within one account a gain is coins from the shard, and a loss is coins only
+as far as the account has them, while each stands for the other in the account's standing.
+
+The sequence, with keys of the owner's own:
+
+1. One account, two legs of one market, 10,000 units each way, and the maintenance of both as its coins. The
+   gate takes them gladly (a net of nothing).
+2. Whatever the price does, the account's standing is its coins: what one leg gains the other loses. No step of
+   it is ever due. In the books the two legs are nothing at any price, so no call is due either.
+3. The price drifts up 34 % in ticks of 2 % (within the bound, a visit every tick). The owner tops its shard up
+   to the upper level every tick, as an honest owner would.
+4. Its long leaves, settled alone: the shard is asked 33,240 KAS and pays all 10,558 it holds, every coin the
+   owner had put in.
+5. Its short is alone with the account's coins: it lost 34,586 KAS and pays 14,804, which goes to the waiting
+   note of the long.
+6. A user long 1,000 units beside it, owed 3,324 KAS, is paid nothing.
+
+The same without two legs of one market: any account whose legs gain in all (a winner and a loser of two
+markets). And section 13's take (kind 2: "of its own coins, standing at its floor after") is the short form of
+it, which the coordinator asked about: a user with 10 of coins and 100 of gain not yet paid takes its 10 out and
+stands on the gain; its losing legs then owe the shard out of an account with no coins. The model's bound on a
+loser (it pays from its margin within a tick) is a bound on an account of one leg. It is not true of an account
+of two.
+
+It also empties the bond: a statement's bond is a rate of the account's coins, and an account that stands on
+gains has none, so a false statement on it costs nothing.
+
+**The rule I would write.** An account is settled as one thing where coins leave it, whatever leaves the trace:
+
+- What may leave an account, by a take or as a leaving leg's gain paid to the key, is what leaves its **coins**
+  at or above its maintenance **and** the losses its standing legs show at the prices stated. A standing leg's
+  gain is not coins and does not count for this.
+- A leaving leg's gain beyond that stays owed to the account, not to the key: either the leg does not leave by
+  its user's statement until the user has put the coins in or let the losing legs leave first, or the note pays
+  into the account. The first needs no new script.
+- A step of a liquidation, and the steps of a call, let every leg of the account leave in one statement, and the
+  shard is asked the account's gains less its losses beyond its coins, once. ("The leg is its largest, or it
+  stands at its maintenance after" lets the largest leg be the one that won.)
+
+With this the books' equity is right again for an account of several legs: what an account owes beyond its coins
+is taken from what the shard owes it before a coin leaves.
+
+### S1 (High). An entry is stated at one time and its gate is asked at another
+
+The entry states prices at a time t0; a dispute period later (or any time after: section 13 names no limit) it
+is applied with the shard, the gate asked at the prices of t0 against the rows as they then are. The leg's entry
+is the price of t0. So when it is applied the leg has already gained or lost what the price did since, and the
+gate does not count it (round 43's late booking held because the gate counted the gain since the entry; here it
+is asked at the old prices, where that gain is nothing).
+
+Whoever decides whether the gate holds at the applying has an option on the entry. That is the owner: the room
+above the upper level is its own, to add to at once (`KpfTAddC`) and to leave at nothing.
+
+- **Against a user.** The owner keeps no room. A user and the owner sign an entry; the dispute period passes. If
+  the leg has lost, the owner adds the room and applies it: the user is in at a loss. If it has gained, the gate
+  fails and the entry ends. The user has no say: an entry ends only where the gate does not hold.
+- **For itself.** Two accounts of its own, an entry each way at one moment's prices, as large as the room lets
+  in. After the wait it applies the one that won. Within the bound over the wait this takes no more than the room
+  it had (the leg brings a requirement of 7.75 % of its worth and has gained less than 4.5 %), so it is a draw by
+  another door. With no limit to the wait it is not: an entry stated today and applied after the price has moved
+  by more than its requirement takes the users' part of the shard.
+- **By the shard being held.** An entry is applied by spending the shard. While the shard carries a draw's
+  statement, or is called, no entry is applied or ended, and every account with an entry waiting is held under
+  that entry (its user's other legs cannot leave and it takes no step but over "a statement that is none"). The
+  owner's own draws hold its users' accounts.
+
+What must be decided, in the form as it is:
+
+1. An entry is applied within a time after its dispute period that the shard's terms say, and is ended by anyone
+   after it. The bound's "time between two visits" then includes the dispute period and that time, and the terms
+   have to say so.
+2. The user ends its own entry before it is applied (and the owner too): the option is then nobody's alone. What
+   it costs is that an entry completes only where the price has not moved enough for either to walk away.
+3. An entry is applied or ended over what the shard carries (a draw's statement), or a draw is no bar to it.
+
+And the form in which there is no option: the entry is one transaction with the two signatures, the shard and the
+committee's citations of the leg's market and the rows': the price the leg enters at is the price the gate is
+asked at, at that time. Section 13 lists it as wanted later ("a citation in place of the wait"). It is what I
+would build first for the entry; see the last answer.
+
+### S3 (Medium). Prices stated for "each of the shard's rows", and a row that changes hands
+
+A row is taken by the first leg of a market and is no market's when its last unit leaves. An entry that states a
+price for row 2 at t0, when row 2 was market X, is applied when row 2 is market Y (X's legs left, an entry of Y
+was applied in between): Y's net is then counted at X's price. With X at 10 and Y at a hundredth of that, a shard
+that is long Y is counted at a hundred times what its net is worth, and the gate lets in what it cannot carry.
+
+Fix: the entry states its prices by market (the row's name), and the applying holds each stated name to the row
+it finds; a row the entry has no price for ends the entry.
+
+### S4 (Medium). A call that cannot empty, and steps nobody is paid for
+
+- "Its share once no row has a unit": one account that nobody steps keeps a row from emptying, and no note is
+  paid. At a call that has not enough, the fee of a step is paid "after the users, of what is left", which is
+  nothing: nobody but a user who waits for its share has a reason to step the owner's account, and it does so
+  for the cost of a statement an account.
+- The owner holds its own account under statements of its own. A step goes over "a statement that is none". A
+  leaving stated at a false price is a statement; it is answered wrong, at the cost of its bond, which is a rate
+  of the account's coins (nothing, after S2; little, in an account kept small). Each has to be disputed and
+  answered with a citation before a step gets in.
+- The steps' prices are not said. If a step under a call states prices of its own time, the price goes on moving
+  against a shard that is known to be short for as long as the steps take.
+
+What I would write: under a call a step goes over any statement of the account; the legs leave at the call's
+prices (the call's object carries them), so a step has no price to dispute and what is owed in all is fixed when
+the call is; a first, flat part of a step's fee is paid before the users (a step that nobody is paid for does not
+happen); and a call has an end in time: after it, what the unstepped legs would be owed at the call's prices is
+set aside at the same share, and the notes are paid.
+
+### S5 (Medium). The requirement's arithmetic
+
+- **Overflow.** A row's units and the number of what the legs were entered at are sums over every account under
+  the shard, with no count of them. A sum beyond 64 bits fails the script whichever way it is asked: an entry
+  whose applying overflows can be neither applied nor ended, and its account is held for good (F58, now at the
+  gate). The applying has to hold a row to a bound before it adds (a row's gross at most what one leg may be: its
+  worth at the market's limit is then computed), and treat "beyond the bound" as the gate not holding.
+- **The number of what the legs were entered at** falls at a leaving by exactly what it rose by at the entry only
+  if both use the same quote of the same leg (its size, scale and entry): the note carries the leg whole, so it
+  can. The row's worth is the quote of a sum and the number is a sum of quotes: they differ by less than a sompi
+  a leg, the way that depends on which side the net is.
+- **Rounding.** Against the owner at the upper level (the gate, a draw), for the shard at the lower (a call):
+  else a draw that leaves the shard at its level and a gate that fails by a sompi, or a call that is right by a
+  sompi.
+- **A row nobody prices.** An entry of a leg whose market the committee does not price has a price point nobody
+  answers; where it is disputed it lapses and costs its claimers their bond (round 39), and where nobody
+  disputes it is applied. After that every statement that states the shard's rows has that point: every later
+  entry can be made to lapse (half its bond to whoever disputes), a draw lapses, and so does **a call**. A shard
+  with one such row cannot be called. To decide: what the lapse of a price point of a call does (I would let the
+  call stand: the owner is the one who can ask the committee), and that an entry whose row's price lapses is
+  not only ended but leaves no row behind (it does not, being ended; the hole is the entry nobody disputed).
+
+## What holds
+
+- **No leg that is not booked.** With the entry applied in one transaction with the shard, and with `KpfTOpenC`
+  opening no leg, `KpfTLegAdd`, `KpfTLegMove` and `KpfTLegOut` out, and a settlement writing only legs its rows
+  had, every leg of a covered account came through the gate (read). The exception is the one every statement has:
+  a statement whose outcome is false and that nobody disputes writes what it says.
+- **A note is applied once**: it is an output.
+- **The rate on the gross**: the model's fourth owner and mine (round 43) leave nobody unpaid at ticks of 4.5 %
+  with 1.75 %.
+- **Two entries in one block**: each spends the shard, so one a block; the others try again. The shard is not
+  held by an entry that waits (the entry is on the account).
+- **What the shard needs to know what it owes at a price**: what it holds, each row's net, and the one number;
+  less the notes that are not paid. Entries that do not move make a mark tell it nothing (given S2's rule, which
+  is what makes an account's loss beyond its coins not the books' equity).
+
+## The questions
+
+**1. Applying an entry.** S1 and S3. What changes between stating and applying: other entries applied (the room
+is gone: the entry ends, fair), leavings' notes applied (the rows fall), a draw (the room is gone, by the owner's
+choice: S1), a call (nothing is applied while called), a row changing hands (S3). An entry that can be neither
+applied nor ended: by overflow (S5), and while the shard is held (S1).
+
+**2. A leaving's note with no booked object.** Not applied twice. Not made for a leg that did not come through
+the gate, short of an undisputed false statement, which now also asks the shard for whatever it says (the note's
+amount is the statement's). The number falls exactly (S5). Nothing else is needed for the equity (above).
+
+**3. Gains as standing.** S2. The rule is a floor of coins against the legs that lose, and one settlement an
+account wherever coins leave it.
+
+**4. The call.** S4.
+
+**5. The arithmetic.** S5.
+
+**6. What it costs, against the reserve as built.**
+
+| | As built | Section 13 |
+|---|---|---|
+| A leg enters | a statement of the two; its dispute period; a settlement | the same statement; its dispute period; the applying with the shard (one a block a shard, none while the shard carries a draw or is called) |
+| A leg leaves | a statement, its period, a settlement; or at once with the clearing party's signature; the note applied | a statement, its period, a settlement, the note applied. No leaving at once |
+| A gain taken out | a take: a statement, its period, a settlement | not without leaving |
+| A leg moved, an option | there | not under a shard |
+| The clearing party | a margin in each account or none; a draw is a statement; nothing holds it between draws | no margin in accounts; room in the shard for every entry (7.75 % of a one-way leg, 2.25 % of each side of a set-off pair, at the upper level); a top-up in the time of a visit as the price moves, or its users are closed |
+| Whoever watches | every statement on every account and on the shard | the same, and: every leaving's note applied; the guard at every statement on the shard and at every applying; a call, and a statement an account under it |
+
+**Would I build this, or something else?** The shard's side, yes, as it is: the rows with their number, the
+equity and the two levels, the draw of coins, the call, the notes of a leaving. That is the part reviews 37 to 43
+were about, and nothing I found this round is against it. The account's side I would build with S2's rule from
+the start; it is not an addition to the form, it is what makes the books true. The entry I would build as the
+transaction with citations: it has no option for anybody, it holds no account for a dispute period, it asks the
+gate at the price and time of the entry, and it has no row that changes hands between two moments. Its cost is
+that the committee is asked at every entry and not only at a dispute, which the design has refused so far; an
+entry is the one place where a price becomes a debt of the shard, and that seems to me the place to be asked. If
+that stays refused, the statement form with S1's three decisions, and the option said plainly to its users.
+
+## The order I would have the scripts written and reviewed in
+
+1. **The shard's arithmetic alone**: rows with the number, the equity and the two levels in the draw's end; the
+   bounds and the rounding of S5. Review: the script against the model on random books, at the bounds.
+2. **The notes of a leaving and a deposit**, and the guard that a note not applied ends a statement on the
+   shard. Review: the books under any order of notes equal the model's.
+3. **The covered account without side B's margin**: entries that do not move, the take and the leaving under
+   S2's rule, a step that lets every leg leave and goes over a statement. Review: the script against the model on
+   accounts of several legs, and S2's account.
+4. **The entry with the shard**, in the form decided for S1, with S3's names. Review.
+5. **The call, its steps and its end**, with S4's decisions. Review: who is paid what, and a call that is held.
+6. **What goes**: `KpfTLegAdd`, `KpfTLegOut` and `KpfTLegMove` under a shard, side B's margin and its rules.
+
+Before 3 and 4 the model wants two things it does not have: accounts of more than one leg, and an entry that is
+applied a time after it is stated.
+
+## Counts and commands
+
+`auditT1_solvency.rs`: 11 tests pass (one new, S2's). The other audit suites were not run (no script changed).
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
+```
