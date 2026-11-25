@@ -978,6 +978,87 @@ the other, it is half the maintenance rate less three times the tolerance (1.75 
 book is then asked 1.75 % of its legs' worth where two parties' margins are 5.5 % (three times less, not eleven).
 It is a number of the shard's terms, read by its users, like the others.
 
-Order: review of the second model; the scripts' design on paper, the smallest form (what review 42 listed);
-then scripts.
+Order: review of the second model (round 43: section 13, at its head); the scripts' design on paper (section
+13); then scripts.
+
+## 13. The smallest form of section 12, as scripts (26 November 2026; on paper, after review 43)
+
+**Review 43** attacked the second model (`tests/auditT1_solvency.rs`, module `second`) and the draft of this
+section:
+
+| Found | What it is | Decided |
+|---|---|---|
+| N1 (high): a leg not booked loses what it loses and is paid nothing of what it gains | An entry settled with the clearing party's signature, and its booking was another statement, on the shard, that might never come (no room; and the gate, counting what the leg gained since it entered, takes losers and not winners). For the owner's own account that is right; for a user it is a bet it can only lose | **There is no leg that is not booked.** An entry is applied by a transaction that spends the shard with the account: the gate is asked there, at the prices the entry stated for the shard's rows, and the rows and the number take the leg in the same transaction. Where the gate does not hold, the entry is ended, the account as it was. No note of an entry, no booked leg as an object, no leg in an account that the books do not have |
+| N3 (high for the claim as worded): an owner makes any book set off, then leaves | It enters an account of its own against its users' net (the gate welcomes it: the requirement falls to the rate on the gross), draws what a one-way book was asked, and leaves its account, at no loss, before a tick that goes its users' way. Unpaid on 38 of 1,000 paths at ticks of 3 %, 92 at 4.5 %, with the rate on the gross at 0.5 % | One bound, and the rate on the gross is what gives it: half the maintenance rate less three times the tolerance (1.75 % with the terms as they are), a number computed from the terms and not the liquidation fee's rate. With it that owner leaves nobody unpaid at 4.5 % (the reviewer's run). The claim is worded with the one bound |
+| N2 (medium): two levels are one for a set-off book | The levels differed by the tolerance of the net; with a net of nothing they are one, and a shard drawn to its level is called at a hair, the capped fee being all it held | Two levels for the gross as well (the upper counts it the tolerance more); the fees of a call are a share of what is left when the users are paid |
+
+Also taken from it: a call is stated over anything the shard carries but another call; a draw of nothing is no
+statement; the note of every leaving, gain or loss, ends a statement on the shard that it landed before and is
+not applied in; whoever watches is not asked to wait a dispute period a leg at a call (the steps of a call are
+stated together, one statement an account).
+
+**One thing of the goal's wording is given up, and why.** `GOAL.md` says of the bond that many accounts refer
+to it and touch it only at its default. Here an entry touches its shard once, in the transaction that applies
+it. The reason is N1: where taking a leg and booking it are two acts, there is a time in which the leg is in the
+account and not in the books, and no rule for that time is both safe for the shard's users and fair to the leg's
+(paid for neither way, the user cannot hedge with it; paid for both ways, it is F61 again). What the goal's line
+is for is kept: no trade waits on the clearing party after it signed (anyone applies an entry), a shard is one
+clearing party's and not everybody's, and nothing but an entry touches it short of a default (a leaving, a take
+and a step leave notes).
+
+### The form
+
+Correct before it is cheap. Futures legs only; no gain taken out without leaving; no leg moved between
+accounts. An account that no shard covers keeps everything it has (two parties' margins, entries that move with
+a statement, options).
+
+**A covered account**: its user's margin and its legs. Nothing of the clearing side. A leg's entry is the price
+it entered at and stays so. What its legs gained or lost counts for the user's standing (the trace) and moves no
+coin until a leg leaves.
+
+**A shard**: what it holds; four rows of net and gross units; what its legs were entered at (the sum of side
+B's units times their entries: one number, where a position has an ask); whether it is called. Equity at prices:
+what it holds, and its net units' worth, less that number. Requirement: the maintenance rate of the net's worth
+and the rate on the gross of the gross's; the upper level counts both the tolerance more, the lower the
+tolerance less.
+
+| Statement on a covered account | Rule | Applied |
+|---|---|---|
+| A leg enters (kind 6; `KpfTEnter` exists) | as built, and it states a price for each of the shard's rows (answered as a draw's are). The user stands at its maintenance with the leg | **with the shard**: its equity at the prices stated, with the leg, is at least the upper level; the rows and the number take the leg. Else the entry ends |
+| The user takes margin out (kind 2) | of its own coins, standing at its floor after | as today |
+| A leg leaves by the user's statement (kind 4) | the user stands at its maintenance, or the leg lost. The leg is settled alone, from its entry to the price stated | as today; leaves the note that it left (the leg whole, the user's key, what the shard is asked: its gain beyond the band) and, where it lost, the deposit of what it lost, out of the user's margin |
+| A step of the user's liquidation (kind 3, side A) | the user is below its maintenance; the leg is its largest, or it stands at its maintenance after. Stated over a statement that is none | the same, the fee out of the user's margin |
+| The steps of a call (kind 3, side B) | stated with the shard's call shown; every leg of the account leaves in one statement | the same; the fee is a note the shard pays after its users |
+
+| Statement on a shard | Rule | Writes |
+|---|---|---|
+| A draw (kind 5; exists) | leaves the equity at the upper level, and is of coins; not while called; not of nothing | as today |
+| A call (new) | the equity is below the lower level at any price within the tolerance; anyone, with a bond; stated over a draw | the shard called, and the call: an object that the steps of a call show |
+| The call ends (new) | no row has a unit, or the equity is at the upper level again | the shard not called |
+
+| Note to a shard | Does |
+|---|---|
+| A leg left | takes the leg out of the rows and of the number (by its units and its entry, which the note has from the leg); pays what it asks to the user's key: outside a call in full as far as the shard holds, in a call its share once no row has a unit |
+| A deposit | adds to what it holds |
+| The fee of a step under a call | paid after the users, of what is left |
+
+A statement on the shard, and the applying of an entry, is ended by a note to the shard that landed before it
+and is not applied.
+
+**What goes** of what is built: side B's margin in a covered account and all that guarded it; the notes of an
+entry and of what is owed; entries that move with a statement, in a covered account; options and the move of a
+leg under a shard; `KpfTLegAdd`, and with it F61 as it was found.
+
+**What a user does to be covered**: reads the shard (its committee, terms, periods, what it holds against what
+it is asked); opens an account under it; states an entry with the clearing party and waits its dispute period;
+has it applied (anyone does), and is covered from that transaction, or is not in. To leave: states, waits,
+applies, and has its note applied.
+
+**Not in the first form, and wanted:** a gain taken out without leaving; options; a leg moved between accounts;
+an entry that does not wait a dispute period (a citation in place of the wait).
+
+**Sizes are not known.** The applying of an entry carries the shard's rows and terms beside the account's.
+
+Order: the model with these (no unbooked leg, the rate on the gross, an owner that sets its users off and
+leaves); review of this section on paper; then scripts.
 

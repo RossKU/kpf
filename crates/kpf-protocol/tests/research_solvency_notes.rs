@@ -13,15 +13,21 @@
 //!   paid the same share.
 //! - Notes are paid when somebody applies them; a statement on the shard waits for the notes before it.
 //!
+//! After review 43: there is no leg that is not booked (an entry is applied with the shard, or it is not applied);
+//! the rate on the gross is half the maintenance rate less three times the tolerance, and has two levels as the
+//! rate on the net has; the fees of a call are a share of what is left when the users are paid.
+//!
 //! The claim: whatever the owner does with accounts of its own, every user is paid in full what it is owed beyond
 //! the band, as long as the price moves by less than the maintenance rate less the tolerance between two visits of
-//! whoever watches. And each of the two things review 42 found, left out, breaks it.
+//! whoever watches. And each of the things reviews 42 and 43 found, left out, breaks it.
 
 const KAS: i64 = 100_000_000;
 const BPS: i64 = 10_000;
 const MMR: i64 = 500;
 const G: i64 = 50;
 const LIQ: i64 = 50;
+/// The rate on the gross: what a book that is set off keeps for the time between one side's leaving and the call.
+const GROSS: i64 = (MMR - 3 * G) / 2;
 
 fn rate(w: i64, r: i64) -> i64 {
     (w / BPS) * r + ((w % BPS) * r + BPS - 1) / BPS
@@ -58,6 +64,8 @@ struct Rules {
     over: bool,
     /// Whoever watches comes every so many ticks.
     every: usize,
+    /// The rate on the gross.
+    gross: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,8 +94,15 @@ impl World {
         }
         self.coins - self.owed.iter().map(|o| o.1).sum::<i64>() - self.legs.iter().filter(|l| l.booked).map(|l| l.gain(p)).sum::<i64>()
     }
-    fn requirement(&self, p: i64, net_rate: i64) -> i64 {
-        rate(self.net().abs() * p, net_rate) + rate(self.gross() * p, LIQ)
+    /// The requirement at the upper level (`up`: both rates counted the tolerance more) or the lower (the rate on
+    /// the net the tolerance less). Without the booking rule there is one level, as built today.
+    fn requirement(&self, p: i64, r: Rules, up: bool) -> i64 {
+        let (net, gross) = match (r.book, up) {
+            (false, _) => (MMR + G, r.gross),
+            (true, true) => (MMR + G, r.gross + G),
+            (true, false) => (MMR - G, r.gross),
+        };
+        rate(self.net().abs() * p, net) + rate(self.gross() * p, gross)
     }
     /// Notes are paid in full as they come, the owner's own first (the worst order for its users), as far as the
     /// coins go; what is not paid waits.
@@ -128,7 +143,12 @@ impl World {
     /// booking rule, only where the shard's equity is at least its requirement with it: else it does not enter).
     fn enter(&mut self, own: bool, units: i64, p: i64, r: Rules, book: bool, held: bool) -> bool {
         self.legs.push(Leg { own, units, entry: p, margin: rate(units.abs() * p, MMR + G), booked: book, held });
-        if r.book && book && self.equity(p, r) < self.requirement(p, MMR + G) {
+        // (After review 43 there is no leg that is not booked: with the booking rule an entry is booked or is not.)
+        let book = book || r.book;
+        if let Some(l) = self.legs.last_mut() {
+            l.booked = book;
+        }
+        if r.book && self.equity(p, r) < self.requirement(p, r, true) {
             self.legs.pop();
             return false;
         }
@@ -142,7 +162,7 @@ impl World {
         if !self.owed.is_empty() {
             return;
         }
-        let amount = (self.equity(p, r) - self.requirement(p, MMR + G)).min(self.coins).max(0);
+        let amount = (self.equity(p, r) - self.requirement(p, r, true)).min(self.coins).max(0);
         self.coins -= amount;
         self.owner_took += amount;
     }
@@ -163,7 +183,7 @@ impl World {
             }
         }
         self.pay();
-        if r.book && self.equity(p, r) < self.requirement(p, MMR - G) {
+        if r.book && self.equity(p, r) < self.requirement(p, r, false) {
             let cap = rate(self.gross() * p, LIQ);
             let mut i = 0;
             while i < self.legs.len() {
@@ -177,7 +197,8 @@ impl World {
             let total: i64 = self.owed.iter().map(|o| o.1).sum();
             if total <= self.coins {
                 self.pay();
-                let fee = cap.min(self.coins);
+                // (The fees of a call: a share of what is left when the users are paid.)
+                let fee = cap.min(self.coins / 2);
                 self.coins -= fee;
                 self.fees += fee;
             } else {
@@ -231,8 +252,13 @@ enum Owner {
     /// A pair of its own accounts, one each way, both held under statements; the one that won leaves, the one
     /// that lost stands (review 42, H1).
     Pair,
-    /// An account of its own the way the price goes next whose entry it never has booked (review 42, H2).
+    /// An account of its own the way the price goes next whose entry it never has booked (review 42, H2: as
+    /// built today; with the rules there is no such leg).
     Unbooked,
+    /// An account of its own against its users' net, so that the book is set off and asked the rate on the gross;
+    /// it draws what a one-way book was asked, and leaves its account before a tick that goes its users' way
+    /// (review 43, N3).
+    SetOff,
 }
 
 fn run(seed: u64, tick: i64, r: Rules, owner: Owner) -> World {
@@ -261,6 +287,8 @@ fn run(seed: u64, tick: i64, r: Rules, owner: Owner) -> World {
                 // (It leaves what would lose; under the pair, what has won: the loser stands.)
                 Owner::Way | Owner::Unbooked => l.own && (l.units > 0) != up,
                 Owner::Pair => l.own && l.gain(p) > rate(l.worth(p), 2 * G),
+                // (It leaves before a tick that goes its users' way, which is against its own account.)
+                Owner::SetOff => l.own && (l.units > 0) != up,
             };
             if out {
                 w.leave(i, p, r);
@@ -268,11 +296,21 @@ fn run(seed: u64, tick: i64, r: Rules, owner: Owner) -> World {
                 i += 1;
             }
         }
-        let mut size = 4_000;
+        if owner == Owner::SetOff {
+            let users: i64 = w.legs.iter().filter(|l| !l.own).map(|l| l.units).sum();
+            let own: i64 = w.legs.iter().filter(|l| l.own).map(|l| l.units).sum();
+            // Against its users' net, where the next tick does not go against the account it enters.
+            let against = -(users + own);
+            if against != 0 && (against > 0) == up {
+                w.enter(true, against, p, r, true, false);
+            }
+        }
+        let mut size = if owner == Owner::SetOff { 0 } else { 4_000 };
         while size >= 1 {
             let entered = match owner {
                 Owner::Way => w.enter(true, if up { size } else { -size }, p, r, true, false),
                 Owner::Unbooked => w.enter(true, if up { size } else { -size }, p, r, false, false),
+                Owner::SetOff => false,
                 Owner::Pair => {
                     let a = w.enter(true, size, p, r, true, true);
                     let b = a && w.enter(true, -size, p, r, true, true);
@@ -297,7 +335,7 @@ fn run(seed: u64, tick: i64, r: Rules, owner: Owner) -> World {
     w
 }
 
-const RULES: Rules = Rules { book: true, over: true, every: 1 };
+const RULES: Rules = Rules { book: true, over: true, every: 1, gross: GROSS };
 
 fn unpaid(tick: i64, r: Rules, owner: Owner, paths: u64) -> (u64, i64) {
     let (mut n, mut short) = (0, 0);
@@ -315,7 +353,7 @@ fn unpaid(tick: i64, r: Rules, owner: Owner, paths: u64) -> (u64, i64) {
 /// tolerance.
 #[test]
 fn with_booked_legs_steps_over_statements_and_two_levels_no_user_is_unpaid() {
-    for owner in [Owner::Way, Owner::Pair, Owner::Unbooked] {
+    for owner in [Owner::Way, Owner::Pair, Owner::Unbooked, Owner::SetOff] {
         for tick in [50, 200, MMR - G] {
             let (n, _) = unpaid(tick, RULES, owner, 1_000);
             println!("{owner:?}, ticks of {tick} bps, the rules: users unpaid on {n} of 1,000 paths");
@@ -337,7 +375,7 @@ fn an_account_held_under_statements_breaks_it_where_a_step_does_not_reach_it() {
 /// its requirement at its draws alone, the owner's unbooked account leaves users unpaid.
 #[test]
 fn a_leg_paid_that_was_never_booked_breaks_it() {
-    let (n, short) = unpaid(200, Rules { book: false, ..RULES }, Owner::Unbooked, 1_000);
+    let (n, short) = unpaid(200, Rules { book: false, gross: LIQ, ..RULES }, Owner::Unbooked, 1_000);
     println!("Unbooked, ticks of 200 bps, as built today: users unpaid on {n} of 1,000 paths, {short} KAS a path");
     assert!(n > 500, "{n}");
 }
@@ -352,25 +390,36 @@ fn the_bound_is_on_the_move_between_two_visits() {
     }
 }
 
-/// And for a book that is set off it is a smaller bound, which the rate on the gross gives. Nothing gates a
-/// leaving: one side of a set-off book leaves, and until the next visit the other side stands against a shard that
-/// holds what a set-off book is asked. Two users, 1,000 units each way at 10; the owner draws all it may, and the
-/// shard holds the rate on the gross of 20,000 KAS: 100 KAS. The short leaves. The price rises before the visit.
+/// Review 43, N3. With the rate on the gross at the liquidation fee's rate (0.5 %), the owner that sets its users
+/// off and leaves them leaves them unpaid within the bound; with the rate that makes the two bounds one, nobody.
+#[test]
+fn a_book_set_off_by_its_owner_is_held_by_the_rate_on_the_gross() {
+    let (n, short) = unpaid(MMR - G, Rules { gross: LIQ, ..RULES }, Owner::SetOff, 1_000);
+    println!("SetOff, ticks of 450 bps, the rate on the gross at 0.5 %: users unpaid on {n} of 1,000 paths, {short} KAS a path");
+    // (This owner is a plain one; the reviewer's, in tests/auditT1_solvency.rs, leaves 92 of 1,000 unpaid.)
+    assert!(n > 0, "{n}");
+    let (n, _) = unpaid(MMR - G, RULES, Owner::SetOff, 1_000);
+    println!("SetOff, ticks of 450 bps, the rate on the gross at {GROSS} bps: users unpaid on {n} of 1,000 paths");
+    assert_eq!(n, 0);
+}
+
+/// The same in one case. Two users, 1,000 units each way at 10; the owner draws all it may; the short leaves; the
+/// price rises before the visit by the whole bound. With the rate on the gross at 0.5 % the long is short; at
+/// half the maintenance rate less three times the tolerance it is paid.
 #[test]
 fn one_side_of_a_set_off_book_that_leaves_is_held_by_the_rate_on_the_gross_and_the_band() {
-    for (tick, short) in [(100, false), (150, false), (200, false), (MMR - G, true)] {
-        let mut w = World { coins: 1_000 * KAS, ..World::default() };
+    for (gross, short) in [(LIQ, true), (GROSS, false)] {
+        let r = Rules { gross, ..RULES };
+        let mut w = World { coins: 2_000 * KAS, ..World::default() };
         let p = 10 * KAS;
-        assert!(w.enter(false, 1_000, p, RULES, true, false) && w.enter(false, -1_000, p, RULES, true, false));
-        w.draw(p, RULES);
-        assert_eq!(w.coins, 100 * KAS, "the rate on the gross, and nothing on a net of nothing");
-        w.leave(1, p, RULES);
-        assert!(w.equity(p, RULES) < w.requirement(p, MMR - G), "the book is one way, and the shard below what that is asked");
-        w.draw(p, RULES);
-        assert_eq!(w.coins, 100 * KAS, "no draw below the requirement");
-        let p = p + p / BPS * tick;
-        w.watch(p, RULES);
-        println!("a set-off book, one side gone, a rise of {tick} bps before the visit: the user is short {} KAS", w.short / KAS);
-        assert_eq!(w.short > 0, short, "a rise of {tick} bps");
+        assert!(w.enter(false, 1_000, p, r, true, false) && w.enter(false, -1_000, p, r, true, false));
+        w.draw(p, r);
+        assert_eq!(w.coins, rate(20_000 * KAS, gross + G), "the rate on the gross at its upper level, and nothing on a net of nothing");
+        w.leave(1, p, r);
+        assert!(w.equity(p, r) < w.requirement(p, r, false), "the book is one way, and the shard below what that is asked");
+        let p = p + p / BPS * (MMR - G);
+        w.watch(p, r);
+        println!("a set-off book, one side gone, a rise of 450 bps before the visit, the rate on the gross at {gross} bps: the user is short {} KAS", w.short / KAS);
+        assert_eq!(w.short > 0, short, "the rate on the gross at {gross} bps");
     }
 }

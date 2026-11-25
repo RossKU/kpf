@@ -341,3 +341,400 @@ fn a_call_at_a_hair_closes_every_user_of_a_shard_at_its_requirement_and_its_fees
     assert!(w.equity(edge) < w.requirement(edge), "below at the end of the tolerance that is against it");
     println!("(b) a shard above its requirement by 0.25 % of its net at the committee's price is below it at the price 0.5 % higher: a call stated there is within the tolerance");
 }
+
+/// Review 43: the second model (`research_solvency_notes.rs`, after review 42), copied, with the rate on the gross
+/// a number of its own (the model takes the liquidation fee's), a leg booked after it entered (the gate then
+/// counts what it gained since), and owners of the reviewer's making. A test named `..._breaks_...` or
+/// `..._is_not_...` passes while that is so in the model.
+mod second {
+    const KAS: i64 = 100_000_000;
+    const BPS: i64 = 10_000;
+    const MMR: i64 = 500;
+    const G: i64 = 50;
+    const LIQ: i64 = 50;
+
+    fn rate(w: i64, r: i64) -> i64 {
+        (w / BPS) * r + ((w % BPS) * r + BPS - 1) / BPS
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Leg {
+        own: bool,
+        units: i64,
+        entry: i64,
+        margin: i64,
+        booked: bool,
+    }
+
+    impl Leg {
+        fn worth(&self, p: i64) -> i64 {
+            self.units.abs() * p
+        }
+        fn gain(&self, p: i64) -> i64 {
+            self.units * (p - self.entry)
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct World {
+        /// The rate on the gross (the model's: the liquidation fee's rate, 0.5 %).
+        gross_rate: i64,
+        coins: i64,
+        legs: Vec<Leg>,
+        owed: Vec<(bool, i64)>,
+        short: i64,
+        owner_took: i64,
+        fees: i64,
+        calls: i64,
+        /// What users' legs that were never booked had gained when they left (paid by nobody), and what such legs
+        /// paid the shard when they lost.
+        forfeited: i64,
+        taken_unbooked: i64,
+    }
+
+    impl World {
+        fn new(coins: i64, gross_rate: i64) -> World {
+            World { coins, gross_rate, ..World::default() }
+        }
+        fn net(&self) -> i64 {
+            -self.legs.iter().filter(|l| l.booked).map(|l| l.units).sum::<i64>()
+        }
+        fn gross(&self) -> i64 {
+            self.legs.iter().filter(|l| l.booked).map(|l| l.units.abs()).sum()
+        }
+        fn equity(&self, p: i64) -> i64 {
+            self.coins - self.owed.iter().map(|o| o.1).sum::<i64>() - self.legs.iter().filter(|l| l.booked).map(|l| l.gain(p)).sum::<i64>()
+        }
+        fn requirement(&self, p: i64, net_rate: i64) -> i64 {
+            rate(self.net().abs() * p, net_rate) + rate(self.gross() * p, self.gross_rate)
+        }
+        fn pay(&mut self) {
+            self.owed.sort_by_key(|o| !o.0);
+            for o in self.owed.iter_mut() {
+                let paid = o.1.min(self.coins);
+                self.coins -= paid;
+                o.1 -= paid;
+                if o.0 {
+                    self.owner_took += paid;
+                }
+            }
+            self.owed.retain(|o| o.1 > 0);
+        }
+        fn leave(&mut self, i: usize, p: i64) {
+            let l = self.legs.remove(i);
+            let gain = l.gain(p);
+            if gain >= 0 {
+                let asked = (gain - rate(l.worth(p), 2 * G)).max(0);
+                if asked > 0 && l.booked {
+                    self.owed.push((l.own, asked));
+                } else if !l.own {
+                    self.forfeited += asked;
+                }
+            } else {
+                let paid = (-gain).min(l.margin);
+                self.coins += paid;
+                if l.own {
+                    self.owner_took -= paid;
+                } else if !l.booked {
+                    self.taken_unbooked += paid;
+                }
+            }
+        }
+        /// A leg enters at the price with its maintenance as margin; `book`: booked as it enters, where the gate
+        /// lets it.
+        fn enter(&mut self, own: bool, units: i64, p: i64, book: bool) -> bool {
+            self.legs.push(Leg { own, units, entry: p, margin: rate(units.abs() * p, MMR + G), booked: false });
+            if book && !self.book(self.legs.len() - 1, p) {
+                self.legs.pop();
+                return false;
+            }
+            true
+        }
+        /// A leg is booked at the price: the gate is the shard's equity, counting what the leg has gained since it
+        /// entered, at least the requirement with it.
+        fn book(&mut self, i: usize, p: i64) -> bool {
+            self.legs[i].booked = true;
+            if self.equity(p) < self.requirement(p, MMR + G) {
+                self.legs[i].booked = false;
+            }
+            self.legs[i].booked
+        }
+        fn draw(&mut self, p: i64) {
+            self.pay();
+            if !self.owed.is_empty() {
+                return;
+            }
+            let amount = (self.equity(p) - self.requirement(p, MMR + G)).min(self.coins).max(0);
+            self.coins -= amount;
+            self.owner_took += amount;
+        }
+        fn watch(&mut self, p: i64) {
+            let mut i = 0;
+            while i < self.legs.len() {
+                let l = self.legs[i];
+                if l.margin + l.gain(p) < rate(l.worth(p), MMR - G) {
+                    let fee = rate(l.worth(p), LIQ).min((l.margin + l.gain(p)).max(0));
+                    self.legs[i].margin -= fee;
+                    self.fees += fee;
+                    self.leave(i, p);
+                } else {
+                    i += 1;
+                }
+            }
+            self.pay();
+            if self.equity(p) < self.requirement(p, MMR - G) {
+                self.calls += 1;
+                let cap = rate(self.gross() * p, self.gross_rate);
+                let mut i = 0;
+                while i < self.legs.len() {
+                    if self.legs[i].booked {
+                        self.leave(i, p);
+                    } else {
+                        i += 1;
+                    }
+                }
+                let total: i64 = self.owed.iter().map(|o| o.1).sum();
+                if total <= self.coins {
+                    self.pay();
+                    let fee = cap.min(self.coins);
+                    self.coins -= fee;
+                    self.fees += fee;
+                } else {
+                    let coins = self.coins;
+                    for o in self.owed.drain(..) {
+                        let paid = (o.1 as i128 * coins as i128 / total as i128) as i64;
+                        self.coins -= paid;
+                        if o.0 {
+                            self.owner_took += paid;
+                        } else {
+                            self.short += o.1 - paid;
+                        }
+                    }
+                }
+            }
+        }
+        fn end(&mut self, p: i64) {
+            while !self.legs.is_empty() {
+                self.leave(0, p);
+            }
+            self.pay();
+            self.short += self.owed.iter().filter(|o| !o.0).map(|o| o.1).sum::<i64>();
+        }
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            lo + (self.next() % (hi - lo + 1) as u64) as i64
+        }
+    }
+
+    fn users(w: &mut World, g: &mut Rng, p: i64) {
+        if g.range(0, 2) == 0 {
+            let units = g.range(1, 40) * if g.range(0, 1) == 0 { 1 } else { -1 };
+            w.enter(false, units, p, true);
+        }
+        if g.range(0, 5) == 0 && !w.legs.is_empty() {
+            let i = g.range(0, w.legs.len() as i64 - 1) as usize;
+            if !w.legs[i].own && w.legs[i].margin + w.legs[i].gain(p) >= 0 {
+                w.leave(i, p);
+            }
+        }
+    }
+
+    fn leave_own(w: &mut World, p: i64, which: impl Fn(&Leg) -> bool) {
+        let mut i = 0;
+        while i < w.legs.len() {
+            if w.legs[i].own && which(&w.legs[i]) {
+                w.leave(i, p);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// The owner that sets its users off and leaves them: each tick it enters an account of its own against its
+    /// users' net (the book is then set off, and asked the rate on the gross alone), draws all it may, and, where
+    /// the next tick goes its users' way, leaves that account before the price moves.
+    fn set_off_and_leave(seed: u64, tick: i64, gross_rate: i64) -> World {
+        let mut g = Rng(seed);
+        let mut w = World::new(500 * KAS, gross_rate);
+        let mut p = 10 * KAS;
+        for _ in 0..80 {
+            let next = p + p / BPS * g.range(-tick, tick);
+            users(&mut w, &mut g, p);
+            leave_own(&mut w, p, |_| true);
+            let net: i64 = w.legs.iter().filter(|l| l.booked).map(|l| l.units).sum();
+            if net != 0 {
+                w.enter(true, -net, p, true);
+            }
+            w.draw(p);
+            if (next > p) == (net > 0) {
+                leave_own(&mut w, p, |_| true);
+            }
+            p = next;
+            w.watch(p);
+        }
+        w.end(p);
+        w
+    }
+
+    /// The owner that books late: it enters accounts of its own of every size the way the price goes next, none
+    /// booked; after the tick it books the largest the gate lets in (the gate counting what the leg gained), has
+    /// it leave, and draws; and it acts again after the price moved and before whoever watches.
+    fn book_late(seed: u64, tick: i64) -> World {
+        let mut g = Rng(seed);
+        let mut w = World::new(500 * KAS, LIQ);
+        let mut p = 10 * KAS;
+        for _ in 0..80 {
+            let next = p + p / BPS * g.range(-tick, tick);
+            users(&mut w, &mut g, p);
+            let mut size = 4_000;
+            while size >= 1 {
+                w.enter(true, if next > p { size } else { -size }, p, false);
+                size /= 2;
+            }
+            w.draw(p);
+            p = next;
+            // After the price: book what the gate takes, largest first; out of everything of its own; draw.
+            let mut i = 0;
+            while i < w.legs.len() {
+                if w.legs[i].own && !w.legs[i].booked {
+                    w.book(i, p);
+                }
+                i += 1;
+            }
+            leave_own(&mut w, p, |_| true);
+            w.draw(p);
+            w.watch(p);
+        }
+        w.end(p);
+        w
+    }
+
+    fn unpaid(f: impl Fn(u64) -> World, paths: u64) -> (u64, i64, i64) {
+        let (mut n, mut short, mut took) = (0, 0, 0);
+        for seed in 1..=paths {
+            let w = f(seed * 7_919);
+            if w.short > 0 {
+                n += 1;
+                short += w.short;
+            }
+            took += w.owner_took;
+        }
+        (n, short / paths as i64 / KAS, took / paths as i64 / KAS)
+    }
+
+    /// N3. The bound of a set-off book is the bound of every book, at the owner's choice: an account of its own
+    /// against its users' net makes any book set off (and lets the owner draw what a one-way book was asked), and
+    /// leaving it before a tick that goes its users' way makes that side stand against a shard that holds the rate
+    /// on the gross. With the rules on: no user unpaid at ticks of 1.5 %; users unpaid at ticks of 3 % and of 4.5 %,
+    /// which the claim's bound (the maintenance rate less the tolerance) includes.
+    #[test]
+    fn an_owner_that_sets_its_users_off_and_leaves_them_breaks_the_claim_within_its_bound() {
+        let within = unpaid(|s| set_off_and_leave(s + 150, 150, LIQ), 1_000);
+        let three = unpaid(|s| set_off_and_leave(s + 300, 300, LIQ), 1_000);
+        let whole = unpaid(|s| set_off_and_leave(s + 450, 450, LIQ), 1_000);
+        println!("the owner that sets its users off and leaves them, the rate on the gross 0.5 %: users unpaid on (paths of 1,000, KAS a path) {within:?} at ticks of 1.5 %, {three:?} at 3 %, {whole:?} at 4.5 %");
+        assert_eq!(within.0, 0);
+        assert!(three.0 > 0 && whole.0 > three.0, "{three:?} {whole:?}");
+    }
+
+    /// And with the rate on the gross that section 12 computes for the two bounds to be one (half of the
+    /// maintenance rate less three times the tolerance: 1.75 %), the same owner leaves nobody unpaid at ticks of
+    /// 4.5 %; with 1.5 % it does.
+    #[test]
+    fn the_rate_on_the_gross_that_makes_the_two_bounds_one_holds_against_that_owner() {
+        let at = unpaid(|s| set_off_and_leave(s + 450, 450, (MMR - 3 * G) / 2), 1_000);
+        let under = unpaid(|s| set_off_and_leave(s + 450, 450, 150), 1_000);
+        println!("the same owner at ticks of 4.5 %: with a rate on the gross of 1.75 %, users unpaid on {at:?}; with 1.5 %, on {under:?}");
+        assert_eq!(at.0, 0);
+        assert!(under.0 > 0);
+    }
+
+    /// Booking late, the gate counting what the leg gained since it entered: could not be broken. An owner with
+    /// accounts of its own of every size, entered the way of the next tick and booked after it, takes no more
+    /// than the room above the requirement, which was its to draw.
+    #[test]
+    fn a_leg_booked_after_it_gained_takes_no_more_than_the_room_the_gate_counts() {
+        for tick in [50, 200, MMR - G] {
+            let r = unpaid(|s| book_late(s + tick as u64, tick), 1_000);
+            println!("the owner that books late, ticks of {tick} bps: users unpaid on {r:?}");
+            assert_eq!(r.0, 0, "ticks of {tick} bps");
+        }
+    }
+
+    /// N1. A leg that is not booked: what it loses is taken and what it gains is paid by nobody. The model has a
+    /// leg that lost pay the shard from its margin whether it was booked or not, and a leg that gained be paid only
+    /// where it was booked. For the owner's own unbooked account that is the point (review 42, H2). For a user
+    /// whose entry is settled and whose booking is late or refused it is a bet it can only lose: here 100 users of
+    /// 100 units, half each way, entered and not booked; the price moves 2 % and all leave. The claim's measure, users unpaid of what they are owed, is nothing.
+    #[test]
+    fn what_an_unbooked_leg_loses_is_taken_and_what_it_gains_is_not_paid() {
+        let p = 10 * KAS;
+        let mut w = World::new(100 * KAS, LIQ);
+        for i in 0..100 {
+            assert!(w.enter(false, if i % 2 == 0 { 100 } else { -100 }, p, false), "the leg is in its account, not booked");
+        }
+        let p = p + p / BPS * 200;
+        let had = w.coins;
+        while !w.legs.is_empty() {
+            w.leave(0, p);
+        }
+        w.pay();
+        println!("100 users of 100 units, half each way, entered and never booked, a move of 2 %: the half that gained is paid nothing of {} KAS (beyond the band), the half that lost pays the shard {} KAS; the shard held {} KAS and holds {}; users unpaid of what they are owed: {}", w.forfeited / KAS, w.taken_unbooked / KAS, had / KAS, w.coins / KAS, w.short);
+        assert!(w.forfeited > 400 * KAS && w.taken_unbooked > 900 * KAS && w.short == 0 && w.owed.is_empty());
+    }
+
+    /// N2. The two levels are one for a book that is set off: they differ by the tolerance of the **net**. A shard
+    /// drawn to its upper level over two users, one each way, is below its lower level after a rise of a
+    /// hundredth of a percent (the gross is counted at the price); it is called, every user is closed, and the
+    /// fee, capped at the rate on the gross, is all it held.
+    #[test]
+    fn a_set_off_book_at_its_requirement_is_called_at_a_hair_and_the_capped_fee_is_all_it_held() {
+        let p = 10 * KAS;
+        let mut w = World::new(1_000 * KAS, LIQ);
+        assert!(w.enter(false, 1_000, p, true) && w.enter(false, -1_000, p, true));
+        w.draw(p);
+        let had = w.coins;
+        assert_eq!((had, w.requirement(p, MMR + G), w.requirement(p, MMR - G)), (100 * KAS, 100 * KAS, 100 * KAS), "the two levels are one where the net is nothing");
+        w.watch(p + p / BPS);
+        println!("a set-off book at its requirement, the price up 0.01 %: called {} time, {} legs standing, whoever called has {} KAS of the {} it held, the shard {} sompi", w.calls, w.legs.len(), w.fees / KAS, had / KAS, w.coins);
+        assert!(w.calls == 1 && w.legs.is_empty() && w.fees * 100 >= had * 99 && w.short == 0);
+    }
+
+    /// The share of a call, and the owner's own notes in it: could not be turned against the users. At a gap of
+    /// 10 % a user long 1,000 units alone over a shard at its upper level is paid 600 KAS of the 890 it is owed.
+    /// With a pair of the owner's own accounts of 100,000 units each way beside it (booked: the gate asked the rate
+    /// on their gross of the shard), the one that lost pays in what its margin holds, the one that won shares with
+    /// the user, and the user is paid more, not less: the owner's accounts brought more to the call than their
+    /// share takes. An account of the owner's own on the user's side, booked, brings what the user's brought.
+    #[test]
+    fn the_owners_own_notes_take_no_more_of_a_failing_shard_than_they_brought() {
+        let p = 10 * KAS;
+        let gap = p + p / BPS * 1_000;
+        let run = |own: &[i64]| {
+            let mut w = World::new(100_000 * KAS, LIQ);
+            assert!(w.enter(false, 1_000, p, true));
+            for u in own {
+                assert!(w.enter(true, *u, p, true));
+            }
+            w.draw(p);
+            let held = w.coins;
+            w.watch(gap);
+            assert!(w.calls == 1 && w.legs.is_empty());
+            (held / KAS, w.short / KAS, w.owner_took / KAS)
+        };
+        let alone = run(&[]);
+        let pair = run(&[100_000, -100_000]);
+        let beside = run(&[100_000]);
+        println!("a gap of 10 %, a user long 1,000 units owed 890 KAS: (the shard held, the user is short, the owner's accounts and draws took) alone {alone:?}; with an own pair of 100,000 each way {pair:?}; with an own account of 100,000 the user's way {beside:?}");
+        assert!(pair.1 <= alone.1 && beside.1 <= alone.1 + 1, "the owner's own notes took from the user's share");
+    }
+}

@@ -5534,3 +5534,200 @@ hair pass while that is so in the model. `auditT1_builders.rs`: 116 pass (one ne
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 4 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 116 passed, 0 failed
 ```
+
+# Round 43
+
+Scope: the second numbers model of a shard held to its requirement (`docs/ARCHITECTURE-CLEARING.md` section 12,
+from "Review 42 attacked this section" to its end; `crates/kpf-protocol/tests/research_solvency_notes.rs`).
+Numbers and paper only: no script changed and none is reviewed. I copied the second model into my own file
+(`crates/kpf-protocol/tests/auditT1_solvency.rs`, a module `second`, six tests) with the rate on the gross a
+number of its own, a leg booked after it entered, and three owners of my making. No contracts, no `src`, no
+commit, nothing under `kpf-out`.
+
+**The claim as section 12 words it is broken in the model's own terms by an owner that sets its users off and
+leaves them (N3): the bound of a set-off book is the bound of every book, at the owner's choice. With the rate on
+the gross section 12 computes, that owner leaves nobody unpaid. Two more things the model shows without counting
+them: a leg that is not booked loses what it loses and is paid nothing of what it gains, which for a user is a
+bet it can only lose (N1, High); and the two levels are one level for a set-off book, so the call at a hair is
+still there (N2, Medium). Booking late and the share of a call I could not turn against the users.**
+
+## Holes
+
+### N1 (High). A leg that is not booked: what it loses is taken, and what it gains is paid by nobody
+
+`second::what_an_unbooked_leg_loses_is_taken_and_what_it_gains_is_not_paid`
+
+The model has a leg that lost pay the shard from its margin whether it was booked or not, and a leg that gained
+be paid only where it was booked. For the owner's own unbooked account that is the point of the rule. For a user
+it is this:
+
+1. The user and the clearing party state the entry (two signatures); it is settled; the leg is in the account.
+2. The booking is a statement on the shard, later, with a dispute period of its own. Until it is applied the leg
+   is not booked. It may never be: the gate has no room (an owner that draws all it may leaves none), and the
+   gate counts what the leg has gained since it entered, so a leg that has won needs more room and one that has
+   lost needs less.
+3. The leg loses: it pays the shard. The leg gains: nobody owes it. Side B has no margin in the account any
+   more, and the shard pays booked legs alone.
+
+In numbers: 100 users of 100 units, half each way, entered and not booked; a move of 2 %; all leave. The half
+that gained is paid nothing of 490 KAS; the half that lost pays the shard 1,000 KAS, which held 100 and holds
+1,100. The claim's measure (users unpaid of what they are owed) is 0, because nothing was owed. The clearing
+party signs entries knowing there is no room, and the gate does the rest without anybody acting.
+
+What the scripts' design must fix first. A leg that is not booked must be nothing both ways: it pays nothing and
+is paid nothing, and its entry is the price it is booked at; or the entry and the booking are one act. Either way
+an account must be able to tell a booked leg from one that is not without reading the shard: the booking's
+settlement leaves an object for the account (the booked object, or a receipt of it), and the leg counts in the
+account's rows from the statement that shows it. And a booking must be anybody's to state, the user's first.
+
+### N3 (High for the claim as worded). An owner makes any book a set-off book, and leaves
+
+`second::an_owner_that_sets_its_users_off_and_leaves_them_breaks_the_claim_within_its_bound`
+
+Section 12 found that one side of a set-off book leaving is held by the rate on the gross and the band (a move
+of 2 % with the terms as they are), and calls it a second bound. It is the only bound. The owner needs no user to
+leave:
+
+1. Whatever its users' net is, the owner enters an account of its own against it. The book is set off; the gate
+   lets it in gladly (the requirement falls from the rate on the net to the rate on the gross).
+2. It draws all it may: what the one-way book was asked is out.
+3. Before a tick that goes its users' way it leaves its own account, at no loss. Its users stand one way against
+   a shard that holds the rate on the gross.
+4. The price moves; at the visit the shard is called and has not enough.
+
+With the rules on, the rate on the gross 0.5 %, 1,000 paths: no user unpaid at ticks of 1.5 %; users unpaid on 38
+paths at ticks of 3 % and on 92 at 4.5 %, both within the bound the claim names (the maintenance rate less the
+tolerance). `Way`, `Pair` and `Unbooked` do not do this: they enter the way the price goes, never against the
+users.
+
+`second::the_rate_on_the_gross_that_makes_the_two_bounds_one_holds_against_that_owner`: with a rate on the gross
+of 1.75 % the same owner leaves nobody unpaid at ticks of 4.5 % (1,000 paths); with 1.5 % it does (18 paths). So
+section 12's number is right against the worst owner I could write, and the claim holds with it. What has to
+change is the wording and the price: a set-off book is not asked "0.5 % where two parties' margins are 5.5 %"; it
+is asked 1.75 %, and the claim's bound is the smaller of the two bounds whatever the book looks like.
+
+### N2 (Medium). The two levels are one for a set-off book
+
+`second::a_set_off_book_at_its_requirement_is_called_at_a_hair_and_the_capped_fee_is_all_it_held`
+
+The upper and the lower level differ by the tolerance of the **net**. Where the net is nothing they are the same
+number, and the gross is counted at the price, so it grows as the price rises. A shard drawn to its upper level
+over two users of 1,000 units, one each way, holds 100 KAS; the price rises 0.01 %; it is below its lower level,
+it is called, both users are closed, and the fee, capped at the rate on the gross, is 100 KAS of the 100 it held.
+H3 of round 42, as it was, for the book the design makes cheapest. The cap does not help: the cap is the
+requirement.
+
+What would close it: two levels for the rate on the gross too, or the gross counted at the entries booked (it
+then does not move with the price); and a cap on the fee that is a share of the requirement, not all of it.
+
+## What I could not break
+
+- **Booking late** (`second::a_leg_booked_after_it_gained_takes_no_more_than_the_room_the_gate_counts`). I wrote
+  the booking as section 12 says it: the gate asks the equity, counting what the leg has gained since it
+  entered, to be at least the requirement with it. An owner that enters accounts of its own of every size the way
+  of the next tick, none booked, and after the tick books the largest the gate takes, has it leave and draws
+  (acting after the price moved and before whoever watches): no user unpaid on 1,000 paths at ticks of 0.5 %, 2 %
+  and 4.5 %. What it takes is the room above the requirement, which was its to draw.
+- **The share of a call** (`second::the_owners_own_notes_take_no_more_of_a_failing_shard_than_they_brought`). At
+  a gap of 10 %, a user long 1,000 units alone is paid 600 KAS of 890 (short 290). With an own pair of 100,000
+  units each way beside it: short 240. With an own account of 100,000 units the user's way: short 290. An
+  account of the owner's brings to a call what the gate asked for it (and a pair, the margin of the one that
+  lost), which is at least its share. The gate is what makes the share fair.
+- **Drawing between a user's leaving and the visit, and acting after the price**: the draw pays every note first
+  and is of coins that are there; the late-booking owner acts in that place and nothing came of it.
+- **The owner's own first, outside a call**: the model pays the owner's notes before the users' wherever it pays
+  in full, and at the end. Within the bound there is enough for both.
+
+## 2. What the model takes for granted that scripts will not give
+
+- **A statement on the shard has a dispute period.** In the model a booking, a draw and a call are instant. In
+  scripts a leg is booked a dispute period after the booking is stated (and the entry had one before it): two
+  dispute periods in which the leg is live and uncovered (N1). The bound's "between two visits" is then a visit
+  and the wait for the shard to be free: a call cannot be stated on a shard that carries a statement.
+- **The owner's own statements on the shard hold it.** The same lever as H1, on the shard: a draw of nothing or a
+  booking of no note, renewed without a gap, and no call is stated. A call must be stated over whatever the
+  shard carries: a draw, a booking, and a disputed point of either (else the owner disputes its own draw and the
+  shard is a disputed point for a period). Not over another call. And a draw of nothing or a booking of no note
+  is no statement. A wrong call still holds the shard for a period; it costs its caller a bond each time.
+- **Notes applied "before" a statement.** The model applies in order. In scripts a note is applied when somebody
+  applies it, and a statement on the shard is held to the notes before it by a guard that somebody exercises in
+  its dispute period (`KpfTDrawNote` today, for a draw). With booked legs the guard has to cover a booking and a
+  call's absence too, and it has to count a leaving's note whether the leg gained or lost (a deposit does not
+  count today).
+- **A leg that left and whose booked object nobody brings.** Anybody must be able to unbook it (the note of the
+  leaving and the booked object are both objects under the registry's id; no signature is needed). If nobody
+  does, the books carry a leg that is gone, and it goes on moving with the price: where it "loses", the books
+  show equity that nobody owes the shard. That is H1 again with no account held: the owner's own leg leaves, the
+  owner does not unbook it, the price goes against it, and the owner draws and books against a loss that is not
+  there. What stands against it is the guard above, exercised by somebody, at every statement on the shard.
+- **One object a leg.** For an account of n legs, as far as section 12 fixes it:
+
+  | | Transactions | Waits |
+  |---|---|---|
+  | The user, to be covered | the opening; n entries stated and n settled; its share of a booking stated and settled | two dispute periods a leg, and the shard free |
+  | The user, to leave | n leavings stated and n settled (or n at once with side B's signature); n notes applied, each with its booked object | one dispute period a leg by statement |
+  | Whoever watches | every leaving's note that its own account does not apply (the owner's, and a user's that lost); the guard at every statement on the shard; at a call one step a leg of every account under the shard | |
+
+  And n outputs stand while the legs do, each holding the least an output may.
+
+## 3. The two bounds
+
+- **Are they right?** The one-way bound as stated is the accounts' bound, not the shard's: a one-way shard at its
+  upper level holds the rate on the net, the tolerance and the rate on the gross (6 % with the terms as they
+  are) and the band takes 1 % more off what it is asked, so it pays a move of 7 %. The 4.5 % is what an account
+  that lost can pay from its margin between two visits (entered at 5.5 %, stepped below 4.5 %), which the shard
+  needs wherever its book has two sides.
+- **The set-off bound** is, to the first order, twice the rate on the gross and twice the tolerance. Exactly,
+  with the band counted at the price after the move: x <= (2 r + 2 g) / (1 - 2 g). For it to be 4.5 % with a
+  tolerance of 0.5 %, r is 1.7275 %; "half of the maintenance rate less three times the tolerance", 1.75 %, is
+  that with a little to spare. The model agrees (above).
+- **Several accounts on each side, of unequal sizes, where the largest leaves.** With a net of n, a smaller side
+  of M and a leaving of Z out of it (all in worth), the move that is held is
+  ((m + g) n + r (n + 2 M)) / (n + Z) + 2 g. It is least where the net is nothing and the whole of one side
+  leaves (Z = M): 2 r + 2 g. A largest account that is less than its side leaves more held. But between two
+  visits every account of a side may leave, and the owner's own account can be the whole of it (N3): the bound
+  to build for is the whole side.
+
+## 4. The honest user's side
+
+- **A booking refused after the entry settled**: N1. Today's model leaves the user with a leg that can lose and
+  cannot win.
+- **A leg that gains before it is booked**: the gate counts the gain, so the more a leg has won the less likely it
+  is booked, and the more it has lost the more likely. Nobody has to act for this; it is the gate's arithmetic.
+  It is right for the owner's own account and wrong for a user unless an unbooked leg is nothing both ways.
+- **Closed by a call at the edge of the tolerance, the band taken**: the user's leg leaves at a price up to 0.5 %
+  against it, and what it is owed is counted less the band (1 % of its worth in the model). A user 4 % ahead is
+  paid about 2.5 %. And it is closed not because of anything it did.
+- **What a user does to be covered, and how often:**
+  1. Once: read the shard (its committee, terms, periods, what it holds against what it is asked, the room).
+  2. Once: open the account with the clearing party; put in its margin.
+  3. Every leg: state the entry with the clearing party; wait a dispute period; settle.
+  4. Every leg: see it booked (state the booking itself where nobody does); wait a dispute period; settle. Only
+     now is it covered. If it is not booked, leave.
+  5. All the time: watch the shard's room. Where the owner draws to its level, a small move calls the shard and
+     closes the user.
+  6. Every leaving: state it, wait, settle (or at once with the clearing party); apply the note with the booked
+     object to be paid.
+
+## What the scripts' design must fix first
+
+1. **What an unbooked leg is** (N1): nothing both ways, or no entry without a booking; how an account tells a
+   booked leg; a booking that anybody states.
+2. **The rate on the gross** (N3, N2): a number of the shard's terms of its own, sized as section 12 computes,
+   with two levels (or the gross counted at booked entries) and a fee that is not the whole of it; and the claim
+   worded with the one bound.
+3. **Statements on the shard**: a call over a draw, a booking and a disputed point; a draw or a booking of
+   nothing no statement.
+4. **A leg that left**: anybody unbooks it; the guard covers every leaving's note at every statement on the
+   shard.
+5. **Cost**: how many notes a booking takes, and that a call's steps do not each wait a dispute period.
+
+## Counts and commands
+
+`auditT1_solvency.rs`: 10 tests pass (round 42's four, and six in `second`). Those named for a hole pass while
+the model has it. `auditT1_builders.rs`, `auditT1_tests.rs`, `auditT1_cli.rs`: not run this round (no script and
+none of those files changed).
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 10 passed, 0 failed
+```
