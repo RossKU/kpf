@@ -127,11 +127,14 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         // What was stated, as it was shown: the side, the amount and the leg left out, 8 bytes each; that leg's market
         // (its first 84 bytes) and side B's units in it, for the note of a leg that leaves a covered account; then the
         // trace.
-        require(said.length >= 116);
+        // (An entry, kind 6, says the leg that enters whole and what its shard's id is the hash of, before its rows.)
+        int at0 = 116;
+        if (kind == 6) { at0 = 167; }
+        require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));
         int skip = int(byte[8](said.slice(16, 24)));
-        byte[] rows = said.slice(116, said.length);
+        byte[] rows = said.slice(at0, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         byte[32] c1 = blake2b(pre + i9(LATE_AGAIN) + i9(held));
@@ -142,7 +145,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 2);
-        require(kind <= 4);
+        require(kind <= 4 || kind == 6);
         require(at >= 2);
         require(at % 2 == 0);
         int i = at / 2;

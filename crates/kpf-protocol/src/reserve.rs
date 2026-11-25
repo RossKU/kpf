@@ -65,6 +65,14 @@ impl Head {
     }
 }
 
+/// A shard's id: the hash of its opening (`seed`, the hash of its anchor's outpoint), of the one committee whose
+/// prices the accounts under it are counted at, and of the terms and periods (lateness, dispute period, bond rate)
+/// those accounts have, which are the shard's own. A leg enters an account under the shard only where the leg's
+/// committee and the account's terms and periods give this id.
+pub fn shard_sid(seed: &[u8; 32], committee: &[u8; 32], terms: &[u8], periods: &[u8]) -> [u8; 32] {
+    blake2b(&[&seed[..], committee, terms, periods].concat())
+}
+
 /// The name the options of a market are counted under in a shard: `blake2b(push8(13) + push(market))`.
 pub fn option_market(market: &[u8; 32]) -> [u8; 32] {
     blake2b(&[i9(crate::thin::OPTION_TAG), p33(market)].concat())
@@ -277,8 +285,8 @@ impl Account {
     /// are not of one clearing party under one shard, a margin would fall below zero, or more than six legs stand
     /// after the leg.
     pub fn leg_moved(&self, i: usize, to: &Account, d: [i64; 4]) -> Result<(Account, Account)> {
-        if self.shard.is_none() || self.shard != to.shard || self.b_key != to.b_key {
-            return Err(Error::Invalid("a leg moves between two covered accounts of one clearing party under one shard".into()));
+        if self.shard.is_none() || self.shard != to.shard || self.b_key != to.b_key || self.terms() != to.terms() || self.periods() != to.periods() {
+            return Err(Error::Invalid("a leg moves between two covered accounts of one clearing party under one shard, of the same terms and periods".into()));
         }
         if i == 0 || i > self.legs.len() || self.legs.len() - i > 6 {
             return Err(Error::Invalid("the leg is one of the account's, with at most six after it".into()));

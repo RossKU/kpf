@@ -189,7 +189,7 @@ impl World {
     /// The clearing party's shard, opened through the first anchor with 50 KAS.
     fn shard(&self) -> OLive<Shard> {
         let f = [fund(xk(&self.b), 40)];
-        let (b, shard) = shard_open(&self.lib, &self.anchors[0], &self.script("KpfTShardOpen"), self.terms(), xk(&self.b), 50 * KAS1, 9_000_000, 50, 100, self.payer(&self.b, &f)).unwrap();
+        let (b, shard) = shard_open(&self.lib, &self.anchors[0], &self.script("KpfTShardOpen"), self.terms(), self.markets[0].committee_id, xk(&self.b), 50 * KAS1, 9_000_000, 50, 100, self.payer(&self.b, &f)).unwrap();
         let s = signed("shard opened", &b, &self.keys);
         nth(&s, 0, shard, 6_100)
     }
@@ -197,7 +197,7 @@ impl World {
     fn covered(&self, sid: [u8; 32]) -> OLive<Account> {
         let a = Account { t: self.terms(), legs: vec![], a_key: xk(&self.a), b_key: xk(&self.b), a_margin: 20 * KAS1, b_margin: 2 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
         let f = [fund(xk(&self.a), 41)];
-        let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, self.payer(&self.a, &f)).unwrap();
+        let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, shard_seed(&self.anchors[0]), self.markets[0].committee_id, self.payer(&self.a, &f)).unwrap();
         let s = signed("covered account opened", &b, &self.keys);
         nth(&s, 0, a, 6_100)
     }
@@ -521,7 +521,7 @@ fn the_holder_of_an_option_is_asked_no_maintenance_for_it_and_keeps_what_it_was_
         assert!(short.s.step_any(KIND_ACCOUNT_LIQ, SIDE_A, 1, &[P10 / 10 * tenths], T0, short.value as i64, xk(&w.w)).is_err(), "at {tenths}: the holder is below nothing");
     }
     let (st, tk, out) = short.s.step(KIND_ACCOUNT_LEAVE, SIDE_A, 1, &[P10 * 14 / 10], T0, short.value as i64, xk(&w.a)).unwrap();
-    assert_eq!((out.after.a_margin, out.after.b_margin, out.owed), (25 * KAS1, 0, 20 * KAS1));
+    assert_eq!((out.after.a_margin, out.after.b_margin, out.owed), (25 * KAS1, 0, 186 * KAS1 / 10));
     assert!(w.end_answered("the holder exercises for all the pot holds", &short, &st, &tk));
     // A exercises at 13: the leg leaves, and the 30 are A's to take.
     let live = OLive { s: counted.clone(), ..account.clone() };
@@ -618,10 +618,10 @@ fn an_option_leaves_a_covered_account_with_the_note_of_its_row_and_what_is_owed(
     let f = [fund(xk(&w.a), 30)];
     let (b, st, tk, stepped) = account_leave(&w.lib, &account, &w.script("KpfTChange"), SIDE_A, 1, &a, T0, w.payer(&w.a, &f)).unwrap();
     signed("an option leaves a covered account: stated", &b, &w.keys);
-    assert_eq!((stepped.owed, stepped.after.a_margin, stepped.after.b_margin, stepped.after.legs.len()), (28 * KAS1, 22 * KAS1, 0, 0));
+    assert_eq!((stepped.owed, stepped.after.a_margin, stepped.after.b_margin, stepped.after.legs.len()), (267 * KAS1 / 10, 22 * KAS1, 0, 0));
     assert_eq!(x.wrong_point_of(KIND_ACCOUNT_LEAVE, &tk, &st.claimer, &st.outs, held, &a), None);
     let release = SNote { sid: shard.s.sid, kind: NOTE_RELEASE, head: ohead, net: 10 * scale, gross: 10 * scale, key: xk(&w.b), amount: 0 };
-    let owed = SNote::owed(shard.s.sid, xk(&w.a), xk(&w.b), 28 * KAS1);
+    let owed = SNote::owed(shard.s.sid, xk(&w.a), xk(&w.b), 267 * KAS1 / 10);
     assert_eq!(st.outs.list().iter().map(|o| o.to).collect::<Vec<_>>(), vec![stepped.after.hash(), release.hash(), owed.hash()]);
     let s = w.settled("an option leaves a covered account", &account, &st, &tk);
     let n = s.tx.outputs.len();
@@ -630,7 +630,7 @@ fn an_option_leaves_a_covered_account_with_the_note_of_its_row_and_what_is_owed(
     let shard = w.applied(&shard, &nth(&s, n - 1, release, 6_570), "an option's release applied");
     assert_eq!(shard.s.rows[0], ShardRow::EMPTY);
     let shard = w.applied(&shard, &nth(&s, n - 2, owed, 6_570), "what the option was worth beyond the pot, paid");
-    assert_eq!(shard.s.held, 22 * KAS1);
+    assert_eq!(shard.s.held, 233 * KAS1 / 10);
     // The clearing party does not exercise the user's call for it (the tool refuses: the leg is not its to end).
     assert!(x.step(KIND_ACCOUNT_LEAVE, SIDE_B, 1, &a, T0, held, xk(&w.b)).is_err());
     // And a statement that names the market's futures row for the option that leaves is wrong at that row.

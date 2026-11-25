@@ -89,7 +89,7 @@ impl World {
     /// The clearing party's shard, opened through the first anchor with 50 KAS.
     fn shard(&self) -> OLive<Shard> {
         let f = [fund(xk(&self.c), 40)];
-        let (b, shard) = shard_open(&self.lib, &self.anchors[0], &self.script("KpfTShardOpen"), self.terms(), xk(&self.c), 50 * KAS1, 9_000_000, 50, 100, self.payer(&self.c, &f)).unwrap();
+        let (b, shard) = shard_open(&self.lib, &self.anchors[0], &self.script("KpfTShardOpen"), self.terms(), self.markets[0].committee_id, xk(&self.c), 50 * KAS1, 9_000_000, 50, 100, self.payer(&self.c, &f)).unwrap();
         let s = signed("shard opened", &b, &self.keys);
         nth(&s, 0, shard, 6_100)
     }
@@ -98,7 +98,7 @@ impl World {
     fn account(&self, sid: [u8; 32]) -> OLive<Account> {
         let a = Account { t: self.terms(), legs: vec![], a_key: xk(&self.u), b_key: xk(&self.c), a_margin: 20 * KAS1, b_margin: 2 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
         let f = [fund(xk(&self.u), 41)];
-        let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, self.payer(&self.u, &f)).unwrap();
+        let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, shard_seed(&self.anchors[0]), self.markets[0].committee_id, self.payer(&self.u, &f)).unwrap();
         let s = signed("covered account opened", &b, &self.keys);
         nth(&s, 0, a, 6_100)
     }
@@ -153,12 +153,12 @@ fn world() -> World {
 fn a_shard_is_opened_by_its_owner_with_an_id_of_its_own_and_funded() {
     let w = world();
     let shard = w.shard();
-    assert_eq!(shard.s.sid, shard_id(&w.anchors[0]));
+    assert_eq!(shard.s.sid, shard_id(&w.anchors[0], &w.markets[0].committee_id, &shard.s));
     assert_eq!((shard.value, shard.s.held, shard.s.rows), ((50 * KAS1 + SHARD_CARRIER) as u64, 50 * KAS1, [ShardRow::EMPTY; 4]), "what it holds, and 1 KAS beside");
     assert_eq!(shard.s.moving().len(), 171);
     // Another id than the anchor's outpoint gives, a second key, or something on B's side: refused.
     let f = [fund(xk(&w.c), 40)];
-    let (b, s) = shard_open(&w.lib, &w.anchors[0], &w.script("KpfTShardOpen"), w.terms(), xk(&w.c), 50 * KAS1, 9_000_000, 50, 100, w.payer(&w.c, &f)).unwrap();
+    let (b, s) = shard_open(&w.lib, &w.anchors[0], &w.script("KpfTShardOpen"), w.terms(), w.markets[0].committee_id, xk(&w.c), 50 * KAS1, 9_000_000, 50, 100, w.payer(&w.c, &f)).unwrap();
     assert!(accepted(&b, &w.keys));
     for (what, lie) in [("another id", Shard { sid: [0x44; 32], ..s }), ("rows of its own", Shard { rows: [ShardRow { head: Head::of(&w.leg(0, 1, LONG)), net: 5, gross: 5 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..s })] {
         let mut t = b.clone();
@@ -240,12 +240,12 @@ fn a_leg_leaves_with_the_note_of_its_leaving_and_what_the_pot_cannot_pay_is_owed
     let f = [fund(xk(&w.u), 44)];
     let (b, st, tk, stepped) = account_leave(&w.lib, &account, &w.script("KpfTChange"), SIDE_A, 1, &a, T0, w.payer(&w.u, &f)).unwrap();
     signed("leg leaves: stated", &b, &w.keys);
-    assert_eq!((st.kind, stepped.fee, stepped.owed), (KIND_ACCOUNT_LEAVE, 0, 28 * KAS1), "30 gained, 2 in the pot: 28 owed");
+    assert_eq!((st.kind, stepped.fee, stepped.owed), (KIND_ACCOUNT_LEAVE, 0, 254 * KAS1 / 10), "30 gained, 2 in the pot: 28 not paid; the shard is asked 25.4, twice the tolerance of the leg's worth in both sides (2.6) less");
     assert_eq!((stepped.after.legs.len(), stepped.after.a_margin, stepped.after.b_margin), (0, 22 * KAS1, 0));
     assert_eq!(x.wrong_point_of(KIND_ACCOUNT_LEAVE, &tk, &st.claimer, &st.outs, held, &a), None);
     // Its outputs: the account with no leg, the note that the leg left, and the note of what is owed.
     let release = SNote { sid: shard.s.sid, kind: NOTE_RELEASE, head: Head::of(&x.legs[0]), net: -10 * scale, gross: 10 * scale, key: xk(&w.c), amount: 0 };
-    let owed = SNote::owed(shard.s.sid, xk(&w.u), xk(&w.c), 28 * KAS1);
+    let owed = SNote::owed(shard.s.sid, xk(&w.u), xk(&w.c), 254 * KAS1 / 10);
     assert_eq!(st.outs.list().iter().map(|o| o.to).collect::<Vec<_>>(), vec![stepped.after.hash(), release.hash(), owed.hash()]);
     assert!(!st.outs.is_note(0) && st.outs.is_note(1) && st.outs.is_note(2));
     let s = w.settled(&account, &st, &tk, "leg leaves");
@@ -263,8 +263,8 @@ fn a_leg_leaves_with_the_note_of_its_leaving_and_what_the_pot_cannot_pay_is_owed
     let (s, shard, rest) = w.applied(&shard, &owed, "owed paid");
     let n = s.tx.outputs.len();
     assert!(rest.is_none());
-    assert_eq!((shard.s.held, shard.value), (22 * KAS1, (22 * KAS1 + SHARD_CARRIER) as u64));
-    assert_eq!((s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), (28 * KAS1 as u64, &p2pk_spk(&xk(&w.u))));
+    assert_eq!((shard.s.held, shard.value), (246 * KAS1 / 10, (246 * KAS1 / 10 + SHARD_CARRIER) as u64));
+    assert_eq!((s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), ((254 * KAS1 / 10) as u64, &p2pk_spk(&xk(&w.u))));
     // The account, with no leg, is ended by the user: its 22 KAS to it; the clearing party's side holds nothing.
     let f = [fund(xk(&w.u), 48)];
     let (b, deposit) = acct_end(&w.lib, &ended, &w.script("KpfTAcctEnd"), SIDE_A, w.payer(&w.u, &f)).unwrap();

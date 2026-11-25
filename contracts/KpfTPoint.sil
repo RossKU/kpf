@@ -33,7 +33,8 @@ pragma silverscript ^0.1.0;
 // option moves by no more than its underlying); and its holder is asked no maintenance for it.
 //
 // KpfTPoint: anyone disputes one point of a stated take on an account, with a bond as large as the claimer's. A
-// point nobody answers within the dispute period lapses: the position again, and both bonds back.
+// point nobody answers within the dispute period lapses: the position again, and both bonds back; but of an entry
+// (kind 6) the claimers' bond is lost to the disputer: the prices of a leg that enters are its claimers' to show.
 //   dispute(who, ageb, slotLen, position, kind, t0, arg, outs, bond, claimer, window, late, held, dkey, point)   anyone.
 //   lapse(the same)                                                                                      anyone, after.
 contract KpfTPoint(int init_version) {
@@ -102,7 +103,7 @@ contract KpfTPoint(int init_version) {
         byte[32] c0 = changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held);
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 2);
-        require(kind <= 5);
+        require(kind <= 6);
         require(point >= 0);
         int landed = OpTxInputDaaScore(j);
         require(landed >= t0);
@@ -126,11 +127,24 @@ contract KpfTPoint(int init_version) {
         require(v >= bond + bond);
         becomes(j, rs, slotLen, position, v - bond - bond);
         int m = tx.outputs.length - 1 - 4 * j;
-        require(m - 1 >= tx.inputs.length);
-        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
-        require(tx.outputs[m].value >= bond);
-        require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
-        require(tx.outputs[m - 1].value >= bond);
+        if (kind == 6) {
+            // A point of an entry that nobody answered: the prices of a leg that enters are its claimers' to show
+            // (a market nobody prices would else let a leg in at any price, for a bond that comes back). The entry
+            // is ended; the disputer has its bond and half of the claimers', and the other half stays in this
+            // script's copy.
+            int half = bond / 2;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m].value >= bond + half);
+            int self = this.activeInputIndex;
+            require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        } else {
+            require(m - 1 >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m].value >= bond);
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
+            require(tx.outputs[m - 1].value >= bond);
+        }
         goesOn();
     }
 

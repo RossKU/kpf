@@ -35,7 +35,8 @@ pragma silverscript ^0.1.0;
 // KpfTStepLiq: the answer of the point 0 of a step of a liquidation (kind 3) and of a leg that leaves by its party's
 // own statement (kind 4: no fee; the claimer is the side's key; the side stands at its maintenance at any price
 // within the tolerance, or the other party below its own). On a covered account the outputs carry the note that the
-// leg left, and the note of what A is owed where the entries at the prices stated leave it more than the pot.
+// leg left, and the note of what A is owed where the entries at the prices stated leave it more than the pot: less
+// twice the tolerance of the legs' worth, which prices that are only near the committee's could have made.
 // For kind 3: Anyone states that `side` stands below
 // its maintenance at the prices stated and that the leg `skip` leaves the account, for a fee. The end is right when
 // the last row's chain is the account's legs', `skip` is one of them, and, the entries standing at the prices stated
@@ -231,6 +232,14 @@ contract KpfTStepLiq(int init_version) {
         if (rate < 0) { rate = 0; }
         int lo = (worth / BPS) * rate + ((worth % BPS) * rate + BPS - 1) / BPS + extra;
         int lo2 = (worth2 / BPS) * rate + ((worth2 % BPS) * rate + BPS - 1) / BPS + extra2;
+        // What the shard is asked to pay is what is owed at any price within the tolerance. The prices of a
+        // statement are only near the committee's, where a leg entered and here: of the legs' worth, twice the
+        // tolerance can be owed to the prices alone, to whoever enters at the one end and leaves at the other
+        // (review 40, F65). It is not asked of the shard. (A futures leg is in both sides' worth: counted twice.)
+        int band = worth + worth2;
+        int g2 = 2 * int(byte[8](tb.slice(G_AT, G_AT + 8)));
+        int asked = owed - ((band / BPS) * g2 + ((band % BPS) * g2 + BPS - 1) / BPS);
+        if (asked < 0) { asked = 0; }
         int fee = 0;
         if (kind == 3) {
             // A step of a liquidation: the side is below its maintenance at any price within the tolerance.
@@ -267,8 +276,8 @@ contract KpfTStepLiq(int init_version) {
                 int gross = int(byte[8](said.slice(108, 116)));
                 if (gross < 0) { gross = 0 - gross; }
                 due2 = due2 + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(2) + said.slice(24, 108) + byte[](0x08) + said.slice(108, 116) + i9(gross) + mv.slice(33, 66) + i9(0))) + byte[](NOTE_MIN as byte[8]);
-                if (owed > 0) {
-                    due2 = due2 + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(4) + mv.slice(33, 66) + byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + i9(0) + i9(0) + mv.slice(0, 33) + i9(owed))) + byte[](NOTE_MIN as byte[8]);
+                if (asked > 0) {
+                    due2 = due2 + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(4) + mv.slice(33, 66) + byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + i9(0) + i9(0) + mv.slice(0, 33) + i9(asked))) + byte[](NOTE_MIN as byte[8]);
                 }
             }
             if (blake2b(due2) != outs) { ok = 0; }

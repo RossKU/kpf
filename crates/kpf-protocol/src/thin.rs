@@ -1223,10 +1223,35 @@ pub fn row_judged(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &R
     row_judged_of(prev, l, before, row, left_out.then(|| (crate::reserve::Head::of(l), crate::reserve::SNote::units(l))), holder_of(l).unwrap_or(SIDE_A))
 }
 
-/// As `row_judged`; `leave`: the row is of the leg that leaves, and this is what the statement says of that leg (its
+/// `KpfTStepRow` on a row of an entry (kind 6); `named`: the row is the one the statement names, and this is the
+/// leg the statement shows as entering. That row is right only where the leg its chain is opened by is that leg,
+/// is a leg (a size within what is computed at its market's limit, a direction or an option's kind and strike),
+/// and has the row's price for its entry: it gains nothing as it enters, and it stays in the second chain.
+pub fn enter_row_judged(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, named: Option<&crate::cross::XLeg>) -> Option<bool> {
+    if row.g == [0; 32] {
+        return Some(false);
+    }
+    if blake2b(&[&prev[..], &leg_bytes(l)].concat()) != row.g {
+        return None;
+    }
+    let enters = named.is_none_or(|x| x == l && leg_size_ok(l) && leg_kind_ok(l) && l.entry == row.a);
+    Some(*prev == before.g && row.a > 0 && row.a <= l.price_max && enters && *row == row_after(before, l, row.a, false))
+}
+
+/// As `row_judged_in`, for a take, a step of a liquidation or a leg that leaves (kinds 2 to 4).
+pub fn row_judged_of(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, leave: Option<(crate::reserve::Head, i64)>, side: i64) -> Option<bool> {
+    row_judged_in(KIND_ACCOUNT_LEAVE, prev, l, before, row, leave, side)
+}
+
+/// As `row_judged`, for a statement of the kind given; `leave`: the row is of the leg the statement names, and this
+/// is what it says of that leg (the name of its row in the shard and side B's units), which the row holds to the
+/// leg. In kinds 2 to 4 that leg leaves; in an entry (kind 6) it enters, and its row is right only where it is a
+/// leg (a size within what is computed at its market's limit, a direction or an option's kind and strike) whose
+/// entry is the row's price: it gains nothing as it enters.
+/// (`leave` below: the row is of the leg that leaves, and this is what the statement says of that leg (its
 /// market and side B's units in it), which the row holds to the leg; `side`: the side the statement is of (an
 /// option leaves by its holder's side alone: the row of an option that leaves by the other is wrong).
-pub fn row_judged_of(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, leave: Option<(crate::reserve::Head, i64)>, side: i64) -> Option<bool> {
+pub fn row_judged_in(kind: i64, prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row: &Row, leave: Option<(crate::reserve::Head, i64)>, side: i64) -> Option<bool> {
     // (A chain of 32 zero bytes is the seed of every chain and of no leg: nobody opens it, and a row that carries it
     // is wrong whatever is shown.)
     if row.g == [0; 32] {
@@ -1234,6 +1259,11 @@ pub fn row_judged_of(prev: &[u8; 32], l: &crate::cross::XLeg, before: &Row, row:
     }
     if blake2b(&[&prev[..], &leg_bytes(l)].concat()) != row.g {
         return None;
+    }
+    if kind == KIND_ENTER {
+        // (An entry shows the leg that enters whole, and its row is held to that leg: `enter_row_judged`. Here the
+        // leg shown is taken to be the one given.)
+        return enter_row_judged(prev, l, before, row, leave.map(|_| l));
     }
     let said = leave.is_none_or(|(head, units)| head == crate::reserve::Head::of(l) && units == crate::reserve::SNote::units(l) && holder_of(l).is_none_or(|h| h == side));
     Some(*prev == before.g && row.a > 0 && row.a <= l.price_max && said && *row == row_after(before, l, row.a, leave.is_some()))
@@ -1250,12 +1280,60 @@ pub fn price_right(l: &crate::cross::XLeg, row: &Row, c: i64, g_bps: i64) -> boo
     row.a > 0 && row.a >= p * (BPS - g_bps) / BPS && row.a <= ((p * (BPS + g_bps) + BPS - 1) / BPS).min(l.price_max)
 }
 
-/// What a leg's leaving leaves: the account, the claimer's fee, and what the pot could not pay A.
+/// What a leg's leaving leaves: the account, the claimer's fee, and what the shard is asked to pay A: what the pot
+/// could not, less twice the tolerance of the legs' worth.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stepped {
     pub after: Account,
     pub fee: i64,
     pub owed: i64,
+}
+
+/// A leg enters an account by a statement of its two parties (`KpfTEnter`).
+pub const KIND_ENTER: i64 = 6;
+
+/// What an entry states (kind 6): the side (1), nothing (0) and the place of the leg that enters (the last); of
+/// that leg the name of its row in the shard and side B's units; what the shard's id is the hash of beside its
+/// committee; and the trace, the entering leg's row last.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AEnter {
+    pub side: i64,
+    pub amount: i64,
+    pub skip: i64,
+    /// The leg that enters, whole: whoever watches has it from the statement.
+    pub leg: crate::cross::XLeg,
+    pub seed: [u8; 32],
+    pub rows: Vec<Row>,
+}
+
+/// A leg read back from its 111 bytes (`None`: bytes that are no leg's).
+pub fn leg_read(b: &[u8]) -> Option<crate::cross::XLeg> {
+    if b.len() != 111 || b[0] != 0x20 || b[33] != 0x20 || [66, 75, 84, 93, 102].iter().any(|i| b[*i] != 0x08) {
+        return None;
+    }
+    let int = |i: usize| crate::state::int8(&b[i..i + 8]);
+    Some(crate::cross::XLeg { market: b[1..33].try_into().ok()?, committee: b[34..66].try_into().ok()?, scale: int(67), price_max: int(76), size: int(85), dir: int(94), entry: int(103) })
+}
+
+impl AEnter {
+    /// What the statement shows: 167 bytes (three numbers, the leg, the seed), then the rows.
+    pub fn said(&self) -> Vec<u8> {
+        [sm8(self.side).to_vec(), sm8(self.amount).to_vec(), sm8(self.skip).to_vec(), leg_bytes(&self.leg), self.seed.to_vec(), rows_bytes(&self.rows)].concat()
+    }
+
+    pub fn arg(&self) -> [u8; 32] {
+        blake2b(&self.said())
+    }
+
+    /// The statement a transaction shows, read back.
+    pub fn read(said: &[u8]) -> Option<AEnter> {
+        if said.len() < 167 || (said.len() - 167) % ROW_LEN != 0 {
+            return None;
+        }
+        let int = |b: &[u8]| crate::state::int8(b);
+        let rows = said[167..].chunks(ROW_LEN).map(|r| Row { a: int(&r[..8]), gain: int(&r[8..16]), wa: int(&r[16..24]), wb: int(&r[24..32]), ea: int(&r[32..40]), eb: int(&r[40..48]), g: r[48..80].try_into().expect("32 bytes"), h: r[80..112].try_into().expect("32 bytes") }).collect();
+        Some(AEnter { side: int(&said[..8]), amount: int(&said[8..16]), skip: int(&said[16..24]), leg: leg_read(&said[24..135])?, seed: said[135..167].try_into().expect("32 bytes"), rows })
+    }
 }
 
 /// What a take on an account states, or a step of its liquidation, or a leg that leaves: the side, the amount (the
@@ -1478,30 +1556,43 @@ impl Account {
         if !end {
             return Some(0);
         }
+        self.rows_wrong_point(kind, tk, c)
+    }
+
+    /// The first row or price of a trace over this account's legs that is wrong at the committee's prices `c` (one
+    /// a leg), its end being right: 2i - 1 row i, 2i the price of row i.
+    pub fn rows_wrong_point(&self, kind: i64, tk: &ATake, c: &[i64]) -> Option<i64> {
+        self.rows_wrong_point_by(&tk.rows, c, &|i, l, before, row| {
+            let leave = (tk.skip == i as i64 + 1).then(|| tk.leave.unwrap_or((crate::reserve::Head::EMPTY, 0)));
+            row_judged_in(kind, &before.g, l, before, row, leave, tk.side)
+        })
+    }
+
+    /// As `rows_wrong_point`, each row judged by `judge` (the place of the row from 0, its leg, the row before, the row).
+    pub fn rows_wrong_point_by(&self, rows: &[Row], c: &[i64], judge: &dyn Fn(usize, &crate::cross::XLeg, &Row, &Row) -> Option<bool>) -> Option<i64> {
         // The end is right: the last row's chain is the legs' root. Counted from the end, row k of n stands against
         // the account's chain of its leg m - (n - k): the last row against the root, the one before against the
         // chain before the last leg, and so on (a trace of more rows than legs runs out of legs: its first rows stand
         // against nothing). The last row that does not carry its chain is of no leg anybody can show. If it carries
         // the seed of every chain (32 zero bytes) it is wrong by that alone; else the row after it, which carries
         // the account's own chain, is opened by that chain's own opening, which is not the row before it: wrong.
-        let (n, m) = (tk.rows.len(), self.legs.len());
+        let (n, m) = (rows.len(), self.legs.len());
         let mut chain = vec![[0u8; 32]];
         for l in &self.legs {
             chain.push(blake2b(&[&chain[chain.len() - 1][..], &leg_bytes(l)].concat()));
         }
         let own = |k: usize| -> Option<[u8; 32]> { (k + m >= n + 1).then(|| chain[k + m - n]) };
-        if let Some(k) = (1..=n).rev().find(|k| own(*k) != Some(tk.rows[k - 1].g) || tk.rows[k - 1].g == [0; 32]) {
-            return Some(if tk.rows[k - 1].g == [0; 32] || k == n { 2 * k as i64 - 1 } else { 2 * k as i64 + 1 });
+        if let Some(k) = (1..=n).rev().find(|k| own(*k) != Some(rows[k - 1].g) || rows[k - 1].g == [0; 32]) {
+            return Some(if rows[k - 1].g == [0; 32] || k == n { 2 * k as i64 - 1 } else { 2 * k as i64 + 1 });
         }
         // Every row carries the chain of its own leg (so the trace has a row a leg): each is held to its leg and to
         // the committee's price.
         for (i, l) in self.legs.iter().enumerate() {
-            let before = if i == 0 { Row::ZERO } else { tk.rows[i - 1] };
-            let leave = (tk.skip == i as i64 + 1).then(|| tk.leave.unwrap_or((crate::reserve::Head::EMPTY, 0)));
-            if row_judged_of(&before.g, l, &before, &tk.rows[i], leave, tk.side) != Some(true) {
+            let before = if i == 0 { Row::ZERO } else { rows[i - 1] };
+            if judge(i, l, &before, &rows[i]) != Some(true) {
                 return Some(2 * i as i64 + 1);
             }
-            if !price_right(l, &tk.rows[i], c[i], self.t.g_bps) {
+            if !price_right(l, &rows[i], c[i], self.t.g_bps) {
                 return Some(2 * i as i64 + 2);
             }
         }
@@ -1538,6 +1629,10 @@ impl Account {
         let mine = if side == SIDE_A { am } else { bm };
         // The maintenance counted the tolerance less, and the tolerance more: the prices are only near the committee's.
         // And what the options a side holds were counted at is kept whole beside it.
+        // What the shard is asked to pay: what is owed at any price within the tolerance (twice the tolerance of
+        // the legs' worth could be owed to prices alone, where a leg entered and here; a futures leg is in both
+        // sides' worth and is counted twice).
+        let asked = (owed - rate_up(last.wa + last.wb, 2 * self.t.g_bps)).max(0);
         // less what of it the pot could not pay: a side is not below its maintenance for what it was not paid.
         let (es, eo) = if side == SIDE_A { ((es - owed).max(0), (eo - lack).max(0)) } else { ((es - lack).max(0), (eo - owed).max(0)) };
         let rate_lo = (self.t.mmr_bps - self.t.g_bps).max(0);
@@ -1560,7 +1655,7 @@ impl Account {
             bm -= fee;
         }
         let legs = self.legs.iter().zip(rows).enumerate().filter(|(i, _)| *i + 1 != k).map(|(_, (l, r))| crate::cross::XLeg { entry: r.a, ..*l }).collect();
-        Some(Stepped { after: Account { legs, a_margin: am, b_margin: bm, ..self.clone() }, fee, owed })
+        Some(Stepped { after: Account { legs, a_margin: am, b_margin: bm, ..self.clone() }, fee, owed: asked })
     }
 
     /// A step of a liquidation (`stepped` of kind 3, by anyone): the account that is left and the liquidator's fee.
@@ -1631,6 +1726,90 @@ impl Account {
         let tk = ATake { side, amount: st.fee, rows, skip, leave: Some((crate::reserve::Head::of(l), crate::reserve::SNote::units(l))) };
         let outs = self.step_outs(&st, &tk, &claimer, held).ok_or_else(|| Error::Invalid("the step's outputs".into()))?;
         Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind, t0, arg: tk.arg(), outs, bond: self.bond(), claimer, held }, tk, st))
+    }
+
+    /// The account's lateness, dispute period and bond rate as its moving part has them (27 bytes): with its ten
+    /// terms, what a shard's id is of beside its opening and its committee.
+    pub fn periods(&self) -> Vec<u8> {
+        self.moving()[93..120].to_vec()
+    }
+
+    /// `KpfTStepEnter`: whether the end of an entry is right for this account, before its outputs are looked at:
+    /// the leg that enters is the last row's and the row before it carries the account's chain; the leg's
+    /// committee is the one the account's shard is of, and the account's terms and periods are the shard's; the
+    /// claimer is side A and the statement takes nothing; no
+    /// margin is below zero once A's gain at the prices stated moved to it, and side A stands at its floor with
+    /// the leg. Returns the two margins.
+    pub fn enter_judged(&self, en: &AEnter, claimer: &[u8; 32]) -> Option<(i64, i64)> {
+        let n = en.rows.len();
+        let last = en.rows.last()?;
+        let chain = if n >= 2 { en.rows[n - 2].g } else { [0; 32] };
+        let sid = self.shard?;
+        let (am, bm) = (self.a_margin + last.gain, self.b_margin - last.gain);
+        let floor = (rate_up(last.wa, self.t.mmr_bps + self.t.g_bps) + last.ea).max(self.b_min_counter);
+        let ok = en.skip == n as i64
+            && en.side == SIDE_A
+            && en.amount == 0
+            && chain == self.legs_root()
+            && self.a_key == *claimer
+            && crate::reserve::shard_sid(&en.seed, &en.leg.committee, &self.terms(), &self.periods()) == sid
+            && last.wa >= 0
+            && last.wb >= 0
+            && am >= 0
+            && bm >= 0
+            && am >= floor;
+        ok.then_some((am, bm))
+    }
+
+    /// The outputs of an entry: the account with the leg and every entry at its price (by the last row's second
+    /// chain), holding what it held, and the note that the leg entered, made of what the statement says of the leg.
+    fn enter_outs(&self, en: &AEnter, am: i64, bm: i64, held: i64) -> Option<Outs> {
+        let (last, sid) = (en.rows.last()?, self.shard?);
+        let next = Account { a_margin: am, b_margin: bm, ..self.clone() };
+        let h = blake2b(&[p33(&blake2b(&[self.terms(), p33(&last.h)].concat())), next.moving()].concat());
+        let note = crate::reserve::SNote { gross: en.leg.size.abs(), ..crate::reserve::SNote::leg(crate::reserve::NOTE_JOIN, sid, &en.leg, self.b_key) };
+        Outs::with_notes(&[(Out { key: false, to: h, value: held }, false), (Out { key: false, to: note.hash(), value: note.value() }, true)])
+    }
+
+    /// `KpfTStepEnter`: whether the end of an entry is right for this account holding `held`.
+    pub fn enter_end_right(&self, en: &AEnter, claimer: &[u8; 32], outs: &Outs, held: i64) -> bool {
+        self.enter_judged(en, claimer).and_then(|(am, bm)| self.enter_outs(en, am, bm, held)).is_some_and(|o| o == *outs)
+    }
+
+    /// The first point of a stated entry that is wrong at the committee's prices `c` (one a leg, the entering
+    /// leg's last): 0 the end, 2i - 1 row i, 2i the price of row i. `None`: the entry is the rule's.
+    pub fn enter_wrong_point(&self, en: &AEnter, claimer: &[u8; 32], outs: &Outs, held: i64, c: &[i64]) -> Option<i64> {
+        if !self.enter_end_right(en, claimer, outs, held) {
+            return Some(0);
+        }
+        let mut with = self.clone();
+        with.legs.push(en.leg);
+        with.rows_wrong_point_by(&en.rows, c, &|i, l, before, row| enter_row_judged(&before.g, l, before, row, (en.skip == i as i64 + 1).then_some(&en.leg)))
+    }
+
+    /// The statement that `leg` enters this covered account holding `held`, at the prices `a` (one a leg, the
+    /// entering leg's last: its entry), by the account's two parties; `seed`: what the shard's id is the hash of
+    /// beside its committee. Returns the statement, what it states, and the account as it will be.
+    pub fn enter(&self, leg: crate::cross::XLeg, a: &[i64], t0: i64, held: i64, seed: [u8; 32]) -> Result<(Stated, AEnter, Account)> {
+        let n = self.legs.len();
+        if self.shard.is_none() || a.len() != n + 1 || n + 1 > LEGS_MAX || !(0..LOCK_TIME_THRESHOLD).contains(&t0) {
+            return Err(Error::Invalid("a leg enters a covered account by a statement of one price a leg (the entering leg's last), and a time".into()));
+        }
+        let l = crate::cross::XLeg { entry: a[n], ..leg };
+        let mut with = self.clone();
+        with.legs.push(l);
+        if !leg_size_ok(&l) || !leg_kind_ok(&l) || l.entry <= 0 || l.entry > l.price_max || !legs_sum_ok(&with.legs) {
+            return Err(Error::Invalid("what enters is a leg: a size within what is computed at its market's limit, a direction or an option's kind and strike, and a price within the limit".into()));
+        }
+        let rows = with.trace(a);
+        let en = AEnter { side: SIDE_A, amount: 0, skip: n as i64 + 1, leg: l, seed, rows };
+        let Some((am, bm)) = self.enter_judged(&en, &self.a_key) else {
+            return Err(Error::Invalid("the leg does not enter: its committee is not the one the account's shard is of, or the account's terms and periods are not the shard's; a margin would fall below zero at the prices stated; or side A would not stand at its maintenance with the leg (add margin first)".into()));
+        };
+        let outs = self.enter_outs(&en, am, bm, held).ok_or_else(|| Error::Invalid("the entry's outputs".into()))?;
+        let legs = with.legs.iter().zip(&en.rows).map(|(x, r)| crate::cross::XLeg { entry: r.a, ..*x }).collect();
+        let after = Account { legs, a_margin: am, b_margin: bm, ..self.clone() };
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_ENTER, t0, arg: en.arg(), outs, bond: self.bond(), claimer: self.a_key, held }, en, after))
     }
 
     /// The statement of a liquidation step on this account holding `held`: `liquidator` states that `side` stands

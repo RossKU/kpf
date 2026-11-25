@@ -47,6 +47,8 @@ contract KpfTStepRow(int init_version) {
     int constant SIDE_B = 2;
     int constant OPTION_TAG = 13;
     int constant FUTURES_TAG = 14;
+    int constant SCALE_MAX = 1000000000;
+    int constant MARGIN_MAX = 1152921504606846975;
     // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
     int constant ORACLE_FEE = 200000;
     int constant STATE_AT = 2;
@@ -133,11 +135,14 @@ contract KpfTStepRow(int init_version) {
         // What was stated, as it was shown: the side, the amount and the leg left out, 8 bytes each; that leg's market
         // (its first 84 bytes) and side B's units in it, for the note of a leg that leaves a covered account; then the
         // trace.
-        require(said.length >= 116);
+        // (An entry, kind 6, says the leg that enters whole and what its shard's id is the hash of, before its rows.)
+        int at0 = 116;
+        if (kind == 6) { at0 = 167; }
+        require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));
         int skip = int(byte[8](said.slice(16, 24)));
-        byte[] rows = said.slice(116, said.length);
+        byte[] rows = said.slice(at0, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         byte[32] c1 = blake2b(pre + i9(LATE_AGAIN) + i9(held));
@@ -148,7 +153,7 @@ contract KpfTStepRow(int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 2);
-        require(kind <= 4);
+        require(kind <= 4 || kind == 6);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);
@@ -209,11 +214,46 @@ contract KpfTStepRow(int init_version) {
                     tag = OPTION_TAG;
                     int holder = SIDE_B;
                     if (oc % 2 == 1) { holder = SIDE_A; }
-                    if (side != holder) { ok = 0; }
+                    if (kind != 6) {
+                        if (side != holder) { ok = 0; }
+                    }
                 }
                 byte[] head = byte[](0x20) + byte[](blake2b(i9(tag) + lg.slice(0, 33))) + lg.slice(33, 84);
-                if (head != said.slice(24, 108)) { ok = 0; }
-                if (int(byte[8](said.slice(108, 116))) != units) { ok = 0; }
+                if (kind != 6) {
+                    if (head != said.slice(24, 108)) { ok = 0; }
+                    if (int(byte[8](said.slice(108, 116))) != units) { ok = 0; }
+                }
+                if (kind == 6) {
+                    // (An entry shows the leg whole: the row named is of that leg.)
+                    if (lg != said.slice(24, 135)) { ok = 0; }
+                    // The leg that enters (the row named is its, and the statement stays with it): it is a leg (its
+                    // pushes; a scale, and a size within what is computed at its market's limit; a direction, or an
+                    // option's kind with a strike within the limit), and its entry is the price of its row, so that
+                    // it gains nothing as it enters.
+                    if (lg.slice(0, 1) != byte[](0x20)) { ok = 0; }
+                    if (lg.slice(33, 34) != byte[](0x20)) { ok = 0; }
+                    if (lg.slice(66, 67) != byte[](0x08)) { ok = 0; }
+                    if (lg.slice(75, 76) != byte[](0x08)) { ok = 0; }
+                    if (lg.slice(84, 85) != byte[](0x08)) { ok = 0; }
+                    if (lg.slice(93, 94) != byte[](0x08)) { ok = 0; }
+                    if (lg.slice(102, 103) != byte[](0x08)) { ok = 0; }
+                    if (scale <= 0) { ok = 0; }
+                    if (scale > SCALE_MAX) { ok = 0; }
+                    if (size <= 0) { ok = 0; }
+                    if (size > MARGIN_MAX) { ok = 0; }
+                    if (int(byte[8](lg.slice(103, 111))) != a) { ok = 0; }
+                    if (oc == 0) {
+                        if (dir != DIR_LONG) {
+                            if (dir != 2) { ok = 0; }
+                        }
+                    } else {
+                        if (strike < 1) { ok = 0; }
+                        if (strike > int(byte[8](lg.slice(76, 84)))) { ok = 0; }
+                    }
+                    if (ok == 1) {
+                        if (size / scale > MARGIN_MAX / int(byte[8](lg.slice(76, 84))) - 1) { ok = 0; }
+                    }
+                }
             }
             if (ok == 1) {
                 int worth = quoteAt(size, scale, a);
@@ -254,8 +294,14 @@ contract KpfTStepRow(int init_version) {
                 if (int(byte[8](row.slice(32, 40))) != int(byte[8](before.slice(32, 40))) + xa) { ok = 0; }
                 if (int(byte[8](row.slice(40, 48))) != int(byte[8](before.slice(40, 48))) + xb) { ok = 0; }
                 // The second chain: the leg at its new entry, or nothing where the statement leaves this leg out.
+                // (The leg named by the statement leaves, and the chain passes it by; in an entry it is the leg that
+                // enters, and it stays.)
                 byte[32] h = byte[32](before.slice(80, 112));
-                if (i != skip) {
+                int stays = 1;
+                if (i == skip) {
+                    if (kind != 6) { stays = 0; }
+                }
+                if (stays == 1) {
                     h = blake2b(before.slice(80, 112) + lg.slice(0, 103) + row.slice(0, 8));
                 }
                 if (h != byte[32](row.slice(80, 112))) { ok = 0; }

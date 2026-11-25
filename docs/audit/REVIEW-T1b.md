@@ -4705,3 +4705,594 @@ Nothing built or run this round; the F61 hole as it stands is the committed
 `t1b_finding_f61_the_owner_of_a_shard_is_owed_by_it_through_an_account_of_its_own_at_an_entry_of_its_choosing`
 (round 37, passing). The test suites are unchanged from round 37 (`auditT1_builders` 104, `auditT1_tests` 55,
 `auditT1_cli` 47).
+
+# Round 39
+
+Scope: the closure of F61 as built beside `KpfTLegAdd`: `KpfTEnter` (the statement of kind 6 by two signatures),
+kind 6 in `KpfTStepRow` and `KpfTStepPrice`, `KpfTStepEnter` (its end), the lapse of kind 6 in `KpfTPoint`, and the
+shard's id of an opening and a committee (`KpfTShardOpen`); the model (`AEnter`, `row_judged_in`,
+`Account::{enter, enter_judged, enter_end_right, enter_wrong_point}`) and the builders. The script table is at 55.
+Everything below is engine-run (`verify::verify`) unless it says "read". Only
+`crates/kpf-protocol/tests/auditT1_builders.rs`, `crates/kpf-tests/tests/auditT1_tests.rs` (the table) and this
+file changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**The scripts do what their headers say: on 85 rows and ends put to the engine the model and the script gave the
+same verdict, and what is stated, lapsed and opened is held as listed. Two findings. F62 (High): an entry is
+answered within the tolerance of the account's own terms, which its two keys choose, so F61 goes through the
+entry that closes it. F63 (Medium): the leg that enters is shown to nobody. I see no reason to keep `KpfTLegAdd`;
+but removing it does not close F61 while F62 stands.**
+
+A correction first. F62 was not in my round 38 report, and it should have been: the paper design already read
+the tolerance and the maintenance from the account's terms. I named the committee (H1) and missed the terms.
+
+## Findings
+
+### F62 (High, open). A covered account's terms are its own, and an entry is answered within them
+
+`t1b_finding_f62_a_covered_accounts_terms_are_its_own_and_an_entry_is_answered_within_them`
+
+`KpfTStepPrice` takes the tolerance, and `KpfTStepEnter` the maintenance rate and the tolerance, from the 90 bytes
+of terms in the account's own fixed part. `KpfTOpenC` asks nothing of those terms, nor of the dispute period, the
+lateness and the bond rate in the moving part: they are what the account's two keys sign. Nothing ties them to
+the shard that pays what the account is owed. With both keys the owner's own:
+
+1. A shard of 50 KAS; a user is long 10 units against the owner, and the shard is asked 5.5275 KAS for it.
+2. The owner opens a covered account under that shard (its second key on side A, 80 KAS and 1) whose terms say a
+   tolerance of 50 % and no maintenance rate. `KpfTOpenC` takes it.
+3. A leg enters by a statement (kind 6): long 10 units at **5**, where the committee says **10**. By the model the
+   entry has no wrong point at the committee's price. At the engine the row is answered right, the end is answered
+   right, and the price is answered **right with the committee's citation of 10** (5 is within 50 % of 10), each
+   not wrong. On an account of the market's terms the same entry has its price as its wrong point (the control).
+4. It is applied. The leg leaves by statement at **15**, within the same tolerance: the end and the price (again
+   against the citation of 10) are answered right. The pot cannot pay the gain of 100 KAS: 99 KAS are owed.
+5. The note is applied: the shard pays all 50 KAS to the owner's second key and holds nothing, the user's leg
+   standing in its rows.
+
+This is F61 through `KpfTEnter`. The same freedom reaches the rest of the closure:
+
+- **The bond.** The bond is the account's bond rate of its pot. The lapse of an entry's point costs the claimers
+  that bond (rule 2 of the decision); in an account of the owner's keys it is as small as they wish (a rate of 1
+  in 10,000 of a pot of a few KAS), so a point nobody answers costs next to nothing and pays a disputer less than
+  its fee.
+- **The dispute period.** It is the account's own number, from 1 block: a statement of any price on such an
+  account is applied before anybody can dispute it. (Read: `Account::check` takes 1 to 864,000; no script asks
+  more.)
+- **The lateness**, likewise: the window in which the statement's time is chosen.
+
+What would close it: the same device as the committee rule. The shard's id is already the hash of its opening and
+its committee, and `KpfTStepEnter` already holds the account's shard id to what the statement shows. Let the id be
+the hash of the opening, the committee **and the terms and periods an account under it must have** (the 90 bytes;
+the dispute period, lateness and bond rate, or bounds for them), and let `KpfTStepEnter` check the account's own
+`terms` and `moving` against it. It has both in its arguments. Then a leg enters only an account whose numbers
+are the shard's, and whoever takes the shard as its cover reads them in its id. I have not tested that form.
+
+### F63 (Medium, open). A leg that enters by a statement is shown to nobody
+
+`t1b_finding_f63_a_leg_that_enters_by_a_statement_is_shown_to_nobody`
+
+What is stated of an entry is 148 bytes and the rows: the name of the leg's row in the shard (a hash of its kind
+and its market), its committee, scale and limit, side B's units, the seed. The leg's 111 bytes are in no input and
+no output of the statement or of its settlement (run: neither the leg, nor its market's name, nor the bytes of an
+option's kind and strike are there). `KpfTLegAdd` showed the leg as an argument (run).
+
+A futures leg can be found again: its market is one of few (try each against the row's name), its size and
+direction are the units, its entry is the row's price. An option that is worth nothing exercised when it enters
+cannot: its row adds nothing to what either side keeps, so the strike is in nothing the statement shows, and it
+cannot be searched for.
+
+Why it matters. A row is answered, right or wrong, only by showing the leg whose hash opens it. So for such a leg
+nobody but its two parties answers its row, in the entry and in **every statement on the account after it**. In
+the entry a point nobody answers costs the claimers their bond (rule 2). In a take, a step or a leaving (kinds 2
+to 4) it does not: the lapse returns both bonds. So on an account with one such leg, a leaving stated with a false
+row for it can only be disputed blind and lapses at no cost to its claimer, who states it again; applied once
+unseen, it writes a note of what is owed. That is the unpaid watch of round 38's H1, by another door, and rule 2
+does not reach it.
+
+What would close it: the statement shows the leg (111 bytes in the place of the 92: the row's name and the units
+follow from it, so `KpfTStepRow` need not be told them), at 19 bytes more.
+
+## What held under attack (all engine-run)
+
+| Item | Test | What was put to the engine |
+|---|---|---|
+| 1. `KpfTEnter` | `t1b_r39_an_entry_is_stated_by_the_two_on_a_covered_account_and_by_no_other_door` | 52 refused. Either signature by another key (side A's by B or a third, side B's by A or a third). What the object becomes: a statement whose claimer is side B or a third key; of kind 1, 2, 3, 4, 5 or 7; with a bond a sompi less or none; a sompi short of the bond; another time, dispute period or lateness. What is stated: no row, a byte short, a byte more, a leg in the place of a row, the rows from 116 as a leaving has them, each of the four pushes (24, 57, 90, 99) as another byte. Outputs: a first flag of 2 or 3, a second of 0, 3 or 0x80; none; five; cut. Kind 6 through `KpfTChange`. An object that carries a statement (shown as the account, and as it is); an account of 138 bytes; a shard |
+| 2. The entering row | `t1b_r39_an_entering_rows_answer_is_the_models` | 37 legs as the leg that enters, 49 rows: long, short, equal to the old leg; the four kinds of option struck at 0, 1, the price, the limit and one beyond; directions' places of 0, -1, 7, 8, 9, 15 and 7 above a strike; no size, a size below zero, at the bound, a unit beyond, a part of a unit; a scale of the most and one beyond. For a long leg and a call also: the entry a sompi off the row's price, a sompi of gain as it enters, and what is said of it the other kind's row, the units the other way, another committee. 18 right, 29 wrong, each `row_judged_in`'s verdict and not the other. Right: the three futures cases, the options struck at 1, the price and the limit, the size at the bound and of a unit's part, the scale of the most. Everything else is wrong |
+| 2. The row named | same | the first row named (the old leg judged as one that enters): the row is as the model says for what is said of it, and the end is wrong both times |
+| 2. Old legs | same | the old leg's row in an entry's trace with each of its six numbers one more and one less: answered wrong 12 times. An old option's row in an entry is its row in a take, and is answered right |
+| 3. `KpfTStepEnter` | `t1b_r39_the_end_of_an_entry_is_the_models` | 36 ends, 10 right and 26 wrong, each `enter_end_right`'s verdict. Right: the first leg of an account; a fourth leg (an old option among them); a leg at exactly side A's floor in four forms (a futures leg; a call worth 20 exercised, whose holder must have the 20; beside an old put that A holds; where side B asks 30, more than the floor); an old leg's gain within B's margin. Wrong: a sompi under each of those four floors; another seed; A's margin below zero by an old leg's loss; B's below zero by its gain (an entry owes nothing); the row named the first, none, one beyond the last; side B; an amount; the last row's worth below zero; the old leg's row left out; and 11 other outputs (A's margin a sompi more, B's a KAS less, the account without the leg, a sompi less held, a note of fewer units, the other way, a leaving's, to another shard, of another side B, of what is owed, a payment beside) |
+| 3. The committee | same | a leg of another committee with its own committee said of it: the row is right and the end is wrong. With the shard's committee said of it: the end is right and the row is wrong. In neither are both right. An account that names the id of the other committee (a shard nobody opened) takes the leg, and its note is to that id, which no shard has |
+| 4. The lapse | `t1b_r39_the_lapse_of_a_point_of_an_entry_costs_its_claimers_their_bond` | of an entry, at the points 0, 1, 2 and one beyond the trace, with an odd bond of 22,000,001 sompi: the account again without the leg; the disputer has 33,000,001 (its bond and the smaller half); the script's copy holds 11,000,001 more beside its fee; nothing to either claimer. Refused: a sompi less to the disputer, a sompi less in the copy, the disputer's part to side A, the account a sompi short, the account with the leg. Of a take: the disputer's bond and the claimer's each back, the copy keeping its fee alone |
+| 4. The claimers' own dispute | same | side A's key as the disputer, left to lapse: of the two bonds they put in they have one and a half back, and the account is as it was, without the leg. It costs them half a bond and buys nothing |
+| 5. The shard's id | `t1b_r39_a_shards_id_is_of_its_opening_and_its_committee` | the id is the hash of the opening's seed and the committee; another committee and another anchor give another id. Refused: another committee shown for the same id; the id of another committee, the seed alone (the id as it was before), nothing, another opening's |
+| The table | `t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on` | 55 scripts, 62 entries, 53 entries `release`. `KpfTPoint` now reads the fee a third time (the copy holds the fee and the half bond after the lapse of an entry); the lint says so |
+
+**Item 4, read: can the claimers keep another from disputing?** The object carries one dispute at a time. A
+claimer that disputes its own entry first, at a point it can answer:
+
+- While its dispute stands anybody still answers any **wrong** point wrong (`at == point || verdict == 0`): the
+  entry ends and the claimers' bond is lost. Its dispute shields nothing that can be answered.
+- If it answers its own point right, the statement stands again as a new output, to be disputed again, and is
+  applied only after a whole dispute period undisputed. So a point nobody can answer is reached by another
+  disputer before the entry is applied, unless the claimer disputes again at once; and then the entry is never
+  applied.
+- If it lets its dispute lapse, the entry ends and half a bond is gone (run, above).
+
+So the leg does not get in behind the claimers' own dispute. What a chain of own disputes does do is hold the
+account under a statement for half a bond a period: that is M1 of round 38, recorded and open.
+
+**Item 6, with `KpfTLegAdd` gone: does any path still put a leg into a covered account at an entry nobody could
+dispute?** None that I found, F62 and F63 apart.
+
+- `KpfTOpenC` opens with no leg (the root of nothing). `KpfTHand` leaves the legs and their entries (round 34).
+- `KpfTLegMove` appends the leg as it is, its entry too, from an account of the same side B and shard (rounds 34
+  and 37, still passing). A leg in such an account entered by a statement, so the move carries an entry that was
+  answered for.
+- A settlement of kinds 2 to 4 writes every entry at its row's price (the second chain), and each of those prices
+  is a point of that statement. They are answered within the account's tolerance: F62 again, not a new door.
+- An object under the registry's id is made by the scripts alone (round 30, still passing).
+
+**Is there a reason not to remove `KpfTLegAdd`?** No. Two things to do with it, not against it:
+
+- Removing it does not close F61 while F62 stands; the box at the head of 6a should stay until the terms are
+  bound.
+- `KpfTLegAdd` showed the leg and `KpfTEnter` does not (F63). If the leg is not put into what is stated, removing
+  `KpfTLegAdd` takes away the one place a watcher learned a leg from.
+
+One thing the decision of round 38 brings with it, to know: with rule 2 a disputer is paid half the claimers'
+bond whenever nobody answers. For a price that takes the committee answering within the dispute period. Where it
+does not, every honest entry is worth half a bond to whoever disputes it. The disputer risks its own bond, which
+it loses if the committee does answer.
+
+## Read, not run
+
+- `KpfTStepEnter` asks side A's floor only. Side B's standing is not asked at an entry (the shard is what stands
+  behind it), and what side B holds of options is not kept whole by the end.
+- An entry where an old leg's gain is beyond B's margin is wrong at its end (run): the user first takes or
+  leaves. Nothing is owed by an entry.
+- Nothing else in `src` computes a shard's id (`shard_seed` and `shard_id` are used by the builders of the
+  opening and of an entry); the reserve compares ids and does not make them.
+
+## Not reached
+
+- `KpfTStepPrice` for kind 6 against the model on random prices (it is run in F62 at one price, right; the
+  author's test runs it wrong).
+- The commands, and anything at a node.
+- Random accounts of many legs entering one after another through settlements (each entry here is one statement
+  on an account made for it).
+- The binding of terms proposed for F62, and the leg in what is stated for F63: neither is written, so neither is
+  attacked.
+- M1 (the lock) at the engine.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F62 | High | open: a covered account's terms and periods are its own; an entry and a leaving are answered within them |
+| F61 | High | open until `KpfTLegAdd` is removed; and by F62 after |
+| F63 | Medium | open: a leg that enters by a statement is shown to nobody |
+| F60 | | fixed in round 37, verified |
+| F58 | Low | closed in the tool; open in the scripts by decision |
+| F57, F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 111 tests pass (7 new: the findings F62 and F63, and five `t1b_r39_...`). A finding's test
+passes while the hole is open and says "is closed" where it would fail. `auditT1_tests.rs`: 55 pass (the table at
+55 scripts). `auditT1_cli.rs`: 47 pass, unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 111 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```
+
+# Round 40
+
+Scope: the changes for F62 (a shard's id is of its opening, its committee, its ten terms and its lateness, dispute
+period and bond rate; `KpfTStepEnter` holds an account's terms and periods to it; `KpfTLegMove` asks the two
+accounts' equal) and for F63 (what is stated of an entry carries the leg whole; `KpfTStepRow` holds the named row
+to it; `KpfTStepEnter` makes the note of it), with the model and the builders. Everything below is engine-run
+(`verify::verify`) unless it says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file
+changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**F63 is closed. F62 is closed where an entry's end is answered, and that is not enough: whether it is answered
+is decided by the account's own dispute period, which is one of the numbers the check is there to hold (F64,
+High). And with every account held to its shard's terms there is still a way for an owner with keys of its own to
+be owed by its shard with no wrong point: the two ends of the tolerance (F65, High). So to the last question: yes,
+I still see two paths, both run at the engine.**
+
+## Findings
+
+### F64 (High, open). An account's own dispute period decides whether its entry is answered
+
+`t1b_finding_f64_an_accounts_own_dispute_period_decides_whether_its_entry_is_answered`
+
+The closure of F62 is a check in the answer of a statement's end. An answer exists only where somebody disputes
+within the statement's dispute period, and `KpfTEnter` writes that period from the account's own moving part
+(`moving[102..111]`), of which `KpfTOpenC` asks nothing. So:
+
+1. A shard of 50 KAS; a user's leg stands in it (asked 5.5275 KAS).
+2. The owner opens an account under the shard's id with its second key on side A: the shard's ten terms, its
+   lateness and bond rate, and a **dispute period of one block**. `KpfTOpenC` takes it.
+3. A leg enters at the committee's own price. Its end is wrong (the account's periods do not give the shard's
+   id); disputed in time it is answered wrong and not right (run). The statement's dispute period is 1, and the
+   settlement, showing an age of one block, is taken: the account goes on **with the leg**.
+4. The leg leaves by a statement at 20 where the committee says 10. By the model its price is a wrong point. That
+   statement's dispute period is 1 too; it is applied. 99 KAS are owed.
+5. The shard pays all 50 KAS to the owner's second key, the user's leg standing.
+
+A dispute period of nothing is stated as well (`KpfTEnter` takes it; run). Whoever watches would have to dispute
+in the block after the statement, every time.
+
+The same holds for every other field: an account of a tolerance of 50 % and a dispute period of one block has its
+wrong end, and nobody in time to say so. One number undoes the binding of the other twelve.
+
+What would close it is a check that is not answered for but made: where the account is opened. `KpfTOpenC` has
+the account's terms and moving part; shown the seed and the committee, it can ask
+`blake2b(seed + committee + terms + moving[93..120]) == moving[139..171]`. An account that names a real shard's
+id then has that shard's terms and periods from its first output, every statement on it has the shard's dispute
+period, and `KpfTStepEnter`'s check is left to hold the leg's committee. (An account that names an id no opening
+has is owed by nobody.) I have not tested that form.
+
+### F65 (High, open). A leg entered and left at the two ends of the tolerance is owed by the shard
+
+`t1b_finding_f65_a_leg_entered_and_left_at_the_two_ends_of_the_tolerance_is_owed_by_the_shard`
+
+On an account that **is** of its shard's terms and periods, both keys the owner's:
+
+- A price is right within the tolerance of the committee's (0.5 %), at an entry and at a leaving. A leg that
+  enters at the lower end and leaves at the upper end gains 1 % of its worth, the committee's price not having
+  moved, with every point right.
+- Side A's floor is 5.5 % of the worth, so the worth is 18 times its margin, and the margin comes back whole.
+- Side B has nothing in such an account, so the gain is what the pot cannot pay: owed by the shard.
+
+Run: 140 units enter at 9.95 where the committee says 10 (the row, the price against the citation of 10 and the
+end answered right, not wrong) and leave at 10.05 (the end and the price answered right). 14 KAS gained on a
+margin of 80 KAS; 13 KAS owed; the shard pays them and holds 37. Nobody can end either statement. Four times
+empties this shard; with a margin of 300 KAS, once. A round is two dispute periods.
+
+This is not new with kind 6 (a leaving at the upper end was always within the rule); kind 6 is what makes the
+entry's end of it a rule too. It is what remains when everything else is held, and I should have put it in round
+38: it is the "tolerance is a cost the other side bears" of round 35, where the other side is the shard.
+
+What would close it is a decision. Some forms, none tested:
+
+- What a shard is asked to pay is counted the tolerance against side A at both ends: a note of what is owed is
+  of the gain less the tolerance of the leg's worth at its entry and at its leaving. The two ends then gain
+  nothing from the shard. It costs an honest user up to 1 % of a leg's worth, and only of what a pot could not
+  pay it.
+- The entering leg's price held to one side of the committee's (not below it for a leg A is long in, not above
+  for one it is short in): the entry's end of the gain goes; the leaving's half stays.
+- Or it is priced: the shard is asked the tolerance of the gross twice more, and the owner's own taking is what
+  that part of the requirement is for. That does not stop the payment, since a note of what is owed is paid
+  below the requirement; it only makes the draw smaller before.
+
+## Fixed and verified
+
+**F63.** `t1b_fixed_f63_an_entry_shows_the_leg_and_whoever_watches_answers_its_rows_from_the_chain`. The
+statement's transaction shows the leg's 111 bytes and its market's name (an option worth nothing exercised, with
+its strike). Read back from what is stated (`AEnter::read`, `leg_read`) it is the leg. After the entry is applied
+a take is stated: with the leg from the entry and its entry from the entry's row (the statement applied last),
+the take's row is answered right. And a row is right for no leg but the one shown: the leg that opens the chain
+with another market, strike, kind, size, committee, scale, limit or entry shown in its place is answered wrong
+(8), and the leg shown does not open the chain (no answer with it).
+
+**F62, as far as an answer reaches.**
+`t1b_fixed_f62_an_entry_and_a_move_hold_an_account_to_its_shards_terms_and_periods`.
+
+- Round 39's account (a tolerance of 50 %, no maintenance rate) is still opened. Its entry at 5 has a right row
+  and a right price within its own terms, and a **wrong end**, not right.
+- One field at a time, 14 accounts that differ from the shard: each of the ten terms, the dispute period (one
+  more, and one block), the bond rate (one less, and 1 in 10,000). For each the model states no entry, and the
+  end of the entry written anyway is not answered right (answered wrong in 13; with the bond rate of 1 the
+  builder writes no answer, see "to know" below).
+- `KpfTLegMove`: 28 moves refused, into such an account and out of one, for each of the 14.
+- The lease and the two asks are not of the id: an account of another lease, or with an ask of either side, is
+  entered.
+
+## What held under attack (all engine-run)
+
+| Attack | Test | What was put to the engine |
+|---|---|---|
+| The shard's id | `t1b_r39_a_shards_id_is_of_its_opening_its_committee_and_its_terms` | the id is `shard_sid(seed, committee, terms, moving[93..120])`. 18 openings refused: another committee shown; the id of another committee, of round 39's form, the seed alone, nothing, another opening, another dispute period, another bond rate, and each of the ten terms changed. A shard of a tolerance of 50 %, a dispute period of a block and a bond rate of 1 is opened, under the id of those |
+| What a user reads | same | a shard's terms and moving part are arguments 3 and 4 of its opening, the id in the moving part; so the terms and periods behind an id are on the chain where the shard was opened |
+| Stating | `t1b_r39_an_entry_is_stated_by_the_two_on_a_covered_account_and_by_no_other_door` | 65 refused, as in round 39 with the new form: what is stated of 167 bytes and rows; no row, a byte off, a leg for a row, a leaving's form, round 39's form; each of the leg's seven pushes as another byte |
+| The entering row | `t1b_r39_an_entering_rows_answer_is_the_models` | 37 legs, 53 rows against `enter_row_judged`: 18 right, 33 wrong, the same legs right as in round 39. For a long leg and a call also the leg shown another than the one that opens the row (another market, a unit more, the other direction, another committee, the entry a sompi off): wrong |
+| The end | `t1b_r39_the_end_of_an_entry_is_the_models` | 40 ends against `enter_end_right`: 10 right, 30 wrong. A leg of another committee: shown as it is, the row is right and the end wrong; shown with the shard's committee, the end is right and the row wrong. The note is of the leg shown: outputs with the note of a short leg, an option, another market or a unit more are wrong |
+| The lapse | `t1b_r39_the_lapse_of_a_point_of_an_entry_costs_its_claimers_their_bond` | as in round 39 |
+
+## The questions asked
+
+**The lease and the two asks, not bound: should either be?** No.
+
+- The lease (`moving[84..93]`) is read by no script that opens a covered account (read: none of `KpfTOpenC`,
+  `KpfTEnter`, `KpfTChange`, the answers, `KpfTHand`, `KpfTAddC`, `KpfTLegOut`, `KpfTLegMove`, `KpfTAcctEnd`
+  reads those bytes). Its two keys do nothing with it.
+- An ask is a floor one side sets for the other's margin (`KpfTStepEnter`, `KpfTStepEnd`, `KpfTHand` read it).
+  It only keeps more in the account. An account of the owner's keys asks nothing, which is what the rule's own
+  floor is for.
+
+**Can a statement of kinds 2 to 4 be judged by other terms than the entry was held to?** No script changes an
+account's terms or periods (read): the terms are in the fixed part,
+which every script carries as it is (`KpfTLegOut`, `KpfTLegMove` and a settlement's second chain hash the same 90
+bytes with the new chain; `KpfTHand` and `KpfTAddC` pass the fixed part's hash through); the periods are
+`moving[93..120]`, and each script that writes a moving part copies those bytes (`KpfTHand` from 75,
+`KpfTLegOut`, `KpfTLegMove` and the settlements from 84). `KpfTAcctEnd` then `KpfTOpenC` makes a new account of
+any terms with no leg, and a leg enters it only by a statement (F64) or by a move from an account of equal terms.
+Two accounts of the same other terms move a leg between them; with `KpfTLegAdd` gone neither has one.
+
+**Can a watcher with only the chain answer every row of every later statement?** Yes, for what I could find:
+
+- a leg's 111 bytes are shown where it enters (`KpfTEnter`: what is stated; `KpfTLegAdd` while it stands: an
+  argument), where it moves (`KpfTLegMove`: an argument) and where it leaves at once (`KpfTLegOut`);
+- its current entry is its row's price in the statement applied last on the account (kinds 2 to 4 and 6 write
+  every entry at its row's price), and what is stated is an argument of the stating transaction; a move and a
+  leaving at once keep the entries;
+- the account's terms and moving part are arguments of every transaction on it.
+
+So the account's legs follow from its transactions in order: which statements were applied and which ended is on
+the chain too. One step of that is run (the take after the entry, in the F63 test); the whole walk over moves
+and leavings is not.
+
+**A shard whose own terms are loose.** It is opened (run), and its accounts are held to those terms: its users
+read a tolerance of 50 % or a dispute period of a block in its opening. That is their reading; nothing to close.
+
+**Is there still a path for an owner with keys of its own, `KpfTLegAdd` removed?** Two: F64 and F65.
+
+## To know
+
+- With a bond rate of 1 in 10,000 a statement's bond is a hundredth of a KAS on a pot of 100, and the builder
+  writes no answer whose payouts are that small (an output of that value is not mined beside the rest of the
+  transaction unless whoever answers adds to it). A shard chooses its bond rate and its users read it; but rule 2
+  of round 38 (a lapse costs the claimers their bond) pays whoever disputes only as much as that rate makes it.
+- `KpfTStepEnter` builds the note from the leg shown as `KpfTLegOut` reads it (a futures leg unless the
+  direction's place says an option). A leg of no kind or of a size below zero shown has a wrong row, so its entry
+  ends there; the end by itself does not refuse it.
+
+## Not reached
+
+- The check at `KpfTOpenC` proposed for F64 and the forms for F65: not written, so not attacked.
+- The whole walk of a watcher over an account's moves, leavings at once and statements, from the chain alone.
+- `KpfTStepPrice` for kind 6 on random prices (run right at 5 under a tolerance of 50 % and at 9.95 under 0.5 %,
+  against a citation of 10; the author runs it wrong).
+- The commands, and anything at a node. M1 (the lock) at the engine.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F64 | High | open: an account's own dispute period decides whether its entry (and any statement on it) is answered |
+| F65 | High | open: a leg entered and left at the two ends of the tolerance is owed by the shard, no point wrong |
+| F62 | High | closed where an entry's end is answered and where a leg moves (round 40); what is left of it is F64 |
+| F61 | High | open until `KpfTLegAdd` is removed; and by F64 after |
+| F63 | | fixed in round 40, verified |
+| F60 | | fixed in round 37, verified |
+| F58 | Low | closed in the tool; open in the scripts by decision |
+| F57, F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 113 tests pass (the F62 and F63 tests turned into their closures'; the five `t1b_r39_...`
+brought to the new forms; new: the findings F64 and F65). A finding's test passes while the hole is open and says
+"is closed" where it would fail. `auditT1_tests.rs`: 55 pass, unchanged. `auditT1_cli.rs`: 47 pass, unchanged,
+run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 113 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```
+
+# Round 41
+
+Scope: the changes for F64 (`KpfTOpenC` is shown the seed and the committee and opens a covered account only
+where its ten terms, lateness, dispute period and bond rate give the id it names) and for F65 (`KpfTStepLiq`: the
+note of what is owed is of what the pot could not pay less twice the tolerance of the two sides' worth at the last
+row, and no note where that is nothing), with the model and the builders. Everything below is engine-run
+(`verify::verify`) unless it says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file
+changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**F64 is closed. F65 is closed for futures legs and not for an option that A holds: a put entered at the upper end
+of the tolerance and left at the lower end is still asked of the shard, with every point right and no margin
+needed to hold it (F67, High). And an entry asks side A's floor and not side B's, so an owner's own account with
+nothing on side B is owed by the shard for a real move of the price, with nobody paid to stop it (F66, Medium).
+To the standing question: yes, two paths remain, both run at the engine.**
+
+## Findings
+
+### F67 (High, open). A put entered and left at the two ends of the tolerance is asked of the shard beyond the band
+
+`t1b_finding_f67_a_put_entered_and_left_at_the_two_ends_of_the_tolerance_is_asked_of_the_shard_beyond_the_band`
+
+The band is twice the tolerance of the two sides' worth **at the leaving's prices**.
+
+- A futures leg is in both sides' worth: its band is 2 % of its worth, where the two ends make 1 %. Enough.
+- An option is in its writer's worth alone: its band is 1 % of the underlying's worth at the price it leaves at.
+  A put that A holds, in at the upper end and out at the lower end, has made the tolerance of the worth at both
+  ends, which is 1 % of the worth at the committee's price: more than 1 % of the worth at the lower end, by twice
+  the tolerance squared. 0.005 % of the underlying's worth is asked of the shard, the committee's price not having
+  moved.
+- It costs nothing to hold. Struck at the price it enters at, the put is counted at nothing: its holder is asked
+  the maintenance of nothing and keeps nothing whole, and side B is asked nothing at an entry (F66). So the size
+  is what the leg's bound allows, not what a margin carries.
+
+Run, on an account of the shard's own terms and periods, both keys the owner's: a put on 11,000 units struck and
+entered at 20.1 where the committee says 20 (the row, the price against the citation of 20 and the end answered
+right, not wrong) leaves at 19.9 (the end and the price answered right). 2,200 KAS gained; the band is 2,189; the
+shard is asked 11 KAS and pays them. The 30 KAS of margin (there for the bond's sake) come back whole. Eight such
+legs fit one account, and there is no limit to accounts: this shard of 50 KAS is five legs. A round is two dispute
+periods.
+
+A call the other way (in low, out high) has its band counted at the upper end and is asked nothing (run): the hole
+is where the price a band is counted at is the lower of the two.
+
+What would close it: the band counted at both ends of each leg, not at the last row's price alone. The row
+already computes a leg's worth at its entry (`we`) beside its worth at the price; the tolerance of the two,
+summed over the legs (one more number in a row), is what prices alone can have made since the last mark. That
+form also covers a leg whose worth fell (below), and it asks an honest user half of what the band asks now (a
+futures leg counted once at each end, not twice at one). Not tested.
+
+### F66 (Medium, open). Side B enters with nothing, and nobody is paid to liquidate it
+
+`t1b_finding_f66_side_b_enters_with_nothing_and_nobody_is_paid_to_liquidate_it`
+
+`KpfTStepEnter` asks side A's floor. Side B may have nothing. A side with nothing is below its maintenance from
+the first block and anyone may state a step of its liquidation; the step's fee is paid out of that side's margin,
+so it pays nothing. In an account of the owner's two keys:
+
+- 140 units enter at 10 with nothing on side B (the end is answered right);
+- a step of side B's liquidation at 10 is right at once, for a fee of nothing (run);
+- nobody states it. The committee's price goes to 11 and the leg leaves at 11, every point right. Of the 140 KAS
+  gained none is in the pot: the shard is asked 109.2 KAS (less the band) and pays all 50 it holds;
+- had the price gone to 9.6, side A would be below and a step of its liquidation pays 6.72 KAS to whoever states
+  it. Side A loses at most its 80 KAS.
+
+With a second account the other way the owner is owed whichever way the price goes, and loses in the other
+account no more than a margin (which stays there as side B's, to be deposited or not). This is round 38's second
+claim ("two accounts at true entries: an ordinary default, and somebody is paid to liquidate it"): the side that
+loses is liquidated by somebody who is paid; the side that wins runs against a side B that nobody is paid to
+step.
+
+Why Medium: it needs the price to move, and whoever watches the shard can stop it at any time, for nothing.
+
+What would close it is a choice: the end of an entry asks side B's floor too (the clearing party then carries a
+margin in every account, and a step of its liquidation is paid); or the fee of a step of side B's liquidation in
+a covered account is a note to the shard. Neither tested.
+
+## Fixed and verified
+
+**F64.** `t1b_fixed_f64_a_covered_account_is_opened_only_with_its_shards_terms_and_periods`.
+
+- 19 openings refused, by the builder and built past it (the terms, the moving part, the seed and the committee
+  are arguments 3 to 6): an account that differs from the shard in one of the ten terms, in the dispute period
+  (one more; round 40's one block; nothing), in the bond rate (one less; 1 in 10,000), round 39's tolerance of
+  50 %; another seed, another committee, the two in each other's place.
+- Each of those accounts is opened under the id its own terms and periods give, which is no shard's.
+- The lease and the two asks are not of the id: such an account is opened.
+- A shard is not opened with a second key.
+
+**F65, for futures legs.** `t1b_fixed_f65_what_prices_within_the_tolerance_make_is_not_asked_of_the_shard`.
+
+- Round 40's round trip: in at 9.95 and out at 10.05 are right as before, and the leaving writes no note of what
+  is owed (its end is answered right; the end of round 40, with a note of 13 KAS, is answered wrong).
+- On the model, a futures leg in and out at the ends that favour A, against what the committee's prices alone
+  would leave owed, for entries and leavings between 0.1 and 10 times the price, long and short: in 49 cases
+  where the worth at the entry is less than three times the worth at the leaving the shard is asked no more.
+
+## What held, and what the band does not reach (the attack list)
+
+| Asked | Result |
+|---|---|
+| A leg entered at 20 and left at 10 | enough (the band is 2 % of the worth at 10, the skew 0.5 % of the worth at 20 and at 10) |
+| A leg whose worth at its entry was far above where it leaves | not enough from a worth three times as large (run, model): in 27 cases the shard is asked more than the committee's prices leave owed, by at most the tolerance of the worth at the entry; the worst, a leg A is short in from 100 to 1, 48.51 KAS on a true gain of 9,900. It needs the price to have fallen by more than two thirds. Low; the form proposed under F67 covers it |
+| Options | a put A holds: F67. Also run on the model: a put struck at 40, in at 20: out at 10, 19, 20 and 30 the shard is asked 5.05, 0.595, 0.1 and 0 KAS more than the committee's prices leave owed (100 units). A call the other way: nothing |
+| Several legs where one leaves and the others are marked | the band is of every leg standing (run: an honest account of ten legs, below). Each standing leg is marked at its row's price in that statement, so its skew is in what is owed and its worth is in the band; a standing put A holds leaks as in F67 |
+| A liquidation step in place of a leaving | the same script and band: the 120 steps of sides the pot did not pay in the F57 test are answered at the engine as the model says, with the note of what is asked |
+| Legs marked many times at alternating ends | read: a statement chooses its end anew, and what it can make against the last mark is the tolerance of the worth at both, which is what a band per statement must cover; marks at the same end add nothing. Not run |
+| A leg moved in by `KpfTLegMove`; `KpfTLegOut` in between | read: a move keeps the entry, so the leaving is as above; `KpfTLegOut` reads no price and moves nothing from side B's margin (round 37) |
+| A take at the high end, then a leaving at the high end | read: a take whose gain is beyond side B's margin has a wrong end (round 34), so a take moves only what the pot holds, which in an account of the owner's keys is its own; what is owed is the leaving's, with the band. Not run this round |
+
+**What the band costs an honest user** (run, model). A user long 10 units from 10 to 14 against a pot of 25: the
+pot cannot pay 20 KAS, and the shard is asked 17.2: 2 % of the leg's worth of 140 is not paid. The same user with
+nine other legs of that worth standing in the account: the band is of all ten, 28 KAS, and the shard is asked
+**nothing** of the 20. So what a user is not paid grows with the size of its account, not with the leg that
+leaves, and it is taken at every statement that owes. A form that asks less and is still closed: the one under
+F67 (each leg once at each end: 1 % where the price did not move). I see no form that takes it once in a leg's
+life: every statement chooses its end anew.
+
+## F64: the other ways an account could come to stand under a shard's id
+
+- `KpfTOpen`, `KpfTBoth` and the position's scripts are typed for a moving part of 138 bytes (read): the hash
+  they write is of 138 bytes.
+- `KpfTShardOpen` asks that the second key is 32 zero bytes (run: refused with one).
+- `KpfTHand`, `KpfTAddC`, `KpfTLegOut`, `KpfTLegMove` write the account they were given with a key, a margin or a
+  chain changed, the fixed part's terms and `moving[84..171]` as they were; `KpfTAcctEnd` writes none (read; the
+  refusals of other outputs are in the tests of rounds 34, 36, 37 and 39).
+- A settlement writes what was stated, and an answer or a lapse the object as it was. What is stated is the
+  claimer's: an account of other terms stated as the outcome has a wrong end, answered within the dispute period,
+  which is now the shard's (read).
+- An account opened under an id that is of no shard (run: it is opened): its notes name that id
+  (`moving[138..171]`), `KpfTNoteApply` takes a note only of the shard's own id, `KpfTLegMove` asks one id of the
+  two accounts, and no script writes another id into an account (read).
+
+**The shard's own periods.** Its statements are draws, with the dispute period in its own moving part, chosen by
+its owner at the opening and held in its id. A shard of a dispute period of one block is opened (run, round 40),
+and its owner's draw is applied before anybody can dispute it. That is not a hole in the scripts; it is what a
+user reads.
+
+**What a user reads off a shard before taking it as its cover** (all of it in the opening's arguments and the
+shard's state; the id in an account's moving part is the hash of the first four):
+
+1. the opening (the seed) and the owner's key;
+2. the committee: every leg of every account under the shard is priced by it;
+3. the ten terms, of which three decide what the user is owed: the maintenance rate (what side A must hold, and
+   the rate on the shard's net), the tolerance (how far a stated price may stand from the committee's; twice it,
+   of the account's worth, is not paid by the shard), the liquidation fee (the rate on the shard's gross);
+4. the lateness, the dispute period and the bond rate. The dispute period is the time anybody has to answer a
+   wrong statement on any account under the shard, and a wrong draw; the bond rate is what a wrong statement
+   costs and what whoever answers is paid;
+5. what the shard holds against what its four rows ask at today's prices;
+6. the notes to the shard that are not applied (round 36): a row may count less than stands.
+
+## Is there still a path for an owner with keys of its own, `KpfTLegAdd` removed?
+
+Yes. F67, which needs nothing but two dispute periods; and F66, which needs the price to move and nobody to step
+side B for nothing. Both are run on accounts of the shard's own terms, opened by `KpfTOpenC` as it is now.
+
+## Not reached
+
+- The forms proposed for F67 and F66: not written, so not attacked.
+- Alternating marks and a take before a leaving, at the engine.
+- `KpfTOpen` with a moving part of 171 bytes at the engine (read by its type).
+- The commands, and anything at a node. M1 (the lock) at the engine.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F67 | High | open: a put A holds, in and out at the two ends of the tolerance, is asked of the shard beyond the band |
+| F66 | Medium | open: an entry asks no floor of side B, and nobody is paid to liquidate a side with nothing |
+| F65 | High | closed for futures legs (round 41); for options it is F67 |
+| F64 | | fixed in round 41, verified |
+| F62, F63 | | fixed in round 40, verified |
+| F61 | High | open until `KpfTLegAdd` is removed |
+| F60 | | fixed in round 37, verified |
+| F58 | Low | closed in the tool; open in the scripts by decision |
+| F57, F59 | | fixed in round 35, verified |
+| F56 | | fixed in round 34, verified |
+| F41 | High | open, with the owner |
+| F50 to F55 | | fixed in rounds 29 to 31, verified |
+| F42 to F49 | | fixed in rounds 28, 29 |
+| F32, F13 | Medium | accepted by the owner |
+| F39 | Medium | by design |
+| F5, F7, F8, F9 | Low | by design / changed by round 23 |
+| all others | | fixed in earlier rounds |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 115 tests pass (the F64 and F65 tests turned into their closures'; new: the findings F66
+and F67; brought along: the F61 test's amounts, the F57 test's amount and its helper, the F62 test's opening). A
+finding's test passes while the hole is open and says "is closed" where it would fail. `auditT1_tests.rs`: 55
+pass, unchanged. `auditT1_cli.rs`: 47 pass, unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 115 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```

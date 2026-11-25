@@ -332,13 +332,12 @@ between them but accounts.
 
 ### 6a. The reserve as scripts: the design (25 November 2026, before any script)
 
-**Open, high (review 37, F61; 26 November 2026): the owner of a shard takes all the shard holds, past the rule of
-the draw, with nobody else.** It opens a covered account whose other side is a key of its own, adds a leg at an
-entry far from the price (`KpfTLegAdd` reads no price), and states that the leg leaves at the committee's price:
-the statement has no wrong point, the pot cannot pay the gain, and the note of what is owed is paid by the shard
-in full, whatever the shard is asked to hold. One dispute period, a bond that comes back. Until this is closed the
-cover of this section protects a user only from a clearing party that does not do this. The closure is not built;
-its form is at the end of section 11 (a leg enters by a statement, at a price that is answered for).
+**What this section's cover is, and is not, as of review 41 (26 November 2026).** Against a clearing party that
+keeps to it, the shard pays what an account's pot could not, beyond the band of the tolerance. Against a clearing
+party that opens accounts with keys of its own to take what its shard holds, **it does not hold yet**: five
+reviews (37 to 41) each found a way, and two are open (F66, F67). They are of one kind, and closing them one at a
+time has not converged: section 11, at its end, says why and what the choice is. Until that is settled, a user
+relies on a clearing party's shard as it relies on the clearing party.
 
 Written whole before anything is compiled, and walked through for each party that reads it. Nothing of this runs
 yet (D).
@@ -765,6 +764,84 @@ Left as it is, and said: a committee the users chose that stops signing. Nothing
 everywhere in this design; with rule (2) nobody enters under it, and what stands is left by the exit of a market
 with no price.
 
-Order of building: the shard's id of one committee; kind 6 beside `KpfTLegAdd` (the statement with two
-signatures, the entering row, the end, the lapse of an entry's price); then the tests and the commands moved to
-it; then `KpfTLegAdd` out of the library.
+**Built, first stage** (26 November 2026; E, `tests/thin_enter.rs`, six tests; `KpfTLegAdd` is still in the
+library, so F61 is still open):
+
+| Script | Bytes | |
+|---|---|---|
+| `KpfTShardOpen` | 650 | the id is of the opening, the committee, and the shard's ten terms, lateness, dispute period and bond rate |
+| `KpfTEnter` (new) | 1,326 | the two parties state an entry: three numbers, the leg whole (111 bytes), the seed of the shard's id, the trace |
+| `KpfTStepRow` | 3,472 | the row the statement names is, in an entry, the leg it shows: a leg, with the row's price for its entry, and it stays |
+| `KpfTStepPrice` | 1,564 | takes an entry's rows |
+| `KpfTStepEnter` (new) | 1,955 | the end of an entry |
+| `KpfTPoint` | 1,487 | a point of an entry that nobody answers costs the claimers their bond |
+| `KpfTLegMove` | 1,481 | the two accounts have the same terms and periods |
+
+An entry is stated in a transaction of 2,908 bytes and applied in one of 2,602 (one leg). `KpfTStepRow` is now
+the largest script of an answer: what it asks of an entering leg belongs in a script of its own.
+
+**Review 39** (at the engine) found that the first build did not close F61, and one more thing:
+
+| Finding | What it was | Now |
+|---|---|---|
+| F62 (high) | The tolerance, the maintenance rate, the dispute period, the lateness and the bond rate an entry is judged by were the account's own, which its two keys choose when they open it (`KpfTOpenC` asks nothing of them). An account of the owner's keys with a tolerance of 50 % and no maintenance entered at 5 and left at 15 where the committee said 10, each answered right, and the shard paid all it held | A shard's id is of its committee and of the terms and periods the accounts under it have, which are its own; the end of an entry holds the account to them, and a leg moves only between accounts of the same. Who takes a shard as its cover reads them in the shard |
+| F63 (medium) | The leg that entered was shown to nobody: the statement carried its row's name (a hash) and units. An option's strike was in nothing shown, so nobody but the two parties could answer that leg's row, then or later | The statement shows the leg whole, 111 bytes for 92, and its row is held to that leg |
+
+What held: 52 statements refused by `KpfTEnter`; 49 entering rows and 36 ends each as the model says; the lapse of
+an entry's point to the sompi; a leg of another committee never has a right row and a right end at once. To know,
+from rule (2): where the committee does not answer within the dispute period, an honest entry that is disputed
+costs its claimers half a bond.
+
+**Review 40** (at the engine) verified F63 closed and found F62 closed only where an entry's end is answered,
+and two more ways for an owner with only keys of its own to be owed by its shard:
+
+| Finding | What it was | Now |
+|---|---|---|
+| F64 (high) | The terms and periods were held in the answer of an entry's end, and an answer is given only where somebody disputes within the dispute period, which was the account's own: an account of a dispute period of one block settled an entry nobody had the time to dispute, then a leaving at twice the price | `KpfTOpenC` is shown the seed and the committee of the shard's id and opens an account under it only with the shard's ten terms, lateness, dispute period and bond rate. The lease and what each party asks of the other stay the account's own |
+| F65 (high) | On an account wholly of its shard's terms: a leg entered at 9.95 and left at 10.05 where the committee said 10, every point answered right. The prices of a statement are only near the committee's; twice the tolerance of a leg's worth is a gain from prices alone, and what the pot could not pay of it was owed by the shard. Four rounds emptied a shard | What the shard is asked to pay is what is owed at any price within the tolerance: `KpfTStepLiq` writes the note of what the pot could not pay less twice the tolerance of the legs' worth. A futures leg is in both sides' worth and is counted twice in it (exact would take a number more in a row) |
+
+**What F65 makes of the cover, to say plainly.** The reserve pays what an account's pot could not, beyond a band:
+with a tolerance of 0.5 %, 2 % of the worth of the account's futures legs (1 % were it counted once), and 1 % of
+the worth of options. Up to that band a user is covered by what the clearing party keeps in the account itself,
+which the user asks of it when the account is opened (its ask). The band is the price of prices that are stated
+and answered for within a tolerance, and it is as narrow as the tolerance: a committee whose price a statement can
+follow within 0.1 % gives a band a fifth as wide. It is not asked where the pot paid: a user whose clearing party
+holds its ask in the account is paid in full.
+
+Left as it is, and said: the same band is what a clearing party and a user who signs with it can move from the
+clearing party's margin to the user's, a round at a time, by statements that are each answered right (what F60
+closed for a payment stands, within the band, for a price).
+
+**Review 41** (at the engine) verified F64 closed and F65 closed for futures legs, and found two more:
+
+| Finding | What it is | |
+|---|---|---|
+| F67 (high) | The band is counted at the leaving's prices and from the sides' worth, in which an option stands once (its writer's). A put side A holds, struck at its entry so that it is counted at nothing and asks no margin, entered at the upper end of the tolerance and left at the lower, gains 1 % of its underlying at the committee's price; the band is 1 % of it at the lower end. The shard pays the difference, twice the tolerance squared: 11 KAS on 11,000 units, with a margin of 30 that comes back, eight such legs an account | open |
+| F66 (medium) | The end of an entry asks side A's maintenance and nothing of side B. A step of side B's liquidation takes its fee from side B's margin, so where that is nothing nobody is paid to step, and the leg stands while the price moves: 140 units entered at 10 with nothing on side B left at 11, and the shard was asked 109 KAS and paid its 50. With a second account the other way the owner is owed whichever way the price goes | open |
+
+Also from it: where a leg's worth fell by more than two thirds between its entry and its leaving, the band at the
+leaving's worth is less than the entry's half of what prices could make (low: 48.51 KAS on a gain of 9,900). And
+what the band costs an honest user grows with its account: owed 20 KAS on a leg worth 140, it is asked 17.2 of the
+shard; with nine other legs of that worth standing beside it, nothing.
+
+**Why this is not closed a finding at a time, and the choice** (not decided). F61, F62, F64, F65, F66 and F67
+are one thing seen six times: the shard pays what an account says it is owed, the account's other side can be the
+shard's owner, and the one rule that holds the owner, the requirement, is asked only when it draws. Nothing is
+asked of a shard when it takes a leg, and nothing as the price moves. So an owner takes, through an account of
+its own keys, a position its shard cannot carry; where the position wins, the shard pays its owner; where it
+loses, the owner's own margin goes into its own shard. Each finding was a way to win surely or cheaply (an entry
+of its choosing, terms of its choosing, the tolerance, an option that asks no margin, a side nobody liquidates).
+Close them all and what is left is the same at fair odds: an owner with coins outside its shard turns the shard's
+into its own with a chance as large as its coins are to the shard's, and the users' cover is what it lost.
+
+A clearing house holds a member to its requirement all the time: a member below it is called, and its positions
+are closed by others where it does not answer. That is what is missing here, and it is not one script:
+
+| | What it is | What it costs |
+|---|---|---|
+| A. The cover is of a clearing party one trusts | Leave the reserve as it is, with what is closed. Say in every place what it is: capital pooled behind many accounts, which pays where a clearing party that keeps to the rules cannot; no protection from one that turns on its users. A user chooses its clearing party as it chooses a broker | nothing more to build. The goal's line "no party that must be trusted to stay" is not met for the cover |
+| B. No shared cover | A user that does not trust takes an account no shard covers: the clearing party's margin stands in the account itself, as between any two parties (section 4b; it exists) | the capital the reserve was to save: this is the two-party position again |
+| C. The requirement held all the time | Three things. A leg enters only against what the shard holds over what it is asked with the leg. The shard's rows carry what its legs were entered at, so that what it has lost at given prices is a statement on the shard as a draw is. A shard below what it is asked is stepped by anyone, for a fee the shard pays: its users' legs leave at the prices stated, paid first | a design of its own, on paper first: the entry and every mark of an account then touch the shard or leave it a note to apply before it is counted, and the order in which a shard's users are paid when it fails has to be said. Weeks, and reviews of its own |
+
+What is built stands under any of the three: the entry by statement (one price, a leg shown, terms and periods
+of the shard), the band, the committee in the shard's id.

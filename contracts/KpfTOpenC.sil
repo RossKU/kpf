@@ -86,7 +86,7 @@ contract KpfTOpenC(int init_version) {
         require(tx.outputs[o1].value >= tx.inputs[j].value);
     }
 
-    entry open(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[171] moving, sig sa, sig sb) {
+    entry open(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[171] moving, byte[32] seed, byte[32] committee, sig sa, sig sb) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -97,6 +97,11 @@ contract KpfTOpenC(int init_version) {
         signedBy(sa, mv.slice(1, 33));
         signedBy(sb, mv.slice(34, 66));
         require(mv.slice(138, 139) == byte[](0x20));
+        // The shard the account names is one whose terms and periods the account has: the shard's id is the hash of
+        // its opening, of its committee, and of the ten terms, lateness, dispute period and bond rate of every
+        // account under it. An account of a dispute period of its own would settle what nobody had the time to
+        // dispute, and one of terms of its own would be answered within them (reviews 39 and 40, F62 and F64).
+        require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + byte[](committee) + byte[](terms) + mv.slice(93, 120))));
         int am = int(byte[8](mv.slice(67, 75)));
         int bm = int(byte[8](mv.slice(76, 84)));
         require(am >= 0);

@@ -319,8 +319,10 @@ pub fn shard_open_cmd(a: &Args) -> R<()> {
     let m = cmarket_from(a.need("market1")?)?.0;
     let anchor = anchor_of(a, &lib, &mut node, net)?;
     let s = script_of(a, &lib, "KpfTShardOpen", &mut node, net)?;
-    let (b, shard) = tb::shard_open(&lib, &anchor, &s, terms_of(&m, None), fk, price(a, "held")?, int_or(a, "exit-daa", 864_000)?, int_or(a, "dispute-daa", 600)?, int_or(a, "bond-bps", 1_000)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    // (A shard is of one committee: the market's, whose prices every account under it is counted at.)
+    let (b, shard) = tb::shard_open(&lib, &anchor, &s, terms_of(&m, None), m.committee_id, fk, price(a, "held")?, int_or(a, "exit-daa", 864_000)?, int_or(a, "dispute-daa", 600)?, int_or(a, "bond-bps", 1_000)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
     show(&AObj::Shard(shard), net);
+    println!("seed {} (an account under this shard is opened with it and the market's file: acct-open --seed --market1; the shard's id is the hash of it, of the committee, and of the terms and periods every account under it has)", to_hex(&tb::shard_seed(&anchor)));
     adone(a, "shard-open", &b, &keys, net, &mut node, &lib, &[AObj::Shard(shard)], &["KpfTShardOpen"])
 }
 
@@ -385,7 +387,7 @@ pub fn shard_note_cmd(a: &Args) -> R<()> {
 /// `--shard`) in the shard's library, through an anchor of its registry, with the margins `--a-margin` and
 /// `--b-margin` and no leg. Its terms are the shard's. Both sign: both keys are given here (`--key` twice).
 pub fn open_cmd(a: &Args) -> R<()> {
-    only(a, &["shard", "a", "b", "a-margin", "b-margin", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
+    only(a, &["shard", "seed", "market1", "a", "b", "a-margin", "b-margin", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, shard) = shard_of(a, &mut node, net)?;
@@ -393,11 +395,15 @@ pub fn open_cmd(a: &Args) -> R<()> {
     if b_key != shard.owner {
         return Err("REFUSED: --b is not the owner of --shard: the shard applies no note of such an account and pays nothing it owes".into());
     }
-    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: price_or(a, "b-margin", 0)?, expiry: int_or(a, "exit-daa", 864_000)?, dispute_daa: int_or(a, "dispute-daa", 600)?, bond_bps: int_or(a, "bond-bps", 1_000)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
+    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: price_or(a, "b-margin", 0)?, expiry: int_or(a, "exit-daa", 864_000)?, dispute_daa: int_or(a, "dispute-daa", shard.dispute_daa)?, bond_bps: int_or(a, "bond-bps", shard.bond_bps)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
+    // (An account has its shard's terms and periods: the dispute period and the bond rate are the shard's unless
+    // given, and given otherwise the opening is refused. The shard's id is opened by its seed and its committee.)
+    let seed = hex32(a.need("seed")?).map_err(e)?;
+    let committee = cmarket_from(a.need("market1")?)?.0.committee_id;
     let anchor = anchor_of(a, &l.lib, &mut node, net)?;
     let s = script_of(a, &l.lib, "KpfTOpenC", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let b = tb::account_open_c(&l.lib, &anchor, &s, &x, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    let b = tb::account_open_c(&l.lib, &anchor, &s, &x, seed, committee, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
     show(&AObj::Account(x.clone()), net);
     adone(a, "acct-open", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(x)], &["KpfTOpenC"])
 }

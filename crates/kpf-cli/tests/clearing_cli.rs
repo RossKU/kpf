@@ -135,11 +135,12 @@ fn a_shard_a_covered_account_a_leg_that_leaves_and_a_draw() {
     let (d, out) = h.build(&exec, &["shard-open", "--lib", &genesis, "--anchor", &anchors[0], "--script", &script(&h, "KpfTShardOpen"), "--registry", &registry, "--market1", &market, "--held", "50", "--dispute-daa", "50"]);
     assert!(out.contains("holds 50 KAS in it"), "{out}");
     let shard0 = h.obj(&d, "shard", 33_100);
+    let seed = out.split("seed ").nth(1).and_then(|s| s.get(..64)).expect("the shard's seed").to_string();
     // A user opens a covered account against it: 20 KAS of its own, 2 of the clearing party's. Another key than
     // the shard's owner as side B is refused.
-    let err = h.refused(&me, &["acct-open", "--shard", &shard0, "--anchor", &anchors[1], "--script", &script(&h, "KpfTOpenC"), "--registry", &registry, "--key", &watch, "--a", &me, "--b", &watch, "--a-margin", "20", "--b-margin", "2", "--dispute-daa", "50"]);
+    let err = h.refused(&me, &["acct-open", "--shard", &shard0, "--anchor", &anchors[1], "--script", &script(&h, "KpfTOpenC"), "--registry", &registry, "--seed", &seed, "--market1", &market, "--key", &watch, "--a", &me, "--b", &watch, "--a-margin", "20", "--b-margin", "2", "--dispute-daa", "50"]);
     assert!(err.contains("is not the owner of --shard"), "{err}");
-    let (d, _) = h.build(&me, &["acct-open", "--shard", &shard0, "--anchor", &anchors[1], "--script", &script(&h, "KpfTOpenC"), "--registry", &registry, "--key", &exec, "--a", &me, "--b", &exec, "--a-margin", "20", "--b-margin", "2", "--dispute-daa", "50"]);
+    let (d, _) = h.build(&me, &["acct-open", "--shard", &shard0, "--anchor", &anchors[1], "--script", &script(&h, "KpfTOpenC"), "--registry", &registry, "--seed", &seed, "--market1", &market, "--key", &exec, "--a", &me, "--b", &exec, "--a-margin", "20", "--b-margin", "2", "--dispute-daa", "50"]);
     let account0 = h.obj(&d, "covered account", 33_110);
     // The user goes long 10 units at 10; the note that the leg entered is applied to the shard.
     let (d, out) = h.build(&me, &["acct-leg", "--account", &account0, "--script", &script(&h, "KpfTLegAdd"), "--key", &exec, "--market", &market, "--size", "10", "--dir", "long", "--x", "10"]);
@@ -168,7 +169,7 @@ fn a_shard_a_covered_account_a_leg_that_leaves_and_a_draw() {
     // The price is 13: the user states that its leg leaves. The leg gained 30 and the clearing side's margin is 2:
     // the pot pays 2 of the gain and the shard owes 28.
     let (d, out) = h.build(&me, &["acct-leave", "--account", &account, "--script", &script(&h, "KpfTChange"), "--side", "a", "--leg", "1", "--prices", "13", "--t0", "33150"]);
-    assert!(out.contains("28 KAS are owed by the shard"), "{out}");
+    assert!(out.contains("25.4 KAS are owed by the shard"), "{out}");
     let stated = h.obj(&d, "statement", 33_160);
     let out = h.ok(&["acct-show", "--object", &stated, "--prices", "13"]);
     assert!(out.contains("the statement is the rule's"), "{out}");
@@ -195,7 +196,7 @@ fn a_shard_a_covered_account_a_leg_that_leaves_and_a_draw() {
     let (d, _) = h.build(&watch, &["shard-note", "--shard", &shard1, "--note", &release, "--script", &script(&h, "KpfTNoteApply")]);
     let shard2 = h.obj(&d, "shard", 33_310);
     let (d, _) = h.build(&watch, &["shard-note", "--shard", &shard2, "--note", &owed, "--script", &script(&h, "KpfTNoteApply")]);
-    assert_eq!(paid(&d, &me), 28 * KAS, "the shard pays the user what the pot could not");
+    assert_eq!(paid(&d, &me), 254 * KAS / 10, "the shard pays the user what the pot could not");
     let shard3 = h.obj(&d, "shard", 33_320);
     // The user ends the account: its 22 KAS.
     let (d, _) = h.build(&me, &["acct-end", "--account", &ended, "--script", &script(&h, "KpfTAcctEnd"), "--side", "a"]);
@@ -204,12 +205,12 @@ fn a_shard_a_covered_account_a_leg_that_leaves_and_a_draw() {
     // The clearing party draws what the shard holds above its requirement (no leg is left: all of its 22 KAS), by
     // a statement that is applied after the dispute period.
     let (d, out) = h.build(&exec, &["shard-draw", "--shard", &shard3, "--script", &script(&h, "KpfTChange"), "--prices", "0,0,0,0", "--t0", "33330"]);
-    assert!(out.contains("draws 22 KAS"), "{out}");
+    assert!(out.contains("draws 24.6 KAS"), "{out}");
     let draw = h.obj(&d, "stated draw", 33_340);
     let out = h.ok(&["acct-show", "--object", &draw, "--prices", "0,0,0,0"]);
     assert!(out.contains("the statement is the rule's"), "{out}");
     let (d, _) = h.build(&watch, &["stated-settle", "--stated", &draw, "--script", &script(&h, "KpfTChangeSettle"), "--daa", "33500"]);
-    assert_eq!(paid(&d, &exec), (22 + 2) * KAS + 2 * KAS / 10, "the amount and the bond (a tenth of what the shard held)");
+    assert_eq!(paid(&d, &exec), 246 * KAS / 10 + 246 * KAS / 100, "the amount and the bond (a tenth of what the shard held)");
     // Another key than the owner's states no draw the tool builds.
     let err = h.refused(&watch, &["shard-draw", "--shard", &shard3, "--script", &script(&h, "KpfTChange"), "--prices", "0,0,0,0", "--t0", "33330", "--amount", "1"]);
     assert!(!err.is_empty());

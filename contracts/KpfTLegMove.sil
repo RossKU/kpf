@@ -106,9 +106,13 @@ contract KpfTLegMove(int init_version) {
         }
         require(blake2b(p33(blake2b(tb + p33(g))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(blake2b(p33(blake2b(tc + p33(root2))) + mw) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
-        // One clearing party and one shard.
+        // One clearing party and one shard; and the same terms and periods (lateness, dispute period, bond rate): a
+        // leg whose entry was answered for within the one account's terms is not carried into an account of looser
+        // ones (review 39, F62).
         require(mv.slice(33, 66) == mw.slice(33, 66));
         require(mv.slice(138, 171) == mw.slice(138, 171));
+        require(tb == tc);
+        require(mv.slice(93, 120) == mw.slice(93, 120));
         signedBy(sa, mv.slice(1, 33));
         signedBy(sn, mw.slice(1, 33));
         signedBy(sb, mv.slice(34, 66));
