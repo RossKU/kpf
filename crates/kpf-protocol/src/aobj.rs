@@ -180,10 +180,10 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
         *row = ShardRow { head: head_of(r)?, net: r.int()?, gross: r.int()? };
     }
     let (owner, none, v, sid) = moving_of(r, 171)?;
-    if none != [0; 32] || v[1] != 0 || v[3] != t.late_daa || v[6] != 0 || v[7] != 0 {
-        return Err(bad("a shard has no second key, no second margin and no asks"));
+    if none != [0; 32] || v[1] != 0 || v[3] != t.late_daa {
+        return Err(bad("a shard has no second key and no second margin"));
     }
-    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes") })
+    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7] })
 }
 
 fn host_bytes(h: &Host) -> Vec<u8> {

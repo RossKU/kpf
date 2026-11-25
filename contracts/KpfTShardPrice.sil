@@ -2,10 +2,11 @@ pragma silverscript ^0.1.0;
 
 // A draw (kind 5 of KpfTChange) is stated on a shard by its owner: 40 bytes, an amount and a price a row. It is
 // within the rule when the claimer is the shard's owner, the amount is above zero, each row that has a market has a
-// price above zero and within the market's limit, and what the shard then holds is at least its requirement at
-// those prices: the rate on the net (the terms' maintenance rate) of the worth of every row's net units, and the
-// rate on the gross (the terms' liquidation rate) of the worth of every row's gross units, and the tolerance of that
-// more (the prices are only near the committee's). A dispute names one point:
+// price above zero and within the market's limit, the shard is not called, the amount is of coins it holds, and
+// its equity then (what it holds, and what its net units are worth at those prices, less what its legs were
+// entered at) is at least its requirement at its upper level: the maintenance rate of the worth of every row's net
+// units and the rate on the gross (half the maintenance rate less three times the tolerance) of the worth of every
+// row's gross units, each counted the tolerance more. A dispute names one point:
 //   point 0        the end: the rule above, and the outputs (the shard holding the amount less, the amount to its
 //                  owner): KpfTShardEnd computes it over the four rows
 //   point r, 1..4  the price of row r is within the tolerance of the committee's (KpfTShardPrice, one citation; a

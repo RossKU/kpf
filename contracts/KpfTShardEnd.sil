@@ -2,10 +2,11 @@ pragma silverscript ^0.1.0;
 
 // A draw (kind 5 of KpfTChange) is stated on a shard by its owner: 40 bytes, an amount and a price a row. It is
 // within the rule when the claimer is the shard's owner, the amount is above zero, each row that has a market has a
-// price above zero and within the market's limit, and what the shard then holds is at least its requirement at
-// those prices: the rate on the net (the terms' maintenance rate) of the worth of every row's net units, and the
-// rate on the gross (the terms' liquidation rate) of the worth of every row's gross units, and the tolerance of that
-// more (the prices are only near the committee's). A dispute names one point:
+// price above zero and within the market's limit, the shard is not called, the amount is of coins it holds, and
+// its equity then (what it holds, and what its net units are worth at those prices, less what its legs were
+// entered at) is at least its requirement at its upper level: the maintenance rate of the worth of every row's net
+// units and the rate on the gross (half the maintenance rate less three times the tolerance) of the worth of every
+// row's gross units, each counted the tolerance more. A dispute names one point:
 //   point 0        the end: the rule above, and the outputs (the shard holding the amount less, the amount to its
 //                  owner): KpfTShardEnd computes it over the four rows
 //   point r, 1..4  the price of row r is within the tolerance of the committee's (KpfTShardPrice, one citation; a
@@ -117,9 +118,11 @@ contract KpfTShardEnd(int init_version) {
         int ok = 1;
         if (mv.slice(1, 33) != byte[](claimer)) { ok = 0; }
         if (amount <= 0) { ok = 0; }
-        // The worth of the rows' net and gross units at the prices stated.
+        // The worth of the rows' net and gross units at the prices stated; and what side B's net units are worth
+        // there (above zero where it is long, below where it is short).
         int wn = 0;
         int wg = 0;
+        int sn = 0;
         byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         for (r, 0, 4, 4) {
             byte[] row = rw.slice(102 * r, 102 * r + 102);
@@ -128,23 +131,38 @@ contract KpfTShardEnd(int init_version) {
                 int sc = int(byte[8](row.slice(67, 75)));
                 int net = int(byte[8](row.slice(85, 93)));
                 int gross = int(byte[8](row.slice(94, 102)));
-                if (net < 0) { net = 0 - net; }
+                int short = 0;
+                if (net < 0) {
+                    net = 0 - net;
+                    short = 1;
+                }
                 if (gross < 0) { gross = 0 - gross; }
                 if (p <= 0) { ok = 0; }
                 if (p > int(byte[8](row.slice(76, 84)))) { ok = 0; }
                 if (sc <= 0) { ok = 0; }
                 if (ok == 1) {
-                    wn = wn + (net / sc) * p + (net % sc) * (p / sc) + ((net % sc) * (p % sc)) / sc;
+                    int w = (net / sc) * p + (net % sc) * (p / sc) + ((net % sc) * (p % sc)) / sc;
+                    wn = wn + w;
+                    if (short == 1) { sn = sn - w; } else { sn = sn + w; }
                     wg = wg + (gross / sc) * p + (gross % sc) * (p / sc) + ((gross % sc) * (p % sc)) / sc;
                 }
             }
         }
-        int rn = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8)));
-        int rg = int(byte[8](tb.slice(LIQFEE_AT, LIQFEE_AT + 8)));
+        // The requirement at its upper level: the maintenance rate of the net's worth and the rate on the gross of
+        // the gross's (half the maintenance rate less three times the tolerance: what a book that is set off keeps
+        // for the time between one side's leaving and a call), each counted the tolerance more.
+        int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
+        int rn = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) + g;
+        int rg = (int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) - 3 * g) / 2;
+        if (rg < 0) { rg = 0; }
+        rg = rg + g;
         int need = (wn / BPS) * rn + ((wn % BPS) * rn + BPS - 1) / BPS + (wg / BPS) * rg + ((wg % BPS) * rg + BPS - 1) / BPS;
-        need = need + (need / BPS) * int(byte[8](tb.slice(G_AT, G_AT + 8))) + ((need % BPS) * int(byte[8](tb.slice(G_AT, G_AT + 8))) + BPS - 1) / BPS;
+        // A draw is of coins the shard holds, leaves its equity (what it holds, and what its net units are worth,
+        // less what its legs were entered at) at that level, and is not made while the shard is called.
         int has = int(byte[8](mv.slice(67, 75))) - amount;
-        if (has < need) { ok = 0; }
+        if (has < 0) { ok = 0; }
+        if (int(byte[8](mv.slice(130, 138))) != 0) { ok = 0; }
+        if (has + sn - int(byte[8](mv.slice(121, 129))) < need) { ok = 0; }
         if (ok == 1) {
             byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[](has as byte[8]) + mv.slice(75, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
             if (blake2b(due2) != outs) { ok = 0; }

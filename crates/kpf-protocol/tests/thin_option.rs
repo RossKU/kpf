@@ -555,8 +555,10 @@ fn an_option_enters_a_covered_account_and_a_shard_counts_it_in_a_row_of_its_own(
     assert_eq!(shard.s.rows[0], ShardRow { head: ohead, net: 14 * scale, gross: 14 * scale });
     // What the shard is asked at 10: the rates of 140 and 100 KAS, as if no leg were set against another.
     let t = &shard.s.t;
-    let need = rate_up(240 * KAS1, t.mmr_bps) + rate_up(240 * KAS1, t.liq_fee_bps);
-    assert_eq!(shard.s.requirement(&[P10, P10, 0, 0]), Some(need + rate_up(need, t.g_bps)));
+    // (The upper level: the maintenance rate of the net's worth and the rate on the gross of the gross's, each
+    // counted the tolerance more.)
+    let need = rate_up(240 * KAS1, t.mmr_bps + t.g_bps) + rate_up(240 * KAS1, kpf_protocol::reserve::gross_rate(t) + t.g_bps);
+    assert_eq!(shard.s.requirement(&[P10, P10, 0, 0]), Some(need));
 
     // What is no leg does not enter: an option with no strike, one struck beyond its market's limit, a kind that is
     // none.
@@ -649,7 +651,7 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let scale = m.p.scale;
     let ohead = Head { market: option_market(&m.id()), committee: m.committee_id, scale, price_max: m.p.price_max };
     // A shard that counts options on 20 units of market 1, and holds 50 KAS.
-    let s = Shard { t: w.terms(), rows: [ShardRow { head: ohead, net: 20 * scale, gross: 20 * scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32] };
+    let s = Shard { t: w.terms(), rows: [ShardRow { head: ohead, net: 20 * scale, gross: 20 * scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0 };
     let shard = OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 };
     let stated = |st: &Stated, said: &[u8]| -> OLive<Stated> {
         let f = [fund(xk(&w.b), 30)];
@@ -659,9 +661,10 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
         nth(&sg, 0, *st, 6_510)
     };
     let honest = [P10, 0, 0, 0];
-    let low = [P10 / 2, 0, 0, 0];
+    // (The shard's side is long these units, entered at 10: a higher price says its equity is more.)
+    let low = [2 * P10, 0, 0, 0];
     let held = shard.value as i64;
-    // The owner states the underlying at 5 (the committee's price is 10): more is drawn.
+    // The owner states the underlying at 20 (the committee's price is 10): more is drawn.
     let max = s.draw_max(&low);
     assert!(max > s.draw_max(&honest));
     let (st, d) = s.draw(max, low, T0, held).unwrap();

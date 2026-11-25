@@ -98,9 +98,14 @@ contract KpfTShardOpen(int init_version) {
         byte[] mv = byte[](moving);
         signedBy(s, mv.slice(1, 33));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        // No second key, nothing on B's side, and the id of this opening.
+        // No second key, nothing on B's side, no leg yet (what its legs were entered at is nothing), not called,
+        // and the id of this opening.
+        // (The bytes, and not numbers that read as nothing: the state is the hash of the bytes, and whoever reads
+        // the shard writes them again.)
         require(mv.slice(34, 66) == z32);
-        require(int(byte[8](mv.slice(76, 84))) == 0);
+        require(mv.slice(76, 84) == byte[](0 as byte[8]));
+        require(mv.slice(121, 129) == byte[](0 as byte[8]));
+        require(mv.slice(130, 138) == byte[](0 as byte[8]));
         require(mv.slice(138, 139) == byte[](0x20));
         // The id: of this opening (the hash of the anchor's outpoint), of the one committee whose prices the
         // accounts under this shard are counted at, and of the terms and periods those accounts have: this shard's

@@ -1986,8 +1986,8 @@ pub fn point_lapse(lib: &[u8; 32], obj: &OLive<Pointed>, script: &LibScript, p: 
     args.extend([bv(q.disputer.to_vec()), iv(q.point)]);
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTPoint", "lapse", args, c.window as u64)?;
     d.out(obj.value - 2 * c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "account", None);
-    if c.kind == crate::thin::KIND_ENTER {
-        // (A point of an entry that nobody answered: the claimers' bond is lost, half to the disputer.)
+    if c.kind == crate::thin::KIND_ENTER || c.kind == crate::thin::KIND_DRAW {
+        // (A point of an entry or of a draw that nobody answered: the claimer's bond is lost, half to the disputer.)
         let half = c.bond / 2;
         keep_with(&mut d, script, lid, c.bond - half)?;
         d.fund(p.funds, &p.change_to);
@@ -2430,6 +2430,59 @@ pub fn leg_out_as(lib: &[u8; 32], account: &OLive<Account>, i: usize, payb: i64,
     Ok((d.finish()?, next, note))
 }
 
+// ---------------------------------------------------------------- the notes of a shard held to its requirement
+
+/// `KpfTLeft.apply`: the note that legs left a covered account is applied to its shard. Input 0 is the shard, input
+/// 2 the note; output 0 the shard without the legs, output 2 the note of the rest where the shard did not hold what
+/// was asked; what it paid is the last output, to the user's key.
+pub fn left_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let (next, at, paid, rest) = s.left(n)?;
+    left_apply_as(lib, shard, note, &at, next, paid, rest, script, p)
+}
+
+/// As `left_apply`, with the rows named and the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments)]
+pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let legs: Vec<u8> = n.legs.iter().flat_map(crate::thin::leg_bytes).collect();
+    let rows: Vec<u8> = at.iter().flat_map(|r| sm8(*r as i64)).collect();
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(legs), bv(rows), bv(n.key.to_vec()), iv(n.asked)];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeft", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    d.out((shard.value as i64 - paid) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
+    Ok((d.finish()?, next, rest))
+}
+
+/// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
+pub fn rest_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let (next, paid, rest) = s.rest_paid(n)?;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeft", "rest", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    d.out((shard.value as i64 - paid) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    Ok((d.finish()?, next, rest))
+}
+
 // ---------------------------------------------------------------- a leg enters by a statement
 
 /// `KpfTEnter.state`: the account's two parties state that `leg` enters it at the prices `a` (one a leg, the
@@ -2653,16 +2706,48 @@ pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
 #[allow(clippy::too_many_arguments)]
 pub fn draw_note<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::SNote>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
     let n = &note.s;
-    if st.kind != crate::thin::KIND_DRAW || st.position != shard.hash() || n.sid != shard.sid {
-        return invalid("the statement is not a draw on this shard, or the note is to another");
-    }
     let of_owner = match n.kind {
         crate::reserve::NOTE_JOIN | crate::reserve::NOTE_RELEASE => n.key == shard.owner,
         crate::reserve::NOTE_OWED => n.head.market == shard.owner,
         _ => false,
     };
-    if !of_owner || note.daa >= obj.daa {
-        return invalid("the note is not one that ends a draw (a leg's or what is owed, of an account whose side B is the owner), or it landed at or after the statement");
+    if !of_owner || n.sid != shard.sid {
+        return invalid("the note is not one that ends a draw (a leg's or what is owed, of an account whose side B is the owner), or it is to another shard");
+    }
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (n.kind, n.head.bytes(), n.net, n.gross, n.key, n.amount), script, rkey, p)
+}
+
+/// As `draw_note`, by a note that legs left a covered account (whatever it asks).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_note_left<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::Left>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    let n = &note.s;
+    if n.sid != shard.sid {
+        return invalid("the note is to another shard");
+    }
+    // (The chain of the legs stands where a market's name would: 33 bytes, and nothing after.)
+    let head = [&[0x20][..], &crate::reserve::Left::chain(&n.legs), &[0u8; 51]].concat();
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_LEFT, head, 0, 0, n.key, n.asked), script, rkey, p)
+}
+
+/// As `draw_note`, by a note of the rest.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_note_rest<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::Rest>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    let n = &note.s;
+    if n.sid != shard.sid {
+        return invalid("the note is to another shard");
+    }
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_REST, vec![0u8; 84], 0, 0, n.key, n.amount), script, rkey, p)
+}
+
+/// `KpfTDrawNote.end` with the note given by its hash and by what the script is shown of it (its kind, the 84 bytes
+/// where a market stands, two numbers, a key, an amount).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn draw_note_of<T, N>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<N>, nhash: [u8; 32], shown: (i64, Vec<u8>, i64, i64, [u8; 32], i64), script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    if st.kind != crate::thin::KIND_DRAW || st.position != shard.hash() {
+        return invalid("the statement is not a draw on this shard");
+    }
+    if note.daa >= obj.daa {
+        return invalid("the note landed at or after the statement");
     }
     let h = match pointed {
         None => st.hash(),
@@ -2675,13 +2760,13 @@ pub fn draw_note<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.fixed_hash().to_vec()), bv(shard.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()),
         iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held), iv(pointed.is_some() as i64), bv(pointed.map(|x| x.0).unwrap_or([0; 32]).to_vec()), iv(pointed.map(|x| x.1).unwrap_or(0)),
-        iv(n.kind), bv(n.head.bytes()), iv(n.net), iv(n.gross), bv(n.key.to_vec()), iv(n.amount), bv(rkey.to_vec()),
+        iv(shown.0), bv(shown.1), iv(shown.2), iv(shown.3), bv(shown.4.to_vec()), iv(shown.5), bv(rkey.to_vec()),
     ];
     let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated draw", script, "KpfTDrawNote", "end", args, 0)?;
-    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
     d.out(obj.value - bonds as u64, hash_spk(lib, &st.position), Some((0, id)), "shard", None);
     keep_with(&mut d, script, lid, st.bond - half)?;
-    d.out(note.value, hash_spk(lib, &n.hash()), Some((0, id)), "note", None);
+    d.out(note.value, hash_spk(lib, &nhash), Some((0, id)), "note", None);
     d.fund(p.funds, &p.change_to);
     match pointed {
         Some((disputer, _)) => d.last(st.bond, &disputer, "the disputer's bond", &p.change_to),

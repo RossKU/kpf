@@ -89,12 +89,12 @@ impl World {
         let m = &self.markets[i];
         Head { market: kpf_protocol::reserve::futures_market(&m.id()), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max }
     }
-    /// The clearing party's shard: 50 KAS; in market 0 it is 60 units short over 140 of legs, in market 1 it is
-    /// 10 long over 30; two rows are empty.
+    /// The clearing party's shard: 100 KAS; in market 0 it is 60 units short over 140 of legs, in market 1 it is
+    /// 10 long over 30, every leg entered at 10 (what its legs were entered at: 500 KAS short); two rows are empty.
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 50 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32] };
+        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0 };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -162,13 +162,15 @@ fn the_owner_draws_what_is_above_the_requirement_and_no_more() {
     // At 10: the net is worth 600 and 100 KAS, the gross 1,400 and 300. 5 % of 700 and 0.5 % of 1,700, and the
     // tolerance (0.5 %) of that more: 43.7175 KAS. It holds 50.
     let need = s.requirement(&PRICES).unwrap();
-    assert_eq!(need, 35 * KAS1 + 850_000_000 + (4_350_000_000 * 50 + 9_999) / 10_000);
+    // (5.5 % of the 700 KAS the net units are worth, and 2.25 % of the 1,700 the gross are: the upper level.)
+    assert_eq!(need, 3_850_000_000 + 3_825_000_000);
+    assert_eq!((s.equity(&PRICES), s.level(&PRICES, false)), (Some(100 * KAS1), Some(3_150_000_000 + 2_975_000_000)), "its equity is what it holds: its legs stand where they entered; the lower level is 4.5 % and 1.75 %");
     let max = s.draw_max(&PRICES);
-    assert_eq!(max, 50 * KAS1 - need);
+    assert_eq!(max, 100 * KAS1 - need);
     let f = [fund(xk(&w.c), 30)];
     let (b, st, d) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), max, PRICES, T0, w.payer(&w.c, &f)).unwrap();
     let sg = signed("draw stated", &b, &w.keys);
-    assert_eq!((st.kind, st.claimer, st.bond), (KIND_DRAW, xk(&w.c), 5 * KAS1));
+    assert_eq!((st.kind, st.claimer, st.bond), (KIND_DRAW, xk(&w.c), 10 * KAS1));
     assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, &PRICES), None);
     // Applied after the dispute period: the shard holds the amount less, the amount and the bond to the owner.
     let live = nth(&sg, 0, st, 6_510);
@@ -203,6 +205,54 @@ fn the_owner_draws_what_is_above_the_requirement_and_no_more() {
     signed("draw's end answered right", &b, &w.keys);
     let forced = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(false));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
+}
+
+/// Section 13, stage 1. A shard knows what its side has gained or lost: its equity is what it holds and what its
+/// net units are worth, less what its legs were entered at. A draw leaves that at the upper level, is of coins it
+/// holds, and is not made while the shard is called.
+#[test]
+fn a_draw_is_of_the_equity_above_the_upper_level_of_coins_and_not_while_called() {
+    let w = world();
+    let shard = w.shard();
+    let s = &shard.s;
+    let held = shard.value as i64;
+    let f = [fund(xk(&w.w), 31)];
+    // The end of a draw of `amount` at `prices`, stated by the owner whatever the rule says, answered at the engine.
+    let judged = |what: &str, on: &OLive<Shard>, amount: i64, prices: [i64; 4]| -> bool {
+        let x = &on.s;
+        let d = Draw { amount, prices };
+        let outs = Outs::of(&[Out { key: false, to: x.drawn(amount).hash(), value: on.value as i64 - amount }, Out { key: true, to: xk(&w.c), value: amount }]).unwrap();
+        let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: x.bond(), claimer: xk(&w.c), held: on.value as i64 };
+        let q = w.pointed(&w.stated(on, &st, &d.said()), 0);
+        let (b, right) = shard_end(&w.lib, &q, x, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+        signed(&format!("{what}: the end of a draw answered {}", if right { "right" } else { "wrong" }), &b, &w.keys);
+        let forced = shard_end(&w.lib, &q, x, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(!right));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered the other way");
+        right
+    };
+    let _ = held;
+    // Market 0, where its side is 60 units short from 10, stands at 11: it has lost 60 KAS, and its equity is 40,
+    // below what it is asked. It holds 100 KAS, and draws none of them.
+    let up = [P10 * 11 / 10, P10, 0, 0];
+    assert_eq!((s.equity(&up), s.draw_max(&up)), (Some(40 * KAS1), 0));
+    assert!(!judged("a shard that lost draws a sompi", &shard, 1, up));
+    // At 9 it has gained 60: its equity is 160. What it draws is of its equity above the upper level, and of the
+    // coins it holds: the gain is in its users' margins until their legs leave.
+    let down = [P10 * 9 / 10, P10, 0, 0];
+    let need = s.requirement(&down).unwrap();
+    assert_eq!((s.equity(&down), s.draw_max(&down)), (Some(160 * KAS1), 160 * KAS1 - need));
+    assert!(judged("the most at 9", &shard, 160 * KAS1 - need, down));
+    assert!(!judged("a sompi more at 9", &shard, 160 * KAS1 - need + 1, down));
+    let far = [P10 / 2, P10, 0, 0];
+    assert_eq!((s.equity(&far), s.draw_max(&far)), (Some(400 * KAS1), 100 * KAS1), "of coins: it holds 100");
+    assert!(judged("all its coins at 5", &shard, 100 * KAS1, far));
+    assert!(!judged("a sompi more than its coins", &shard, 100 * KAS1 + 1, far));
+    // A shard that is called draws nothing.
+    let called = OLive { s: Shard { called: 6_400, ..*s }, ..shard.clone() };
+    assert_eq!(called.s.draw_max(&PRICES), 0);
+    assert!(!judged("a called shard draws", &called, KAS1, PRICES));
+    assert!(judged("the same shard, not called", &shard, KAS1, PRICES));
+    // And a shard is opened with no leg and not called (the reserve's test opens one: thin_reserve.rs).
 }
 
 #[test]
@@ -442,6 +492,10 @@ fn the_draws_answers_agree_with_the_model_on_random_shards() {
             };
         }
         shard.s.held = r.range(20, 200) * KAS1 + r.range(0, KAS1 - 1);
+        // What its legs were entered at: near what its net units are worth at 10, so that its equity is near what
+        // it holds; and now and then it is called.
+        shard.s.basis = shard.s.rows.iter().map(|x| x.net / scale * P10).sum::<i64>() + r.range(-60, 60) * KAS1;
+        shard.s.called = if r.range(0, 19) == 0 { 6_000 } else { 0 };
         shard.value = (shard.s.held + SHARD_CARRIER) as u64;
         let s = &shard.s;
         let mut prices = [0i64; 4];
@@ -554,3 +608,167 @@ fn what_is_kept_of_a_shard_a_note_and_a_draw_reads_back_as_it_was_written() {
     assert_eq!(all[0].least_value(), s.held + SHARD_CARRIER);
 }
 
+// ---------------------------------------------------------------- section 13, stage 2: the notes of a leaving
+
+use kpf_protocol::reserve::{Left, Rest};
+use kpf_protocol::state::SHORT;
+
+fn fleg(w: &World, i: usize, units: i64, dir: i64, entry: i64) -> XLeg {
+    let m = &w.markets[i];
+    XLeg { market: m.id(), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max, size: units * m.p.scale, dir, entry }
+}
+
+/// A shard of 100 KAS with no leg, to book legs in by hand (the statement of an entry does it: stage 4).
+fn bare(w: &World) -> OLive<Shard> {
+    let x = w.shard();
+    OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..x.s }, ..x }
+}
+
+fn left_note(shard: &OLive<Shard>, n: &Left, k: u8) -> OLive<Left> {
+    OLive { s: n.clone(), value: NOTE_MIN as u64, id: shard.id, op: op(60 + k), daa: 6_200 }
+}
+
+/// A leg is in the books from its entry; the note that legs left takes each out of its row and out of what the
+/// legs were entered at. Whatever the order the notes are applied in, the books end as they began.
+#[test]
+fn the_note_that_legs_left_takes_them_out_of_the_books_whatever_the_order() {
+    let w = world();
+    let base = bare(&w);
+    let scale = w.markets[0].p.scale;
+    // Six legs of three users in three markets.
+    let legs = [fleg(&w, 0, 10, LONG, P10), fleg(&w, 0, 4, SHORT, P10 * 11 / 10), fleg(&w, 1, 7, LONG, P10), fleg(&w, 1, 7, SHORT, P10 * 9 / 10), fleg(&w, 2, 3, LONG, 2 * P10), fleg(&w, 0, 5, LONG, P10 * 12 / 10)];
+    let mut s = base.s;
+    for l in &legs {
+        s = s.booked(l).unwrap();
+    }
+    assert_eq!([s.rows[0].net, s.rows[0].gross, s.rows[1].net, s.rows[1].gross, s.rows[2].net, s.rows[2].gross].map(|x| x / scale), [-11, 19, 0, 14, -3, 3]);
+    assert_eq!(s.basis, -183 * KAS1, "what the legs were entered at: side B's units times their entries");
+    // At 10, 10 and 20 its users have lost 13 KAS between them: its equity is what it holds and those.
+    assert_eq!(s.equity(&[P10, P10, 2 * P10, 0]), Some(113 * KAS1));
+    // Three notes: a user's two legs of market 0; one leg, for which 3 KAS are asked; three legs of two markets.
+    let sid = s.sid;
+    let notes = [
+        Left { sid, legs: vec![legs[0], legs[5]], key: xk(&w.w), asked: 0 },
+        Left { sid, legs: vec![legs[1]], key: xk(&w.c), asked: 3 * KAS1 },
+        Left { sid, legs: vec![legs[2], legs[3], legs[4]], key: xk(&w.w), asked: 0 },
+    ];
+    let f = [fund(xk(&w.w), 43)];
+    for order in [[0usize, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+        let mut shard = OLive { s, ..base.clone() };
+        for (k, i) in order.iter().enumerate() {
+            let note = left_note(&shard, &notes[*i], *i as u8);
+            let (b, next, rest) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.w, &f)).unwrap();
+            let sg = signed(&format!("legs left: note {i} applied in place {k}"), &b, &w.keys);
+            assert!(rest.is_none());
+            if notes[*i].asked > 0 {
+                let n = sg.tx.outputs.len();
+                assert_eq!((sg.tx.outputs[n - 1].value, &sg.tx.outputs[n - 1].script_public_key), (notes[*i].asked as u64, &p2pk_spk(&xk(&w.c))));
+            }
+            shard = nth(&sg, 0, next, 6_300 + k as u64);
+        }
+        assert_eq!((shard.s.rows, shard.s.basis, shard.s.held, shard.value), ([ShardRow::EMPTY; 4], 0, 97 * KAS1, (97 * KAS1 + SHARD_CARRIER) as u64), "order {order:?}");
+    }
+    // A leg that leaves at its entry with nothing asked changes nothing of the equity at that price.
+    let (after, at, paid, rest) = s.left(&Left { sid, legs: vec![legs[2]], key: xk(&w.w), asked: 0 }).unwrap();
+    assert_eq!((at, paid, rest, after.equity(&[P10, P10, 2 * P10, 0])), (vec![1], 0, None, s.equity(&[P10, P10, 2 * P10, 0])));
+}
+
+/// What a shard does not hold goes on as a note of the rest; nothing is paid while it is called; and what is no
+/// note of legs in its books is not applied.
+#[test]
+fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_while_it_is_called() {
+    let w = world();
+    let base = bare(&w);
+    let leg = fleg(&w, 0, 10, LONG, P10);
+    let s = base.s.booked(&leg).unwrap();
+    let shard = OLive { s, ..base.clone() };
+    let f = [fund(xk(&w.w), 43)];
+    let script = w.script("KpfTLeft");
+    // 130 KAS are asked of a shard that holds 100: it pays the 100, and 30 go on.
+    let n = Left { sid: s.sid, legs: vec![leg], key: xk(&w.c), asked: 130 * KAS1 };
+    let (b, next, rest) = left_apply(&w.lib, &shard, &left_note(&shard, &n, 0), &script, w.payer(&w.w, &f)).unwrap();
+    let sg = signed("legs left: more asked than the shard holds", &b, &w.keys);
+    let rest = rest.expect("the rest goes on");
+    let k = sg.tx.outputs.len();
+    assert_eq!((next.held, next.rows, next.basis, rest, sg.tx.outputs[k - 1].value), (0, [ShardRow::EMPTY; 4], 0, Rest { sid: s.sid, key: xk(&w.c), amount: 30 * KAS1 }, 100 * KAS1 as u64));
+    assert_eq!(sg.tx.outputs[2].script_public_key, hash_spk(&w.lib, &rest.hash()));
+    // The shard holds 50 again: the rest is paid, and nothing goes on.
+    let funded = OLive { s: Shard { held: 50 * KAS1, ..next }, value: (50 * KAS1 + SHARD_CARRIER) as u64, ..nth(&sg, 0, next, 6_300) };
+    let rnote = nth(&sg, 2, rest, 6_300);
+    let (b, after, more) = rest_apply(&w.lib, &funded, &rnote, &script, w.payer(&w.w, &f)).unwrap();
+    signed("the rest paid", &b, &w.keys);
+    assert_eq!((after.held, more), (20 * KAS1, None));
+    assert!(rest_apply(&w.lib, &OLive { s: Shard { held: 0, ..next }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f)).is_err(), "a shard that holds nothing pays nothing");
+
+    // While the shard is called nothing is paid here: a note that asks something waits; one that asks nothing is
+    // applied (the leg is out of the books).
+    let called = OLive { s: Shard { called: 6_400, ..s }, ..shard.clone() };
+    assert!(left_apply(&w.lib, &called, &left_note(&called, &n, 0), &script, w.payer(&w.w, &f)).is_err());
+    let (open_next, at, paid, open_rest) = s.left(&n).unwrap();
+    let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at, Shard { called: 6_400, ..open_next }, paid, open_rest, &script, w.payer(&w.w, &f));
+    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "a called shard pays a note");
+    let quiet = Left { asked: 0, ..n.clone() };
+    let (b, out, _) = left_apply(&w.lib, &called, &left_note(&called, &quiet, 1), &script, w.payer(&w.w, &f)).unwrap();
+    signed("legs left a called shard's books, nothing asked", &b, &w.keys);
+    assert_eq!((out.rows, out.basis, out.called), ([ShardRow::EMPTY; 4], 0, 6_400));
+    let paid_rest = rest_apply(&w.lib, &OLive { s: Shard { called: 6_400, ..funded.s }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f));
+    assert!(paid_rest.is_err(), "a called shard pays a note of the rest");
+
+    // What is not applied: a leg that is in no row; a leg larger than its row has; a leg read out of another row;
+    // the books left with the leg in them; what the legs were entered at left as it was.
+    let other = Left { legs: vec![fleg(&w, 1, 10, LONG, P10)], ..quiet.clone() };
+    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &other, 2), &script, w.payer(&w.w, &f)).is_err());
+    let big = Left { legs: vec![fleg(&w, 0, 11, LONG, P10)], ..quiet.clone() };
+    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &big, 3), &script, w.payer(&w.w, &f)).is_err());
+    let (good, at, _, _) = s.left(&quiet).unwrap();
+    let lies: Vec<(&str, Vec<usize>, Shard)> = vec![
+        ("the leg read out of another row", vec![1], good),
+        ("the leg left in its row", at.clone(), Shard { rows: s.rows, ..good }),
+        ("what the legs were entered at left as it was", at.clone(), Shard { basis: s.basis, ..good }),
+        ("more held than there was", at.clone(), Shard { held: good.held + 1, ..good }),
+    ];
+    for (what, at, next) in lies {
+        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, next, 0, None, &script, w.payer(&w.w, &f));
+        assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
+    }
+    let (b, _, _) = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, good, 0, None, &script, w.payer(&w.w, &f)).unwrap();
+    assert!(accepted(&b, &w.keys), "the control");
+}
+
+
+/// Until the note that legs left is applied the books have legs that are gone: what they lost reads as the shard's
+/// equity. A draw stated meanwhile is ended by that note, whatever it asks; and by a note of the rest, which is
+/// what the shard owes and its books do not say.
+#[test]
+fn a_note_that_legs_left_or_a_note_of_the_rest_that_is_not_applied_ends_a_draw() {
+    let w = world();
+    let base = bare(&w);
+    // A user is short 10 units from 10: the shard's side is long them.
+    let leg = fleg(&w, 0, 10, SHORT, P10);
+    let s = base.s.booked(&leg).unwrap();
+    let shard = OLive { s, ..base.clone() };
+    // The leg left at 12; its note is not applied. At 12 the books read 20 KAS gained, and the owner draws on them.
+    let at12 = [P10 * 12 / 10, 0, 0, 0];
+    assert_eq!(s.equity(&at12), Some(120 * KAS1));
+    let (st, d) = s.draw(s.draw_max(&at12), at12, T0, shard.value as i64).unwrap();
+    let live = w.stated(&shard, &st, &d.said());
+    let f = [fund(xk(&w.w), 37)];
+    let script = w.script("KpfTDrawNote");
+    let note = OLive { s: Left { sid: s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 }, value: NOTE_MIN as u64, id: shard.id, op: op(70), daa: 6_400 };
+    let b = draw_note_left(&w.lib, &live, &st, None, &s, &note, &script, xk(&w.w), w.payer(&w.w, &f)).unwrap();
+    let sg = signed("a draw ended by a note that legs left", &b, &w.keys);
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
+    assert_eq!(sg.tx.outputs[2].script_public_key, hash_spk(&w.lib, &note.s.hash()), "the note goes on as it is");
+    // One that landed after the statement ends nothing, nor one to another shard.
+    assert!(draw_note_left(&w.lib, &live, &st, None, &s, &OLive { daa: 6_520, ..note.clone() }, &script, xk(&w.w), w.payer(&w.w, &f)).is_err());
+    let elsewhere = OLive { s: Left { sid: [0x44; 32], ..note.s.clone() }, ..note.clone() };
+    assert!(draw_note_left(&w.lib, &live, &st, None, &s, &elsewhere, &script, xk(&w.w), w.payer(&w.w, &f)).is_err());
+    // A note of the rest that is not paid ends a draw too.
+    let rest = OLive { s: Rest { sid: s.sid, key: xk(&w.w), amount: 5 * KAS1 }, value: NOTE_MIN as u64, id: shard.id, op: op(71), daa: 6_400 };
+    let b = draw_note_rest(&w.lib, &live, &st, None, &s, &rest, &script, xk(&w.w), w.payer(&w.w, &f)).unwrap();
+    signed("a draw ended by a note of the rest", &b, &w.keys);
+    // A note of other legs than the object shown is no such note: the transaction of the one, with the other's legs.
+    let (mut t, other) = (b.clone(), Rest { amount: 6 * KAS1, ..rest.s });
+    t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &other.hash());
+    assert!(!accepted(&t, &w.keys), "the note is written on as another");
+}

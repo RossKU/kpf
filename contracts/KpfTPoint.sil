@@ -34,7 +34,7 @@ pragma silverscript ^0.1.0;
 //
 // KpfTPoint: anyone disputes one point of a stated take on an account, with a bond as large as the claimer's. A
 // point nobody answers within the dispute period lapses: the position again, and both bonds back; but of an entry
-// (kind 6) the claimers' bond is lost to the disputer: the prices of a leg that enters are its claimers' to show.
+// (kind 6) and of a draw (kind 5) the claimer's bond is lost to the disputer: their prices are the claimer's to show.
 //   dispute(who, ageb, slotLen, position, kind, t0, arg, outs, bond, claimer, window, late, held, dkey, point)   anyone.
 //   lapse(the same)                                                                                      anyone, after.
 contract KpfTPoint(int init_version) {
@@ -127,11 +127,12 @@ contract KpfTPoint(int init_version) {
         require(v >= bond + bond);
         becomes(j, rs, slotLen, position, v - bond - bond);
         int m = tx.outputs.length - 1 - 4 * j;
-        if (kind == 6) {
-            // A point of an entry that nobody answered: the prices of a leg that enters are its claimers' to show
-            // (a market nobody prices would else let a leg in at any price, for a bond that comes back). The entry
-            // is ended; the disputer has its bond and half of the claimers', and the other half stays in this
-            // script's copy.
+        if (kind == 6 || kind == 5) {
+            // A point of an entry, or of a draw, that nobody answered: the prices of a leg that enters, and of a
+            // shard's rows where it draws, are the claimer's to show (a market nobody prices would else let a leg
+            // in at any price, or count a row as equity at any price, for a bond that comes back: reviews 38 and
+            // 45). The statement is ended; the disputer has its bond and half of the claimer's, and the other half
+            // stays in this script's copy.
             int half = bond / 2;
             require(m >= tx.inputs.length);
             require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));

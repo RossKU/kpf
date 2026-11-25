@@ -5963,3 +5963,305 @@ applied a time after it is stated.
 ```
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
 ```
+
+# Round 45
+
+Scope: stage 1 of the smallest form (section 13), uncommitted: the shard's arithmetic. A shard's moving part has
+its basis at `[121..129]` and whether it is called at `[130..138]`; `KpfTShardOpen` asks both nothing;
+`KpfTShardEnd` judges a draw by the equity (what the shard holds, what side B's net units are worth, less the
+basis) against the requirement at its upper level, and not while called. Model: `reserve.rs` (`gross_rate`,
+`need_of`, `Shard::{level, equity, draw_end_judged, draw_max}`). Everything below is engine-run
+(`verify::verify`) unless it says "read". Only `crates/kpf-protocol/tests/auditT1_builders.rs` and this file
+changed; no contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**The script's arithmetic is what it is said to be: on 360 draws over random books the engine takes the verdict
+of that arithmetic written out, and neither where a number does not fit. Four findings. F68 (High while stage 1
+stands alone): nothing writes the basis yet, so a shard that is long is drawn empty by a draw that is right. F69
+(Medium): a row nobody prices is now equity at whatever price its owner states. F70 (Low): a shard is opened with
+the eight bytes the engine reads as nothing in the place of either new number. F71 (Low): the model says wrong
+where the script gives no verdict.**
+
+## Findings
+
+### F68 (High, while stage 1 stands without the stages that write the basis). A shard that is long is drawn empty
+
+`t1b_finding_f68_until_a_note_moves_the_basis_a_shard_that_is_long_is_drawn_empty`
+
+The equity is `held + what the net units are worth - basis`, and nothing that exists writes the basis: the notes
+of an entry and of a leaving are the notes of before. So a shard with legs has a basis of nothing, and its
+equity counts the whole worth of its net units as a gain where it is long and as a loss where it is short.
+
+Run, with the scripts as they stand in the tree: a shard of 50 KAS; a user short 10 units against its owner (by
+`KpfTLegAdd`, its join applied): the shard is long 10, its row worth 100 KAS. Its equity reads 150 KAS, it is
+asked 7.75, and the model's most is all it holds. The draw of all 50 KAS is stated; it has no wrong point at the
+committee's price; its end is answered right and not wrong. Before stage 1 the same shard gave 44.47 KAS; with the
+basis the leg's entry makes (set by hand), 42.25. The other way (a user long 10): the equity reads 50 below
+nothing and nothing is drawn.
+
+So to the fourth question plainly: between stage 1 and the stage that writes the basis, a draw is wrong for every
+shard that has a leg, in the owner's favour by the whole worth of its long rows and against it by the whole of
+its short ones. If stage 1 is committed and anybody uses the reserve before stage 2 and the entry are in, the
+owner of a shard whose users are short takes all it holds. Either the stages land together, or until they do
+`KpfTShardEnd` refuses a draw from a shard that has a row and a basis of nothing.
+
+The test passes while the join does not move the basis, and says "F68 is closed" where it does.
+
+### F69 (Medium). A row nobody prices is equity at the price its owner states
+
+`t1b_finding_f69_a_row_nobody_prices_is_equity_at_the_price_its_owner_states`
+
+Before stage 1 a false price for a row nobody prices took that row's requirement away and no more (round 35:
+"as if the row were not there"). Now what side B's net units are worth is in the equity. Where the shard is
+short in such a row, a price of next to nothing makes what it owes there nothing.
+
+Run: a shard of 50 KAS, short 10 units of a market the committee prices and 1,000 units of one it does not, the
+basis as the entries make it. At the entries' prices it holds 50 and is asked 782.75: no draw. With the second
+row stated at a sompi its equity reads 10,049 KAS and the draw of all 50 has an end that is answered right. The
+price of that row has no answer (no citation is of it); a dispute of it lapses, the shard again and both bonds
+back, as any lapse of kind 5. The owner states it again.
+
+Round 44 named this (S5, last point) for the call. It is there for the draw as soon as the equity is: whoever
+watches such a shard disputes every draw for nothing, and one draw unseen is all the shard holds. What lets such
+a row in is an entry nobody disputed (today `KpfTLegAdd`, which asks nothing). To decide with the entry and the
+call: what the lapse of a row's price does to a statement on the shard. For a draw I would have it cost the
+claimer its bond, as it does for an entry: a draw's prices are its owner's to show.
+
+### F70 (Low). A shard is opened with the bytes of "nothing, below zero" in the place of either number
+
+`t1b_finding_f70_a_shard_is_opened_with_the_eight_bytes_the_engine_reads_as_nothing`
+
+`KpfTShardOpen` asks `int(moving[121..129]) == 0` and the same of `[130..138]`. The engine reads the eight bytes
+`00 00 00 00 00 00 00 80` as nothing. A shard is opened with them in the place of the basis, of the call, and
+(as before this stage) of side B's margin: three openings taken. Every script reads those bytes as nothing
+after, so no rule changes. But the shard's state is the hash of its bytes: a tool that reads the two numbers as
+nothing and writes them back as eight zero bytes has another hash and does not find the shard, to apply a note to
+it or to dispute its draw. An owner that wants its draws undisputed by tools that keep numbers opens its shard
+so.
+
+Fix: the opening holds the bytes, not the numbers (`moving[121..138]` is seventeen given bytes; and side B's
+margin likewise).
+
+### F71 (Low). The model says wrong where the script gives no verdict
+
+`t1b_finding_f71_the_model_says_wrong_where_the_script_computes_an_equity_that_does_not_fit`
+
+`KpfTShardEnd` computes what is left and the equity whatever it found before; `Shard::draw_end_judged` stops at
+the first thing that is wrong. On a shard whose equity does not fit (a basis at the end of 64 bits), a draw that
+is wrong for an earlier reason (not the owner's, an amount of nothing, a price out of its limits, more than is
+held, a shard that is called) is "wrong" by the model and has no verdict at the engine: the answer the tool
+would give is refused, and the dispute lapses. 14 of the 360 random draws; and one written out (a sompi more than
+a shard holds, its basis the largest number).
+
+With it, something to know of the arithmetic: the engine's numbers are of 63 bits and a sign. A sum that comes to
+the least 64-bit number fails the script, where a 64-bit sum does not overflow (some of the random draws showed
+it before the written-out arithmetic counted it).
+
+## What held under attack (all engine-run)
+
+| Item | Test | What was put to the engine |
+|---|---|---|
+| 1. The script against the model | `t1b_r45_the_end_of_a_draw_is_the_models_on_random_books` | 360 draws, every one stated and its end disputed. Half on books a shard could have, half on any: rows of either sign; a gross that is nothing, half the net, the net's other sign, at the ends of 64 bits; units up to those ends; scales of 1, 100, the market's, the most, nothing and below; limits of 1 and of the largest number; prices of 1, the limit, one beyond, nothing and below; a basis of either sign and at the ends; a shard that is called (a time, and minus one); terms with a maintenance rate of 0, 100, 149, 151, 500 and 4,999 and a tolerance of 0, 1, 50 and 9,999 (the rate on the gross nothing in five of the seven); a draw of the most, a sompi more, a sompi, all that is held, a sompi more than that, nothing, minus one; by the owner and by another. 30 right, 187 wrong, 143 with no verdict: each what `KpfTShardEnd`'s arithmetic written out in the test says, the other answer refused. `draw_end_judged` agrees on all but F71's 14 |
+| 2. The level, to the sompi | same | a shard short 10 units, the basis of its entry: the most is what it holds less 7.75 % of 100 KAS, right; a sompi more, wrong |
+| 2. Rounding and signs | `t1b_r45_a_short_rows_worth_is_rounded_down_which_is_for_the_owner` | below |
+| 3. The outputs | the first test | a draw whose outcome is the shard with another basis (a KAS less, nothing, the least but one) or called has a wrong end: 4. A draw of a sompi from a shard that is called: wrong, and the model's most is nothing |
+| 3. Who writes the two numbers | `t1b_r45_nothing_that_exists_writes_a_shards_basis_or_calls_it` | 15 refused: a shard opened with a basis of 1, minus 1, the least but one, called 1 or minus 1, or both; a note applied (a join) to a shard that has a basis, and to one that is called, with either number changed in the shard that goes on. The note itself is applied and leaves both as they were |
+
+**Rounding and signs (the second question).** The worth of a row's units is rounded down in its size, then
+signed.
+
+- A row side B is long in: its worth counts a part of a sompi less than it is. Against the owner.
+- A row side B is short in: what it owes counts a part of a sompi less than it is. For the owner. Run: 15 parts
+  of a unit short at a price of 7 a ten of them is 10.5 sompi, counted 10; the draw of the most leaves 1.5 sompi
+  of equity where 2 are asked, and is answered right.
+- The requirement's two rates are each rounded up. Against the owner.
+
+So a draw the script takes leaves the true equity under the level by less than a sompi a short row (under four
+in all), and a draw it refuses may be one that leaves it over by less than a sompi a long row and two for the
+rates. Whether it should be otherwise: at the upper level a short row's worth should be rounded up, and when the
+lower level is written (the call) each rounding should be the other way, so that between a draw that is right
+and a call that is right there is never the same sompi. It is sompi; I would do it with the call, not before.
+
+**The third question, read.** A shard's moving part is shown to `KpfTAddC` (it writes the margin at 67 and the
+rest as it was), `KpfTNoteApply` (what it holds, and the rest as it was: run), `KpfTChange` stating a draw (it
+reads the two margins for the bond; side B's is nothing), `KpfTShardPrice` and `KpfTDrawNote` (they end a
+statement and write the shard as it was; changed this stage in their comments only), and a settlement (it writes
+what the draw stated: the end holds that to the shard with what it holds less, the rest as it was: run). None
+reads `[121..138]` as asks: the scripts that read asks (`KpfTHand`, `KpfTStepEnd`, `KpfTStepEnter`) open an
+account with a second key, and a shard has none. Nothing that exists calls a shard or moves its basis, an
+undisputed false draw aside (its outcome is what it says).
+
+## Brought along
+
+The two tests that failed by the requirement's new numbers: in `t1b_finding_f61_...` what a draw gives is counted
+on the shard with the basis its leg's entry makes (42.25 KAS of 50); in `t1b_fixed_f59_...` the shard of three
+rows has the basis its legs' entries make, set by hand, and the draw at the least price for the made row is
+asserted to be of all the shard holds (F69).
+
+## Not reached
+
+- The lower level and a call: not written.
+- `KpfTAddC` on a shard at the engine (read).
+- A shard's `called` set to a time and anything that would read it but the draw: nothing does yet.
+- The commands (`aobj.rs` reads the two numbers: not run).
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F68 | High | open while stage 1 stands without what writes the basis: a shard that is long is drawn empty |
+| F69 | Medium | open: a row nobody prices is equity at the price stated, and a draw's lapse costs nothing |
+| F70 | Low | open: a shard is opened with the bytes of nothing below zero for its basis, its call, side B's margin |
+| F71 | Low | open: the model says wrong where the script gives no verdict |
+| F66, F67 | Medium, High | open on purpose (the reserve as built; section 13 replaces it) |
+| F61 | High | open until `KpfTLegAdd` is removed |
+| F60, F62 to F65 | | fixed in rounds 37 to 41 (F65 for futures legs) |
+| F58 | Low | closed in the tool; open in the scripts by decision |
+| F41 | High | open, with the owner |
+| all others | | as in round 41's ledger |
+
+## Counts and commands
+
+`auditT1_builders.rs`: 123 tests pass (7 new: four findings and three `t1b_r45_...`; two brought along). A
+finding's test passes while the hole is open and says "is closed" where it would fail. `auditT1_tests.rs`: 55
+pass, unchanged. `auditT1_cli.rs`: 47 pass, unchanged, run once.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 123 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```
+
+# Round 46
+
+Scope: stage 2 of section 13 (the notes of a leaving: `KpfTLeft`'s `apply` and `rest`, and the two new note
+kinds in `KpfTDrawNote`) and the round 45 fixes (F69, F70, F71; F68 left open on purpose). Everything below is
+engine-run (`verify::verify`) unless it says "read". I edited only
+`crates/kpf-protocol/tests/auditT1_builders.rs`, `crates/kpf-tests/tests/auditT1_tests.rs` and this file; no
+contracts, no `src`, no commit, nothing under `kpf-out`.
+
+**No finding. The three round 45 fixes hold, and stage 2 does what it is said to: the script and the model agree on
+240 random notes; the three note shapes do not collide; a leaving's note is applied once, to the rows it names,
+and pays its key. One thing to carry into stage 3, run at the engine and recorded: a `Left` note whose legs are
+in no row ends a draw and can never be applied, so stage 3's settlement must write a kind-6 note only for legs
+that are in the shard's rows.**
+
+## The round 45 fixes, verified
+
+- **F69** (`t1b_fixed_f69_a_draw_whose_price_nobody_answers_costs_its_claimer_the_bond`): `KpfTPoint`'s lapse now
+  treats a draw (kind 5) as an entry. The draw of all over the row no committee prices still has a right end (the
+  equity at the stated price is as it was), and the dispute of that price, which nobody answers, ends it: the
+  disputer has its bond and half the claimer's, the copy the other half, the shard as it was. So the equity is not
+  the hole; what holds the draw is that its price is its claimer's to show.
+- **F70** (`t1b_fixed_f70_a_shard_is_opened_with_eight_zero_bytes_for_its_basis_its_call_and_side_bs_margin`):
+  `KpfTShardOpen` now holds the bytes of the basis, the call and side B's margin to eight zero bytes. A shard
+  opened with the bytes of nothing-below-zero in any of the three is refused (0 taken, where 3 were).
+- **F71** (`t1b_fixed_f71_the_model_gives_no_verdict_where_the_script_computes_an_equity_that_does_not_fit`):
+  `Shard::draw_end_judged` now computes what the script computes in its order and gives no verdict where the
+  equity does not fit. The random-books test (`t1b_r45_...`) no longer counts a single draw where the model and
+  the script part (0, where round 45 recorded 14).
+
+## Stage 2, verified
+
+- **The script against the model, random books**
+  (`t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says`): 240 notes over shards of one to eight booked
+  legs of four markets, either direction, sizes from a part of a unit to the bound and entries from 1 to the
+  limit, held and called at random. The note of one to six of those legs in any order, and notes that are not of
+  the books (a leg of another size, entry, direction, market; the same leg twice; no leg; seven legs); asked
+  nothing, less than is held, more, below zero. For each the engine takes the transaction the script's arithmetic
+  written out gives and no other (`left_as_the_script46`), and `Shard::left` gives the same: 99 applied, 141
+  refused, **0 where the model and the script's arithmetic part**.
+- **One note, to the sompi** (`t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_its_key`):
+  two of three legs leave, 20 KAS paid and 30 the rest; the third stands in its row, the emptied market's row is
+  no market's, the basis falls by the two legs' entered worth. 28 other transactions refused: the payment a sompi
+  short or to another key; the shard holding a sompi less, with the legs still in, with the basis as it was; the
+  rest note of another amount, key or shard, under no id, below its least, or the leaving's note in its place; a
+  note of the rest where all is paid; the rows named the other way, both the first, an empty row, one beyond the
+  fourth, below the first, for one leg, three for two; the legs in the other order, one of two, the wrong third
+  leg; another key or amount than the note's. While called: a note that asks something is refused, one that asks
+  nothing is applied (the legs out, nothing paid). A leg twice in one note is applied only where it is twice in
+  the books.
+- **The rest** (`t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds`): a rest of 30 KAS
+  paid in full by a shard of 50, and 20 of it by a shard of 20 with a note of 10 going on; 13 other transactions
+  refused (the payment, the shard, the note that goes on of another amount or key or under no id, a note where all
+  is paid, a shard that holds nothing, a shard that is called, a note of nothing).
+
+## The questions
+
+**a. Who can write a kind-6 or kind-7 note; hash-domain separation**
+(`t1b_r46_the_three_note_shapes_do_not_collide`, `t1b_r46_an_owed_note_is_an_snote_that_kpftleft_does_not_read`).
+A note object's state is the hash the creating script writes, and a leg is taken out of the books, or a note is
+paid, only where `KpfTLeft` reconstructs that hash from what is shown. The three preimages differ in their tag
+(the third push: 1 to 4 for an `SNote`, 6 for a `Left`, 7 for a `Rest`) and in length (195, 126, 93 bytes), so a
+forged note of one shape is not read as another short of a blake2b collision. Checked: 81 note hashes of one
+shard, over every kind and several heads, keys and amounts, are all distinct; an `SNote` built with kind 6 or 7
+is still a 195-byte preimage and has no `Left` or `Rest` hash. And the one writer that pays from a shard today,
+`KpfTNoteApply` of an owed note (an `SNote`, kind 4), makes no kind-6 or kind-7 object: its note is applied and
+paid by `KpfTNoteApply`, not by `KpfTLeft` (which refuses to read the owed note's state as a `Rest`). Nothing
+else (a join by `KpfTLegAdd`, a deposit, a settlement, `KpfTShardOpen`) writes a `Left`- or `Rest`-shaped state.
+So no kind-6 or kind-7 note can exist today, and `KpfTLeft` and `KpfTDrawNote`'s new clauses cannot be reached
+with a real object until stage 3 writes one.
+
+**b, d. `apply`.** Covered by the two tests above. The row named must be the leg's market's futures-tagged head;
+a row goes no-market only where its net and gross are both zero; a row short of the leg's units is refused
+(`rg >= 0`); the basis moves by the leg's entered worth, signed as side B's; the same leg twice needs it twice in
+the books; `at` of the wrong length is refused by the builder's shape; the payment is one output at
+`len - 1 - 4j` to the key, and the shard's value falls by exactly what is paid. Overflow of a row or the basis:
+`left_as_the_script46` carries `checked_*` and the engine's 63-bit-plus-sign range, and the random books reach
+the bound sizes; a sum that does not fit gives no verdict (as a row's).
+
+**c. `rest`.** The third test. Paid once (the note is an input, spent); to the note's key alone; a note of
+nothing or of a called shard is refused; partial payment leaves a note of exactly the rest.
+
+**e. `KpfTDrawNote` with kinds 6 and 7**
+(`t1b_r46_a_draw_is_ended_by_a_note_of_this_shard_and_the_settlement_must_only_write_appliable_ones`). A draw is
+ended by a `Left` note only where the note is of this shard's sid (the preimage uses the shard's own
+`moving[138..171]`), is an object under the registry's covenant id (`OpInputCovenantId(n) == id`), and landed
+before the statement. Refused: another sid; a note not older than the draw. **But** the script reads only the
+chain, the key and the amount from a kind-6 note; a `Left` note whose legs are in no row of the shard ends the
+draw all the same, and `KpfTLeft.apply` can never apply such a note (a leg in no row is refused). Run at the
+engine (the `Left` object built by hand, since nothing writes one). So, to the question: a stranger cannot grief
+a draw today (no kind-6 note exists); **what stage 3's settlement must guarantee** is that a kind-6 note is
+written only for legs that are in the shard's rows, so that every note that can end a draw can also be applied to
+end the dispute. A note the shard's books do not have must not be a note that ends its draws.
+
+**f. F69's fix and an honest owner**
+(`t1b_r46_a_disputer_of_an_honest_draws_row_loses_its_bond_not_the_owners`). The lapse that costs the claimer is
+reached only where nobody answers the point. For a row whose market a committee prices, the owner (the claimer)
+answers the price right with one citation of the committee's price at the statement's time — which already landed,
+so the owner cannot be made to wait for it — and the disputer's bond is lost to the owner, not the owner's to the
+disputer (run: the right answer is taken, the wrong is refused, and the disputer is not paid its bond back). A
+disputer cannot delay that citation: the price at t0 is in the past, and the citation of it is a note that is
+already on the chain. So F69's fix does not let a disputer take an honest owner's bond; the half-bond lapse is
+only F69's own case, a row no committee can price.
+(Not shown in this harness: that the owner is not forced to let the point lapse before the window. The unit
+builders self-attest the age argument, so a lapse's timing is not modelled here; the owner's answer being
+available is what the test shows.)
+
+## What was not reached
+
+- A kind-6 or kind-7 note written by a real settlement: stage 3, not yet built. Items e and the "appliable"
+  requirement are run with a note object built by hand.
+- F68 stays open on purpose (a shard with legs has a basis of nothing until stage 4 and the removal of the old
+  entry; recorded in `docs/ARCHITECTURE-CLEARING.md` 13 "Built so far"). The round-45 tests that carry a basis
+  set it by hand.
+- `KpfTLeft` with options or a leg of no kind: under a shard there are only futures legs in this form; a leg of
+  no kind in a note is refused by `book_of`/the row-head check, which the random books reach.
+
+## Findings ledger
+
+No new finding. F69, F70, F71 fixed and verified. F68 open on purpose until stage 4. Otherwise as round 45's
+ledger.
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 130 tests pass (5 brought along to the fixes; 6 new
+  `t1b_r46_...`).
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 56 scripts, 64 entries, 54 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 47 pass, unchanged, run once.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 130 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed
+```

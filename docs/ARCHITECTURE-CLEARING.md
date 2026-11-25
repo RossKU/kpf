@@ -1096,3 +1096,45 @@ position's with a longer moving part any more: they are written for it.
 
 Before 3: the model with accounts of more than one leg.
 
+### Built so far (26 November 2026; at the engine only)
+
+**Stage 1, the shard's arithmetic** (`KpfTShardEnd`, `KpfTShardOpen`; `reserve.rs`; `tests/thin_draw.rs`). A
+shard's moving part carries, where a position has its two asks, what its legs were entered at and whether it is
+called. The end of a draw counts the equity (what it holds, and what its net units are worth, less that number)
+against the upper level (the maintenance rate of the net's worth and the rate on the gross of the gross's, each
+the tolerance more); a draw is of coins the shard holds and is not made while it is called. Run: a shard that
+lost draws no sompi of the 100 KAS it holds; the most is right and a sompi more wrong, at two prices; no more than
+its coins; nothing while called; and on 60 random shards the script takes the model's verdict.
+
+**Review 45** of it (at the engine; 360 random draws, each as the arithmetic written out says):
+
+| Finding | What it is | Now |
+|---|---|---|
+| F68 (high while stage 1 stands without what writes the number) | nothing writes what the legs were entered at until an entry is stated with the shard: a shard with legs of the old entry has that number at nothing, and its equity counts the whole worth of its long rows as gain. A shard of 50 KAS with a user short 10 units was drawn empty | open until stage 4 and the old entry's removal; the box at the head of 6a stands |
+| F69 (medium) | a row nobody prices is equity at whatever price its owner states: the price's dispute lapsed with both bonds back | a point of a draw that nobody answers costs the claimer its bond, as a point of an entry does (`KpfTPoint`) |
+| F70 (low) | a shard was opened with the bytes the engine reads as nothing in place of nothing; whoever read the numbers and wrote them again had another hash | `KpfTShardOpen` holds the bytes |
+| F71 (low) | the model said wrong where the script computes an equity that does not fit and gives no verdict | the model gives none there |
+
+To do with the call (stage 5): a short row's worth is rounded down, which is for the owner by less than a sompi
+a row at the upper level.
+
+**Stage 2, the notes of a leaving** (`KpfTLeft`, 4,503 bytes; `KpfTDrawNote`; `tests/thin_draw.rs`). One note for
+legs that left, one leg or all an account has (the chain of the legs, the user's key, what the shard is asked):
+applied, each leg is taken out of its row and out of what the legs were entered at, and what is asked is paid as
+far as the shard holds; what it does not hold goes on as a note of the rest. Nothing is paid by it while the shard
+is called. A draw is ended by either note where it landed before the draw and is not applied. Run: six legs of
+three users in three markets booked by hand, three notes applied in each of their six orders, the books as they
+began and the shard holding what it paid less; more asked than is held; the rest paid; a called shard; five
+things that are not applied. The script is large for what it does (a loop of six legs): to be made smaller.
+
+**Review 46** of stage 2 and of the fixes of review 45 (at the engine): no finding. F69, F70 and F71 are closed
+(a draw over a row nobody prices is ended by the dispute of that price, at its claimer's cost; the three openings
+with bytes that read as nothing are refused; the model and the script part on none of 360 random draws). On 240
+random notes over shards of one to eight booked legs the engine takes exactly what the script's arithmetic gives,
+and the model agrees on all; 41 changed transactions of one note and of a note of the rest are refused. The three
+shapes of a note (a leg's or a deposit's, legs that left, the rest) differ in their third push and their length:
+none is read as another. One thing is asked of stage 3: **a note that legs left is written only for legs that are
+in the shard's rows** (a note of legs in no row would end every draw and could never be applied). It holds by
+there being no leg in a covered account that the books do not have (stage 4), and until then by nothing writing
+such an account but a test.
+

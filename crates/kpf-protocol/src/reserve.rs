@@ -113,17 +113,22 @@ pub struct Shard {
     pub dispute_daa: i64,
     pub bond_bps: i64,
     pub sid: [u8; 32],
+    /// What its legs were entered at: the sum of side B's units times their entries (where a position has what A
+    /// asks of B). With it the shard knows what its side has gained or lost at given prices.
+    pub basis: i64,
+    /// Whether it is called (where a position has what B asks of A): nothing, or the time of the call.
+    pub called: i64,
 }
 
 impl Shard {
     /// An account with this shard's terms and moving part and no leg: what the bytes are taken from.
     fn shell(&self) -> Account {
-        Account { t: self.t, legs: vec![], a_key: self.owner, b_key: [0; 32], a_margin: self.held, b_margin: 0, expiry: self.expiry, dispute_daa: self.dispute_daa, bond_bps: self.bond_bps, a_min_counter: 0, b_min_counter: 0, shard: Some(self.sid) }
+        Account { t: self.t, legs: vec![], a_key: self.owner, b_key: [0; 32], a_margin: self.held, b_margin: 0, expiry: self.expiry, dispute_daa: self.dispute_daa, bond_bps: self.bond_bps, a_min_counter: self.basis, b_min_counter: self.called, shard: Some(self.sid) }
     }
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid }
+        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0 }
     }
 
     pub fn terms(&self) -> Vec<u8> {
@@ -339,6 +344,130 @@ impl Account {
     }
 }
 
+/// The note that legs left a covered account (`KpfTLeft`; `docs/ARCHITECTURE-CLEARING.md` 13).
+pub const NOTE_LEFT: i64 = 6;
+/// What a note that legs left asked and the shard did not hold.
+pub const NOTE_REST: i64 = 7;
+
+/// The note that legs left a covered account: the legs (one, or all the account had), the user's key, and what
+/// the shard is asked for them. Applied, each leg is taken out of the shard's books.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Left {
+    pub sid: [u8; 32],
+    pub legs: Vec<XLeg>,
+    pub key: [u8; 32],
+    pub asked: i64,
+}
+
+impl Left {
+    /// The chain of legs, as an account's is: for all an account's legs it is the account's own.
+    pub fn chain(legs: &[XLeg]) -> [u8; 32] {
+        legs.iter().fold([0u8; 32], |g, l| blake2b(&[&g[..], &crate::thin::leg_bytes(l)].concat()))
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_LEFT), p33(&Left::chain(&self.legs)), p33(&self.key), i9(self.asked)].concat())
+    }
+
+    pub fn value(&self) -> i64 {
+        NOTE_MIN
+    }
+}
+
+/// What a note that legs left asked and the shard did not hold: paid as far as the shard holds, later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rest {
+    pub sid: [u8; 32],
+    pub key: [u8; 32],
+    pub amount: i64,
+}
+
+impl Rest {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_REST), p33(&self.key), i9(self.amount)].concat())
+    }
+
+    pub fn value(&self) -> i64 {
+        NOTE_MIN
+    }
+}
+
+impl Shard {
+    /// What a futures leg is to the books: the row of its market's futures legs, side B's units in it (the size
+    /// below zero where A is long), and its worth at its entry signed as side B's (what it adds to what the legs
+    /// were entered at).
+    fn book_of(l: &XLeg) -> Result<(Head, i64, i64)> {
+        if (l.dir != LONG && l.dir != crate::state::SHORT) || l.size <= 0 || l.scale <= 0 || l.entry <= 0 {
+            return Err(Error::Invalid("the books are of futures legs: a direction, a size, a scale and an entry".into()));
+        }
+        let we = worth(l.size, l.scale, l.entry).ok_or_else(|| Error::Invalid("the leg's worth is beyond what is counted".into()))?;
+        let head = Head { market: futures_market(&l.market), committee: l.committee, scale: l.scale, price_max: l.price_max };
+        Ok(if l.dir == LONG { (head, -l.size, -we) } else { (head, l.size, we) })
+    }
+
+    /// The shard with the leg in its books: its row with the leg's units, and what the legs were entered at with
+    /// the leg's entry (what the statement of an entry does, in the transaction that states it).
+    pub fn booked(&self, l: &XLeg) -> Result<Shard> {
+        let (head, units, basis) = Shard::book_of(l)?;
+        let r = self.row_for(&head).ok_or_else(|| Error::Invalid("the shard has no row for the leg's market: its four are other markets'".into()))?;
+        let mut s = *self;
+        let row = &mut s.rows[r];
+        row.head = head;
+        row.net = row.net.checked_add(units).ok_or_else(|| Error::Invalid("the row is beyond what is counted".into()))?;
+        row.gross = row.gross.checked_add(l.size).ok_or_else(|| Error::Invalid("the row is beyond what is counted".into()))?;
+        s.basis = s.basis.checked_add(basis).ok_or_else(|| Error::Invalid("what the legs were entered at is beyond what is counted".into()))?;
+        Ok(s)
+    }
+
+    /// `KpfTLeft.apply`: the shard once the note that legs left is applied: each leg out of its row and out of
+    /// what the legs were entered at; what is asked paid as far as the shard holds, and the note of the rest. Also
+    /// the row of each leg. Refused where a leg is in no row, or where the shard is called and something is asked.
+    pub fn left(&self, n: &Left) -> Result<(Shard, Vec<usize>, i64, Option<Rest>)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the note that legs left is not applied: {why}")));
+        if n.sid != self.sid {
+            return no("it is to another shard");
+        }
+        if n.legs.is_empty() || n.legs.len() > 6 || n.asked < 0 {
+            return no("it is of one to six legs, and asks nothing below zero");
+        }
+        if self.called != 0 && n.asked != 0 {
+            return no("the shard is called: what is asked waits, and is paid its share");
+        }
+        let mut s = *self;
+        let mut at = vec![];
+        for l in &n.legs {
+            let (head, units, basis) = Shard::book_of(l)?;
+            let Some(r) = s.rows.iter().position(|row| row.head == head) else { return no("a leg is in no row of the shard") };
+            let row = &mut s.rows[r];
+            if row.gross < l.size {
+                return no("a row has fewer units than the leg");
+            }
+            row.net -= units;
+            row.gross -= l.size;
+            if row.net == 0 && row.gross == 0 {
+                row.head = Head::EMPTY;
+            }
+            s.basis -= basis;
+            at.push(r);
+        }
+        let pay = n.asked.min(s.held);
+        s.held -= pay;
+        Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+    }
+
+    /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
+    pub fn rest_paid(&self, r: &Rest) -> Result<(Shard, i64, Option<Rest>)> {
+        if r.sid != self.sid || r.amount <= 0 || self.called != 0 {
+            return Err(Error::Invalid("the note of the rest is to this shard, of something, and paid while it is not called".into()));
+        }
+        let pay = r.amount.min(self.held);
+        if pay <= 0 {
+            return Err(Error::Invalid("the shard holds nothing to pay it with".into()));
+        }
+        Ok((Shard { held: self.held - pay, ..*self }, pay, (pay < r.amount).then_some(Rest { amount: r.amount - pay, ..*r })))
+    }
+}
+
 /// What a draw states (kind 5): the amount, and a price a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Draw {
@@ -375,9 +504,18 @@ fn rate_up(w: i64, r: i64) -> Option<i64> {
     (w / BPS).checked_mul(r)?.checked_add((w % BPS).checked_mul(r)?.checked_add(BPS - 1)? / BPS)
 }
 
-fn need_of(wn: i64, wg: i64, t: &crate::cross::XTerms) -> Option<i64> {
-    let need = rate_up(wn, t.mmr_bps)?.checked_add(rate_up(wg, t.liq_fee_bps)?)?;
-    need.checked_add(rate_up(need, t.g_bps)?)
+/// The rate on the gross: half the maintenance rate less three times the tolerance. What a book that is set off
+/// keeps for the time between one side's leaving and a call (`docs/ARCHITECTURE-CLEARING.md` 12).
+pub fn gross_rate(t: &crate::cross::XTerms) -> i64 {
+    ((t.mmr_bps - 3 * t.g_bps) / 2).max(0)
+}
+
+/// The requirement at its upper level (`up`: both rates counted the tolerance more; a draw and an entry are held to
+/// it) or its lower (the rate on the net the tolerance less; a call is right below it), of the worth `wn` of the
+/// net units and `wg` of the gross.
+fn need_of(wn: i64, wg: i64, t: &crate::cross::XTerms, up: bool) -> Option<i64> {
+    let (rn, rg) = if up { (t.mmr_bps + t.g_bps, gross_rate(t) + t.g_bps) } else { ((t.mmr_bps - t.g_bps).max(0), gross_rate(t)) };
+    rate_up(wn, rn)?.checked_add(rate_up(wg, rg)?)
 }
 
 impl Shard {
@@ -386,12 +524,10 @@ impl Shard {
         self.shell().bond()
     }
 
-    /// What the shard is asked to hold at the prices `p` (one a row), with `KpfTShardEnd`'s arithmetic: the rate on
-    /// the net of the worth of every row's net units, the rate on the gross of the worth of every row's gross
-    /// units, and the tolerance of that more. `None` where a row that has a market has no price within its limit,
-    /// or where the numbers are beyond what a script computes (`draw_end_judged`).
-    pub fn requirement(&self, p: &[i64; SHARD_ROWS]) -> Option<i64> {
-        let (mut wn, mut wg) = (0i64, 0i64);
+    /// (The worth of the net units summed, of the gross, and what side B's net units are worth: above zero where it
+    /// is long.) `None` where a row that has a market has no price within its limit, or a number is beyond 64 bits.
+    fn worths(&self, p: &[i64; SHARD_ROWS]) -> Option<(i64, i64, i64)> {
+        let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(p) {
             if row.head.market == [0; 32] {
                 continue;
@@ -399,10 +535,32 @@ impl Shard {
             if *p <= 0 || *p > row.head.price_max || row.head.scale <= 0 {
                 return None;
             }
-            wn = wn.checked_add(worth(row.net.checked_abs()?, row.head.scale, *p)?)?;
+            let w = worth(row.net.checked_abs()?, row.head.scale, *p)?;
+            wn = wn.checked_add(w)?;
+            sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
             wg = wg.checked_add(worth(row.gross.checked_abs()?, row.head.scale, *p)?)?;
         }
-        need_of(wn, wg, &self.t)
+        Some((wn, wg, sn))
+    }
+
+    /// What the shard is asked at the prices `p` (one a row), at its upper level, with `KpfTShardEnd`'s
+    /// arithmetic: the maintenance rate of the worth of every row's net units and the rate on the gross of the
+    /// worth of every row's gross units, each counted the tolerance more.
+    pub fn requirement(&self, p: &[i64; SHARD_ROWS]) -> Option<i64> {
+        self.level(p, true)
+    }
+
+    /// The requirement at its upper level (`up`) or its lower.
+    pub fn level(&self, p: &[i64; SHARD_ROWS], up: bool) -> Option<i64> {
+        let (wn, wg, _) = self.worths(p)?;
+        need_of(wn, wg, &self.t, up)
+    }
+
+    /// The shard's equity at the prices `p`: what it holds, and what its net units are worth there, less what its
+    /// legs were entered at.
+    pub fn equity(&self, p: &[i64; SHARD_ROWS]) -> Option<i64> {
+        let (_, _, sn) = self.worths(p)?;
+        self.held.checked_add(sn)?.checked_sub(self.basis)
     }
 
     /// `KpfTShardEnd`, step by step: whether the end of a draw is within the rule before its outputs are looked at
@@ -412,7 +570,7 @@ impl Shard {
     /// from only while nobody disputes. Its rows are that large only by legs its owner signed for.
     pub fn draw_end_judged(&self, d: &Draw, claimer: &[u8; 32]) -> Option<bool> {
         let mut ok = *claimer == self.owner && d.amount > 0;
-        let (mut wn, mut wg) = (0i64, 0i64);
+        let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(&d.prices) {
             if row.head.market == [0; 32] {
                 continue;
@@ -422,12 +580,22 @@ impl Shard {
                 ok = false;
             }
             if ok {
-                wn = wn.checked_add(worth(net, row.head.scale, *p)?)?;
+                let w = worth(net, row.head.scale, *p)?;
+                wn = wn.checked_add(w)?;
+                sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
                 wg = wg.checked_add(worth(gross, row.head.scale, *p)?)?;
             }
         }
-        let need = need_of(wn, wg, &self.t)?;
-        Some(ok && self.held.checked_sub(d.amount)? >= need)
+        let need = need_of(wn, wg, &self.t, true)?;
+        // Of coins it holds; its equity then at the upper level; not while it is called. (The script computes the
+        // equity whatever it found before: where that does not fit it gives no verdict. And the engine's numbers
+        // have no least value of 64 bits.)
+        let has = self.held.checked_sub(d.amount)?;
+        let equity = has.checked_add(sn)?.checked_sub(self.basis)?;
+        if has == i64::MIN || equity == i64::MIN || has.checked_add(sn)? == i64::MIN {
+            return None;
+        }
+        Some(ok && has >= 0 && self.called == 0 && equity >= need)
     }
 
     /// The shard once `amount` is drawn.
@@ -467,7 +635,13 @@ impl Shard {
 
     /// The most the owner draws at the prices `p`.
     pub fn draw_max(&self, p: &[i64; SHARD_ROWS]) -> i64 {
-        self.requirement(p).map(|need| (self.held - need).max(0)).unwrap_or(0)
+        if self.called != 0 {
+            return 0;
+        }
+        match (self.equity(p), self.requirement(p)) {
+            (Some(e), Some(need)) => (e - need).min(self.held).max(0),
+            _ => 0,
+        }
     }
 
     /// The statement of a draw of `amount` at the prices `p` by the shard's owner, on a shard whose output holds
