@@ -845,3 +845,72 @@ are closed by others where it does not answer. That is what is missing here, and
 
 What is built stands under any of the three: the entry by statement (one price, a leg shown, terms and periods
 of the shard), the band, the committee in the shard's id.
+
+**Chosen, 26 November 2026: C.** Section 12 is its design, on paper.
+
+## 12. A shard held to its requirement all the time (26 November 2026; on paper and in numbers, nothing built)
+
+What section 6a promises and does not keep: a user of a shard is paid what it is owed whatever the shard's owner
+does. Reviews 37 to 41 are why it does not (section 11, at its end). This section is the form that would, what
+was checked of it in numbers, and what is not known. It replaces nothing yet.
+
+**The claim to be built towards.** Whatever the owner of a shard does, with any number of accounts of its own
+keys, every user of the shard is paid in full what it is owed beyond the band, as long as the price moves by less
+than the maintenance rate less the tolerance in the time it takes whoever watches to act. A move beyond that is
+the gap any margin has.
+
+**Three things, and why each.**
+
+| | What | Why |
+|---|---|---|
+| Books | The shard knows what its side has gained or lost at given prices: beside each row's net and gross units, one number for all rows, what its legs were entered at (the sum of side B's units times their entries). Its equity at prices is what it holds, and what its net units are worth there, less that number | today a shard knows what it holds and how many units it has, and not that a leg entered at 10 stands at 14 against it. What a shard owes is then seen only when an account says so |
+| Gate | A leg enters only where the shard's equity is at least its requirement with the leg | else an owner takes, through an account of its own, a position the shard cannot carry |
+| Call | A shard whose equity is below its requirement is stepped by anyone: the legs of the accounts under it leave at the prices stated, each user paid what it is owed, for a fee the shard pays. No draw meanwhile | the requirement was asked at a draw alone. A clearing house calls a member below its requirement, and closes its positions where it does not answer |
+
+With the three, what an owner's own account wins is what the shard owed a counterparty while it was still held to
+its requirement for everything else; the requirement, not the owner's good will, is what stands behind the users.
+A step of side B's liquidation by an account's own numbers (which F66 found nobody is paid for) goes: side B of a
+covered account stands by its shard, and is stepped when its shard is called.
+
+**In numbers** (`tests/research_solvency.rs`; one market of futures legs, the books exact, whoever watches acting
+once a tick, the owner knowing the next tick, entering accounts of its own as large as the gate lets in, leaving
+the ones that would lose, and drawing all it may; 80 ticks a path):
+
+| Rules | Ticks of | Users unpaid | The owner took, a path | Whoever stepped was paid |
+|---|---|---|---|---|
+| books, gate, call | 0.5 % | on 0 of 1,000 paths | 37 KAS of 500 | 464 KAS |
+| books, gate, call | 2 % | 0 of 1,000 | 183 KAS | 323 KAS |
+| books, gate, call | 4.5 % (the rate less the tolerance) | 0 of 1,000 | 369 KAS | 134 KAS |
+| books, gate, call | 15 % | 134 of 1,000 | | |
+| as built today (the requirement at a draw alone) | 2 % | 995 of 1,000 | | |
+
+The owner still takes from its own shard, by winning as a counterparty and by its draws, and pays for the steps
+it causes: that is its own capital, and no user's. The last row is reviews 37 to 41 with no trick of entry or
+terms.
+
+**What is not known** (each decides whether this can be scripts; in the order it decides things):
+
+1. **Books that are whole.** The model's books know every leg the moment it enters. A script's books are told by
+   notes, which somebody applies later: a leg whose note of entry is not applied is not in the books, and its
+   account is owed all the same. Either what is owed is paid only for legs the books had (a note of what is owed
+   then names what it is of, and the shard has four rows, not a list of legs), or the entry touches the shard
+   (which the goal says an account does only at a default). Not solved.
+2. **What tells the books of a mark.** A take moves entries and moves A's gain into its margin from side B's in
+   the account: the shard's number of what its legs were entered at changes with it, by one amount a statement.
+   Every settled statement of a covered account then leaves a note for the shard (a leaving and a deposit do
+   today; a take does not).
+3. **Options.** What an option has gained is not units times a price: no sum over legs gives it. The books above
+   are of futures legs. An option under a shard is either not there in the first form, or counted at the whole of
+   its underlying with what it gained seen only at a mark.
+4. **How an account knows its shard is called.** A statement on an account does not read the shard. The call
+   would leave an object that a step of side B shows, as a draw is ended by a note today.
+5. **Who is paid first when a shard fails at a gap.** Today whoever applies its note first. Closed in an order
+   somebody chooses, the owner's own accounts can be first (the model takes that order).
+6. **What it costs.** The statements of a call are a trace over the shard's rows and prices that are answered
+   for, with a dispute period: the time whoever watches needs is that period, and the move the requirement must
+   hold is the move over it. And the account that carries a statement takes no other change meanwhile (M1).
+7. **The band and the gate together**: the gate is asked at prices within the tolerance, as everything is.
+
+Order: this section attacked on paper by review; then 1, since without it the rest is of no use; then the model
+with notes that arrive late and in any order.
+
