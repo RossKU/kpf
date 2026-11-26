@@ -896,11 +896,22 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     assert_eq!(second.note.asked, 100 * KAS1);
     let b = call_step_as(&w.lib, &a, &a.s, None, &two, &second, &step_s, w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys), "(of a call no script writes) the step names the second row of the leg's market");
-    // (A row of the market's name and another scale or limit is no row of the leg: the step is refused.)
+    // (Review T5, docs 17.8b: the call's object is the list of prices: a market's name, its limit, a day, the
+    // price. It has NO scale: a call whose row says another scale is the same object, and the step is taken as
+    // before. It was: "a row of the market's name and another scale or limit is no row of the leg: the step is
+    // refused". An entry of another LIMIT is still no entry of the leg. What holds a leg's scale to its row is
+    // now `KpfTEnterS` alone (one row a name, the leg's 18 bytes of scale and limit written in the head), and
+    // the note's application (`KpfTLeft` finds the row by name, scale and limit): REVIEW-T5, R4.)
     let mut other_scale = two.clone();
     other_scale.s.heads[1].scale += 1;
-    let b = call_step_as(&w.lib, &a, &a.s, None, &other_scale, &second, &step_s, w.payer(&w.f, &ff));
-    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a row of another scale");
+    assert_eq!(other_scale.s.hash(), two.s.hash(), "the call's object does not say a scale");
+    let b = call_step_as(&w.lib, &a, &a.s, None, &other_scale, &second, &step_s, w.payer(&w.f, &ff)).unwrap();
+    assert!(accepted(&b, &w.keys), "the object is the same: the step is the one above");
+    let mut other_limit = two.clone();
+    other_limit.s.heads[1].price_max += 1;
+    assert_ne!(other_limit.s.hash(), two.s.hash());
+    let b = call_step_as(&w.lib, &a, &a.s, None, &other_limit, &second, &step_s, w.payer(&w.f, &ff));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "an entry of another limit");
 }
 
 // ================================================================================================================
@@ -919,9 +930,13 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // 4,226 from 3,873; KpfTLeftVoid 2,017 from 1,955. And the others of the nine, from the artifacts of a1cd15a:
     // KpfTShardOpen 730 from 679; KpfTCallPay 1,691 from 1,562; KpfTShardEnd 3,234 from 3,162; KpfTShardPrice
     // 1,810 from 1,772; KpfTCallEnd 3,695 from 3,622.)
-    assert_eq!(sizes, vec![("KpfTCStep", 4829), ("KpfTEnterS", 2463), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017), ("KpfTStepPrice", 1821)]);
+    // (Review T5, docs 17.8b: KpfTCStep 5,056 from 4,829: it reads a leg's price from the list of 56 bytes an
+    // entry, and still hashes the leg's market to the name its row has. KpfTShardEnd 1,747 from 3,234 and
+    // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
+    // the committee found in the row of the entry's name.)
+    assert_eq!(sizes, vec![("KpfTCStep", 5056), ("KpfTEnterS", 2463), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 1691), ("KpfTShardEnd", 3234), ("KpfTShardPrice", 1810), ("KpfTCallEnd", 3695)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 1691), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2700), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);
@@ -943,7 +958,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
         steps.push((what, sg.mass.size, sg.mass.compute, sg.mass.storage));
     }
     println!("T3 B5: the scripts {sizes:?}; an entry stated: {} bytes (compute {}, storage {}); steps (what, bytes, compute, storage): {steps:?}", entry.mass.size, entry.mass.compute, entry.mass.storage);
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_040, 6_890, 6_942, 7_538));
+    // (Review T5, docs 17.8b: the steps were 6,890, 6,942 and 7,538: the script is 227 bytes longer and the call's
+    // object, of two prices here, 112 bytes where it was 368 and one push longer. 17.8b estimated 6,520 to 6,750.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_040, 6_972, 7_024, 7_620));
 }
 
 // ================================================================================================================
@@ -1139,34 +1156,100 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
     let (b, _) = call_off(&w.lib, &done, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
     v.push(("KpfTCallPay.off", b, 5, 0, done.s, same()));
-    // The answers of a draw's end and of a row's price, and of a call's end: the object is the disputed point of a
-    // statement on the shard.
+    // The answers of a row of a draw's trace and of a price of its list, and of a row of a call's: the object is
+    // the disputed point of a statement on the shard. (Review T5, docs 17.8b: the two ENDS read no row and show
+    // none: they are shown the books' hash, 32 bytes, and are no longer of this list: `ends_t5` below. The rows
+    // are shown to the new `KpfTShardRow.answer`, a point 1 to 4, and to `KpfTShardPrice.answer`, a point from 5.)
     let shard = w.shard();
     let s = shard.s;
     let prices = [P10, P10, 0, 0];
     let (_, st, d) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, prices, T0, w.payer(&w.c, &fc)).unwrap();
-    let live = w.stated(&shard, &st, &d.said());
+    let live = w.stated(&shard, &st, &s.traced(&d, false).unwrap().said());
     let pointed_of = |st: Stated, point: i64| -> Box<dyn Fn([u8; 32]) -> [u8; 32]> { Box::new(move |h| Pointed { st: Stated { position: h, ..st }, disputer: xk(&kp(3)), point }.hash()) };
-    let q = w.pointed(&live, 0);
-    assert_eq!(pointed_of(st, 0)(s.hash()), q.s.hash());
-    let (b, right) = shard_end(&w.lib, &q, &s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
-    assert!(right);
-    v.push(("KpfTShardEnd.answer", b, 5, 0, s, pointed_of(st, 0)));
     let q = w.pointed(&live, 1);
-    let c = w.cited(0, P10);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    assert_eq!(pointed_of(st, 1)(s.hash()), q.s.hash());
+    let (b, right) = shard_row(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardRow"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
-    v.push(("KpfTShardPrice.answer", b, 5, 0, s, pointed_of(st, 1)));
+    v.push(("KpfTShardRow.answer (a draw)", b, 5, 0, s, pointed_of(st, 1)));
+    // (The price of row 1: the point 4 and its place in the list, from 1.)
+    let p1 = 5 + s.traced(&d, false).unwrap().rows[0].at;
+    let q = w.pointed(&live, p1);
+    let c = w.cited(0, P10);
+    let (b, right) = shard_price(&w.lib, &q, &s, &d, p1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    assert!(right);
+    v.push(("KpfTShardPrice.answer", b, 5, 0, s, pointed_of(st, p1)));
     let up = [P10 * 11 / 10, P10, 0, 0];
     let (_, st, d) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &f)).unwrap();
-    let q = w.pointed(&w.stated(&shard, &st, &d.said()), 0);
-    let (b, right) = call_end(&w.lib, &q, &s, &d, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let q = w.pointed(&w.stated(&shard, &st, &s.traced(&d, true).unwrap().said()), 2);
+    let (b, right) = shard_row(&w.lib, &q, &s, &d, 2, &w.script("KpfTShardRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(right);
-    v.push(("KpfTCallEnd.answer", b, 5, 0, s, pointed_of(st, 0)));
+    v.push(("KpfTShardRow.answer (a call)", b, 5, 0, s, pointed_of(st, 2)));
     v
 }
 
-/// Second round, B (1) and (3). Each of the ten entries of the eight scripts that show a shard's rows, in a
+/// Review T5 (docs 17.8b): the two ends, which show no row: (what, the transaction, the shard, the object's hash
+/// for a shard of a given state's hash). Argument 4 is the books' hash, 32 bytes.
+#[allow(clippy::type_complexity)]
+fn ends_t5(w: &World) -> Vec<(&'static str, OBuilt, Shard, Box<dyn Fn([u8; 32]) -> [u8; 32]>)> {
+    let (f, ff, fc) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)], [fund(xk(&w.c), 30)]);
+    let shard = w.shard();
+    let s = shard.s;
+    let pointed_of = |st: Stated, point: i64| -> Box<dyn Fn([u8; 32]) -> [u8; 32]> { Box::new(move |h| Pointed { st: Stated { position: h, ..st }, disputer: xk(&kp(3)), point }.hash()) };
+    let mut v: Vec<(&'static str, OBuilt, Shard, Box<dyn Fn([u8; 32]) -> [u8; 32]>)> = vec![];
+    let (_, st, d) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, [P10, P10, 0, 0], T0, w.payer(&w.c, &fc)).unwrap();
+    let q = w.pointed(&w.stated(&shard, &st, &s.traced(&d, false).unwrap().said()), 0);
+    let (b, right) = shard_end(&w.lib, &q, &s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    assert!(right);
+    v.push(("KpfTShardEnd.answer", b, s, pointed_of(st, 0)));
+    let up = [P10 * 11 / 10, P10, 0, 0];
+    let (_, st, d) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &f)).unwrap();
+    let q = w.pointed(&w.stated(&shard, &st, &s.traced(&d, true).unwrap().said()), 0);
+    let (b, right) = call_end(&w.lib, &q, &s, &d, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    v.push(("KpfTCallEnd.answer", b, s, pointed_of(st, 0)));
+    v
+}
+
+/// Review T5. The two ends carry the books' hash unopened (argument 4, 32 bytes, where they were shown the rows
+/// and the 41 bytes): shown other 32 bytes (the hash of the rows alone, a bit, nothing, another shard's books),
+/// refused: the statement's position is of the shard's own. The object made the disputed point of the same
+/// statement on a shard of the OLD form (terms and the hash of the rows alone): refused with the books' hash
+/// shown; with the hash of the rows shown where the books' hash is, the object opens (as for every script that
+/// carries the 32 bytes unopened: the test below) and the same answer is then refused only because the outputs
+/// stated are of the shard of this form (printed). No script of this library writes a shard of the old form
+/// (`KpfTShardOpen`); it is said because the two ends were of the scripts that could not open one.
+#[test]
+fn t5_the_two_ends_hold_the_32_bytes_they_are_shown_to_the_statements_shard() {
+    let w = world();
+    let cases = ends_t5(&w);
+    assert_eq!(cases.len(), 2);
+    for (what, b, s, obj_of) in &cases {
+        assert!(accepted(b, &w.keys), "{what}: the control");
+        assert!(matches!(&args_of(&mut b.clone(), 1)[4], Arg::V(ArtifactValue::Bytes(x)) if x[..] == s.books_hash()[..]) && matches!(&args_of(&mut b.clone(), 1)[3], Arg::V(ArtifactValue::Bytes(x)) if x[..] == s.terms()[..]) && matches!(&args_of(&mut b.clone(), 1)[5], Arg::V(ArtifactValue::Bytes(x)) if x[..] == s.moving()[..]), "{what}: the books' hash is argument 4, between the terms and the moving part");
+        let rows_alone = blake2b(&s.rows_bytes());
+        let mut bit = s.books_hash();
+        bit[0] ^= 1;
+        let other = Shard { rows: [ShardRow { head: w.head(3), net: 0, gross: 77 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_hash();
+        for h in [rows_alone, bit, [0u8; 32], other] {
+            assert!(!accepted(&with_arg(b, 4, bytes_arg(&h)), &w.keys), "{what}: shown other 32 bytes than its shard's books' hash");
+        }
+        // The shard of the old form in the shard's place: refused with the books' hash; with the rows' hash shown
+        // where the books' is, the object is opened: the end is then judged of the old form's shard.
+        let mut t = b.clone();
+        object_made(&mut t, &w.lib, 0, &obj_of(shard_hash_old(s)));
+        assert!(!accepted(&t, &w.keys), "{what}: the shard of the form of before, the books' hash shown");
+        let t = with_arg(&t, 4, bytes_arg(&rows_alone));
+        let right_taken = accepted(&t, &w.keys);
+        println!("T5: {what}: a statement on a shard of the old form, the end shown the rows' hash for the books': answered right, taken: {right_taken}");
+        let mut t = b.clone();
+        object_made(&mut t, &w.lib, 0, &obj_of(s.hash()));
+        assert!(accepted(&t, &w.keys), "{what}: (control) the shard put in its own place");
+    }
+}
+
+/// Second round, B (1) and (3). Each of the nine entries of the seven scripts that show a shard's rows (review T5,
+/// docs 17.8b: it was ten of eight: the two ends show no row now, `KpfTShardRow.answer` is new and is here twice,
+/// of a draw and of a call), in a
 /// transaction of its builder (taken: the control): the argument after the rows is the shard's 41 bytes; shown
 /// another sum (one more, one less, nothing, the largest, below nothing), another hash of the claims (a bit, all
 /// of nothing), another first byte, or the 41 bytes of another shard: refused. With the shard of the OLD form in
@@ -1214,7 +1297,7 @@ fn t3r2_every_script_that_shows_the_rows_holds_the_41_bytes_and_takes_no_shard_o
         object_made(&mut t, &w.lib, *obj, &obj_of(s.hash()));
         assert!(accepted(&t, &w.keys), "{what}: (control) the shard put in its own place");
     }
-    println!("T3 second round: ten entries that show the rows: {refused} transactions with other 41 bytes refused; {old} objects that are no shard of this form refused in the shard's place, each with six other 41 bytes too");
+    println!("T3 second round: nine entries that show the rows (ten transactions): {refused} transactions with other 41 bytes refused; {old} objects that are no shard of this form refused in the shard's place, each with six other 41 bytes too");
 }
 
 /// Second round, B (2): the sum kept through a shard's life, at the engine. A shard of no row (the sum nothing):
@@ -1406,5 +1489,6 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
         }
     }
     opens.sort();
-    assert_eq!(opens, vec!["KpfTCallEnd", "KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTShardEnd", "KpfTShardPrice"]);
+    // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTShardPrice", "KpfTShardRow"]);
 }

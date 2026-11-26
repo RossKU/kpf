@@ -120,7 +120,7 @@ contract KpfTCallEnd(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] books, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -129,10 +129,8 @@ contract KpfTCallEnd(int init_version) {
         byte[] rs = slotOf(j, slotLen);
         byte[] mv = byte[](moving);
         byte[] tb = byte[](terms);
-        byte[] rw = byte[](rows);
-        byte[] gb = byte[](gbook);
         byte[] sd = byte[](said);
-        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv);
+        byte[32] position = blake2b(p33(blake2b(tb + p33(books))) + mv);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(11) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
@@ -148,43 +146,17 @@ contract KpfTCallEnd(int init_version) {
         if (int(byte[8](sd.slice(0, 8))) != 0) { ok = 0; }
         if (t0 <= 0) { ok = 0; }
         int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
-        // The worth of the rows' net and gross units at the prices stated, each moved the tolerance in the shard's
-        // favour; and what side B's net units are worth there (above zero where it is long, below where it is
-        // short).
-        int wn = 0;
-        int wg = 0;
-        int sn = 0;
-        byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        for (r, 0, 4, 4) {
-            byte[] row = rw.slice(102 * r, 102 * r + 102);
-            if (row.slice(0, 33) != none) {
-                int p = int(byte[8](sd.slice(8 + 8 * r, 16 + 8 * r)));
-                int sc = int(byte[8](row.slice(67, 75)));
-                int pm = int(byte[8](row.slice(76, 84)));
-                int net = int(byte[8](row.slice(85, 93)));
-                int gross = int(byte[8](row.slice(94, 102)));
-                int short = 0;
-                if (net < 0) {
-                    net = 0 - net;
-                    short = 1;
-                }
-                if (gross < 0) { gross = 0 - gross; }
-                if (p <= 0) { ok = 0; }
-                if (p > pm) { ok = 0; }
-                if (sc <= 0) { ok = 0; }
-                if (ok == 1) {
-                    int q = (p * (BPS - g)) / BPS;
-                    if (short == 0 && net > 0) {
-                        q = (p * (BPS + g) + BPS - 1) / BPS;
-                        if (q > pm) { q = pm; }
-                    }
-                    int w = (net / sc) * q + (net % sc) * (q / sc) + ((net % sc) * (q % sc)) / sc;
-                    wn = wn + w;
-                    if (short == 1) { sn = sn - w; } else { sn = sn + w; }
-                    wg = wg + (gross / sc) * q + (gross % sc) * (q / sc) + ((gross % sc) * (q % sc)) / sc;
-                }
-            }
-        }
+        // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
+        require(sd.length >= 184);
+        require((sd.length - 184) % 56 == 0);
+        int ne = (sd.length - 184) / 56;
+        require(ne <= 4);
+        // The counts as they are written: the list's, and four rows. No row is read: the sums are the last row's.
+        if (int(byte[8](sd.slice(8, 16))) != ne) { ok = 0; }
+        if (int(byte[8](sd.slice(16 + 56 * ne, 24 + 56 * ne))) != 4) { ok = 0; }
+        int wn = int(byte[8](sd.slice(sd.length - 24, sd.length - 16)));
+        int wg = int(byte[8](sd.slice(sd.length - 16, sd.length - 8)));
+        int sn = int(byte[8](sd.slice(sd.length - 8, sd.length)));
         // The requirement at its lower level: the maintenance rate less the tolerance of the net's worth, and the
         // rate on the gross of the gross's.
         int mmr = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8)));
@@ -204,9 +176,9 @@ contract KpfTCallEnd(int init_version) {
         // The call holds half the shard's carrier, out of what the shard's output holds.
         if (held - pay - CALL_HOLD < CALL_HOLD) { ok = 0; }
         if (ok == 1) {
-            byte[] heads = rw.slice(0, 84) + rw.slice(102, 186) + rw.slice(204, 288) + rw.slice(306, 390);
-            byte[32] call = blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(11) + i9(t0) + p33(blake2b(heads + sd.slice(8, 40))));
-            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[]((hd - pay) as byte[8]) + mv.slice(75, 130) + byte[](t0 as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - CALL_HOLD) as byte[8]) + byte[](0x02) + byte[](call) + byte[](CALL_HOLD as byte[8]);
+            // (The call's object holds the list of the call's prices, and nothing else: docs 17.8b.)
+            byte[32] call = blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(11) + i9(t0) + p33(blake2b(sd.slice(16, 16 + 56 * ne))));
+            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(books))) + mv.slice(0, 67) + byte[]((hd - pay) as byte[8]) + mv.slice(75, 130) + byte[](t0 as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - CALL_HOLD) as byte[8]) + byte[](0x02) + byte[](call) + byte[](CALL_HOLD as byte[8]);
             if (pay > 0) {
                 due2 = due2 + byte[](0x01) + byte[](claimer) + byte[](pay as byte[8]);
             }

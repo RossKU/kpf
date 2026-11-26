@@ -740,3 +740,373 @@ price before the end, so that what is answered wrong is what a script can answer
   `KpfTShardPrice` does today.
 - The names of the points in the builders; the two stale comments (T22, T28).
 - What is said to a user and a watcher of a market nobody signs (T23), with 14.7.
+
+# Third round: 17.8c
+
+27 November 2026, the same day. Under review: `docs/ARCHITECTURE-CLEARING.md` 17.8c (the claims of a called
+shard, and the row's gate), with 17.8a and 17.10. Findings T29 to T38. Nothing run; this section is the only
+thing written.
+
+**Read whole for it, as they stand in the working tree (commits 1 and 2):** `KpfTCStep`, `KpfTCallPay` (claim,
+off), `KpfTDrawNote`, `KpfTOwed`, `KpfTShardOpen.open`, `KpfTLeft` (apply, rest), `KpfTLeftAll.apply`,
+`KpfTLeftVoid.void`, `KpfTMarkNote.apply`, the row's arithmetic of `KpfTEnterS`; in `reserve.rs` `Left`, `Rest`,
+`MarkNote`, `Owed`, `left_holding`, `marked`, `rest_paid`, `claim_paid`, `call_off`, `paid_in`, `books_hash`,
+`claims_hash`, `need_of`; in `covered.rs` `call_step_at` to its end; 16.3 (a mark's band). **Not opened:**
+`KpfTCEnd`, `KpfTCMark`, `KpfTJoinC`, `KpfTPass`, the tests. What a leaving's end takes as its band is from 14.9
+and 16.3, not from the script. **Sizes are estimates** (a statement about 20 bytes, one inside the loop over six
+legs six times that).
+
+## Verdict
+
+**Sound to build once four things are changed; the arithmetic of both classes holds as written.** With every
+claim counted before the first payment, no order of payments pays more than there is and no first-class claim
+is paid less because a second-class one was paid first (shown below, with the unit's edges). To change first:
+
+1. **"A claim counted late is behind what was paid, at its holder's cost" is not what the formulas do** (T29).
+   A first-class claim counted after the second class was paid takes from a first-class claim that was on time
+   and not yet shown. One rule closes it: **once anything was paid, every claim counted is of the second
+   class.**
+2. **The call's step writes a note of a kind of its own** (T30). Two amounts in the note that legs left would
+   change the hash every account's leaving writes, which 17.8c says does not change.
+3. **`KpfTDrawNote`, `KpfTLeft.rest` and `KpfTLeftVoid` change too** (T31): the first two hold a note of the
+   rest by its hash.
+4. **The gate needs a second arm** (T35): as written it refuses a leg that lowers its row's requirement to a
+   shard that holds too little, which is the leg such a shard needs.
+
+The gate: **yes**, as the third piece of three, with the inequality of T35.
+
+## The numbers, and every script that moves them
+
+| Number | Where | While not called | While called |
+|---|---|---|---|
+| H, what it holds | moving part, 67 to 75 | as today | falls by what a claim is paid; rises by every note that pays in and every addition |
+| C1 | moving part, 76 to 84, where what it owes is | **as today: rises by what a note asked and was not paid, falls as a note of the rest is paid** | rises by every first-class amount counted; never falls |
+| D1, C2, D2 | the claims' numbers, `blake2b(i9(D1) + i9(C2) + i9(D2))` in the books' hash | nothing, all three | D1 and D2 rise by what is paid; C2 by every second-class amount counted |
+
+**C1 that does not fall is the called shard's rule only, and that is compatible with today.** Not called, a
+note of the rest is written again with what is left and what is owed falls with it (`KpfTLeft.rest`,
+`rest_paid`): keep that, so what is owed is always the sum of the notes outstanding, each with nothing paid. At
+the call's applying nothing is written but the call's time: C1 is what was owed, D1 nothing, and each note of
+before the call is a first-class claim of its amount with a1 nothing. No script needs to know which notes are
+of before.
+
+**Show the three numbers, not their hash** (T32): with their pushes they are 27 bytes and the hash is 32. The
+41 bytes beside the rows become 36: `i9(gross) + i9(D1) + i9(C2) + i9(D2)`, and each script hashes the last 27.
+
+| Script | Shown of the claims | Writes |
+|---|---|---|
+| `KpfTShardOpen` | none | three of nothing, as built |
+| `KpfTEnterS` | the 27 bytes, carried | none (it refuses a called shard; the gate reads what is owed) |
+| `KpfTLeft.apply`, `KpfTLeftAll.apply` | the 27 bytes | not called: C1, as today. Called: C1 by the first-class amount, C2 by the second |
+| `KpfTLeft.rest` | carried | C1 falls by what is paid (not called only) |
+| `KpfTLeftVoid` | carried | none |
+| `KpfTMarkNote.apply` | **the books opened**: the sum of the gross (8), the hash of the rows (32), the three numbers: 64 bytes where it carries 32 | as `KpfTLeft.apply` |
+| `KpfTCallPay.claim` | the 27 bytes | D1, D2 |
+| `KpfTCallPay.off` | the 27 bytes | C1 and the three as nothing |
+| `KpfTOwed.apply`, `KpfTAddC`, the ends and answers of a draw and a call | carried in the books' hash or beside the rows | none |
+
+## The notes
+
+**The claim** (the note of the rest, tag 7), for every shard, called or not:
+
+    blake2b(i9(12) + p33(sid) + i9(7) + p33(key) + i9(A1) + i9(a1) + i9(A2) + i9(a2))
+
+Not called it is always (A1, 0, 0, 0). Written by `KpfTLeft.apply`, `KpfTLeftAll.apply`, `KpfTMarkNote.apply`
+(what was asked and not paid; under a call, what was counted), by `KpfTLeft.rest` (what is left, not called) and
+by `KpfTCallPay.claim` (a1 and a2 raised).
+
+**The note that legs left** (tags 6 and 8) stays as it is: one amount. Every leaving, split, sale and undone
+entry writes it by a hash its statement's end holds; none of those scripts changes.
+
+**The note of a call's step, tag 9, new**, written by `KpfTCStep` alone:
+
+    blake2b(i9(12) + p33(sid) + i9(9) + p33(chain of the futures legs) + p33(key) + i9(asked) + i9(young))
+
+`asked` as today (what the old legs gained with what the young lost together, less the set-off against what the
+account owes; or, below nothing, what the account paid, which the note holds); `young` the second-class amount,
+nothing or more.
+
+**The class, where a note is applied to a called shard.** With `called` the moving part's 130 to 138 (not
+nothing), `late` its 94 to 102, `dispute` its 103 to 111:
+
+    young(leg)  is  int(leg[34..42]) > called - 2 * (late + dispute)
+
+the comparison `KpfTCStep` makes. And `paid` is `D1 + D2 > 0`.
+
+| Note | A1 counted | A2 counted |
+|---|---|---|
+| tag 6, one leg; a mark's note (its one leg, as it was) | `asked` where the leg is not young and not `paid` | `asked` otherwise |
+| tag 6, two to six legs | `asked` where no leg is young and not `paid` | `asked` otherwise |
+| tag 9 | `asked` where above nothing and not `paid` | `young`, and `asked` where above nothing and `paid` |
+| tag 8 | nothing | nothing |
+
+A tag 9 note is held to its legs as well, since a note is not taken at its word: `young >= 0`; `young == 0`
+where no leg is young; `asked <= 0` where every leg is young. That is what the legs can say without prices; a
+mixed account's split is the step's.
+
+## The checks, script by script
+
+**`KpfTCStep.step`.** As built, and:
+
+1. In the loop, for a young leg: `ym = ym + (the larger of wp and we)`.
+2. After it: `band = (ym / 10000) * 2g + ((ym % 10000) * 2g + 9999) / 10000`, g the terms' tolerance (bytes
+   19 to 27). `young = ygain - band`, nothing where that is below nothing. (`ygain` below nothing is added to
+   `gain` as built.) One rate on the sum, not one a leg: T34.
+3. `asked`, `pay`, `setoff` and what the account owes exactly as built, from `gain`. **Nothing of `young` is set
+   off, and nothing of it is paid by or to the account.**
+4. The note is tag 9 with `asked` and `young`; its value `NOTE_MIN + pay` as built.
+
+**`KpfTLeft.apply` (one leg), `KpfTLeftAll.apply` (two to six).** Shown as built, the 36 bytes for the 41, the
+tag, and `young` (nothing but for tag 9).
+
+1. The shard, the rows' arithmetic, the sum of the gross: as built. The note's hash by its tag: 6 and 8 as
+   built; 9 with both amounts. Tag 9: `called != 0` (a step's note is of a called shard), and the three checks
+   against the legs above.
+2. `asked < 0`: what the note holds is taken as built.
+3. Not called: `asked > 0` is paid as far as the shard holds, the rest owed: as built, the note written
+   (rest, 0, 0, 0).
+4. Called: nothing is paid. A1 and A2 by the table. `C1 = C1 + A1`, `C2 = C2 + A2`.
+5. Outputs under the id: the shard; and the claim (key, A1, 0, A2, 0), holding a note's least, where
+   `A1 + A2 > 0`. (Today's branches are "below nothing" or "asked": a tag 9 note may pay in and ask of the
+   second class in one.)
+
+**`KpfTMarkNote.apply`.** As built, the books opened (64 bytes). Not called: as built, the note (rest, 0, 0, 0).
+Called: A1 or A2 by its leg and `paid`; the claim (key, A1, 0, A2, 0).
+
+**`KpfTLeft.rest`.** Shown the note's four numbers.
+
+1. `A1 > C1`, or not called and any of `A1 <= 0`, `a1 != 0`, `A2 != 0`, `a2 != 0`: never counted. Spent,
+   nothing paid, the shard as it is (as today for a note of more than is owed).
+2. Else: not called (`require`); `pay` the smaller of A1 and what is held, above nothing; `C1 = C1 - pay`; the
+   note written again as (A1 - pay, 0, 0, 0), or spent where nothing is left.
+
+**`KpfTLeftVoid.void`.** Tags 6, 8 and 9 (the hash of 9 with both amounts); the rest as built.
+
+**`KpfTDrawNote.end`, kind 7.** The note's hash with four numbers; `A1 > 0`, `a1 == 0`, `A2 == 0`, `a2 == 0`,
+`A1 <= C1`. (Today a note of the rest of amount nothing would pass `owed >= amount` and could be spent by
+nothing: only a wrong statement nobody disputed writes one, and `A1 > 0` closes it here.) Kinds 6 and 13 as
+built. Tag 9 ends no draw: no step's note with legs in the books outlives its call.
+
+**`KpfTCallPay.claim`.** Shown the terms, the rows, the 36 bytes, the moving part, the key, A1, a1, A2, a2, and
+the place f of an input.
+
+1. The shard, called. The four rows empty (until the tree) **and** the sum of the gross nothing.
+2. The time: `OpTxInputDaaScore(f) >= called + late + 3 * dispute` (an input that landed then shows it, as
+   `KpfTEnterS` shows an entry's time; a period more than 17.8c has: T33).
+3. The note's hash. `0 <= a1 <= A1 <= C1`, `0 <= a2 <= A2 <= C2`, `A1 + A2 > 0`, `H >= 0`.
+4. `W = H + D1 + D2`.
+5. First: `e1 = A1` where `W >= C1`; else u from C1 by today's four thresholds, `h = W / u`,
+   `o = (C1 - 1) / u + 1`, `e1 = (A1 / o) * h + ((A1 % o) * h) / o`. `p1 = e1 - a1`, nothing where below
+   nothing, no more than H, and no more than `C1 - D1`.
+6. Second: `S = W - C1`. `S <= 0`: `e2 = 0`. `S >= C2`: `e2 = A2`. Else u from C2 by the same thresholds,
+   `h = S / u`, `o = (C2 - 1) / u + 1`, `e2 = (A2 / o) * h + ((A2 % o) * h) / o`. `p2 = e2 - a2`, nothing where
+   below nothing, no more than `S - D2` (which is H less what the first class is still owed, whatever p1
+   is), and no more than `C2 - D2`.
+7. `whole` is `a1 + p1 == A1 && a2 + p2 == A2`. `p1 + p2 >= NOTE_MIN`, or `whole` (`require`: a part below the
+   least waits; a payment of nothing that spends nothing is no transaction).
+8. Where `p1 + p2 >= NOTE_MIN`: an output of that to the key. Below it (the claim is whole thereby): no output
+   is asked; it is whoever pays's, as a step's small payments are.
+9. The shard: H less `p1 + p2`, the three numbers with `D1 + p1` and `D2 + p2`, C1 as it is; its output's
+   value no less than before less `p1 + p2`.
+10. `whole`: the note spent, one output under the id. Else the note again with `a1 + p1`, `a2 + p2`, its
+    output holding what it held.
+
+**`KpfTCallPay.off`.** As built, with: the sum of the gross nothing and the four rows empty; `D1 == C1` and
+`D2 == C2`; written: C1 nothing, the three numbers nothing, not called.
+
+**`KpfTEnterS.state`, the gate** (T35). After the row's new net `rn` and gross `rg` are computed, with `rn0`,
+`rg0` the row's before, `sc` and `e` the leg's scale and entry, `mmr` and `g` the terms' (bytes 10 to 18, 19 to
+27), `worth` the script's three-term product, `|x|` the size of x:
+
+    rN = mmr + g
+    rG = (mmr - 3 * g) / 2, nothing where below nothing, and g
+    need(n, s) = (worth(|n|) / 10000) * rN + ((worth(|n|) % 10000) * rN + 9999) / 10000
+               + (worth(s)   / 10000) * rG + ((worth(s)   % 10000) * rG + 9999) / 10000     at the price e
+    require( held - owed >= need(rn, rg)  ||  need(rn, rg) <= need(rn0, rg0) )
+
+`need` is `need_of(wn, wg, terms, true)` for one row. `held` and `owed` are the shard's 67 to 75 and 76 to 84.
+
+## The payment: what holds, and where it breaks
+
+Take every claim counted before the first payment, so C1 and C2 stand, and the sum of the A1 is C1, of the A2
+is C2 (a note that was never counted is another matter: it says no more than C and is paid a part as a real one
+is, today as well).
+
+- **No part is above its exact share.** `h <= W / u` and `o >= C1 / u`, so `e1 <= A1 * W / C1`; the same for
+  the second with S and C2. So the parts of the first class sum to no more than the smaller of W and C1, and of
+  the second to no more than the smaller of S and C2.
+- **The products fit.** `(A1 / o) * h <= (C1 / o) * (W / u) <= W`. `(A1 % o) * h < o * h`, and o is no more
+  than 3,000,000,000 by the thresholds while h is below o: under 9 x 10^18. The same with S and C2. That needs
+  `A1 <= C1` and `A2 <= C2`, which check 3 holds.
+- **W does not fall while a shard is called** (no draw, no note paid where it is applied; a payment moves H to
+  D), so a part only grows.
+- **What is kept:** `D2 <= S` after every payment (`p2 <= S - D2`, and S moves only up). Then what the first
+  class may still take, the smaller of W and C1 less D1, is no more than `W - D2 - D1`, which is H. **So a
+  first-class claim finds its part whatever was paid to the second class before it**, and the bound "no more
+  than H" in check 5 only ever cuts by rounding.
+- At the edges. C1 = 3,000,000,001 (u a thousand, o = 3,000,001) and W one sompi less: a single claim of all
+  of it has a part of 2,999,999,001, 999 sompi below its exact share and never above; S is below nothing and
+  the second class is paid nothing. W = C1: every first part is whole. W = C1 + 1, so S is 1 sompi: a second
+  part is nothing where C2 is 3,000,000,000 or more (h is nothing), and at most 1 sompi otherwise, which is
+  below a note's least and waits unless it makes its claim whole. What rounding leaves stays held, and is the
+  claims' when more comes.
+
+**Where it breaks: T29.**
+
+## Findings
+
+**T29 (High as written).** *A claim counted after payments began is not behind.* The only claims that can be
+counted then are of notes that take no leg out: a mark's. (Every other waits for no row to have a unit by
+being what empties the rows.) A shard, called, with W 150: X, a user's first-class claim of 100; Y, the owner's
+own second-class claim of 50; and Z, a mark's note of an old leg of the owner's, of 100, stated before the call
+and left unapplied. Payments open. Y is shown: S is 50, Y is paid 50. Z is applied: C1 is 200. Z is shown:
+its part is 75, paid. X is shown: its part is 75 and the shard holds 25. The owner has 125 of the 150; at one
+share X had 75. X was on time; what it did not do is show its claim, or apply the owner's note, in the block
+payments opened.
+*Decision.* **A claim counted where `D1 + D2 > 0` is of the second class, whatever its legs** (the table
+above). Then C1 stands from the first payment and everything under "what holds" is true without a condition. Z
+then shares S with the second class, behind every first-class claim: that is "behind", and at its holder's
+cost. C2 can still grow late, and within the second class a claim shown early keeps what it was paid: said to a
+user as "apply the notes of a called shard and show your claim when its time comes". 17.10's T12 has this as
+"it stands behind what was paid"; correct it there as well.
+
+**T30 (Medium).** *Two amounts in the note that legs left reach every account's script.* That note's hash is
+computed by each statement that takes a leg out and held by its end. Tag 9 keeps them all as they are and
+gives the applying scripts one more form. A user's own leaving cannot then carry a first-class amount for young
+legs: it writes tag 6, one amount, and the class is its legs'. A wrong statement nobody disputed can write a
+tag 9 note as it can write any note; the three checks against the legs bound what it says where the legs are
+all young or all old.
+
+**T31 (Medium).** *What 17.8c's list of what changes leaves out.* `KpfTDrawNote` (kind 7: the hash of a note of
+the rest and `owed >= amount`); `KpfTLeft.rest` (the same hash; what "never counted" is with four numbers);
+`KpfTLeftVoid` (tag 9). Built without them, a draw is ended by no note of the rest and a note of the rest of an
+uncalled shard is paid by nothing.
+
+**T32 (Low).** *The claims' numbers unopened cost more than opened*: 32 bytes against 27. One form, shown
+plain, in every script that shows the rows. `KpfTMarkNote` cannot stay at 32 bytes carried: under a call it
+writes C2.
+
+**T33 (Medium).** *What 17.8c does not say of a payment.* (a) The two parts are one output: the least is of
+their sum. (b) "Covered, paid whole whatever its size": below the least no output can be asked of a block, so
+it is whoever pays's; without that line a claim of 0.001 KAS is paid by nobody and `D1 == C1` never comes. (c)
+A transaction that pays nothing and spends nothing is refused, or a claim is written again a block for ever.
+(d) The time is shown by an input's landing; the shard's own output is as young as its last note. (e) A claim
+says `A <= C` for the arithmetic to fit, not only `a <= A`. (f) **A dispute period more before the first
+payment.** "A lateness and two dispute periods" is when the last statement of before the call is applied, not
+when its note is: a mark stated a block before the call's time and disputed by the owner's other key is applied
+in the block payments open, and with T29's rule a payment made in that block puts its note in the second
+class. Three periods give its holder one to apply it. (g) **No class is paid more than it is owed**: a part is
+also no more than C less D of its class. A note that was never counted and says no more than C is paid a part
+as today; without the bound it takes D past C, and the call never ends.
+
+**T34 (Low).** *The band.* (a) One rate on the sum of the young legs' larger worths, rounded up once: the same
+band to a sompi a leg, and about 130 bytes less in a loop that is unrolled six times. (b) No second band where
+a note is applied: a leaving took its own at its own price, and a mark left its band in the leg (16.3); the
+applying script has no price to take one at. What L1's path keeps is what every leaving keeps today: a short's
+tolerance squared twice (0.65 KAS a 13,000 KAS of size). It goes where the leaving's band is corrected, not
+here. (c) A young pair entered together is taken the band of both legs from their net: a hedge that gained 10
+on 2,000 KAS of legs is of nothing in the second class. That is the two edges of each leg; say it.
+
+**T35 (Medium).** *The gate.*
+
+- **It refuses the leg that helps.** A shard holds 100 KAS and its row is users long 10,000 KAS: asked 775.
+  A user's short of 10,000 KAS would bring the row to a net of nothing and 450 asked. The gate as written
+  refuses it (100 is below 450). Hence the second arm: a leg that does not raise its row's requirement enters.
+  It lets an owner's own leg in for nothing only against the row's net and up to 1.4 times it (a leg lowers
+  what is asked by 5.5 % of the units it sets off and raises it by 2.25 % of its own size): that is a hedge of
+  what the users hold, not L4's leg.
+- **Both rates are counted the tolerance more** (5.5 % and 2.25 % with the tests' terms: 7.75 % of a leg alone).
+  17.8c's bracket has the tolerance on the net only.
+- **What it refuses that is honest:** a shard at its level by what its legs gained on paper, whose owner drew
+  the coins: it holds less than the row asks and takes no leg that raises the row until it is paid up. And a
+  shard that owes: it holds nothing and takes nothing that raises a row. Both are what a gate is for. It never
+  asks more than the upper level a draw already holds the whole shard to, and for one row only.
+- **The price.** The leg's own entry, which its statement's last row holds to the committee's within the
+  tolerance: an edge moves the bound by 0.5 % of itself. A wrong entry far below passes the gate and is wrong at
+  its own price: disputed, the entry ends and the leg is undone at its entry, a claim of nothing. Meanwhile it
+  is in the books (14.4) and a call may be due by it: an owner can still bring a call about so, for an entry's
+  bond; what it cannot do is dilute by it.
+- **The other rows** cannot be counted without their prices. Four rows at their caps is what the review's
+  second table shows: 12.3 of 15.3 at 1 %, 9.1 of 16.0 at 2 %, every market moving the owner's way. With the
+  tree it is a row of sixty-three: the gate is then a bound on a leg and no more, and a number kept over the
+  rows is a question for commit 4.
+- **An honest busy shard.** A leg of 100,000 KAS into a row of its own: 7,750 KAS held. Into a row of users
+  long and short a million each: 52,750 (45,000 without it). Against the row's net: nothing more.
+- **L4.** The 1,000 units ask 1,012 KAS of a shard that holds 19.9: refused; 14.7 units enter. To enter them
+  the owner pays its shard up by about 990 KAS, and those pay the second class: the user is whole unless the
+  price moves about 7.7 % beyond the band while the legs are young.
+- An entry is about 5,300 bytes with both arms (5,040 now): 5 %.
+
+*Decision.* Build it, both arms, at the leg's entry, held less owed. Its tests need shards that hold what their
+rows ask: the plays of F116 and L4 as they are written enter legs the gate refuses, and are kept by paying the
+shard up or by entering under the cap.
+
+**T36 (Low).** *"Second, whole, where any leg is young" against a user.* A young leg enters an account by its
+user's signature. But a step of a liquidation is anyone's and names the legs: on an account that is due, a step
+that names an old leg that gained beside a young one makes one note of both, of the second class whole if a
+call's time then falls within T of the young leg's entry. Narrow (the account is due; a leg that gained is
+named only where the legs that stay lost nothing), and the user chose the young leg. Said, not built against.
+
+**T37 (Low; to say in 17.8c).** *A shard is called until both classes are whole.* An owner that diluted its
+users with a young leg of its own has that leg's claim standing too: to have its shard back it pays in until
+every second-class claim is whole, the users' with its own. Or it leaves the shard called for good with
+nothing in it. So what L4 leaves is a user unpaid by an owner that gives the shard up, not an owner that is rid
+of the claim and goes on. And how the first class is protected from the owner's old legs: it is not, as today;
+an old leg was within what the shard was held to for T, and with the gate it entered against coins the shard
+held.
+
+**T38 (Medium).** *Sizes, estimated.*
+
+| Transaction | Now (commits 1, 2) | With commit 3 | |
+|---|---|---|---|
+| an entry stated | 5,040 | about 5,300 | the gate |
+| a note of one leg applied | 4,314 | about 4,550 | the class, the claim of four numbers; 5 bytes less shown |
+| a note of two to six legs applied | not measured | about 400 more | a test of a time in each of six turns |
+| a mark's note applied | not measured | about 200 more | the books opened (32 more shown), the class |
+| a call's step, one leg | 6,520 to 6,750 (estimated) | about 350 more | the larger worth in each of six turns, the band, an amount more |
+| a claim paid | 3,624 | about 4,100 | the second formula, four numbers, the time |
+| a call ended | not measured | about 60 more | two comparisons, three numbers written |
+
+Every one is heavier. The common paths are the first two: 5 % each.
+
+## On each "to be said by the review" line
+
+| 17.8c asks | Said |
+|---|---|
+| the arithmetic with the unit and its rounding, and that no order pays more than there is | checks 4 to 6 of `KpfTCallPay.claim`; the unit of the second class from C2, its part of S; holds for every order once C1 stands, which T29's rule makes so |
+| a claim counted late | not behind as written (T29); second class once anything was paid; said in 17.8c's "when it is paid" and in 17.10's T12 |
+| "second, whole, where any leg is young" against a user | its own signature for an entry; a liquidation's step is the narrow way (T36) |
+| the gate's arithmetic, what it refuses that is honest, which price | T35: both arms, both rates the tolerance more, at the leg's entry |
+| how the first class is protected from the owner's old legs | it is not, as today (T37) |
+| the sizes | T38 |
+
+## The order within commit 3
+
+Three pieces, each reviewable at the engine alone:
+
+1. **What a called shard has paid**: the claim of four numbers with A2 and a2 nothing everywhere; D1; the first
+   formula; no payment while a row has a unit, and the time; whole below the least; the call's end; `KpfTLeft`
+   (apply, rest), `KpfTLeftAll`, `KpfTMarkNote`, `KpfTCallPay`, `KpfTDrawNote`. Its test is F114's shard (100
+   held, 200 owed, 60 that come late).
+2. **The second class**: `KpfTCStep`'s tag 9 and band; the class where a note is applied; "second once anything
+   was paid"; the second formula; `KpfTLeftVoid`. Its tests are L1, T29's three claims, and L4's table in the
+   model.
+3. **The gate**: `KpfTEnterS` alone, and the shards of the tests paid up. L4's table again, with it.
+
+The first changes every hash of a note of the rest once; the second adds a tag and touches no hash the first
+wrote; the third touches one script.
+
+## Decide before the scripts of commit 3
+
+1. Second class once anything was paid (T29).
+2. Tag 9 for a step's note; tags 6 and 8 as they are (T30).
+3. The three numbers shown plain, 36 bytes beside the rows (T32).
+4. A payment's least, its one output, its time by an input (T33).
+5. The gate with both arms (T35), and the three pieces in that order.
+
+## Can be decided while building
+
+- The band on the sum or a leg at a time (T34).
+- Whether `KpfTLeft.rest` keeps showing the rows it does not read (it could carry the books' hash and the 27
+  bytes).
+- What is said to a user of T36 and T37, with 14.7.

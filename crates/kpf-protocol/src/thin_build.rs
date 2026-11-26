@@ -3048,12 +3048,18 @@ pub fn rest_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &O
 pub fn shard_draw(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: &LibScript, amount: i64, prices: [i64; 4], t0: i64, p: Payer) -> Result<(OBuilt, Stated, crate::reserve::Draw)> {
     let s = &shard.s;
     let (st, d) = s.draw(amount, prices, t0, shard.value as i64)?;
-    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
+    let said = trace_of(s, &d, st.kind)?.said();
+    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &said, s.form(), script, p)?, st, d))
 }
 
-fn draw_open(obj: &OLive<Pointed>, shard: &crate::reserve::Shard, d: &crate::reserve::Draw) -> Result<()> {
+/// The trace a draw or a call says at the prices `dr` gives, one a row (docs 17.8b).
+fn trace_of(shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, kind: i64) -> Result<crate::reserve::Traced> {
+    shard.traced(dr, kind == crate::reserve::KIND_CALL).ok_or_else(|| Error::Invalid("the shard's rows at these prices are beyond what a script computes: nobody states or answers this".into()))
+}
+
+fn draw_open(obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced) -> Result<()> {
     let c = &obj.s.st;
-    if (c.kind != crate::thin::KIND_DRAW && c.kind != crate::reserve::KIND_CALL) || c.arg != d.arg() || c.position != shard.hash() {
+    if (c.kind != crate::thin::KIND_DRAW && c.kind != crate::reserve::KIND_CALL) || c.arg != t.arg() || c.position != shard.hash() {
         return invalid("the statement is not this draw, or this call, on this shard");
     }
     Ok(())
@@ -3064,7 +3070,8 @@ fn draw_open(obj: &OLive<Pointed>, shard: &crate::reserve::Shard, d: &crate::res
 pub fn shard_call(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: &LibScript, prices: [i64; 4], t0: i64, claimer: [u8; 32], p: Payer) -> Result<(OBuilt, Stated, crate::reserve::Draw)> {
     let s = &shard.s;
     let (st, d) = s.call(prices, t0, shard.value as i64, claimer)?;
-    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
+    let said = trace_of(s, &d, st.kind)?.said();
+    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &said, s.form(), script, p)?, st, d))
 }
 
 /// The input that shows a covered account's time has come (`KpfTAddC`, `KpfTPass`): one that landed at or after the
@@ -3291,26 +3298,32 @@ pub fn call_enter_end<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: O
     d.finish()
 }
 
-/// `KpfTCallEnd.answer`: the point 0 of a call is answered: whether the shard's equity, each price moved the
-/// tolerance in its favour, is below its lower level, and the outputs are the shard called, the call and the fee.
+/// `KpfTCallEnd.answer`: the point 0 of a call is answered: whether the shard's equity, by the last row's sums of
+/// the trace, is below its lower level, and the outputs are the shard called, the call and the fee. No row is shown.
 #[allow(clippy::too_many_arguments)]
 pub fn call_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
-    draw_open(obj, shard, dr)?;
+    call_end_t(lib, obj, shard, &trace_of(shard, dr, crate::reserve::KIND_CALL)?, script, rkey, p, force)
+}
+
+/// As `call_end`, of the trace as it was said (for whoever answers a statement that is not the rule's).
+#[allow(clippy::too_many_arguments)]
+pub fn call_end_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
     if c.kind != crate::reserve::KIND_CALL {
         return invalid("the statement is a draw: its end is answered by `shard_end`");
     }
-    if force.is_none() && shard.call_end_judged(dr, c.t0, c.held).is_none() {
-        return invalid("the shard's rows at these prices are beyond what a script computes: nobody answers this point, and the dispute lapses");
+    if force.is_none() && shard.call_trace_end_judged(t, c.t0, c.held).is_none() {
+        return invalid("the trace's sums are beyond what a script computes: nobody answers this point, and the dispute lapses");
     }
-    let right = force.unwrap_or_else(|| shard.call_end_right(dr, &c.claimer, &c.outs, c.held, c.t0));
+    let right = force.unwrap_or_else(|| shard.call_trace_end_right(t, &c.claimer, &c.outs, c.held, c.t0));
     if force.is_none() && q.point != 0 && right {
         return invalid("a point other than the one disputed is answered only where it is wrong");
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let mut args = shard_args(shard, vec![0; 24]);
-    args.extend(point_args_said(q, dr.said(), 0, rkey, right));
+    let mut args = end_args(shard);
+    args.extend(point_args_said(q, t.said(), 0, rkey, right));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCallEnd", "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
@@ -3320,58 +3333,115 @@ fn shard_args(shard: &crate::reserve::Shard, who: Vec<u8>) -> Vec<Arg> {
     vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.terms()), bv(shard.rows_bytes()), bv(shard.books_head()), bv(shard.moving())]
 }
 
-/// `KpfTShardEnd.answer`: the point 0 of a draw is answered: whether the shard holds its requirement at the prices
-/// stated once the amount is drawn, and the outputs are that.
+/// What an end is shown of the shard: its terms, the books' hash and its moving part. No row (docs 17.8b).
+fn end_args(shard: &crate::reserve::Shard) -> Vec<Arg> {
+    vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.terms()), bv(shard.books_hash().to_vec()), bv(shard.moving())]
+}
+
+/// `KpfTShardEnd.answer`: the point 0 of a draw is answered: whether the shard holds its requirement, by the last
+/// row's sums of the trace, once the amount is drawn, and the outputs are that. No row is shown.
 #[allow(clippy::too_many_arguments)]
 pub fn shard_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
-    draw_open(obj, shard, dr)?;
+    shard_end_t(lib, obj, shard, &trace_of(shard, dr, crate::thin::KIND_DRAW)?, script, rkey, p, force)
+}
+
+/// As `shard_end`, of the trace as it was said.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_end_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
     if c.kind != crate::thin::KIND_DRAW {
         return invalid("the statement is a call: its end is answered by `call_end`");
     }
-    if force.is_none() && shard.draw_end_judged(dr, &c.claimer, c.t0).is_none() {
-        return invalid("the shard's rows at these prices are beyond what a script computes: nobody answers this point, and the dispute lapses");
+    if force.is_none() && shard.draw_trace_end_judged(t, &c.claimer, c.t0).is_none() {
+        return invalid("the trace's sums are beyond what a script computes: nobody answers this point, and the dispute lapses");
     }
-    let right = force.unwrap_or_else(|| shard.draw_end_right(dr, &c.claimer, &c.outs, c.held, c.t0));
+    let right = force.unwrap_or_else(|| shard.draw_trace_end_right(t, &c.claimer, &c.outs, c.held, c.t0));
     if force.is_none() && q.point != 0 && right {
         return invalid("a point other than the one disputed is answered only where it is wrong");
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let mut args = shard_args(shard, vec![0; 24]);
-    args.extend(point_args_said(q, dr.said(), 0, rkey, right));
+    let mut args = end_args(shard);
+    args.extend(point_args_said(q, t.said(), 0, rkey, right));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardEnd", "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
 }
 
-/// `KpfTShardPrice.answer`: the point `at` (1 to 4, or beyond) of a draw is answered with the committee's price for
-/// the row's market at the statement's time, in a citation; a row with no market and a point beyond the fourth are
-/// answered right with none. A row is named by the hash of its kind and its market: the citation is of that market.
+/// `KpfTShardRow.answer`: the point `at` (1 to 4) of a draw or of a call is answered: whether the trace's row is
+/// the row of the books at its place, at the price the list has for it, and its sums the row before's and its own.
 #[allow(clippy::too_many_arguments)]
-pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
-    draw_open(obj, shard, dr)?;
+pub fn shard_row(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, at: i64, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    shard_row_t(lib, obj, shard, &trace_of(shard, dr, obj.s.st.kind)?, at, script, rkey, p, force)
+}
+
+/// As `shard_row`, of the trace as it was said.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_row_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced, at: i64, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
-    if at < 1 {
-        return invalid("a row's price is a point from 1");
+    if !(1..=4).contains(&at) {
+        return invalid("a row of a trace is a point 1 to 4");
     }
-    let row = shard.rows.get(at as usize - 1).filter(|r| r.head.market != [0; 32]);
-    // The market the citation is of: the row carries the hash of its kind and of that market's name.
+    let judged = shard.trace_row_judged(t, at as usize, c.kind == crate::reserve::KIND_CALL);
+    if force.is_none() && judged.is_none() {
+        return invalid("the row's worth or a sum is beyond what a script computes: nobody answers this point, and the dispute lapses");
+    }
+    let right = force.unwrap_or(judged == Some(true));
+    if force.is_none() && at != q.point && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = shard_args(shard, vec![0; 24]);
+    args.extend(point_args_said(q, t.said(), at, rkey, right));
+    args.push(iv(c.kind));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardRow", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTShardPrice.answer`: the point `at` (5 and above: the price `at - 4` of the list) of a draw or of a call is
+/// answered with the committee's price for that market at the statement's time, in a citation. A point beyond the
+/// list is answered right with none; an entry out of its order, or of a day, wrong with none. A market in the list
+/// is the name its row has (the hash of its kind and its market): the citation is of that market.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    shard_price_t(lib, obj, shard, &trace_of(shard, dr, obj.s.st.kind)?, at, script, cite, rkey, p, force)
+}
+
+/// As `shard_price`, of the trace as it was said.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, t)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if at < 5 {
+        return invalid("a price of the list is a point from 5 (the points 1 to 4 are the rows': `shard_row`)");
+    }
+    let e = (at - 4) as usize;
+    let en = t.list.get(e - 1);
+    // (Cited where the entry is in its order and of no day: else it is wrong with nothing cited.)
+    let cited_for = en.filter(|x| (e < 2 || t.list[e - 2].below(x)) && x.day == 0);
+    // The market the citation is of: the entry carries the hash of its kind and of that market's name.
     let mut under = [0u8; 32];
-    let right = match (row, cite) {
-        (Some(row), Some((_, cited))) => {
+    let right = match (cited_for, cite) {
+        (Some(x), Some((_, cited))) => {
             let n = &cited.note;
             under = n.market;
-            let named = crate::reserve::futures_market(&n.market) == row.head.market || crate::reserve::option_market(&n.market) == row.head.market;
+            let named = crate::reserve::futures_market(&n.market) == x.market || crate::reserve::option_market(&n.market) == x.market;
+            let Some(row) = shard.rows.iter().find(|r| r.head.market == x.market && r.head.market != [0; 32]) else {
+                return invalid("no row of the shard is of the entry's market: nobody cites its price, and the dispute lapses at the cost of whoever stated it");
+            };
             if n.committee != row.head.committee || !named || n.t0 != c.t0 || n.spread_bps * 4 > shard.t.g_bps {
-                return invalid("the citation is not of the row's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
+                return invalid("the citation is not of the row's committee and the entry's market and the statement's time, or the committee's spread leaves the tolerance no margin");
             }
-            force.unwrap_or_else(|| shard.draw_price_right(dr, at as usize, n.price))
+            force.unwrap_or_else(|| shard.trace_price_right(t, e, n.price))
         }
-        (Some(_), None) => return invalid("the row has a market: its price is answered with a citation"),
-        (None, Some(_)) => return invalid("the row has no market (or the point is beyond the fourth): it is answered with no citation"),
-        (None, None) => force.unwrap_or(true),
+        (Some(_), None) => return invalid("the entry is in its order: its price is answered with a citation"),
+        (None, Some(_)) => return invalid("the point is beyond the list, or its entry is out of its order or of a day: it is answered with no citation"),
+        (None, None) => force.unwrap_or(en.is_none()),
     };
     if force.is_none() && at != q.point && right {
         return invalid("a point other than the one disputed is answered only where it is wrong");
@@ -3379,7 +3449,7 @@ pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, if cite.is_some() { 2 } else { 0 }, if cite.is_some() { 2 } else { 0 }].iter().flat_map(|w| sm8(*w)).collect();
     let mut args = shard_args(shard, who);
-    args.extend(point_args_said(q, dr.said(), at, rkey, right));
+    args.extend(point_args_said(q, t.said(), at, rkey, right));
     args.push(bv(under.to_vec()));
     // (Of a draw, or of a call: the statement's kind.)
     args.push(iv(c.kind));

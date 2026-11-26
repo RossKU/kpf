@@ -560,13 +560,27 @@ pub struct Called {
 }
 
 impl Called {
-    /// The rows' names (84 bytes each) and the prices (8 each): 368 bytes.
+    /// The list of the call's prices (docs 17.8b): one for each row that has a market (its name, its price's
+    /// limit, no day, the price), in the order of the names.
+    pub fn list(&self) -> Vec<Priced> {
+        let mut list: Vec<Priced> = self.heads.iter().zip(&self.prices).filter(|(h, _)| h.market != [0; 32]).map(|(h, p)| Priced { market: h.market, limit: h.price_max, day: 0, price: *p }).collect();
+        list.sort_by_key(|p| p.numbers());
+        list
+    }
+
+    /// What the call's object holds: the list, 56 bytes a price.
     pub fn body(&self) -> Vec<u8> {
-        [self.heads.iter().flat_map(|h| h.bytes()).collect::<Vec<u8>>(), self.prices.iter().flat_map(|p| sm8(*p)).collect()].concat()
+        self.list().iter().flat_map(|p| p.bytes()).collect()
+    }
+
+    /// The hash of the call of a shard at a time, of a list's bytes (what `KpfTCallEnd` writes out of what a
+    /// call's statement says).
+    pub fn hash_of(sid: &[u8; 32], time: i64, list: &[u8]) -> [u8; 32] {
+        blake2b(&[i9(12), p33(sid), i9(NOTE_CALL), i9(time), p33(&blake2b(list))].concat())
     }
 
     pub fn hash(&self) -> [u8; 32] {
-        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_CALL), i9(self.time), p33(&blake2b(&self.body()))].concat())
+        Called::hash_of(&self.sid, self.time, &self.body())
     }
 
     /// What the call's output holds: half of what the shard's output held beside what the shard holds (an output
@@ -585,21 +599,15 @@ pub struct Draw {
 }
 
 impl Draw {
-    /// What the statement shows: 40 bytes.
-    pub fn said(&self) -> Vec<u8> {
-        [sm8(self.amount).to_vec(), self.prices.iter().flat_map(|p| sm8(*p)).collect()].concat()
-    }
-
-    pub fn arg(&self) -> [u8; 32] {
-        blake2b(&self.said())
-    }
-
+    /// The amount and the prices of a statement's trace (docs 17.8b): for each row the price its list has at the
+    /// place the row names (nothing where it names none). What the statement says is the trace: `Shard::traced`.
     pub fn read(said: &[u8]) -> Option<Draw> {
-        if said.len() != 40 {
-            return None;
+        let t = Traced::read(said)?;
+        let mut prices = [0i64; SHARD_ROWS];
+        for (p, r) in prices.iter_mut().zip(&t.rows) {
+            *p = usize::try_from(r.at).ok().and_then(|i| t.list.get(i)).map_or(0, |e| e.price);
         }
-        let int = |i: usize| crate::state::int8(&said[8 * i..8 * i + 8]);
-        Some(Draw { amount: int(0), prices: [int(1), int(2), int(3), int(4)] })
+        Some(Draw { amount: t.amount, prices })
     }
 }
 
@@ -749,10 +757,53 @@ impl Shard {
     /// The first point of a stated draw that is wrong at the committee's prices `c` (one a row): 0 the end, r the
     /// price of row r. `None`: the draw is the rule's.
     pub fn draw_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
-        if !self.draw_end_right(d, claimer, outs, held, t0) {
+        match self.traced(d, false) {
+            Some(t) => self.trace_wrong_point(&t, false, claimer, outs, held, t0, c),
+            None => Some(0),
+        }
+    }
+
+    /// The first point of a stated trace that is wrong, at the committee's prices `c` (one a row of the books):
+    /// 0 the end, 1 to 4 a row, 4 + e the price e of the list (docs 17.8b). `None`: it is the rule's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn trace_wrong_point(&self, t: &Traced, call: bool, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+        let end = if call { self.call_trace_end_right(t, claimer, outs, held, t0) } else { self.draw_trace_end_right(t, claimer, outs, held, t0) };
+        if !end {
             return Some(0);
         }
-        (1..=SHARD_ROWS).find(|r| !self.draw_price_right(d, *r, c[*r - 1])).map(|r| r as i64)
+        if let Some(r) = (1..=SHARD_ROWS).find(|r| self.trace_row_judged(t, *r, call) != Some(true)) {
+            return Some(r as i64);
+        }
+        let cited = |x: &Priced| self.rows.iter().position(|r| r.head.market == x.market).map_or(0, |i| c[i]);
+        (1..=t.list.len()).find(|e| !self.trace_price_right(t, *e, cited(&t.list[*e - 1]))).map(|e| 4 + e as i64)
+    }
+
+    /// `KpfTShardEnd`, of a trace: whether the end of a draw is right, its outputs with it.
+    pub fn draw_trace_end_right(&self, t: &Traced, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64) -> bool {
+        if self.draw_trace_end_judged(t, claimer, t0) != Some(true) {
+            return false;
+        }
+        Outs::of(&[Out { key: false, to: self.drawn(t.amount, t0).hash(), value: held - t.amount }, Out { key: true, to: *claimer, value: t.amount }]).is_some_and(|o| o == *outs)
+    }
+
+    /// The outputs of a call that is the rule's by its trace: the shard called, the call (of the list the trace
+    /// says), and the fee to the caller.
+    pub fn call_trace_outs(&self, t: &Traced, claimer: &[u8; 32], t0: i64, held: i64) -> Option<Outs> {
+        let (ok, pay) = self.call_trace_end_judged(t, t0, held)?;
+        if !ok {
+            return None;
+        }
+        let next = Shard { held: self.held - pay, called: t0, ..*self };
+        let mut v = vec![(Out { key: false, to: next.hash(), value: held - pay - CALL_HOLD }, false), (Out { key: false, to: Called::hash_of(&self.sid, t0, &t.list_bytes()), value: CALL_HOLD }, true)];
+        if pay > 0 {
+            v.push((Out { key: true, to: *claimer, value: pay }, false));
+        }
+        Outs::with_notes(&v)
+    }
+
+    /// `KpfTCallEnd`, of a trace: whether the end of a call is right, its outputs with it.
+    pub fn call_trace_end_right(&self, t: &Traced, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64) -> bool {
+        self.call_trace_outs(t, claimer, t0, held).is_some_and(|o| o == *outs)
     }
 
     /// The most the owner draws at the prices `p`.
@@ -774,7 +825,8 @@ impl Shard {
         if !self.draw_end_right(&d, &self.owner, &outs, held, t0) {
             return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero, or it is stated before the time the shard says ({})", self.held, self.requirement(&p), self.expiry)));
         }
-        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_DRAW, t0, arg: d.arg(), outs, bond: self.bond(), claimer: self.owner, held }, d))
+        let t = self.traced(&d, false).ok_or_else(|| Error::Invalid("the rows at these prices are beyond what is counted: nobody states this draw".into()))?;
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_DRAW, t0, arg: t.arg(), outs, bond: self.bond(), claimer: self.owner, held }, d))
     }
 
     /// The bond of a call: the shard's, no more than a hundred times the terms' least fee of a keeper, and no less
@@ -858,10 +910,10 @@ impl Shard {
     /// The first point of a stated call that is wrong at the committee's prices `c` (one a row): 0 the end, r the
     /// price of row r. `None`: the call is the rule's.
     pub fn call_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
-        if !self.call_end_right(d, claimer, outs, held, t0) {
-            return Some(0);
+        match self.traced(d, true) {
+            Some(t) => self.trace_wrong_point(&t, true, claimer, outs, held, t0, c),
+            None => Some(0),
         }
-        (1..=SHARD_ROWS).find(|r| !self.draw_price_right(d, *r, c[*r - 1])).map(|r| r as i64)
     }
 
     /// The statement of a call at the prices `p` by `claimer` (anyone), on a shard whose output holds `held`.
@@ -869,7 +921,8 @@ impl Shard {
     pub fn call(&self, p: [i64; SHARD_ROWS], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, Draw)> {
         let d = Draw { amount: 0, prices: p };
         let outs = self.call_outs(&d, &claimer, t0, held).ok_or_else(|| Error::Invalid("no call is due at these prices: the shard's equity, each price moved the tolerance in its favour, is at its lower level or above; or the shard is called; or a row that has a market has no price".into()))?;
-        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_CALL, t0, arg: d.arg(), outs, bond: self.call_bond(), claimer, held }, d))
+        let t = self.traced(&d, true).ok_or_else(|| Error::Invalid("the rows at these prices are beyond what is counted: nobody states this call".into()))?;
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_CALL, t0, arg: t.arg(), outs, bond: self.call_bond(), claimer, held }, d))
     }
 
     /// `KpfTCallPay.claim`: a note of the rest is paid its share by its called shard, once no row has a unit: the
@@ -992,7 +1045,9 @@ impl Traced {
         let list = (0..e).map(|i| 16 + 56 * i).map(|a| Priced { market: said[a..a + 32].try_into().expect("32 bytes"), limit: n(a + 32), day: n(a + 40), price: n(a + 48) }).collect();
         let at = 16 + 56 * e;
         let rows = (0..SHARD_ROWS).map(|i| at + 8 + 40 * i).map(|a| TraceRow { place: n(a), at: n(a + 8), wn: n(a + 16), wg: n(a + 24), sn: n(a + 32) }).collect();
-        Some(Traced { amount: n(0), e: n(8), list, n: n(at), rows })
+        // (Only what is written back the same: a number of nothing has two forms in eight bytes, and a script
+        // that compares bytes takes one. Review T5, R1.)
+        Some(Traced { amount: n(0), e: n(8), list, n: n(at), rows }).filter(|t| t.said() == said)
     }
 }
 

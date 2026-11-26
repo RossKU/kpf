@@ -108,7 +108,7 @@ contract KpfTShardEnd(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] books, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -117,10 +117,8 @@ contract KpfTShardEnd(int init_version) {
         byte[] rs = slotOf(j, slotLen);
         byte[] mv = byte[](moving);
         byte[] tb = byte[](terms);
-        byte[] rw = byte[](rows);
-        byte[] gb = byte[](gbook);
         byte[] sd = byte[](said);
-        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv);
+        byte[32] position = blake2b(p33(blake2b(tb + p33(books))) + mv);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(5) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
@@ -135,36 +133,17 @@ contract KpfTShardEnd(int init_version) {
         int ok = 1;
         if (mv.slice(1, 33) != byte[](claimer)) { ok = 0; }
         if (amount <= 0) { ok = 0; }
-        // The worth of the rows' net and gross units at the prices stated; and what side B's net units are worth
-        // there (above zero where it is long, below where it is short).
-        int wn = 0;
-        int wg = 0;
-        int sn = 0;
-        byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        for (r, 0, 4, 4) {
-            byte[] row = rw.slice(102 * r, 102 * r + 102);
-            if (row.slice(0, 33) != none) {
-                int p = int(byte[8](sd.slice(8 + 8 * r, 16 + 8 * r)));
-                int sc = int(byte[8](row.slice(67, 75)));
-                int net = int(byte[8](row.slice(85, 93)));
-                int gross = int(byte[8](row.slice(94, 102)));
-                int short = 0;
-                if (net < 0) {
-                    net = 0 - net;
-                    short = 1;
-                }
-                if (gross < 0) { gross = 0 - gross; }
-                if (p <= 0) { ok = 0; }
-                if (p > int(byte[8](row.slice(76, 84)))) { ok = 0; }
-                if (sc <= 0) { ok = 0; }
-                if (ok == 1) {
-                    int w = (net / sc) * p + (net % sc) * (p / sc) + ((net % sc) * (p % sc)) / sc;
-                    wn = wn + w;
-                    if (short == 1) { sn = sn - w; } else { sn = sn + w; }
-                    wg = wg + (gross / sc) * p + (gross % sc) * (p / sc) + ((gross % sc) * (p % sc)) / sc;
-                }
-            }
-        }
+        // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
+        require(sd.length >= 184);
+        require((sd.length - 184) % 56 == 0);
+        int ne = (sd.length - 184) / 56;
+        require(ne <= 4);
+        // The counts as they are written: the list's, and four rows. No row is read: the sums are the last row's.
+        if (int(byte[8](sd.slice(8, 16))) != ne) { ok = 0; }
+        if (int(byte[8](sd.slice(16 + 56 * ne, 24 + 56 * ne))) != 4) { ok = 0; }
+        int wn = int(byte[8](sd.slice(sd.length - 24, sd.length - 16)));
+        int wg = int(byte[8](sd.slice(sd.length - 16, sd.length - 8)));
+        int sn = int(byte[8](sd.slice(sd.length - 8, sd.length)));
         // The requirement at its upper level: the maintenance rate of the net's worth and the rate on the gross of
         // the gross's (half the maintenance rate less three times the tolerance: what a book that is set off keeps
         // for the time between one side's leaving and a call), each counted the tolerance more.
@@ -187,7 +166,7 @@ contract KpfTShardEnd(int init_version) {
         if (t0 < int(byte[8](mv.slice(85, 93)))) { ok = 0; }
         int next = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
         if (ok == 1) {
-            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[](has as byte[8]) + mv.slice(75, 85) + byte[](next as byte[8]) + mv.slice(93, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
+            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(books))) + mv.slice(0, 67) + byte[](has as byte[8]) + mv.slice(75, 85) + byte[](next as byte[8]) + mv.slice(93, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
             if (blake2b(due2) != outs) { ok = 0; }
         }
         require(ok == verdict);

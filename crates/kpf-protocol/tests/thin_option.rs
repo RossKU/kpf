@@ -522,28 +522,28 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let max = s.draw_max(&low);
     assert!(max > s.draw_max(&honest));
     let (st, d) = s.draw(max, low, T0, held).unwrap();
-    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, held, T0, &honest), Some(1));
+    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, held, T0, &honest), Some(5), "the one price of the list: the point 5");
     let f = [fund(xk(&w.w), 32)];
     let cite1 = w.script("KpfTCite");
-    let q = w.pointed(&stated(&st, &d.said()), 1);
+    let q = w.pointed(&stated(&st, &s.traced(&d, false).unwrap().said()), 5);
     let c = w.cited(1, P10);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
     let sg = signed("the price of a row of options answered wrong, with its underlying's citation", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
-    let forced = shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
+    let forced = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
     // The citation of another market is not the row's.
     let other = w.cited(0, P10 / 2);
-    assert!(shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &other)), xk(&w.w), w.payer(&w.w, &f), None).is_err());
+    assert!(shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &other)), xk(&w.w), w.payer(&w.w, &f), None).is_err());
     // A draw at the committee's price is answered right.
     let (st, d) = s.draw(s.draw_max(&honest), honest, T0, held).unwrap();
-    let q = w.pointed(&stated(&st, &d.said()), 1);
+    let q = w.pointed(&stated(&st, &s.traced(&d, false).unwrap().said()), 5);
     let c = w.cited(1, P10 + P10 / 400);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
     signed("the price of a row of options answered right", &b, &w.keys);
-    let forced = shard_price(&w.lib, &q, &s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(false));
+    let forced = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(false));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
 }
 

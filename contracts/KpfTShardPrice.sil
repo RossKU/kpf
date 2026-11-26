@@ -114,9 +114,9 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] under, int kind) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] under, int kind) {
         require(version == 1);
-        // (A row's price of a draw, or of a call: both say a price a row after eight bytes.)
+        // (A price of the list a draw or a call says: docs 17.8b. The points 5 and above.)
         require(kind == 5 || kind == 11);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -137,19 +137,52 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
-        require(at >= 1);
+        require(at >= 5);
+        // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
+        require(sd.length >= 184);
+        require((sd.length - 184) % 56 == 0);
+        int ne = (sd.length - 184) / 56;
+        require(ne <= 4);
         int ok = 1;
         int u = int(byte[8](who.slice(8, 16)));
         byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         int cited = 0;
-        if (at <= 4) {
-            byte[] row = rw.slice(102 * (at - 1), 102 * at);
-            if (row.slice(0, 33) != none) {
+        int e = at - 4;
+        // (A point beyond the list is of nothing: right, with nothing cited.)
+        if (e <= ne) {
+            byte[] en = sd.slice(56 * e - 40, 56 * e + 16);
+            // The list is in order, no market and day twice: the entry before is below this one, by the market's
+            // 32 bytes as four numbers and then the day. And it is of no day (until the day is built: docs 17.5).
+            if (e >= 2) {
+                byte[] be = sd.slice(56 * e - 96, 56 * e - 40);
+                int below = 0;
+                int same = 1;
+                for (k, 0, 5, 5) {
+                    int bx = int(byte[8](be.slice(8 * k, 8 * k + 8)));
+                    int ex = int(byte[8](en.slice(8 * k, 8 * k + 8)));
+                    if (k == 4) {
+                        bx = int(byte[8](be.slice(40, 48)));
+                        ex = int(byte[8](en.slice(40, 48)));
+                    }
+                    if (same == 1) {
+                        if (bx < ex) {
+                            below = 1;
+                            same = 0;
+                        }
+                        if (bx > ex) { same = 0; }
+                    }
+                }
+                if (below == 0) { ok = 0; }
+            }
+            // (Eight bytes of nothing, as the call's step holds them: review T5, R1.)
+            if (en.slice(40, 48) != byte[](0 as byte[8])) { ok = 0; }
+            if (ok == 1) {
                 cited = 1;
-                int a = int(byte[8](sd.slice(8 * at, 8 * at + 8)));
+                int a = int(byte[8](en.slice(48, 56)));
                 int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
-                // The committee's price: input u is a copy of KpfTCite spent by `cite` for the row's committee and
-                // market and the statement's time.
+                // The committee's price: input u is a copy of KpfTCite spent by `cite` for the committee of the row
+                // of that market and for the market, at the statement's time. (An entry no row is of is cited by
+                // nobody: it costs whoever wrote it.)
                 require(u >= 0);
                 require(u < tx.inputs.length);
                 require(u != this.activeInputIndex);
@@ -157,9 +190,19 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
                 require(tx.inputs[u].scriptPubKey == byte[](CITE_SPK));
                 require(OpInputCovenantId(u) == OpInputCovenantId(this.activeInputIndex));
                 require(OpTxInputScriptSigSubstr(u, 0, 1) == byte[](0x20));
-                byte[32] name = byte[32](row.slice(1, 33));
+                byte[32] name = byte[32](en.slice(0, 32));
+                byte[] cm = none;
+                int found = 0;
+                for (r, 0, 4, 4) {
+                    byte[] row = rw.slice(102 * r, 102 * r + 102);
+                    if (row.slice(0, 33) != none && row.slice(1, 33) == byte[](name)) {
+                        cm = row.slice(33, 66);
+                        found = 1;
+                    }
+                }
+                require(found == 1);
                 require(blake2b(i9(FUTURES_TAG) + p33(under)) == name || blake2b(i9(OPTION_TAG) + p33(under)) == name);
-                require(OpTxInputScriptSigSubstr(u, 33, 99) == row.slice(33, 66) + p33(under));
+                require(OpTxInputScriptSigSubstr(u, 33, 99) == cm + p33(under));
                 require(OpTxInputScriptSigSubstr(u, 99, 108) == i9(t0));
                 require(OpTxInputScriptSigSubstr(u, 108, 109) == byte[](0x08));
                 int c = int(byte[8](OpTxInputScriptSigSubstr(u, 109, 117)));
@@ -169,7 +212,7 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
                 require(spread >= 0);
                 require(spread * SPREAD_MARGIN <= g);
                 require(OpTxInputScriptSigSubstr(u, 126, 127) == byte[](0x20));
-                int pm = int(byte[8](row.slice(76, 84)));
+                int pm = int(byte[8](en.slice(32, 40)));
                 if (c > pm) { c = pm; }
                 int hi = (c * (BPS + g) + BPS - 1) / BPS;
                 if (hi > pm) { hi = pm; }

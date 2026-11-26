@@ -91,6 +91,10 @@ name = "auditT3_legtime"
 path = "tests/auditT3_legtime.rs"
 
 [[test]]
+name = "auditT5_trace"
+path = "tests/auditT5_trace.rs"
+
+[[test]]
 name = "bond_model"
 path = "tests/bond_model.rs"
 required-features = ["legacy"]

@@ -155,6 +155,18 @@ fn world() -> World {
 
 const PRICES: [i64; 4] = [P10, P10, 0, 0];
 
+/// What a draw at the prices `d` gives says on the shard `s`: its trace (docs 17.8b). And a call.
+fn said(s: &Shard, d: &Draw) -> Vec<u8> {
+    s.traced(d, false).expect("a trace").said()
+}
+fn said_c(s: &Shard, d: &Draw) -> Vec<u8> {
+    s.traced(d, true).expect("a trace").said()
+}
+/// The point of the price of the row `r` (from 1): 4 and the place its price has in the list, from 1.
+fn price_point(s: &Shard, d: &Draw, r: usize) -> i64 {
+    5 + s.traced(d, false).expect("a trace").rows[r - 1].at
+}
+
 #[test]
 fn the_owner_draws_what_is_above_the_requirement_and_no_more() {
     let w = world();
@@ -184,14 +196,14 @@ fn the_owner_draws_what_is_above_the_requirement_and_no_more() {
     // A sompi more is not stated by the tool; stated all the same, its end is answered wrong.
     assert!(shard_draw(&w.lib, &shard, &w.script("KpfTChange"), max + 1, PRICES, T0, w.payer(&w.c, &f)).is_err());
     let lies: Vec<(&str, Stated, Draw)> = vec![
-        ("a sompi more", { let d = Draw { amount: max + 1, prices: PRICES }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(max + 1, T0).hash(), value: shard.value as i64 - max - 1 }, Out { key: true, to: xk(&w.c), value: max + 1 }]).unwrap(), ..st } }, Draw { amount: max + 1, prices: PRICES }),
+        ("a sompi more", { let d = Draw { amount: max + 1, prices: PRICES }; Stated { arg: kpf_protocol::committee::blake2b(&said(s, &d)), outs: Outs::of(&[Out { key: false, to: s.drawn(max + 1, T0).hash(), value: shard.value as i64 - max - 1 }, Out { key: true, to: xk(&w.c), value: max + 1 }]).unwrap(), ..st } }, Draw { amount: max + 1, prices: PRICES }),
         ("another key than the owner's", Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(max, T0).hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.w), value: max }]).unwrap(), ..st }, d),
         ("rows of its own making in the shard that goes on", Stated { outs: Outs::of(&[Out { key: false, to: Shard { rows: [ShardRow::EMPTY; 4], ..s.drawn(max, T0) }.hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.c), value: max }]).unwrap(), ..st }, d),
-        ("a market with no price", { let d = Draw { amount: KAS1, prices: [P10, 0, 0, 0] }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap(), ..st } }, Draw { amount: KAS1, prices: [P10, 0, 0, 0] }),
+        ("a market with no price", { let d = Draw { amount: KAS1, prices: [P10, 0, 0, 0] }; Stated { arg: kpf_protocol::committee::blake2b(&said(s, &d)), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap(), ..st } }, Draw { amount: KAS1, prices: [P10, 0, 0, 0] }),
     ];
     for (what, lie, d) in lies {
         assert!(!s.draw_end_right(&d, &lie.claimer, &lie.outs, shard.value as i64, T0), "{what}");
-        let q = w.pointed(&w.stated(&shard, &lie, &d.said()), 0);
+        let q = w.pointed(&w.stated(&shard, &lie, &said(&shard.s, &d)), 0);
         let (b, right) = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
         assert!(!right, "{what}");
         let sg = signed(&format!("draw's end answered wrong: {what}"), &b, &w.keys);
@@ -223,8 +235,8 @@ fn a_draw_is_of_the_equity_above_the_upper_level_of_coins_and_not_while_called()
         let x = &on.s;
         let d = Draw { amount, prices };
         let outs = Outs::of(&[Out { key: false, to: x.drawn(amount, T0).hash(), value: on.value as i64 - amount }, Out { key: true, to: xk(&w.c), value: amount }]).unwrap();
-        let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: x.bond(), claimer: xk(&w.c), held: on.value as i64 };
-        let q = w.pointed(&w.stated(on, &st, &d.said()), 0);
+        let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_DRAW, t0: T0, arg: kpf_protocol::committee::blake2b(&said(x, &d)), outs, bond: x.bond(), claimer: xk(&w.c), held: on.value as i64 };
+        let q = w.pointed(&w.stated(on, &st, &said(&on.s, &d)), 0);
         let (b, right) = shard_end(&w.lib, &q, x, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
         signed(&format!("{what}: the end of a draw answered {}", if right { "right" } else { "wrong" }), &b, &w.keys);
         let forced = shard_end(&w.lib, &q, x, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(!right));
@@ -266,27 +278,29 @@ fn a_price_that_understates_the_requirement_is_answered_by_the_committees() {
     let max = s.draw_max(&low);
     assert!(max > s.draw_max(&PRICES));
     let (st, d) = s.draw(max, low, T0, shard.value as i64).unwrap();
-    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), Some(1), "the end follows from the prices stated: the price of row 1 is the point");
-    let live = w.stated(&shard, &st, &d.said());
+    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), Some(price_point(s, &d, 1)), "the end follows from the prices stated: the price of row 1 is the point");
+    let (p1, p2) = (price_point(s, &d, 1), price_point(s, &d, 2));
+    assert_eq!((p1.min(p2), p1.max(p2)), (5, 6), "two prices in the list: the points 5 and 6");
+    let live = w.stated(&shard, &st, &said(&shard.s, &d));
     let f = [fund(xk(&w.w), 32)];
     let cite1 = w.script("KpfTCite");
-    let q = w.pointed(&live, 1);
+    let q = w.pointed(&live, p1);
     let c = w.cited(0, P10);
-    let (b, right) = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
     let sg = signed("row's price answered wrong", &b, &w.keys);
     assert_eq!(sg.tx.inputs.len(), 4, "the object, the script, one citation and a coin");
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
-    let forced = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
+    let forced = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
-    // The price of row 2 is the committee's: right; a row with no market and a point beyond the fourth are of
-    // nothing: right, with no citation.
-    let q = w.pointed(&live, 2);
+    // The price of row 2 is the committee's: right; a point beyond the list is of nothing: right, with no
+    // citation.
+    let q = w.pointed(&live, p2);
     let c = w.cited(1, P10 + P10 / 400);
-    let (b, right) = shard_price(&w.lib, &q, s, &d, 2, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, s, &d, p2, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
     signed("row's price answered right", &b, &w.keys);
-    for point in [3i64, 4, 5, 77] {
+    for point in [7i64, 8, 77] {
         let q = w.pointed(&live, point);
         let (b, right) = shard_price(&w.lib, &q, s, &d, point, &w.script("KpfTShardPrice"), None, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
         assert!(right);
@@ -295,9 +309,9 @@ fn a_price_that_understates_the_requirement_is_answered_by_the_committees() {
         assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "a point of nothing is answered wrong");
     }
     // Under a dispute of another point, the wrong price ends the draw all the same.
-    let q = w.pointed(&live, 4);
+    let q = w.pointed(&live, 77);
     let c = w.cited(0, P10);
-    let (b, right) = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
     signed("row's price answered wrong under a dispute of another point", &b, &w.keys);
 }
@@ -318,10 +332,10 @@ fn a_shard_takes_a_draw_and_no_other_statement_and_an_account_takes_no_draw() {
         assert!(!accepted(&b, &w.keys), "kind {kind} is stated on a shard");
     }
     // (The draw is: the control.)
-    let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), &w.script("KpfTChange"), w.payer(&w.c, &f)).unwrap();
+    let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &st, &said(s, &d), s.form(), &w.script("KpfTChange"), w.payer(&w.c, &f)).unwrap();
     assert!(accepted(&b, &w.keys));
     // A draw of other bytes than an amount and four prices, or without the shard's form: refused.
-    for (what, said, form) in [("39 bytes", d.said()[..39].to_vec(), s.form()), ("no form", d.said(), vec![]), ("another shard's form", d.said(), Shard { held: 1, rows: [ShardRow::EMPTY; 4], ..*s }.form())] {
+    for (what, said, form) in [("39 bytes", said(s, &d)[..39].to_vec(), s.form()), ("no form", said(s, &d), vec![]), ("another shard's form", said(s, &d), Shard { held: 1, rows: [ShardRow::EMPTY; 4], ..*s }.form())] {
         let odd = Stated { arg: blake2b(&said), ..st };
         let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &odd, &said, form, &w.script("KpfTChange"), w.payer(&w.c, &f)).unwrap();
         assert!(!accepted(&b, &w.keys), "a draw is stated with {what}");
@@ -330,7 +344,7 @@ fn a_shard_takes_a_draw_and_no_other_statement_and_an_account_takes_no_draw() {
     let account = Account { t: w.terms(), legs: vec![], a_key: xk(&w.c), b_key: xk(&w.w), a_margin: 50 * KAS1, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0, shard: Some(s.sid) };
     let live = OLive { s: (), value: 50 * KAS1 as u64, id: shard.id, op: op(14), daa: 6_100 };
     let on = Stated { position: account.hash(), ..st };
-    let b = state_raw(&w.lib, &live, &account.fixed_hash(), &account.moving(), &on, &d.said(), account.form(), &w.script("KpfTChange"), w.payer(&w.c, &f)).unwrap();
+    let b = state_raw(&w.lib, &live, &account.fixed_hash(), &account.moving(), &on, &said(s, &d), account.form(), &w.script("KpfTChange"), w.payer(&w.c, &f)).unwrap();
     assert!(!accepted(&b, &w.keys), "a draw is stated on an account");
     let _ = SIDE_A;
 }
@@ -350,15 +364,18 @@ fn a_shard_too_large_to_compute_is_drawn_from_by_no_answer() {
     assert_eq!(s.draw_end_judged(&d, &xk(&w.c), T0), None, "the script cannot compute it");
     assert_eq!(s.draw_max(&PRICES), 0);
     assert!(s.draw(KAS1, PRICES, T0, shard.value as i64).is_err(), "the tool states no draw on it");
-    // Stated all the same and disputed at its end: no verdict is accepted, so the dispute lapses and the draw ends.
+    // Stated all the same (with the sums of a shard that can be computed) and disputed at the row: no verdict is
+    // accepted, so the dispute lapses and the draw ends. (The end reads no row: docs 17.8b.)
+    let t = w.shard().s.traced(&d, false).unwrap();
+    assert_eq!(s.trace_row_judged(&t, 1, false), None);
     let outs = Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap();
-    let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: s.bond(), claimer: xk(&w.c), held: shard.value as i64 };
-    let q = w.pointed(&w.stated(&shard, &st, &d.said()), 0);
+    let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: t.arg(), outs, bond: s.bond(), claimer: xk(&w.c), held: shard.value as i64 };
+    let q = w.pointed(&w.stated(&shard, &st, &t.said()), 1);
     let f = [fund(xk(&w.w), 34)];
-    assert!(shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).is_err());
+    assert!(shard_row_t(&w.lib, &q, s, &t, 1, &w.script("KpfTShardRow"), xk(&w.w), w.payer(&w.w, &f), None).is_err());
     for verdict in [true, false] {
-        let forced = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(verdict));
-        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "the end is answered {verdict}");
+        let forced = shard_row_t(&w.lib, &q, s, &t, 1, &w.script("KpfTShardRow"), xk(&w.w), w.payer(&w.w, &f), Some(verdict));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "the row is answered {verdict}");
     }
     let b = point_lapse(&w.lib, &q, &w.script("KpfTPoint"), w.payer(&w.w, &f)).unwrap();
     let sg = signed("draw nobody can answer lapses", &b, &w.keys);
@@ -366,8 +383,8 @@ fn a_shard_too_large_to_compute_is_drawn_from_by_no_answer() {
     // A draw that is wrong before any worth is computed (another key than the owner's) is answered wrong all the same.
     let lie = Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.w), value: KAS1 }]).unwrap(), ..st };
     assert_eq!(s.draw_end_judged(&d, &lie.claimer, T0), Some(false));
-    let q = w.pointed(&w.stated(&shard, &lie, &d.said()), 0);
-    let (b, right) = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let q = w.pointed(&w.stated(&shard, &lie, &t.said()), 0);
+    let (b, right) = shard_end_t(&w.lib, &q, s, &t, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
     signed("draw of a shard too large, by another key, answered wrong", &b, &w.keys);
 }
@@ -445,10 +462,20 @@ fn the_draws_answers_agree_with_the_model_on_random_shards() {
         let off = if r.range(0, 14) == 0 { 1 } else { 0 };
         let outs = Outs::of(&[Out { key: false, to: s.drawn(amount, T0).hash(), value: held - amount }, Out { key: true, to: claimer, value: amount - off }]).filter(|_| amount - off > 0 && amount < held).unwrap_or_else(|| Outs::of(&[Out { key: false, to: s.hash(), value: held - 1 }, Out { key: true, to: claimer, value: 1 }]).unwrap());
         let d = Draw { amount, prices };
-        let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: s.bond(), claimer, held };
-        let right = s.draw_end_right(&d, &claimer, &st.outs, held, T0);
+        let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: kpf_protocol::committee::blake2b(&said(s, &d)), outs, bond: s.bond(), claimer, held };
+        // (The end is judged by the trace's last sums; a row that has no price is wrong at its own point.)
+        let t = s.traced(&d, false).expect("a trace");
+        let rows = (1..=4).all(|r| s.trace_row_judged(&t, r, false) == Some(true));
+        let right = s.draw_trace_end_right(&t, &claimer, &st.outs, held, T0);
+        assert_eq!(right && rows, s.draw_end_right(&d, &claimer, &st.outs, held, T0), "case {case}: the trace's verdict is the end's over the rows");
         assert!(s.draw_end_judged(&d, &claimer, T0).is_some(), "case {case}: within what a script computes");
-        if right {
+        if !rows {
+            let r = (1..=4).find(|r| s.trace_row_judged(&t, *r, false) != Some(true)).unwrap() as i64;
+            let q = OLive { s: Pointed { st, disputer: xk(&w.w), point: r }, value: shard.value + 2 * st.bond as u64, id: shard.id, op: op(40), daa: 6_520 };
+            let (b, said) = shard_row(&w.lib, &q, s, &d, r, &w.script("KpfTShardRow"), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+            assert!(!said && accepted(&b, &w.keys), "case {case}: a row with no price is answered wrong");
+        }
+        if right && rows {
             assert!(amount <= max && amount > 0 && off == 0 && claimer == s.owner, "case {case}: right only within the most that is drawn");
             rights += 1;
         } else {
@@ -475,14 +502,15 @@ fn the_draws_answers_agree_with_the_model_on_random_shards() {
                     _ => (stated + r.range(-stated / 50, stated / 50)).max(1),
                 }
                 .clamp(1, pm);
-                let q = OLive { s: Pointed { st, disputer: xk(&w.w), point: at }, ..q.clone() };
+                let pt = price_point(s, &d, at as usize);
+                let q = OLive { s: Pointed { st, disputer: xk(&w.w), point: pt }, ..q.clone() };
                 let cited = w.cited(at as usize - 1, c);
                 let cite1 = w.script("KpfTCite");
                 let right = s.draw_price_right(&d, at as usize, c);
-                let (b, said) = shard_price(&w.lib, &q, s, &d, at, &w.script("KpfTShardPrice"), Some((&cite1, &cited)), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+                let (b, said) = shard_price(&w.lib, &q, s, &d, pt, &w.script("KpfTShardPrice"), Some((&cite1, &cited)), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
                 assert_eq!(said, right);
                 assert!(accepted(&b, &w.keys), "case {case}: row {at} at {stated} against {c}: the model's verdict ({right}) is not the script's");
-                let other = shard_price(&w.lib, &q, s, &d, at, &w.script("KpfTShardPrice"), Some((&cite1, &cited)), xk(&w.f), w.payer(&w.w, &f), Some(!right));
+                let other = shard_price(&w.lib, &q, s, &d, pt, &w.script("KpfTShardPrice"), Some((&cite1, &cited)), xk(&w.f), w.payer(&w.w, &f), Some(!right));
                 assert!(other.is_err() || !accepted(&other.unwrap().0, &w.keys), "case {case}: row {at}: the script takes the other verdict");
                 if right { prices_right += 1 } else { prices_wrong += 1 }
             }
@@ -510,8 +538,8 @@ fn what_is_kept_of_a_shard_a_note_and_a_draw_reads_back_as_it_was_written() {
         AObj::Left(Left { sid: s.sid, legs: vec![leg], key: xk(&w.w), asked: -3 * KAS1 }),
         AObj::Rest(Rest { sid: s.sid, key: xk(&w.w), amount: 3 * KAS1 }),
         AObj::Rest(Rest { sid: s.sid, key: xk(&w.w), amount: 3 * KAS1 }),
-        AObj::Stated { on: Host::Shard(*s), st, said: d.said() },
-        AObj::Pointed { on: Host::Shard(*s), q: Pointed { st, disputer: xk(&w.w), point: 3 }, said: d.said() },
+        AObj::Stated { on: Host::Shard(*s), st, said: said(s, &d) },
+        AObj::Pointed { on: Host::Shard(*s), q: Pointed { st, disputer: xk(&w.w), point: 3 }, said: said(s, &d) },
     ];
     for o in &all {
         let b = o.encode();
@@ -524,7 +552,7 @@ fn what_is_kept_of_a_shard_a_note_and_a_draw_reads_back_as_it_was_written() {
         assert!(AObj::decode(&other).is_err(), "{} read as another kind", o.kind());
     }
     // A statement whose bytes are not of its kind (a draw's 40 bytes on an account) is not one.
-    let odd = AObj::Stated { on: Host::Account(account), st: Stated { kind: KIND_ACCOUNT_TAKE, ..st }, said: d.said() };
+    let odd = AObj::Stated { on: Host::Account(account), st: Stated { kind: KIND_ACCOUNT_TAKE, ..st }, said: said(s, &d) };
     assert!(AObj::decode(&odd.encode()).is_err());
     assert_eq!(all[0].least_value(), s.held + SHARD_CARRIER);
 }
@@ -747,7 +775,7 @@ fn a_note_that_legs_left_or_a_note_of_the_rest_that_is_not_applied_ends_a_draw()
     let at12 = [P10 * 12 / 10, 0, 0, 0];
     assert_eq!(s.equity(&at12), Some(120 * KAS1));
     let (st, d) = s.draw(s.draw_max(&at12), at12, T0, shard.value as i64).unwrap();
-    let live = w.stated(&shard, &st, &d.said());
+    let live = w.stated(&shard, &st, &said(&shard.s, &d));
     let f = [fund(xk(&w.w), 37)];
     let script = w.script("KpfTDrawNote");
     let note = OLive { s: Left { sid: s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 }, value: NOTE_MIN as u64, id: shard.id, op: op(70), daa: 6_400 };
@@ -1516,7 +1544,7 @@ fn a_draw_writes_a_time_before_which_no_draw_is_stated_again() {
     let (st, d) = s.draw(KAS1, PRICES, T0, shard.value as i64).unwrap();
     let after = s.drawn(KAS1, T0);
     assert_eq!((s.expiry, after.expiry, after.held), (0, T0 + 2 * life, s.held - KAS1));
-    let live = w.stated(&shard, &st, &d.said());
+    let live = w.stated(&shard, &st, &said(&shard.s, &d));
     let b = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.c, &f)).unwrap();
     let sg = signed("a draw applied: the shard says its time", &b, &w.keys);
     assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &after.hash()));
@@ -1530,7 +1558,7 @@ fn a_draw_writes_a_time_before_which_no_draw_is_stated_again() {
     let (st0, d0) = again.draw(KAS1, PRICES, T0, held.value as i64).unwrap();
     let lie = Stated { position: after.hash(), ..st0 };
     assert_eq!(after.draw_end_judged(&d0, &lie.claimer, T0), Some(false));
-    let q = w.pointed(&w.stated(&held, &lie, &d0.said()), 0);
+    let q = w.pointed(&w.stated(&held, &lie, &said(&held.s, &d0)), 0);
     let ff = [fund(xk(&w.f), 36)];
     let (b, right) = shard_end(&w.lib, &q, &after, &d0, &w.script("KpfTShardEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(!right);
@@ -1569,7 +1597,7 @@ fn no_draw_is_stated_before_an_entry_is_settled_and_one_that_ended_ends_a_draw()
     let lapsed = signed("the price of the entry lapses", &b, &w.keys);
     let m_live: OLive<Marked> = nth(&lapsed, 0, marked.clone(), 6_700);
     // (The draw, landed a block after its time.)
-    let draw = OLive { daa: t1 as u64 + 1, ..w.stated(&shard, &dst, &d.said()) };
+    let draw = OLive { daa: t1 as u64 + 1, ..w.stated(&shard, &dst, &said(&shard.s, &d)) };
     let script = w.script("KpfTDrawEntry");
     let ended = |what: &str, pending: Pending, value: u64, state: [u8; 32]| {
         let b = draw_entry(&w.lib, &draw, &dst, None, &next, pending, &script, xk(&w.f), w.payer(&w.f, &ff)).unwrap();
@@ -1728,7 +1756,7 @@ fn call_said(w: &World, on: &OLive<Shard>, prices: [i64; 4], shown: [i64; 4], fe
     if fee > 0 {
         v.push((Out { key: true, to: xk(&w.w), value: fee }, false));
     }
-    (Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_CALL, t0: T0, arg: d.arg(), outs: Outs::with_notes(&v).unwrap(), bond: x.call_bond(), claimer: xk(&w.w), held: on.value as i64 }, d)
+    (Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_CALL, t0: T0, arg: kpf_protocol::committee::blake2b(&said_c(x, &d)), outs: Outs::with_notes(&v).unwrap(), bond: x.call_bond(), claimer: xk(&w.w), held: on.value as i64 }, d)
 }
 
 /// A shard whose equity, each price moved the tolerance in its favour, is below its lower level is called by
@@ -1755,7 +1783,7 @@ fn a_shard_below_its_lower_level_is_called_by_anyone_and_the_call_is_an_object_o
     assert_eq!((st.kind, st.claimer, st.bond), (KIND_CALL, xk(&w.w), (10 * KAS1).min(100 * fee).max(NOTE_MIN)));
     assert_eq!(sg.tx.outputs[0].value, shard.value + st.bond as u64);
     assert_eq!(s.call_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &up), None);
-    assert_eq!(s.call_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), Some(1), "at the committee's 10 the price of row 1 is the point");
+    assert_eq!(s.call_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), Some(price_point(s, &d, 1)), "at the committee's 10 the price of row 1 is the point");
     // Applied after the dispute period.
     let live = nth(&sg, 0, st, 6_510);
     let ff = [fund(xk(&w.f), 31)];
@@ -1772,9 +1800,9 @@ fn a_shard_below_its_lower_level_is_called_by_anyone_and_the_call_is_an_object_o
 
     // The end of a call, stated whatever the rule says, answered at the engine.
     let judged = |what: &str, on: &OLive<Shard>, st: &Stated, d: &Draw| -> bool {
-        let q = w.pointed(&w.stated(on, st, &d.said()), 0);
+        let q = w.pointed(&w.stated(on, st, &said_c(&on.s, &d)), 0);
         let (b, right) = call_end(&w.lib, &q, &on.s, d, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
-        assert_eq!(right, on.s.call_end_right(d, &st.claimer, &st.outs, on.value as i64, T0), "{what}");
+        assert_eq!(right, on.s.call_trace_end_right(&on.s.traced(d, true).unwrap(), &st.claimer, &st.outs, on.value as i64, T0), "{what}");
         let sg = signed(&format!("{what}: the end of a call answered {}", if right { "right" } else { "wrong" }), &b, &w.keys);
         if !right {
             assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (on.value, &hash_spk(&w.lib, &on.s.hash())), "{what}: the shard again");
@@ -1801,7 +1829,13 @@ fn a_shard_below_its_lower_level_is_called_by_anyone_and_the_call_is_an_object_o
     let (st, d) = call_said(&w, &shard, up, near, fee, 0);
     assert!(!judged("a call of other prices than those stated", &shard, &st, &d));
     let (st, d) = call_said(&w, &shard, [P10 * 11 / 10, 0, 0, 0], [P10 * 11 / 10, 0, 0, 0], fee, 0);
-    assert!(!judged("a row with a market and no price", &shard, &st, &d));
+    // (A row with a market and no price is wrong at its own point: the end reads no row. Docs 17.8b.)
+    {
+        let q = w.pointed(&w.stated(&shard, &st, &said_c(s, &d)), 2);
+        let (b, right) = shard_row(&w.lib, &q, s, &d, 2, &w.script("KpfTShardRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+        assert!(!right);
+        signed("a row with a market and no price: answered wrong", &b, &w.keys);
+    }
     let (st, d) = call_said(&w, &shard, up, up, fee, 0);
     let not_called = { let (next, call) = s.called_at(&up, 0, fee); Outs::with_notes(&[(Out { key: false, to: next.hash(), value: shard.value as i64 - fee - CALL_HOLD }, false), (Out { key: false, to: call.hash(), value: CALL_HOLD }, true), (Out { key: true, to: xk(&w.w), value: fee }, false)]).unwrap() };
     assert!(!judged("the shard written not called", &shard, &Stated { outs: not_called, ..st }, &d));
@@ -1831,17 +1865,18 @@ fn the_prices_of_a_call_are_the_callers_to_show() {
     let live = nth(&signed("call stated", &b, &w.keys), 0, st, 6_510);
     let cite1 = w.script("KpfTCite");
     // The committee's price of market 0 is 10: the call's 11 is wrong, and the shard is again.
-    let q = w.pointed(&live, 1);
+    let p1 = price_point(s, &d, 1);
+    let q = w.pointed(&live, p1);
     let c = w.cited(0, P10);
-    let (b, right) = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(!right);
     let sg = signed("a call's price answered wrong", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
-    let forced = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), Some(true));
+    let forced = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), Some(true));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
     // It is 11: right, and the call stands again.
     let c = w.cited(0, P10 * 11 / 10);
-    let (b, right) = shard_price(&w.lib, &q, s, &d, 1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, s, &d, p1, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(right);
     let sg = signed("a call's price answered right", &b, &w.keys);
     assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &st.again().hash()), "the call stands again");
@@ -1850,7 +1885,7 @@ fn the_prices_of_a_call_are_the_callers_to_show() {
     assert!(shard_end(&w.lib, &q0, s, &d, &w.script("KpfTShardEnd"), xk(&w.f), w.payer(&w.f, &ff), None).is_err());
     let max = s.draw_max(&PRICES);
     let (dst, dd) = s.draw(max, PRICES, T0, shard.value as i64).unwrap();
-    let dq = w.pointed(&w.stated(&shard, &dst, &dd.said()), 0);
+    let dq = w.pointed(&w.stated(&shard, &dst, &said(&shard.s, &dd)), 0);
     assert!(call_end(&w.lib, &dq, s, &dd, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &ff), None).is_err());
     // A point nobody answers: the shard again, and the caller's bond is lost, half to the disputer.
     let q = w.pointed(&live, 2);
@@ -1916,8 +1951,18 @@ fn the_end_of_a_call_agrees_with_the_model_on_random_shards() {
             _ => pay,
         };
         let (st, d) = call_said(&w, &shard, prices, prices, paid, amount);
-        let right = s.call_end_right(&d, &st.claimer, &st.outs, held, T0);
-        assert_eq!(right, judged.unwrap().0 && paid == pay, "case {case}");
+        // (The end is judged by the trace's last sums; a row that has no price is wrong at its own point, where
+        // the end over the rows stopped and was wrong itself.)
+        let t = s.traced(&d, true).expect("a trace");
+        let rows = (1..=4).all(|r| s.trace_row_judged(&t, r, true) == Some(true));
+        let right = s.call_trace_end_right(&t, &st.claimer, &st.outs, held, T0);
+        assert_eq!(right && rows, judged.unwrap().0 && paid == pay, "case {case}");
+        if !rows {
+            let r = (1..=4).find(|r| s.trace_row_judged(&t, *r, true) != Some(true)).unwrap() as i64;
+            let q = OLive { s: Pointed { st, disputer: xk(&w.c), point: r }, value: shard.value + 2 * st.bond as u64, id: shard.id, op: op(40), daa: 6_520 };
+            let (b, said) = shard_row(&w.lib, &q, s, &d, r, &w.script("KpfTShardRow"), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+            assert!(!said && accepted(&b, &w.keys), "case {case}: a row with no price is answered wrong");
+        }
         if right {
             rights += 1;
             if pay == 0 { due_unpaid += 1 }
@@ -2267,7 +2312,7 @@ fn an_account_that_holds_less_than_it_says_is_stepped_and_a_small_shards_draw_ha
     let sg = signed("a small shard's draw stated", &b, &w.keys);
     assert_eq!((st.bond, sg.tx.outputs[0].value), (KAS1, small.value + KAS1 as u64));
     let cheap = Stated { bond: KAS1 / 10, ..st };
-    let b = state_raw(&w.lib, &small, &small.s.fixed_hash(), &small.s.moving(), &cheap, &d.said(), small.s.form(), &w.script("KpfTChange"), w.payer(&w.c, &fc)).unwrap();
+    let b = state_raw(&w.lib, &small, &small.s.fixed_hash(), &small.s.moving(), &cheap, &said(&small.s, &d), small.s.form(), &w.script("KpfTChange"), w.payer(&w.c, &fc)).unwrap();
     assert!(!accepted(&b, &w.keys), "a draw stated at the shard's rate of what it holds, below a KAS");
     // And a covered account's statement has a bond of a note's least at the least (F100): an account of 1 KAS.
     let leg1 = fleg(&w, 1, 1, LONG, P10);
@@ -2720,7 +2765,7 @@ fn a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
     let shard = OLive { s, ..base.clone() };
     let at9 = [P10 * 9 / 10, 0, 0, 0];
     let (st, d) = s.draw(s.draw_max(&at9), at9, T0, shard.value as i64).unwrap();
-    let live = w.stated(&shard, &st, &d.said());
+    let live = w.stated(&shard, &st, &said(&shard.s, &d));
     let f = [fund(xk(&w.w), 37)];
     let script = w.script("KpfTDrawNote");
     let n = MarkNote { sid: s.sid, leg, entry: P10 * 95 / 100, key: xk(&w.w), asked: 5 * KAS1 };
@@ -3403,4 +3448,111 @@ fn under_a_call_the_young_legs_of_an_account_ask_nothing() {
         let b = c_enter_state_as(&w.lib, &empty, &seeded, &enter, SEED, &st2, &said2, &next, w.payer(&w.w, &f));
         assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "an entry whose leg says {what}");
     }
+}
+
+/// 17.8b: a draw says a trace (an amount, the list of its prices in order, a row of sums a row of the books), and a
+/// dispute names one point of it: 0 the end (no row is read), 1 to 4 a row, 5 and above a price of the list.
+#[test]
+fn a_draws_trace_is_answered_a_row_at_a_time() {
+    use kpf_protocol::reserve::{Priced, Traced};
+    let w = world();
+    let shard = w.shard();
+    let s = &shard.s;
+    let f = [fund(xk(&w.w), 32)];
+    let (st, d) = s.draw(s.draw_max(&PRICES), PRICES, T0, shard.value as i64).unwrap();
+    let t = s.traced(&d, false).unwrap();
+    assert_eq!((t.said().len(), t.e, t.n, t.list.len(), t.rows.len()), (184 + 56 * 2, 2, 4, 2, 4));
+    assert!(t.list[0].below(&t.list[1]) && t.list.iter().all(|x| x.day == 0 && x.price == P10));
+    assert_eq!(st.arg, t.arg());
+    let live = w.stated(&shard, &st, &t.said());
+    let row_s = w.script("KpfTShardRow");
+    // Every row is right, the two with no market as well; no other verdict is taken.
+    for at in 1..=4i64 {
+        let q = w.pointed(&live, at);
+        let (b, right) = shard_row(&w.lib, &q, s, &d, at, &row_s, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+        assert!(right);
+        let sg = signed(&format!("row {at} of a draw's trace answered right"), &b, &w.keys);
+        assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &st.again().hash()), "the draw stands again");
+        let forced = shard_row(&w.lib, &q, s, &d, at, &row_s, xk(&w.w), w.payer(&w.w, &f), Some(false));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "row {at} answered wrong");
+    }
+    // What is said otherwise is wrong at its own point, and the draw ends there: the shard again.
+    let stated = |lie: &Traced| (Stated { arg: lie.arg(), ..st }, lie.said());
+    let wrong_row = |what: &str, lie: &Traced, at: i64, point: i64| {
+        let (lst, said) = stated(lie);
+        let q = w.pointed(&w.stated(&shard, &lst, &said), point);
+        let (b, right) = shard_row_t(&w.lib, &q, s, lie, at, &row_s, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+        assert!(!right, "{what}");
+        let sg = signed(&format!("{what}: answered wrong"), &b, &w.keys);
+        assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "{what}: the shard again");
+        let forced = shard_row_t(&w.lib, &q, s, lie, at, &row_s, xk(&w.w), w.payer(&w.w, &f), Some(true));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered right");
+    };
+    let moved = |i: usize, f: usize, by: i64| {
+        let mut lie = t.clone();
+        let x = &mut lie.rows[i];
+        *[&mut x.place, &mut x.at, &mut x.wn, &mut x.wg, &mut x.sn][f] += by;
+        lie
+    };
+    wrong_row("a sum of the net's worth a sompi less in the second row", &moved(1, 2, -1), 2, 2);
+    wrong_row("the gross's worth more in the first row", &moved(0, 3, 5), 1, 1);
+    wrong_row("the signed worth of the first row turned", &Traced { rows: { let mut r = t.rows.clone(); r[0].sn = -r[0].sn; r }, ..t.clone() }, 1, 1);
+    wrong_row("a row with no market that adds something", &moved(2, 2, 1), 3, 3);
+    wrong_row("a row that says another place in the books", &moved(1, 0, 1), 2, 2);
+    wrong_row("a row that names the other price", &Traced { rows: { let mut r = t.rows.clone(); r[0].at = 1 - r[0].at; r }, ..t.clone() }, 1, 1);
+    wrong_row("a row that names a place beyond the list", &moved(0, 1, 7), 1, 1);
+    wrong_row("a row that names a place below nothing", &moved(0, 1, -5), 1, 1);
+    wrong_row("a wrong row under a dispute of the end", &moved(1, 2, -1), 2, 0);
+    // (A wrong row leaves the rows after it wrong or right by their own sums: the last row's is what the end reads.)
+    let less = { let mut lie = t.clone(); for r in lie.rows.iter_mut().skip(1) { r.wn -= 1_000_000; } lie };
+    assert_eq!((1..=4).map(|at| s.trace_row_judged(&less, at, false)).collect::<Vec<_>>(), vec![Some(true), Some(false), Some(true), Some(true)]);
+
+    // The end: the counts as written.
+    for (what, lie) in [("a count of prices that is not the list's", Traced { e: t.e + 1, ..t.clone() }), ("three rows written", Traced { n: 3, ..t.clone() })] {
+        let (lst, said) = stated(&lie);
+        let q = w.pointed(&w.stated(&shard, &lst, &said), 0);
+        let (b, right) = shard_end_t(&w.lib, &q, s, &lie, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+        assert!(!right, "{what}");
+        signed(&format!("{what}: the end answered wrong"), &b, &w.keys);
+        let forced = shard_end_t(&w.lib, &q, s, &lie, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(true));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered right");
+    }
+    // The list: out of its order, or a market twice, is wrong at the second with nothing cited; an entry of a day
+    // the same (until the day is built).
+    let swapped = Traced { list: vec![t.list[1], t.list[0]], rows: t.rows.iter().map(|r| kpf_protocol::reserve::TraceRow { at: 1 - r.at, ..*r }).collect(), ..t.clone() };
+    let twice = Traced { list: vec![t.list[0], t.list[0]], ..t.clone() };
+    let dated = Traced { list: vec![t.list[0], Priced { day: 7_000, ..t.list[1] }], ..t.clone() };
+    for (what, lie) in [("the list out of its order", &swapped), ("a market twice in the list", &twice), ("a price of a day", &dated)] {
+        let (lst, said) = stated(lie);
+        let q = w.pointed(&w.stated(&shard, &lst, &said), 6);
+        let (b, right) = shard_price_t(&w.lib, &q, s, lie, 6, &w.script("KpfTShardPrice"), None, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+        assert!(!right, "{what}");
+        let sg = signed(&format!("{what}: answered wrong with nothing cited"), &b, &w.keys);
+        assert_eq!(sg.tx.inputs.len(), 3, "the object, the script and a coin");
+        let forced = shard_price_t(&w.lib, &q, s, lie, 6, &w.script("KpfTShardPrice"), None, xk(&w.w), w.payer(&w.w, &f), Some(true));
+        assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered right");
+    }
+    // An entry no row of the shard is of: nobody cites its price (it costs whoever wrote it).
+    let stray = Priced { market: [0x7f; 32], limit: t.list[0].limit, day: 0, price: P10 };
+    let mut list = vec![t.list[0], t.list[1], stray];
+    list.sort_by_key(|x| x.numbers());
+    let at_of = |m: &[u8; 32]| list.iter().position(|x| x.market == *m).unwrap() as i64;
+    let rows = t.rows.iter().enumerate().map(|(i, r)| kpf_protocol::reserve::TraceRow { at: if i < 2 { at_of(&s.rows[i].head.market) } else { 0 }, ..*r }).collect();
+    let with = Traced { e: 3, list: list.clone(), rows, ..t.clone() };
+    assert!((1..=4).all(|at| s.trace_row_judged(&with, at, false) == Some(true)));
+    let (lst, said) = stated(&with);
+    let point = 5 + at_of(&[0x7f; 32]);
+    let q = w.pointed(&w.stated(&shard, &lst, &said), point);
+    let c = w.cited(0, P10);
+    assert!(shard_price_t(&w.lib, &q, s, &with, point, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.w), w.payer(&w.w, &f), None).is_err());
+    assert!(shard_price_t(&w.lib, &q, s, &with, point, &w.script("KpfTShardPrice"), None, xk(&w.w), w.payer(&w.w, &f), None).is_err());
+
+    // Where it is stated: a length that is no trace's is refused.
+    for said in [t.said()[..t.said().len() - 1].to_vec(), [t.said(), vec![0]].concat(), t.said()[..183].to_vec(), [t.said(), vec![0; 56 * 3]].concat()] {
+        let lst = Stated { arg: kpf_protocol::committee::blake2b(&said), ..st };
+        let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &lst, &said, s.form(), &w.script("KpfTChange"), w.payer(&w.c, &[fund(xk(&w.c), 33)]));
+        assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a statement of {} bytes", said.len());
+    }
+    let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &st, &t.said(), s.form(), &w.script("KpfTChange"), w.payer(&w.c, &[fund(xk(&w.c), 33)])).unwrap();
+    assert!(accepted(&b, &w.keys), "the control");
 }

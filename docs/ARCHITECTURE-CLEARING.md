@@ -3244,7 +3244,46 @@ not need the tree; the tree needs traces. Four commits, each with every test of 
    after an argument was added (five of the review's own, found and corrected): a change that adds an argument
    brings the places along.
 2. **A draw and a call as traces, on four rows**, with today's judgement of an end kept as what the trace is
-   compared with; the call's object a list of prices.
+   compared with; the call's object a list of prices. **Built and reviewed** (17.8b; `s294_trace_sil.py`, run after
+   `s286`; `Traced`, `Priced`, `TraceRow` and `Shard::traced` in `reserve.rs`): a draw and a call say a trace;
+   `KpfTShardEnd` and `KpfTCallEnd` read no row; the new `KpfTShardRow` answers a row (the library has 71
+   scripts); `KpfTShardPrice` answers a price of the list (the points 5 and above) and its order; the call's
+   object is the list, and `KpfTCStep` reads a leg's price from it. In the model, on 80,000 random shards and
+   prices, the trace judged a row at a time is the verdict of the end over the rows (14,594 right, 61,026
+   wrong, 4,380 of no verdict), and each of 291,880 numbers of a right trace moved is wrong at its own row. At
+   the engine (`a_draws_trace_is_answered_a_row_at_a_time` and the tests of a draw and a call brought along):
+   every row answered right and no other verdict taken; a sum, a place, a price's place moved, each answered
+   wrong at its row and the shard again; the counts as written, at the end; a list out of its order, a market
+   twice, a price of a day, wrong at the second with nothing cited; an entry no row is of cited by nobody; a
+   statement of another length refused where it is stated. **One thing is not as 17.8b has it:** a market in
+   the list is the name its row has (the hash of its kind and its market, as a row's head holds it), not the
+   plain market: a row's answer and a step compare bytes they have today, the price's answer keeps its
+   citation's market shown, and whoever states a draw gives a price a row as before. The plain market comes
+   with the tree's keys (4), where the rows' names change as well.
+   **Review T5** (`docs/audit/REVIEW-T5-trace.md`; its tests `auditT5_trace.rs`; the earlier reviews' tests
+   brought along; the default workspace 689 tests, none failed). Every point of a right statement is answered:
+   the end, the four rows (one with no market by its sums), each price with its citation, and every point
+   beyond the list up to the largest number with nothing cited. No wrong statement was found that is answered
+   right everywhere: on 14 random shards, a draw and a call each, 347 points of the rule's traces answered
+   right and not wrong, and 747 traces with one thing changed each answered wrong at the model's point (127 at
+   the end, 551 at a row, 69 at a price), and again under a dispute of another point. A draw lives no longer
+   for having nine points: the last time to dispute does not move.
+
+   | Finding | What it is | Decided |
+   |---|---|---|
+   | R1 (high) | a list's day was read as a number by the row's and the price's answers and as bytes by the call's step, and a number of nothing has two forms in eight bytes (F70 again): a call with one byte so written was right at every point, was applied, and no account of that market could be stepped under it: the shard called for good | **fixed, and closed at the engine** for a call and for a draw: both answers compare the eight bytes with eight of nothing, as the step does (the row of that market and the price of that entry are answered wrong and not right, the shard again); what is said is read back only where it is written back the same. No other number of nothing is read by two readers that could disagree: the day was the only one that also goes into an object compared as bytes |
+   | R2 (low) | under a false call nobody disputed, an account is stepped only if the list has its market's entry (the end wrote the four heads itself before) | said: a call's list is looked at, as its prices are |
+   | R3 (low) | the model's judgement of a row differs from the script's where a sum said is at the end of 64 bits (nothing is gained by it) | the model follows the script's order |
+   | R4 (low) | the call's object says no scale: a call whose row says another scale is the same object | as meant (17.8b): a leg has its row's scale |
+   | R5 (low) | measured: a price answered is 9,454 to 9,566 bytes (8,226), a call's step of one leg 6,912 to 7,024 (6,890): heavier than estimated | said |
+   | R7 (low; open) | by R1's fix the model reads no statement that writes any number of nothing its other way, and the scripts still do: a wrong draw so written is answered wrong at the engine, and a watcher's tool can neither name its wrong point nor answer it | the model is to keep the bytes as said beside the numbers (judge by the numbers, answer with the bytes); with the next change of these builders |
+
+   Measured: a draw stated 3,382 bytes at two markets and 3,494 at four (about 3,200); a call stated 3,423 and
+   3,535 (2,913); a draw's end answered 3,407 and 3,519 (about 5,050); a call's 3,512 and 3,624 (5,402); a row
+   answered 4,176 and 4,288. `KpfTShardEnd` is 1,747 bytes (3,234), `KpfTCallEnd` 1,853 (3,695),
+   `KpfTShardPrice` 2,700 (1,810), `KpfTCStep` 5,056 (4,829), `KpfTShardRow` 2,098. And found on the way: one of
+   the earlier reviews' tests had passed for the wrong reason since a point's number changed its meaning, and
+   another named places as rows where they are the list's.
 3. **The claims**: no claim paid while a row has a unit, what a called shard has paid (F114), two classes (L1,
    L4).
 4. **The tree**: it then touches only the scripts that read one row, and a row's answer.
@@ -3319,6 +3358,103 @@ The 1,000 units of L4's play ask 1,012 KAS of a shard that holds 19.9: refused; 
 review has L4's user whole at moves of 1 % and 2 % with one row, and with all four rows at their caps and
 every market moving the owner's way 12.3 of 15.3 at 1 % and 9.1 of 16.0 at 2 % (2.12 and 1.16 with no gate).
 It counts what is held and not the equity, and a row at a time: it bounds a leg, it is not the rule of 12.
+
+### 17.8c The claims of a called shard, and the row's gate (17.8a, 3; on paper, reviewed)
+
+Today a called shard owes one number (what its notes asked and it did not pay), and a claim is paid its amount
+by what the shard holds over what it owes, once no row has a unit, and is spent. Three things are wrong with
+it: coins that reach the shard after the last claim are the owner's (F114); a leg entered and called is a
+claim (F116: closed at the call's step by asking nothing of the young, which an owner uses to be rid of what
+its newest users gained: L4), and the same leg leaving by its user's own statement is a claim again (L1).
+
+**The numbers.** A called shard has: H, what it holds; C1 and C2, what it owes by claims of the first and of
+the second class, neither of which falls when a claim is paid; D1 and D2, what it has paid to each. C1 stands
+where what it owes stands today (its moving part): while the shard is not called it is as today, the sum of
+the notes of the rest that stand (it rises by what was asked and not paid, and falls as a note is paid), and at
+the call nothing is written but the time. C2, D1 and D2 are the claims' numbers, in the books' hash, shown
+plain (27 bytes with their pushes) where 17.8a, 1 carries their hash. W is H, D1 and D2: what the shard ever held for its claims; a
+payment does not change it, and every coin that reaches the shard raises it.
+
+**A claim** is a note of its key and four numbers: A1 and a1, its amount of the first class and what it has
+been paid of it; A2 and a2, of the second. One note, since a block takes one beside the shard.
+
+**When it is paid.** No claim is paid while a row has a unit (as today: every note that takes a leg out is
+counted first), nor before the call's time, a lateness and **three** dispute periods (one more than a
+statement lives: a mark stated a block before the call's time and disputed is applied by then). Then, in
+whatever order:
+
+- First class: its part is A1 where W is at least C1; else A1 by W over C1 (in the unit `KpfTCallPay` has,
+  chosen from C1; C1 rounded up, W down). It is paid the smaller of its part less a1 and H.
+- Second class: S is W less C1, and nothing is paid where S is not above nothing. Its part is A2 where S is at
+  least C2; else A2 by S over C2. It is paid the smaller of its part less a2 and H less what the first class is
+  still owed (C1 less D1).
+- A claim that is covered is paid whole whatever its size; a part below a note's least waits (the least is of
+  the two parts together, in one output). A note says amounts no less than what it was paid, or is paid
+  nothing (a note is not taken at its word: F86); and no part is more than what its class is still owed (C
+  less D: a note that was never counted would else take what was paid past what is owed, and the call would
+  never end).
+- **Once anything was paid, every claim that is counted is of the second class** (review T4, T29). A claim
+  counted late is else not behind: with 150 held, a user's first claim of 100, the owner's second of 50 and
+  the owner's mark's note of 100 not yet applied, the 50 are paid, the note is then applied and paid 75, and
+  the user finds 25, where at one share it had 75. Only a mark's note can be counted that late; whoever holds
+  one applies it before the time.
+- The call ends where no row has a unit, D1 is C1 and D2 is C2: the numbers are written as nothing. A shard
+  that never holds enough stays called, its claims standing, and what reaches it late is theirs.
+
+**Where a claim has its class: where its note is applied to a called shard, by its legs' times against the
+call's** (a leg is young where it entered after the call's time less T: 17.9), for every kind of note:
+
+| Where the claim is born | Class |
+|---|---|
+| a note of the rest written before the call | first: it is in what is owed already |
+| the call's step (`KpfTCStep`) | a note of a kind of its own (tag 9: the legs' chain, the key, what is asked, what the young gained), written by that script alone, so that the note every account's leaving writes does not change: what the old legs gained, with what the young lost together, first; what the young gained together, less their band, second. Where it is applied it is held to its legs: the young's amount nothing where no leg is young, the other not above nothing where every leg is |
+| a note of one leg (a leaving, a step of a liquidation), a mark's note | by that leg: young at the call, second |
+| a note of two to six legs | second, whole, where any leg is young; else first |
+
+- **The band** of the second class is the tolerance twice of the sum of the young legs' larger worths (each at
+  its entry or at the call's price), rounded up once, in the call's step: without it a user's young gain is
+  diluted for certain by an owner's leg entered at one edge and called at the other (17.10). No second band
+  where a note is applied: a leaving took its own, and a mark left its band in the leg.
+- **Nothing of the second class is set off**: not against what the account's old legs lost, not against what
+  the account owes. (Set off, an owner's old loss would be paid with a young leg's gain, and the first class
+  would lose it.)
+- Not "stated after the call's time": no script that counts a claim knows when a statement was stated, and an
+  owner that says a call's time a lateness back would push a user of old legs down.
+
+**The row's gate.** `KpfTEnterS` reads the row a leg enters, and holds that **what the shard holds, less what
+it owes, is at least the upper requirement of that row with the leg, at the leg's own entry, or that the
+row's requirement with the leg is no more than without it** (a leg that sets the row off is not refused: a
+shard that holds 100 with users long 10,000 units takes the short that brings it from 775 asked to 450). The
+requirement is `need_of` for the one row: the maintenance rate and the tolerance of the worth of its net units,
+and the rate on the gross and the tolerance of the worth of its gross units. Nothing more is shown, about 200
+bytes of script. A leg of 100,000 KAS in a row of its own needs 7,750 held; an owner's 1,000 units of L4's play
+need about 990 KAS paid in, which then pay the users. It bounds a leg by what its shard holds; it is not the rule of 12 (it counts
+what is held and not the equity, and a row at a time). With it and the second class, L4's user is whole at
+moves of 1 % and 2 % in one row (the review's numbers; in the model before it is built).
+
+**What changes:** `KpfTCStep` (the note of tag 9; the band), `KpfTLeft` (`apply`: the class; `rest`: the note
+of four numbers), `KpfTLeftAll`, `KpfTLeftVoid` (it takes a note of tag 9), `KpfTMarkNote` (it opens the
+books: under a call it writes what is owed of the second class), `KpfTDrawNote` (a note of the rest by its new
+hash), `KpfTCallPay` (the two parts; the end), `KpfTEnterS` (the gate), `KpfTShardOpen` and the scripts that
+show the claims' numbers. What does not: an account's statements; the note an account's leaving writes; a shard
+that is not called.
+
+**In three pieces, each reviewed at the engine:** (a) what a called shard has paid: the claim of four numbers
+with nothing of the second class, the first formula, the time, the end (F114's shard is its test); (b) the
+second class: the note of tag 9, the band, the class at the applying, "second once anything was paid", the
+second formula (L1, T29's play, L4 in the model); (c) the gate, in `KpfTEnterS` alone (the tests of F116 and L4
+enter legs it refuses: their shards are paid up, or the legs are within it).
+
+**Said to a user:** a shard stays called until both classes are whole: an owner that brought a call about
+pays its users whole to have its shard back, or gives it up. Apply your notes and show your claim when the
+time comes: within the second class a claim shown early keeps what it was paid. A step of a liquidation, which
+is anyone's, that names an old leg that gained beside a young one writes a note of the second class whole.
+
+Sizes, estimated by the review: an entry stated about 5,300 bytes (5,040), a note of one leg applied about
+4,550 (4,314), a claim paid about 4,100 (3,624), a call's step about 350 more: everything a little heavier,
+the two common paths by about 5 %.
+
+The checks of each script, as lists to build from, are in `docs/audit/REVIEW-T4-tree.md` ("Third round").
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 

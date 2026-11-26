@@ -998,10 +998,12 @@ impl Account {
             if (l.dir != LONG && l.dir != SHORT) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 {
                 return None;
             }
-            // (The row of the leg's market: its name, its scale and its price's limit.)
+            // (The price the call's list has for the leg's market: the name its row has, its price's limit, no
+            // day. The place is the list's: docs 17.8b.)
             let name = crate::reserve::futures_market(&l.market);
-            let r = call.heads.iter().position(|h| h.market == name && h.scale == l.scale && h.price_max == l.price_max)?;
-            let p = call.prices[r];
+            let list = call.list();
+            let r = list.iter().position(|e| e.market == name && e.limit == l.price_max && e.day == 0)?;
+            let p = list[r].price;
             if p < 0 {
                 return None;
             }

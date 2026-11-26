@@ -2783,7 +2783,9 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
     // (Round 54: 61, with the four of the call; round 56: 63, with the two of section 15.)
     // (Round 59: 64, with the split of 16.2; round 60: 66, with the two of a mark.)
-    assert_eq!(names.len(), 70, "{names:?}");
+    // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a draw's or a call's trace.)
+    assert_eq!(names.len(), 71, "{names:?}");
+    assert!(names.iter().any(|n| n == "KpfTShardRow"), "{names:?}");
     assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
     for cmd in ["acct-leg", "acct-out"] {
         let (ok, out, err) = s.h.run(&[cmd, "--account", "nothing.json"]);

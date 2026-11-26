@@ -348,7 +348,8 @@ pub fn shard_draw_cmd(a: &Args) -> R<()> {
     let s = script_of(a, &l.lib, "KpfTChange", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let (b, st, d) = tb::shard_draw(&l.lib, &alive(&l, shard, false)?, &s, amount, p, t0_of(a)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
-    let o = AObj::Stated { on: Host::Shard(shard), st, said: d.said() };
+    let said = shard.traced(&d, false).ok_or("the shard's rows at these prices are beyond what is counted")?.said();
+    let o = AObj::Stated { on: Host::Shard(shard), st, said };
     show(&o, net);
     adone(a, "shard-draw", &b, &keys, net, &mut node, &l.lib, &[o], &["KpfTChange"])
 }
@@ -611,14 +612,18 @@ pub fn answer_cmd(a: &Args) -> R<()> {
     let p = Payer { funds: &fu, change_to: fk, rate: rate(a)? };
     let (b, right, script) = match &on {
         Host::Shard(sh) => {
-            let d = Draw::read(&said).ok_or("the statement's bytes are not a draw's")?;
+            let d = kpf_protocol::reserve::Traced::read(&said).ok_or("the statement's bytes are not a draw's")?;
             if at == 0 {
                 let s = script_of(a, &l.lib, "KpfTShardEnd", &mut node, net)?;
-                let (b, r) = tb::shard_end(&l.lib, &q, sh, &d, &s, fk, p, None).map_err(e)?;
+                let (b, r) = tb::shard_end_t(&l.lib, &q, sh, &d, &s, fk, p, None).map_err(e)?;
                 (b, r, "KpfTShardEnd")
+            } else if at <= 4 {
+                let s = script_of(a, &l.lib, "KpfTShardRow", &mut node, net)?;
+                let (b, r) = tb::shard_row_t(&l.lib, &q, sh, &d, at, &s, fk, p, None).map_err(e)?;
+                (b, r, "KpfTShardRow")
             } else {
                 let s = script_of(a, &l.lib, "KpfTShardPrice", &mut node, net)?;
-                let (b, r) = tb::shard_price(&l.lib, &q, sh, &d, at, &s, pair, fk, p, None).map_err(e)?;
+                let (b, r) = tb::shard_price_t(&l.lib, &q, sh, &d, at, &s, pair, fk, p, None).map_err(e)?;
                 (b, r, "KpfTShardPrice")
             }
         }

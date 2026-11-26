@@ -7244,6 +7244,246 @@ fn t1b_r42_a_statement_that_changes_nothing_is_right_and_holds_the_account_for_a
 
 use kpf_protocol::reserve::Draw;
 
+/// Review T5: a draw and a call say a trace (docs 17.8b), which needs the shard the statement is on. What a draw at
+/// the prices `d` gives says on `s`, or a call (`call`). Where a worth or a sum is beyond 64 bits nobody states the
+/// rule's trace (`Shard::traced` is `None`): the sums are then written as far as a script's number goes, a trace of
+/// the right length whose row that does not fit nobody answers.
+fn trace_t5(s: &Shard, d: &Draw, call: bool) -> kpf_protocol::reserve::Traced {
+    use kpf_protocol::reserve::{Priced, TraceRow, Traced};
+    if let Some(t) = s.traced(d, call) {
+        return t;
+    }
+    let mut list: Vec<Priced> = s.rows.iter().zip(&d.prices).filter(|(r, _)| r.head.market != [0; 32]).map(|(r, p)| Priced { market: r.head.market, limit: r.head.price_max, day: 0, price: *p }).collect();
+    list.sort_by_key(|p| p.numbers());
+    let fit = |x: i128| x.clamp(-(i64::MAX as i128), i64::MAX as i128) as i64;
+    let (mut wn, mut wg, mut sn) = (0i128, 0i128, 0i128);
+    let mut rows = vec![];
+    for (i, (row, p)) in s.rows.iter().zip(&d.prices).enumerate() {
+        let mut at = 0;
+        if row.head.market != [0; 32] {
+            at = list.iter().position(|x| x.market == row.head.market && x.limit == row.head.price_max).unwrap_or(0) as i64;
+            if *p > 0 && *p <= row.head.price_max && row.head.scale > 0 {
+                let (g, sc) = (s.t.g_bps as i128, row.head.scale as i128);
+                let q = if !call { *p as i128 } else if row.net > 0 { ((*p as i128 * (10_000 + g) + 9_999) / 10_000).min(row.head.price_max as i128) } else { *p as i128 * (10_000 - g) / 10_000 };
+                let worth = |n: i128| (n / sc) * q + (n % sc) * (q / sc) + ((n % sc) * (q % sc)) / sc;
+                let w = worth((row.net as i128).abs());
+                wn += w;
+                sn += if row.net < 0 { -w } else { w };
+                wg += worth((row.gross as i128).abs());
+            }
+        }
+        rows.push(TraceRow { place: i as i64, at, wn: fit(wn), wg: fit(wg), sn: fit(sn) });
+    }
+    Traced { amount: d.amount, e: list.len() as i64, list, n: 4, rows }
+}
+fn dsaid(s: &Shard, d: &Draw) -> Vec<u8> {
+    trace_t5(s, d, false).said()
+}
+fn csaid(s: &Shard, d: &Draw) -> Vec<u8> {
+    trace_t5(s, d, true).said()
+}
+/// The point of the price of the row `r` (from 1) of a draw or a call at the prices `d` on `s`: 4 and the place its
+/// price has in the list, from 1 (review T5: it was the point `r`; the points 1 to 4 are the rows' now).
+fn price_point_t5(s: &Shard, d: &Draw, r: usize) -> i64 {
+    5 + trace_t5(s, d, false).rows[r - 1].at
+}
+
+/// Review T5. `KpfTShardRow.answer`'s verdict written out in the script's own order, for the row `at` (1 to 4) of
+/// the trace `t` on the books of `s` (`call`: the kind 11, the price moved the tolerance): `None` where a number of
+/// the script does not fit. (The script adds the row before's signed sum and the worth before it looks whether
+/// the row is short, and compares all three sums whatever the first two gave.)
+fn row_as_the_script_t5(s: &Shard, t: &kpf_protocol::reserve::Traced, at: usize, call: bool) -> Option<bool> {
+    const BPS: i64 = 10_000;
+    let fit = |v: Option<i64>| v.filter(|x| *x != i64::MIN);
+    let ne = t.list.len() as i64;
+    let cur = t.rows[at - 1];
+    let (pwn, pwg, psn) = if at >= 2 { (t.rows[at - 2].wn, t.rows[at - 2].wg, t.rows[at - 2].sn) } else { (0, 0, 0) };
+    let mut ok = cur.place == at as i64 - 1;
+    let row = &s.rows[at - 1];
+    if row.head.market == [0; 32] {
+        if cur.wn != pwn || cur.wg != pwg || cur.sn != psn {
+            ok = false;
+        }
+        return Some(ok);
+    }
+    let c = cur.at;
+    if c < 0 || c >= ne {
+        ok = false;
+    }
+    if ok {
+        let en = t.list[c as usize];
+        let (sc, pm, p) = (row.head.scale, row.head.price_max, en.price);
+        if en.market != row.head.market || en.limit != pm || en.day != 0 || p <= 0 || p > pm || sc <= 0 {
+            ok = false;
+        }
+        if ok {
+            let (mut net, mut gross, mut short) = (row.net, row.gross, false);
+            if net < 0 {
+                net = fit(0i64.checked_sub(net))?;
+                short = true;
+            }
+            if gross < 0 {
+                gross = fit(0i64.checked_sub(gross))?;
+            }
+            let mut q = p;
+            if call {
+                let g = s.t.g_bps;
+                q = fit(p.checked_mul(BPS - g))? / BPS;
+                if !short && net > 0 {
+                    q = fit(fit(p.checked_mul(BPS + g))?.checked_add(BPS - 1))? / BPS;
+                    if q > pm {
+                        q = pm;
+                    }
+                }
+            }
+            let worth = |n: i64| fit(fit(fit((n / sc).checked_mul(q))?.checked_add(fit((n % sc).checked_mul(q / sc))?))?.checked_add(fit((n % sc).checked_mul(q % sc))? / sc));
+            let (w, v) = (worth(net)?, worth(gross)?);
+            let mut nsn = fit(psn.checked_add(w))?;
+            if short {
+                nsn = fit(psn.checked_sub(w))?;
+            }
+            if cur.wn != fit(pwn.checked_add(w))? {
+                ok = false;
+            }
+            if cur.wg != fit(pwg.checked_add(v))? {
+                ok = false;
+            }
+            if cur.sn != nsn {
+                ok = false;
+            }
+        }
+    }
+    Some(ok)
+}
+
+/// Review T5. The requirement of an end, of the last row's sums, as the two ends write it: four terms added in
+/// their order.
+fn need_as_the_script_t5(wn: i64, wg: i64, rn: i64, rg: i64) -> Option<i64> {
+    const BPS: i64 = 10_000;
+    let fit = |v: Option<i64>| v.filter(|x| *x != i64::MIN);
+    let a = fit((wn / BPS).checked_mul(rn))?;
+    let b = fit(fit((wn % BPS).checked_mul(rn))?.checked_add(BPS - 1))? / BPS;
+    let c = fit((wg / BPS).checked_mul(rg))?;
+    let d = fit(fit((wg % BPS).checked_mul(rg))?.checked_add(BPS - 1))? / BPS;
+    fit(fit(fit(a.checked_add(b))?.checked_add(c))?.checked_add(d))
+}
+
+/// Review T5. `KpfTShardEnd.answer`'s verdict written out in the script's own order, of the trace `t` (docs 17.8b:
+/// the two counts as written, the last row's sums, no row read), for a draw stated at `t0` by `claimer` on a shard
+/// whose output held `held`, with the outputs `outs`: `None` where a number of the script does not fit.
+fn draw_end_of_trace_as_the_script_t5(s: &Shard, t: &kpf_protocol::reserve::Traced, claimer: &[u8; 32], t0: i64, held: i64, outs: &Outs) -> Option<bool> {
+    let fit = |v: Option<i64>| v.filter(|x| *x != i64::MIN);
+    let mut ok = *claimer == s.owner && t.amount > 0;
+    if t.e != t.list.len() as i64 || t.n != 4 {
+        ok = false;
+    }
+    let (wn, wg, sn) = (t.rows[3].wn, t.rows[3].wg, t.rows[3].sn);
+    let g = s.t.g_bps;
+    let rn = fit(s.t.mmr_bps.checked_add(g))?;
+    let mut rg = fit(s.t.mmr_bps.checked_sub(fit(3i64.checked_mul(g))?))? / 2;
+    if rg < 0 {
+        rg = 0;
+    }
+    let rg = fit(rg.checked_add(g))?;
+    let need = need_as_the_script_t5(wn, wg, rn, rg)?;
+    let has = fit(s.held.checked_sub(t.amount))?;
+    if has < 0 || s.called != 0 {
+        ok = false;
+    }
+    if fit(fit(has.checked_add(sn))?.checked_sub(s.basis))? < need {
+        ok = false;
+    }
+    if t0 < s.expiry {
+        ok = false;
+    }
+    let next = fit(t0.checked_add(fit(2i64.checked_mul(fit(s.t.late_daa.checked_add(fit(2i64.checked_mul(s.dispute_daa))?))?))?))?;
+    if ok {
+        let after = Shard { held: has, expiry: next, ..*s };
+        if Outs::of(&[Out { key: false, to: after.hash(), value: fit(held.checked_sub(t.amount))? }, Out { key: true, to: *claimer, value: t.amount }]).as_ref() != Some(outs) {
+            ok = false;
+        }
+    }
+    Some(ok)
+}
+
+/// Review T5. `KpfTCallEnd.answer`'s verdict written out in the script's own order, of the trace `t`: the call's
+/// object is of the list's bytes as they are said.
+fn call_end_of_trace_as_the_script_t5(s: &Shard, t: &kpf_protocol::reserve::Traced, t0: i64, held: i64, outs: &Outs, claimer: &[u8; 32]) -> Option<bool> {
+    let fit = |v: Option<i64>| v.filter(|x| *x != i64::MIN);
+    let mut ok = t.amount == 0 && t0 > 0;
+    let g = s.t.g_bps;
+    if t.e != t.list.len() as i64 || t.n != 4 {
+        ok = false;
+    }
+    let (wn, wg, sn) = (t.rows[3].wn, t.rows[3].wg, t.rows[3].sn);
+    let mmr = s.t.mmr_bps;
+    let rn = fit(mmr.checked_sub(g))?.max(0);
+    let rg = (fit(mmr.checked_sub(fit(3i64.checked_mul(g))?))? / 2).max(0);
+    let need = need_as_the_script_t5(wn, wg, rn, rg)?;
+    if s.called != 0 {
+        ok = false;
+    }
+    if fit(fit(s.held.checked_add(sn))?.checked_sub(s.basis))? >= need {
+        ok = false;
+    }
+    let mut pay = s.t.keeper_fee_min.max(0);
+    if s.held < pay {
+        pay = 0;
+    }
+    if fit(fit(held.checked_sub(pay))?.checked_sub(CALL_HOLD))? < CALL_HOLD {
+        ok = false;
+    }
+    if ok {
+        let next = Shard { held: s.held - pay, called: t0, ..*s };
+        let mut v = vec![(Out { key: false, to: next.hash(), value: held - pay - CALL_HOLD }, false), (Out { key: false, to: Called::hash_of(&s.sid, t0, &t.list_bytes()), value: CALL_HOLD }, true)];
+        if pay > 0 {
+            v.push((Out { key: true, to: *claimer, value: pay }, false));
+        }
+        if Outs::with_notes(&v).as_ref() != Some(outs) {
+            ok = false;
+        }
+    }
+    Some(ok)
+}
+
+/// Review T5. What the engine takes of the five answers that judge a trace with no citation, each point disputed
+/// itself: the end (point 0: `KpfTShardEnd`, or `KpfTCallEnd` for a call) and the four rows (points 1 to 4:
+/// `KpfTShardRow`): for each, (right is taken, wrong is taken). The statement `live` says the trace `t`.
+fn points_taken_t5(w: &OW, live: &OLive<Stated>, s: &Shard, t: &kpf_protocol::reserve::Traced) -> [(bool, bool); 5] {
+    let mut out = [(false, false); 5];
+    for at in 0..5i64 {
+        let q = OLive { daa: live.daa + 10, ..w.pointed(live, at) };
+        let take = |v: bool| {
+            let f = [fund(xk(&w.f), 72, 1_000)];
+            let p = w.payer(&w.f, &f);
+            let b = if at > 0 {
+                shard_row_t(&w.lib, &q, s, t, at, &w.script("KpfTShardRow"), xk(&w.f), p, Some(v))
+            } else if live.s.kind == KIND_CALL {
+                call_end_t(&w.lib, &q, s, t, &w.script("KpfTCallEnd"), xk(&w.f), p, Some(v))
+            } else {
+                shard_end_t(&w.lib, &q, s, t, &w.script("KpfTShardEnd"), xk(&w.f), p, Some(v))
+            };
+            b.is_ok_and(|b| taken30(&b.0, &w.keys))
+        };
+        out[at as usize] = (take(true), take(false));
+        assert!(!(out[at as usize].0 && out[at as usize].1), "the point {at} is answered right and wrong");
+    }
+    out
+}
+
+/// Review T5. The five answers as one verdict of the statement, as the end's alone was before the trace: (every
+/// point is answered right and none wrong, some point is answered wrong). Neither: a point nobody answers and none
+/// that is wrong.
+fn whole_t5(v: [(bool, bool); 5]) -> (bool, bool) {
+    (v.iter().all(|x| *x == (true, false)), v.iter().any(|x| x.1))
+}
+
+/// Review T5. The verdicts of the script's arithmetic written out, for the five points of a trace, against what
+/// the engine took: equal at every point. And the model's (`trace_row_judged`; the end's by the caller).
+fn points_as_the_script_t5(s: &Shard, t: &kpf_protocol::reserve::Traced, call: bool, end: Option<bool>) -> [(bool, bool); 5] {
+    [verdicts(end), verdicts(row_as_the_script_t5(s, t, 1, call)), verdicts(row_as_the_script_t5(s, t, 2, call)), verdicts(row_as_the_script_t5(s, t, 3, call)), verdicts(row_as_the_script_t5(s, t, 4, call))]
+}
+
 /// A shard of the model's making under the registry's id (nothing opened it): for what a draw's end says of it.
 fn shard_made45(s: Shard, n: u8) -> OLive<Shard> {
     OLive { value: (s.held + kpf_protocol::reserve::SHARD_CARRIER) as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(n), daa: 6_100 }
@@ -7258,26 +7498,30 @@ fn draw_by_hand45(shard: &OLive<Shard>, amount: i64, prices: [i64; 4], claimer: 
     // (Round 51: the shard a draw leaves says the time before which no draw is stated again.)
     let after = Shard { held: s.held.checked_sub(amount)?, expiry: s.draw_time(T0).unwrap_or(s.expiry), ..*s };
     let outs = Outs::of(&[Out { key: false, to: after.hash(), value: held.checked_sub(amount)? }, Out { key: true, to: claimer, value: amount }])?;
-    Some((Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: kpf_protocol::thin::KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: s.bond(), claimer, held }, d))
+    Some((Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: kpf_protocol::thin::KIND_DRAW, t0: T0, arg: blake2b(&dsaid(s, &d)), outs, bond: s.bond(), claimer, held }, d))
 }
 
-/// What the engine takes of the answer of the end of a draw: (right is taken, wrong is taken); `None` where the
-/// statement itself is not stated.
+/// What the engine takes of the answers of a draw: (right is taken, wrong is taken); `None` where the statement
+/// itself is not stated. (Review T5, docs 17.8b: it was the answer of the end alone, which computed the rule over
+/// the four rows. The end reads no row now: the rule is the end and the four rows of the trace, each a point of
+/// its own. "Right": the end and every row are answered right and none wrong. "Wrong": some point of the five is
+/// answered wrong. So a draw at a price that is none, which was wrong at its end, is wrong here by its row.)
 fn draw_end_taken45(w: &OW, shard: &OLive<Shard>, st: &Stated, d: &Draw) -> Option<(bool, bool)> {
+    draw_points_taken_t5(w, shard, st, &trace_t5(&shard.s, d, false)).map(whole_t5)
+}
+
+/// Review T5. The draw `st`, which says the trace `t`, stated on the shard by `KpfTChange`, and what the engine
+/// takes of the answers of its five points; `None` where the statement is not stated.
+fn draw_points_taken_t5(w: &OW, shard: &OLive<Shard>, st: &Stated, t: &kpf_protocol::reserve::Traced) -> Option<[(bool, bool); 5]> {
     let s = &shard.s;
     let who = w.who(&st.claimer);
     let f = [fund(xk(who), 71, 1_000)];
-    let b = state_raw(&w.lib, shard, &s.fixed_hash(), &s.moving(), st, &d.said(), s.form(), &w.script("KpfTChange"), w.payer(who, &f)).ok()?;
+    let b = state_raw(&w.lib, shard, &s.fixed_hash(), &s.moving(), st, &t.said(), s.form(), &w.script("KpfTChange"), w.payer(who, &f)).ok()?;
     let sg = b.sign(&w.keys).ok()?;
     if !kpf_protocol::verify::verify(&sg.tx, &sg.entries).is_ok() {
         return None;
     }
-    let q = w.pointed(&nth(&sg, 0, *st, 6_510), 0);
-    let take = |v: bool| {
-        let f = [fund(xk(&w.w), 72, 1_000)];
-        shard_end(&w.lib, &q, s, d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
-    };
-    Some((take(true), take(false)))
+    Some(points_taken_t5(w, &nth(&sg, 0, *st, 6_510), s, t))
 }
 
 /// `KpfTShardEnd`'s arithmetic in the order the script has it: the worths of a row are summed only while nothing is
@@ -7332,7 +7576,9 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
     let owner = xk(&w.b);
     let big = 1i64 << 62;
     let (mut cases, mut rights, mut wrongs, mut nones, mut unstated, mut model_wrong_script_none) = (0, 0, 0, 0, 0, 0);
+    let (mut none_now_wrong, mut no_trace, mut wrong_now_unanswered) = (0, 0, 0);
     let mut mismatches = vec![];
+    let mut trace_model_differs = vec![];
     for case in 0..360 {
         // Every other book is one a shard could have: rows that are legs' sums, prices within their limits, a basis
         // of the size of its worth, not called, drawn by its owner.
@@ -7427,25 +7673,64 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
             model_wrong_script_none += 1;
         }
         let model = script;
-        let Some(engine) = draw_end_taken45(&w, &shard, &st, &d) else {
+        // (Review T5, docs 17.8b. The draw says a trace: the rule's where its sums are numbers, else the sums as
+        // far as a number goes. The engine answers five points: the end by the last row's sums, and the four rows.
+        // Each is the verdict of that script's arithmetic written out, and of the model's function of it. And the
+        // five together against the end as it was computed over the rows (`script`, kept as the reference): right
+        // by it, every point is right; wrong by it, some point is answered wrong; no verdict by it, not every
+        // point is right. A draw that had no verdict may now be answered wrong at a point that can be computed.)
+        let t = trace_t5(&s, &d, false);
+        let Some(engine) = draw_points_taken_t5(&w, &shard, &st, &t) else {
             unstated += 1;
             continue;
         };
         // (The outputs are the rule's: the end is right where the rule allows the draw.)
         assert_eq!(s.draw_end_judged(&d, &claimer, T0) == Some(true), s.draw_end_right(&d, &claimer, &st.outs, shard.value as i64, T0), "case {case}");
-        if engine != verdicts(model) {
-            mismatches.push((case, model, engine, amount, basis, called, claimer == owner, prices, rows.map(|x| (x.head.scale, x.net, x.gross))));
+        let own = points_as_the_script_t5(&s, &t, false, draw_end_of_trace_as_the_script_t5(&s, &t, &claimer, T0, shard.value as i64, &st.outs));
+        let of_model = [verdicts(s.draw_trace_end_judged(&t, &claimer, T0).map(|_| s.draw_trace_end_right(&t, &claimer, &st.outs, shard.value as i64, T0))), verdicts(s.trace_row_judged(&t, 1, false)), verdicts(s.trace_row_judged(&t, 2, false)), verdicts(s.trace_row_judged(&t, 3, false)), verdicts(s.trace_row_judged(&t, 4, false))];
+        if of_model != own {
+            trace_model_differs.push((case, of_model, own));
         }
+        if engine != own {
+            mismatches.push((case, model, engine, own, amount, basis, called, claimer == owner, prices, rows.map(|x| (x.head.scale, x.net, x.gross))));
+        }
+        let whole = whole_t5(engine);
         match model {
-            Some(true) => rights += 1,
-            Some(false) => wrongs += 1,
-            None => nones += 1,
+            Some(true) => {
+                assert_eq!(whole, (true, false), "case {case}: right by the end over the rows, and a point of its trace is not answered right");
+                rights += 1;
+            }
+            Some(false) => {
+                // (Wrong by the end over the rows: no longer every point right. Some point is answered wrong, or,
+                // where the books' own rows are beyond 64 bits, a point is one nobody answers: the end computes
+                // its requirement of the sums said whatever it found before, and such books have no sums. Its
+                // dispute lapses at the stater's cost, where the end was answered wrong before: the draw ends
+                // either way. Counted.)
+                assert!(!whole.0 && (whole.1 || engine.iter().any(|x| *x == (false, false))), "case {case}: wrong by the end over the rows, and every point of its trace is answered right: {engine:?}");
+                if !whole.1 {
+                    assert!(s.traced(&d, false).is_none(), "case {case}: wrong by the end over the rows, a trace the rule makes, and no point of it is answered wrong: {engine:?}");
+                    wrong_now_unanswered += 1;
+                }
+                wrongs += 1;
+            }
+            None => {
+                assert!(!whole.0, "case {case}: no verdict by the end over the rows, and every point of its trace is answered right");
+                nones += 1;
+                if whole.1 {
+                    none_now_wrong += 1;
+                }
+            }
+        }
+        if s.traced(&d, false).is_none() {
+            no_trace += 1;
         }
         cases += 1;
     }
-    assert!(mismatches.is_empty(), "the engine and the model differ on {} of {cases} draws; the first: {:?}", mismatches.len(), mismatches.first());
+    assert!(mismatches.is_empty(), "the engine and the arithmetic written out differ on {} of {cases} draws; the first: {:?}", mismatches.len(), mismatches.first());
     assert!(rights > 20 && wrongs > 100 && nones > 30, "{rights} right, {wrongs} wrong, {nones} with no verdict");
     assert_eq!(model_wrong_script_none, 0, "F71 is open again: the model and the script's arithmetic differ on {model_wrong_script_none} draws");
+    println!("T1b R45 (review T5) the trace: of {nones} draws the end over the rows gave no verdict of, {none_now_wrong} have a point that is answered wrong; of {wrongs} the end answered wrong, {wrong_now_unanswered} (books with a row beyond 64 bits) have no point answered wrong and one nobody answers; {no_trace} draws have no trace the rule makes (a sum beyond 64 bits); the model's functions of a point differ from the script's arithmetic on {} draws, the first: {:?}", trace_model_differs.len(), trace_model_differs.first());
+    assert!(trace_model_differs.is_empty(), "the model of a row or of an end and the script differ");
     // ---- the outputs: the two numbers of the shard stay as they were.
     let s = Shard { t: w.terms(), rows: [ShardRow { head: Head::of(&w.fut(0, 1, LONG, P10)), net: -10 * w.markets[0].p.scale, gross: 10 * w.markets[0].p.scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -100 * KAS1, called: 0 };
     let shard = shard_made45(s, 70);
@@ -7526,18 +7811,41 @@ fn t1b_fixed_f69_a_draw_whose_price_nobody_answers_costs_its_claimer_the_bond() 
     // The price of the made row: no citation is of it (the builder takes none), and the dispute lapses with both
     // bonds back.
     let f = [fund(owner, 71, 1_000)];
-    let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f)).unwrap();
+    let b = state_raw(&w.lib, &shard, &s.fixed_hash(), &s.moving(), &st, &dsaid(&s, &d), s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f)).unwrap();
     let live = nth(&signed("the draw of all, the made row at a sompi", &b, &w.keys), 0, st, 6_600);
     let fw = [fund(xk(&w.w), 51, 1_000)];
-    let (pb, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.w), 2, w.payer(&w.w, &fw)).unwrap();
+    // (Review T5, docs 17.8b: the price of row 2 was the point 2. The point 2 is now the ROW's, answered right
+    // with no citation; its price is the point 4 and the place of its entry in the list, from 1. The builder
+    // refuses a citation of another market; the transaction is then written with the citation it was given, by
+    // the builder of the other row's price, and the engine refuses it: see `price2` below.)
+    let p2 = price_point_t5(&s, &d, 2);
+    let p1 = price_point_t5(&s, &d, 1);
+    assert_eq!((p1.min(p2), p1.max(p2)), (5, 6));
+    let (pb, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.w), p2, w.payer(&w.w, &fw)).unwrap();
     let q = nth(&signed("the price of the made row disputed", &pb, &w.keys), 0, q, 6_610);
     let cs = w.script("KpfTCite");
+    let mut tried = 0;
     for cite in [w.cited(0, P10), w.cited(1, P10)] {
         for v in [true, false] {
-            let built = shard_price(&w.lib, &q, &s, &d, 2, &w.script("KpfTShardPrice"), Some((&cs, &cite)), xk(&w.w), w.payer(&w.w, &fw), Some(v));
+            let built = shard_price(&w.lib, &q, &s, &d, p2, &w.script("KpfTShardPrice"), Some((&cs, &cite)), xk(&w.w), w.payer(&w.w, &fw), Some(v));
             assert!(!built.is_ok_and(|b| taken30(&b.0, &w.keys)), "the price of the row nobody prices is answered");
+            // The same citation in the transaction the builder writes for the price of the OTHER row (which it
+            // builds: the citation of market 0 is of that row), with the point answered made the made row's
+            // (argument 17 of `KpfTShardPrice.answer`: `at`): the engine refuses it, right and wrong.
+            if let Ok((b, _)) = shard_price(&w.lib, &OLive { s: Pointed { point: p1, ..q.s }, ..q.clone() }, &s, &d, p1, &w.script("KpfTShardPrice"), Some((&cs, &cite)), xk(&w.w), w.payer(&w.w, &fw), Some(v)) {
+                assert!(matches!(&args_of(&mut b.clone(), 1)[17], Arg::V(ArtifactValue::Int(x)) if *x == p1), "argument 17 is the point answered");
+                let mut t = with_arg(&b, 17, int_arg(p2));
+                object_made(&mut t, &w.lib, 0, &q.s.hash());
+                assert!(!taken30(&t, &w.keys), "the price of the row nobody prices is answered with the citation of another market");
+                tried += 1;
+            }
         }
     }
+    assert_eq!(tried, 2, "the citation of market 0, right and wrong");
+    // (And the point 2, the row's own, is answered right with no citation: no dispute of it lapses.)
+    let q2 = w.pointed(&live, 2);
+    let (rb, right) = shard_row(&w.lib, &q2, &s, &d, 2, &w.script("KpfTShardRow"), xk(&w.w), w.payer(&w.w, &fw), None).unwrap();
+    assert!(right && taken30(&rb, &w.keys), "the row of the market nobody prices is answered right: it is its price that nobody answers");
     let ls = signed("the dispute lapsed", &point_lapse(&w.lib, &q, &w.script("KpfTPoint"), w.payer(&w.w, &fw)).unwrap(), &w.keys);
     let k = ls.tx.outputs.len();
     let half = st.bond / 2;
@@ -8052,15 +8360,18 @@ fn t1b_r46_a_disputer_of_an_honest_draws_row_loses_its_bond_not_the_owners() {
     let (db, st, d) = shard_draw(&w.lib, &s, &w.script("KpfTChange"), s.s.draw_max(&prices), prices, T0, w.payer(&w.b, &fb)).unwrap();
     assert!(s.s.draw_max(&prices) > 40 * KAS1, "an honest draw of what is above the requirement");
     let live = nth(&signed("an honest draw", &db, &w.keys), 0, st, 6_600);
-    // The disputer points at the price of row 1 (point 1).
-    let (pb, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.w), 1, w.payer(&w.w, &fw)).unwrap();
+    // The disputer points at the price of row 1 (review T5, docs 17.8b: it was the point 1, which is the row's
+    // now; the price is the point 4 and the place of its entry in the list, from 1: 5 here).
+    let p1 = price_point_t5(&s.s, &d, 1);
+    assert_eq!(p1, 5);
+    let (pb, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.w), p1, w.payer(&w.w, &fw)).unwrap();
     let q = nth(&signed("a disputer points at the price", &pb, &w.keys), 0, q, 6_610);
     // The owner answers it right with the committee's citation of 10 at the statement's time.
     let c = w.cited(0, P10);
     let cs = w.script("KpfTCite");
     let answer = |v: bool, who: &Keypair| {
         let f = [fund(xk(who), 52, 1_000)];
-        shard_price(&w.lib, &q, &s.s, &d, 1, &w.script("KpfTShardPrice"), Some((&cs, &c)), xk(&w.w), w.payer(who, &f), Some(v))
+        shard_price(&w.lib, &q, &s.s, &d, p1, &w.script("KpfTShardPrice"), Some((&cs, &c)), xk(&w.w), w.payer(who, &f), Some(v))
     };
     let b = answer(true, &w.b).expect("the owner answers the price right").0;
     let rs = signed("the owner answers the price of its honest draw right", &b, &w.keys);
@@ -9766,16 +10077,12 @@ fn draw_end_at52(w: &OW, shard: &OLive<Shard>, amount: i64, prices: [i64; 4], t0
     let after = Shard { held: s.held - amount, expiry: s.draw_time(t0).unwrap(), ..*s };
     let outs = Outs::of(&[Out { key: false, to: after.hash(), value: shard.value as i64 - amount }, Out { key: true, to: xk(&w.b), value: amount }]).unwrap();
     let d = Draw { amount, prices };
-    let dst = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: kpf_protocol::thin::KIND_DRAW, t0, arg: d.arg(), outs, bond: s.bond(), claimer: xk(&w.b), held: shard.value as i64 };
+    let dst = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: kpf_protocol::thin::KIND_DRAW, t0, arg: blake2b(&dsaid(s, &d)), outs, bond: s.bond(), claimer: xk(&w.b), held: shard.value as i64 };
     let fb = [fund(xk(&w.b), 71, 1_000)];
-    let b = state_raw(&w.lib, shard, &s.fixed_hash(), &s.moving(), &dst, &d.said(), s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
+    let b = state_raw(&w.lib, shard, &s.fixed_hash(), &s.moving(), &dst, &dsaid(s, &d), s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
     let live = nth(&signed("a draw stated", &b, &w.keys), 0, dst, (t0 + 10) as u64);
-    let q = OLive { daa: (t0 + 20) as u64, ..w.pointed(&live, 0) };
-    let take = |v: bool| {
-        let f = [fund(xk(&w.w), 72, 1_000)];
-        shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
-    };
-    (take(true), take(false))
+    // (Review T5: the end and the four rows of the trace, as one verdict: `draw_end_taken45`.)
+    whole_t5(points_taken_t5(w, &live, s, &trace_t5(s, &d, false)))
 }
 
 /// Round 51, F82 (High), fixed in round 52: no statement of an entry is shown to end a draw. `KpfTEnterS` writes
@@ -10270,7 +10577,8 @@ fn t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_wr
 fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, and what is owed, paid)");
+    // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a trace. Every count of the scripts in this file is 71 since.)
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, what is owed, paid, and the row of a trace, 17.8b)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10587,7 +10895,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // more and hashes them. KpfTEnterS 2,463 from 2,367; KpfTLeft 2,374 from 2,220; KpfTLeftAll 4,226 from 3,873;
     // KpfTLeftVoid 2,017 from 1,955; KpfTCallPay 1,691 from 1,562; KpfTCallEnd 3,695 from 3,622; KpfTShardPrice
     // 1,810 from 1,772; and an argument more after the rows in each: every index after it is one more.)
-    assert_eq!(sizes, vec![("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 2017)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 2017)]);
 }
 
 // ================================================================================================================
@@ -10678,7 +10986,7 @@ fn call_by_hand54(shard: &OLive<Shard>, prices: [i64; 4], shown: [i64; 4], pay: 
     if pay > 0 {
         v.push((Out { key: true, to: claimer, value: pay }, false));
     }
-    Some((Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_CALL, t0, arg: d.arg(), outs: Outs::with_notes(&v)?, bond: s.call_bond(), claimer, held }, d))
+    Some((Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_CALL, t0, arg: blake2b(&csaid(s, &d)), outs: Outs::with_notes(&v)?, bond: s.call_bond(), claimer, held }, d))
 }
 
 /// `KpfTCallEnd.answer`'s verdict written out in the script's own order, for a call that says `d` at `t0` on a
@@ -10754,14 +11062,16 @@ fn call_end_as_the_script54(s: &Shard, d: &Draw, t0: i64, held: i64, outs: &Outs
 
 /// What the engine takes of the answer of the end of a call (made by hand as an object, disputed at the engine):
 /// (right taken, wrong taken).
+/// (Review T5, docs 17.8b: the end and the four rows of the call's trace as one verdict, as `draw_end_taken45`.)
 fn call_end_taken54(w: &OW, shard: &OLive<Shard>, st: &Stated, d: &Draw) -> (bool, bool) {
+    whole_t5(call_points_taken_t5(w, shard, st, &trace_t5(&shard.s, d, true)))
+}
+
+/// Review T5. What the engine takes of the answers of the five points of the call `st` that says the trace `t`
+/// (made by hand as an object, each point disputed at the engine).
+fn call_points_taken_t5(w: &OW, shard: &OLive<Shard>, st: &Stated, t: &kpf_protocol::reserve::Traced) -> [(bool, bool); 5] {
     let live = OLive { s: *st, value: (st.held + st.bond) as u64, id: shard.id, op: op(91), daa: (st.t0.max(0) + 10) as u64 };
-    let q = w.pointed(&live, 0);
-    let take = |v: bool| {
-        let f = [fund(xk(&w.f), 72, 1_000)];
-        call_end(&w.lib, &q, &shard.s, d, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
-    };
-    (take(true), take(false))
+    points_taken_t5(w, &live, &shard.s, t)
 }
 
 /// Round 54, item c: `KpfTCallEnd` against the model and against its arithmetic written out, at the edges and on
@@ -10792,7 +11102,22 @@ fn t1b_r54_the_end_of_a_call_is_the_models_at_the_edges_and_on_random_shards() {
         let script = call_end_as_the_script54(&s, &d, st.t0, st.held, &st.outs, &st.claimer);
         let model = s.call_end_judged(&d, st.t0, st.held).map(|_| s.call_end_right(&d, &st.claimer, &st.outs, st.held, st.t0));
         assert_eq!(model, script, "{what}: the model and the arithmetic written out");
-        assert_eq!(call_end_taken54(&w, &shard, &st, &d), verdicts(script), "{what}: the engine");
+        // (Review T5, docs 17.8b: the call says a trace; the engine answers its end by the last row's sums and its
+        // four rows, each as its script's arithmetic written out says and as the model's function of it says. The
+        // five together against the end as it was computed over the rows: right, every point right; wrong, some
+        // point answered wrong; no verdict, not every point right.)
+        let t = trace_t5(&s, &d, true);
+        let engine = call_points_taken_t5(&w, &shard, &st, &t);
+        let own = points_as_the_script_t5(&s, &t, true, call_end_of_trace_as_the_script_t5(&s, &t, st.t0, st.held, &st.outs, &st.claimer));
+        assert_eq!(engine, own, "{what}: the engine, a point at a time");
+        let of_model = [verdicts(s.call_trace_end_judged(&t, st.t0, st.held).map(|_| s.call_trace_end_right(&t, &st.claimer, &st.outs, st.held, st.t0))), verdicts(s.trace_row_judged(&t, 1, true)), verdicts(s.trace_row_judged(&t, 2, true)), verdicts(s.trace_row_judged(&t, 3, true)), verdicts(s.trace_row_judged(&t, 4, true))];
+        assert_eq!(of_model, own, "{what}: the model of the trace, a point at a time");
+        let whole = whole_t5(engine);
+        match script {
+            Some(true) => assert_eq!(whole, (true, false), "{what}: the engine"),
+            Some(false) => assert_eq!(whole, (false, true), "{what}: the engine"),
+            None => assert!(!whole.0, "{what}: the engine"),
+        }
         *seen.borrow_mut().entry(match script { Some(true) => "right", Some(false) => "wrong", None => "no verdict" }).or_default() += 1;
     };
     let v_of = |s: &Shard| s.held + SHARD_CARRIER;
@@ -10934,7 +11259,7 @@ fn t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends() {
         for other in [want + 1, want - 1, shard.s.bond()] {
             if other != want {
                 let d = Draw { amount: 0, prices: up };
-                let t = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &Stated { bond: other, ..st }, &d.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
+                let t = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &Stated { bond: other, ..st }, &csaid(&shard.s, &d), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
                 assert!(!taken30(&t, &w.keys), "a call is stated with a bond of {other} on a shard of {held}");
             }
         }
@@ -10943,8 +11268,10 @@ fn t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends() {
     // On an account, covered or not: no call.
     let acct = cov47(&w, &[w.fut(0, 10, LONG, P10)], 100 * KAS1, 0);
     let d = Draw { amount: 0, prices: up };
-    let on_acct = Stated { position: acct.s.hash(), window: 50, late: 100, kind: KIND_CALL, t0: T0, arg: d.arg(), outs: Outs::of(&[Out { key: false, to: acct.s.hash(), value: acct.value as i64 }]).unwrap(), bond: NOTE_MIN, claimer: xk(&w.w), held: acct.value as i64 };
-    let t = state_raw(&w.lib, &acct, &acct.s.fixed_hash(), &acct.s.moving(), &on_acct, &d.said(), acct.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
+    // (Review T5: what a call says is a trace: that of a shard short 10 units, 240 bytes, stated on the account.)
+    let shard = short54(&w, KAS1, 100);
+    let on_acct = Stated { position: acct.s.hash(), window: 50, late: 100, kind: KIND_CALL, t0: T0, arg: blake2b(&csaid(&shard.s, &d)), outs: Outs::of(&[Out { key: false, to: acct.s.hash(), value: acct.value as i64 }]).unwrap(), bond: NOTE_MIN, claimer: xk(&w.w), held: acct.value as i64 };
+    let t = state_raw(&w.lib, &acct, &acct.s.fixed_hash(), &acct.s.moving(), &on_acct, &csaid(&shard.s, &d), acct.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
     assert!(!taken30(&t, &w.keys), "a call is stated on an account");
     // The rule's call, applied.
     let shard = short54(&w, 5 * KAS1, 100);
@@ -10966,7 +11293,7 @@ fn t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends() {
     // A call that is not the rule's (at 9 the shard, short from 10, has gained), answered wrong.
     let (wst, wd) = call_by_hand54(&shard, [P10 * 9 / 10, 0, 0, 0], [P10 * 9 / 10, 0, 0, 0], fee, 0, T0, xk(&w.b)).unwrap();
     let fbb = [fund(xk(&w.b), 55, 1_000)];
-    let wb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &wst, &wd.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fbb)).unwrap();
+    let wb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &wst, &csaid(&shard.s, &wd), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fbb)).unwrap();
     let wlive = nth(&signed("a call that is not due, stated", &wb, &w.keys), 0, wst, 6_510);
     let wq = w.pointed(&wlive, 0);
     let (eb, right) = call_end(&w.lib, &wq, &shard.s, &wd, &w.script("KpfTCallEnd"), xk(&w.a), w.payer(&w.a, &fa), None).unwrap();
@@ -11240,9 +11567,22 @@ fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
     no("the call of another shard", call_step_as(&w.lib, &acct, x, None, &other, &step, &script, w.payer(&w.b, &f)).unwrap());
     // (Arguments of KpfTCStep.step: 4 the legs, 5 the rows, 6 the moving part, 7 the call's time, 8 its body, 9 the form.)
     no("another time said of the call", with_arg(&b, 7, int_arg(T0 + 1)));
+    // (Review T5, docs 17.8b: the call's body is the list of its prices, 56 bytes a price in the order of the
+    // names: 224 bytes here, where it was the four heads and four prices, 368. A leg names the PLACE its market's
+    // entry has in the list, which is not the place of its row: `step.at`. The price of the first leg's entry is
+    // the eight bytes at 48 of the entry.)
+    let (a1, a2) = (step.at[0] as i64, step.at[1] as i64);
+    let list = call.s.list();
+    assert_eq!((call.s.body().len(), list.len()), (224, 4));
+    assert_eq!((list[a1 as usize].market, list[a2 as usize].market, list[a1 as usize].price, list[a2 as usize].price), (kpf_protocol::reserve::futures_market(&l1.market), kpf_protocol::reserve::futures_market(&l2.market), prices[0], prices[1]));
+    assert!(matches!(&args_of(&mut b.clone(), 1)[8], Arg::V(ArtifactValue::Bytes(x)) if x[..] == call.s.body()[..]) && matches!(&args_of(&mut b.clone(), 1)[5], Arg::V(ArtifactValue::Bytes(x)) if x[..] == [sm8(a1), sm8(a2)].concat()[..]), "argument 8 is the call's body, argument 5 the places");
     let mut body = call.s.body();
-    body[336] ^= 1;
+    body[56 * a1 as usize + 48] ^= 1;
     no("another price said of the call", with_arg(&b, 8, bytes_arg(&body)));
+    // (The body said longer, shorter, or not of whole entries: not the call's.)
+    for other in [[call.s.body(), vec![0u8; 56]].concat(), call.s.body()[..168].to_vec(), call.s.body()[..223].to_vec(), [call.s.body(), vec![0u8]].concat(), vec![]] {
+        no("another length of the call's body", with_arg(&b, 8, bytes_arg(&other)));
+    }
     let mut lacking = call.clone();
     lacking.s.heads[1] = Head::EMPTY;
     assert!(x.call_step(&lacking.s, 50 * KAS1).is_none(), "the model steps an account one leg of which has no row in the call");
@@ -11252,7 +11592,9 @@ fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
     no("another call written", with(&|t| t.tx.outputs[0].script_public_key = other_spk.clone()));
     // The rows and the legs.
     let rows = |v: &[i64]| bytes_arg(&v.iter().flat_map(|x| sm8(*x)).collect::<Vec<u8>>());
-    for (what, at) in [("the other way", vec![1i64, 0]), ("beyond the fourth", vec![4, 1]), ("below the first", vec![-1, 1]), ("of another market", vec![2, 1]), ("one for two legs", vec![0]), ("three for two legs", vec![0, 1, 1])] {
+    // (Review T5: the places are the list's, said about the control's own: they were written as rows 0 and 1.)
+    let neither = (0..4i64).find(|k| *k != a1 && *k != a2).unwrap();
+    for (what, at) in [("the other way", vec![a2, a1]), ("beyond the fourth", vec![4, a2]), ("far beyond", vec![i64::MAX / 56, a2]), ("below the first", vec![-1, a2]), ("of another market", vec![neither, a2]), ("the second of another market", vec![a1, neither]), ("one for two legs", vec![a1]), ("three for two legs", vec![a1, a2, a2])] {
         no(&format!("the rows named {what}"), with_arg(&b, 5, rows(&at)));
     }
     let lb = |l: &XLeg| kpf_protocol::thin::leg_bytes(l);
@@ -11266,7 +11608,7 @@ fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
     }
     no("a leg dropped", with_arg(&b, 4, bytes_arg(&lb(&l1))));
     no("a leg added", with_arg(&b, 4, bytes_arg(&[lb(&l1), lb(&l2), lb(&l2)].concat())));
-    no("the legs the other way", with_arg(&with_arg(&b, 4, bytes_arg(&[lb(&l2), lb(&l1)].concat())), 5, rows(&[1, 0])));
+    no("the legs the other way", with_arg(&with_arg(&b, 4, bytes_arg(&[lb(&l2), lb(&l1)].concat())), 5, rows(&[a2, a1])));
     let richer = Account { a_margin: 51 * KAS1, ..x.clone() };
     no("the account said with other coins", with_arg(&b, 6, bytes_arg(&richer.moving())));
     // The outputs.
@@ -11687,10 +12029,10 @@ fn t1b_r54_a_called_shard_keeps_what_it_owes_and_its_call_under_every_script_tha
     assert_eq!(call_end_taken54(&w, &s, &cst, &cd), (false, true), "the end of a second call");
     // The bond of a statement on it: of what it holds and what it owes.
     assert_eq!((s.s.bond(), dst.bond), (107 * KAS1 / 100, 107 * KAS1 / 100));
-    let stating = state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &dst, &d.said(), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
+    let stating = state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &dst, &dsaid(&s.s, &d), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
     let ss = signed("a draw stated on a called shard", &stating, &w.keys);
     let short = Stated { bond: KAS1, ..dst };
-    assert!(!taken30(&state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &short, &d.said(), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap(), &w.keys), "a statement on it with the bond of what it holds alone");
+    assert!(!taken30(&state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &short, &dsaid(&s.s, &d), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap(), &w.keys), "a statement on it with the bond of what it holds alone");
     refused += 1;
     // That draw, ended by a note: the shard as it was.
     let draw = nth(&ss, 0, dst, 6_600);
@@ -11711,7 +12053,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R54 sizes of the scripts: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let mut rows = vec![];
     let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
@@ -11749,7 +12091,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3695), ("KpfTCStep", 4829), ("KpfTCallPay", 1691), ("KpfTCallEnter", 1051), ("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTShardPrice", 1810), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5056), ("KpfTCallPay", 1691), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2700), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12108,7 +12450,7 @@ fn t1b_fixed_f91_the_models_sums_saturate_and_a_shard_of_any_fee_is_called() {
         assert!(taken30(&b, &w.keys), "F91 is open: a shard whose terms say a fee of {fee} is called by no statement");
         let d = Draw { amount: 0, prices: up };
         let less = Stated { bond: st.bond - 1, ..st };
-        assert!(!taken30(&state_raw(&w.lib, &on, &on.s.fixed_hash(), &on.s.moving(), &less, &d.said(), on.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &f)).unwrap(), &w.keys));
+        assert!(!taken30(&state_raw(&w.lib, &on, &on.s.fixed_hash(), &on.s.moving(), &less, &csaid(&on.s, &d), on.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &f)).unwrap(), &w.keys));
         stated += 1;
     }
     println!("T1b R55 F91 is closed: a note that says the largest number less five is valued and applied by the model without overflow; a call is stated on shards of {stated} terms whose keeper's fee is at and above a hundredth of the largest number, with the shard's own bond");
@@ -12147,7 +12489,11 @@ fn t1b_fixed_f93_whoever_steps_adds_nothing_and_has_the_fee_where_the_account_ha
     // 6,174 or 6,226, and costs its maker 143,200 sompi more at the least rate: whoever steps an account that
     // has no fee for it is 1,578,000 sompi the poorer, where it was 1,434,800. The bound was 1,500,000.)
     assert!(left[0].3 > 8_000_000 && left[2].3 < 0 && left[2].3 > -1_700_000 && left[4].3 > -1_700_000);
-    assert_eq!((left[0].3, left[2].3), (8_411_600, -1_578_000), "what a step leaves whoever made it, with the script as it is");
+    // (Review T5, docs 17.8b: `KpfTCStep` is 227 bytes more (5,056 from 4,829) and the call's object, of one
+    // price here, 56 bytes where it was 368 with a push of two bytes more: a step is 82 bytes more than it was
+    // (7,024 from 6,942) where 17.8b estimated it lighter, and costs its maker 16,400 sompi more at the least
+    // rate: whoever steps an account that has no fee for it is 1,594,400 sompi the poorer, where it was 1,578,000.)
+    assert_eq!((left[0].3, left[2].3), (8_395_200, -1_594_400), "what a step leaves whoever made it, with the script as it is");
 }
 
 /// Round 54, F94 (Low), fixed in round 55: one note of the rest, counted when it is written. A called shard of
@@ -12355,8 +12701,8 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1691), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTEnterOff", 719)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1691), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -12699,7 +13045,7 @@ fn t1b_r56_a_join_takes_two_accounts_equal_but_for_legs_coins_and_time_and_the_s
     no("a shard of another id", &in_place(elsewhere.fixed_hash(), elsewhere.moving(), elsewhere.hash()), &w.keys);
     no("an account in the shard's place", &in_place(a1.s.fixed_hash(), a1.s.moving(), a1.s.hash()), &w.keys);
     let d = Draw { amount: KAS1, prices: [P10, P10, P10, P10] };
-    let stated = Stated { position: shard.s.hash(), window: 50, late, kind: 5, t0: T0, arg: d.arg(), outs: Outs::of(&[Out { key: false, to: shard.s.hash(), value: shard.value as i64 }]).unwrap(), bond: shard.s.bond(), claimer: xk(&w.b), held: shard.value as i64 };
+    let stated = Stated { position: shard.s.hash(), window: 50, late, kind: 5, t0: T0, arg: blake2b(&dsaid(&shard.s, &d)), outs: Outs::of(&[Out { key: false, to: shard.s.hash(), value: shard.value as i64 }]).unwrap(), bond: shard.s.bond(), claimer: xk(&w.b), held: shard.value as i64 };
     no("a statement on the shard in its place", &in_place(shard.s.fixed_hash(), shard.s.moving(), stated.hash()), &w.keys);
     // The signature and the ages.
     no("without the user's signature", &b, &only_keys(&[&w.b, &w.w, &w.f]));
@@ -12780,7 +13126,7 @@ fn t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scr
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTPass", "KpfTJoinC", "KpfTAddC", "KpfTChange", "KpfTDrawNote", "KpfTLeft", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTAcctEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R56 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let fa = [fund(xk(&w.a), 44, 1_000)];
     let legs: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
@@ -12886,7 +13232,7 @@ fn t1b_fixed_f101_a_shard_is_added_to_and_drawn_at_no_age_and_a_join_asks_the_sh
         let s = shard_with47(&w, &[], held, 0);
         let (st, d) = draw_by_hand45(&s, 1_000_000, [0; 4], xk(&w.b)).unwrap();
         assert_eq!((st.bond, s.s.bond()), (bond, bond), "the bond of a draw on a shard of {held}");
-        let state = |st: &Stated| state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), st, &d.said(), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
+        let state = |st: &Stated| state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), st, &dsaid(&s.s, &d), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
         assert!(taken30(&state(&st), &w.keys) && state(&st).tx.inputs[0].sequence == 0);
         assert!(!taken30(&state(&Stated { bond: bond - 1, ..st }), &w.keys), "a draw with a bond a sompi under {bond}");
         assert!(!taken30(&state(&Stated { bond: bond + 1, ..st }), &w.keys), "a draw with a bond a sompi over {bond}");
@@ -12949,7 +13295,7 @@ fn t1b_r57_what_the_owners_round_of_a_draw_costs_at_no_age_and_an_honest_small_d
         let shard = short54(&w, kas * KAS1, 100);
         let (f1, f2, f3, f4) = ([fund(xk(&w.b), 55, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.f), 73, 1_000)], [fund(xk(&w.w), 30, 1_000)]);
         let (dst, d) = draw_by_hand45(&shard, shard.s.held, up, xk(&w.b)).unwrap();
-        let b1 = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &dst, &d.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f1)).unwrap();
+        let b1 = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &dst, &dsaid(&shard.s, &d), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f1)).unwrap();
         assert_eq!((age_told56(&b1), b1.tx.inputs[0].sequence), (0, 0));
         let s1 = signed("the owner's draw, not the rule's", &b1, &w.keys);
         let (b2, q) = point_dispute(&w.lib, &nth(&s1, 0, dst, 6_510), &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.f, &f2)).unwrap();
@@ -12966,7 +13312,7 @@ fn t1b_r57_what_the_owners_round_of_a_draw_costs_at_no_age_and_an_honest_small_d
         assert!(dst.bond >= KAS1 && answered >= dst.bond / 2 && lapsed >= dst.bond / 2, "a round costs half a bond of a KAS or more");
         // On the output the round gave back: the owner's next draw, and anyone's call, both at no age.
         let given = nth(&s3, 0, shard.s, 6_512);
-        let again = state_raw(&w.lib, &given, &given.s.fixed_hash(), &given.s.moving(), &dst, &d.said(), given.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f1)).unwrap();
+        let again = state_raw(&w.lib, &given, &given.s.fixed_hash(), &given.s.moving(), &dst, &dsaid(&given.s, &d), given.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &f1)).unwrap();
         // (A call is due on the shards of 1 and 10 KAS at these prices; the builder states none on the third.)
         let call = shard_call(&w.lib, &given, &w.script("KpfTChange"), up, 6_512, xk(&w.w), w.payer(&w.w, &f4)).ok().map(|c| c.0);
         assert_eq!(call.is_some(), kas <= 10);
@@ -13150,9 +13496,9 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1728, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2463, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1760, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2463, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13379,7 +13725,7 @@ fn t1b_fixed_f103_an_entry_is_a_lateness_after_the_last_by_its_time_and_a_join_s
     let b = on("after an addition", &nth(&signed("the owner's addition", &ab, &w.keys), 0, added, 6_590));
     let third = only_keys(&[&w.w]);
     let (cst, cd) = call_by_hand54(&shard, [P10, 0, 0, 0], [P10, 0, 0, 0], w.terms().keeper_fee_min, 0, T0, xk(&w.w)).unwrap();
-    let cb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &cst, &cd.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
+    let cb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &cst, &csaid(&shard.s, &cd), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
     let c1 = signed("a call that is not due, by a third party", &cb, &third);
     let (pb, q) = point_dispute(&w.lib, &nth(&c1, 0, cst, 6_510), &w.script("KpfTPoint"), xk(&w.w), 0, w.payer(&w.w, &fw2)).unwrap();
     let c2 = signed("disputed by it", &pb, &third);
@@ -13444,7 +13790,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2463), ("KpfTOpenC", 684)]);
 }
 
@@ -13512,7 +13858,7 @@ fn t1b_fixed_f105_a_statement_out_of_its_time_costs_half_its_bond_whoever_ends_i
     let dst = Stated { t0: ahead, ..dst };
     for (what, st, d, by) in [("a call of a time ahead, by a third key", cst, cd, &w.w), ("a draw of a time ahead, by the owner", dst, dd, &w.b)] {
         let own = only_keys(&[by]);
-        let sb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), 30, 1_000)])).unwrap();
+        let sb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &st, &(if st.kind == KIND_CALL { csaid(&shard.s, &d) } else { dsaid(&shard.s, &d) }), shard.s.form(), &change, w.payer(by, &[fund(xk(by), 30, 1_000)])).unwrap();
         let s1 = signed(what, &sb, &own);
         let l1 = signed("ended as out of its time by the claimer's own key", &stated_late58(&w, &nth(&s1, 0, st, 6_510), by, 32), &own);
         let back = l1.tx.outputs[0].value == shard.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &shard.s.hash());
@@ -13890,8 +14236,8 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2463), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 4829), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2463), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 5056), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
 // ================================================================================================================
@@ -14261,8 +14607,8 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2547), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2547), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -14324,7 +14670,7 @@ fn t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
 /// Round 61: `KpfTDrawNote`, in bytes, and what it was.
 #[test]
 fn t1b_r61_the_size_of_the_script_that_changed() {
-    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_700, 70), "(it was 1,406)");
+    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_700, 71), "(it was 1,406)");
 }
 
 // ================================================================================================================
@@ -14620,8 +14966,8 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTEnterS", 2463), ("KpfTPoint", 2588)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTEnterS", 2463), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -14753,8 +15099,8 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
 fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 4829), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5056), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

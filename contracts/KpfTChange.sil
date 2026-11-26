@@ -181,7 +181,10 @@ contract KpfTChange(int init_version) {
         } else {
             if (kind == 5 || kind == 11) {
                 // An amount and a price a row; a call says nothing where a draw says its amount.
-                require(said.length == 40);
+                // (A draw and a call say a trace: 184 bytes and 56 a price of its list, four at the most. 17.8b.)
+                require(said.length >= 184);
+                require(said.length <= 408);
+                require((said.length - 184) % 56 == 0);
                 require(shard == 1);
             } else {
                 // (A covered account's own kinds say two numbers and a chain before their rows.)
