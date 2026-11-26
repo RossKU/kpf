@@ -3118,14 +3118,15 @@ changes a row is shown the row and its path (six hashes: 192 bytes).
   value. **A head leaf**, of the key of nothing (below every key: a scale of nothing is no row's), is in every
   tree from its opening: a tree is never empty and every row has a leaf before it. A row's place among the
   sixty-four is whichever is empty: the order is the keys', not the places'.
-- **The books' hash** takes the place of the hash of the four rows in a shard's state: the hash of the count of
-  rows that have a unit, of what a called shard has paid to claims (17.7), and of the root. No byte of the
+- **The books' hash** takes the place of the hash of the four rows in a shard's state: the hash of the sum of
+  all rows' gross units, of the root, and of the hash of the claims' numbers (17.7, 17.10). No byte of the
   shard's moving part changes, and a script that touches no row carries 32 bytes as today.
 - **A new row** is shown the leaf before it (two paths, the second checked against the root as the first
   rewrote it) and written between: so no key has two rows. A row of no unit is taken out by anyone, shown the
   leaf before it, by a script of its own (a note's applying stays one path). Rows of ended days leave the tree
   so.
-- **The count** of the rows that have a unit is in the books' hash. A call ends where it is nothing.
+- **The sum of the rows' gross units** is in the books' hash (not a count of rows: a script that missed one
+  crossing of nothing would leave a count wrong for ever; review T4). A call ends where it is nothing.
 - The depth is a number of the shard's terms: six for the first form (sixty-four rows: an underlying of three
   days and ten strikes is sixty).
 - What a row is worth to the shard at a price is its net units by what a unit is worth there. What the legs
@@ -3155,7 +3156,8 @@ it reads 8 bytes a leg today). Who pays for taking dead rows out, at sixty-four 
 
 With any number of rows no script reads them all. **A draw is stated as an account's statements are**: a trace
 of a row a row of the books, in the tree's order, with running sums, and the end held to the rule. The
-statement holds the trace by its root and the prices written.
+statement holds the trace whole, as an account's does, and a list of its prices in order (a market, its limit,
+a day, the price): a trace held by its root would be disputed blind (17.10, T9).
 
 - A trace's row is the leaf the row before named as next: the first is the leaf the head names, the last names
   none, and the trace says its count. A row left out or named twice is wrong at the row after it.
@@ -3163,8 +3165,9 @@ statement holds the trace by its root and the prices written.
   (unless its day has passed: 17.5).
 - A dispute names the end, a row (answered with its leaf's path) or a price. A draw is held up for its lateness
   and two dispute periods at most, at a bond a round, as today.
-- The call's object holds the root of its trace: a call's step shows, for each leg, its row of the trace by a
-  path, and has the price from it.
+- The call's object holds the list of the call's prices in order (one a market, and one for each ended day): a
+  call's step reads a leg's price from it at the place its stepper names, and the list has one price for it
+  (17.10, T10).
 
 Sizes, estimated and not measured (N58): a draw stated about 3.8 kB at any count of rows; a row answered about
 5 kB; today's draw is 3.2 kB.
@@ -3218,6 +3221,20 @@ change when a claim is paid and grows by every coin that reaches the shard.
 **Left out of the first form**, and the goal's first row holds without them: exercise before the day; dated
 futures; sums in the tree's inner nodes; a depth above six; a leg that cancels another of its series; the
 deterrent of 17.3.
+
+### 17.8a The order of the books' steps, after review T4
+
+Steps 3 and 4 above are not built in that order: a draw's end, a call's end, a price of a shard, a call's step
+and a claim's payment read four rows today, and with a tree and no trace they have nothing to read. Traces do
+not need the tree; the tree needs traces. Four commits, each with every test of today meaning what it meant:
+
+1. **The books' hash, on today's four rows**: the sum of the gross, the hash of the rows, the hash of the
+   claims' numbers. No rule changes; about 40 bytes more where rows are shown.
+2. **A draw and a call as traces, on four rows**, with today's judgement of an end kept as what the trace is
+   compared with; the call's object a list of prices.
+3. **The claims**: no claim paid while a row has a unit, what a called shard has paid (F114), two classes (L1,
+   L4).
+4. **The tree**: it then touches only the scripts that read one row, and a row's answer.
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
@@ -3312,3 +3329,54 @@ Rests also on: the committee answers a call's disputed price within a dispute pe
 ages a leg past T); every false statement on an account is disputed (an entry whose account says a time of
 nothing is taken where it is stated, answered wrong at its end, and stands where nobody disputes). **Not built
 yet:** the two bounds of a stated price rounded inward.
+
+### 17.10 Review T4: the tree, the traces and the claims, on paper
+
+`docs/audit/REVIEW-T4-tree.md` (T1 to T18; read, and reasoned with numbers; nothing run). **The tree is sound in
+kind and can be built, not as step 3 was written.** Where 17.6 to 17.8 say otherwise, this holds.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| T1 (high) | the head leaf is not below every key by its numbers (a script's numbers have a sign: half of all market ids begin below nothing); found by the model the same hour | the head is below every key by rule (`books.rs`) |
+| T9 (high) | a trace held by its root is disputed blind: whoever watches sees that the root is wrong and not which of sixty points; and nobody but the caller can build a path for a call's step | **the trace whole in what is said**, as an account's, with a list of prices in order. About 440 bytes at four rows, 3.5 kB at sixty-three; a row answered about 5 kB at four rows |
+| T12 (high) | 17.7 had dropped "no claim is paid while a row has a unit": with a share of all ever held, whoever is shown first is paid whole (a shard of 100, three claims of 100: the owner steps and claims first and takes 100) | **kept**, beside the time before which none is paid |
+| T16 (high) | the tree is not separable from the traces in the order written | 17.8a |
+| T2 (medium) | "an underlying" was the market, the scale and the limit: one market could have two futures rows and two prices | **an underlying is its market**: one scale and one limit a market, held against the two neighbours where a row is put in |
+| T3 (medium) | a leaf's "what its legs were entered at" against the one number over all rows: a mark's note reads no row | the leaf's number for rows with a day only (no mark names an option) |
+| T4 (medium) | a count of rows is wrong for ever if one script misses a crossing (two legs of one row in `KpfTLeftAll`) | **the sum of the rows' gross**: the same 8 bytes, the same test for nothing |
+| T6 (medium) | sixty-three rows beside the head; three days of ten strikes of calls and puts and the futures are sixty-one, and eighty-one across a day's roll | depth six, a constant of the scripts; a clearing party of many series has more than one shard |
+| T7 (medium) | two classes of claim need three numbers more, and the moving part has no room | **the books' hash is of the sum of the gross, the root, and the hash of the claims' numbers**: a script of rows carries the last unopened |
+| T8 (medium) | the table of 17.6 counted arguments and not the script, which is in every transaction: an entry on a row that is there about 5.2 to 5.5 kB (4,902 today), a note of one leg applied 4.35 to 4.6 kB (4,002) | said: **the common path is 6 to 15 % heavier with the tree, not lighter**. Measured where it is built |
+| T10 (medium) | a call's object as a root costs every step six paths (a step of one leg 8.4 to 9.2 kB, 6,890 today), and "a row an underlying" lets a stepper give a futures leg an ended day's price | **the call's object is the list of prices**: 224 bytes at four markets (368 today), no path, nothing to choose |
+| T11 (medium) | an ended row counted at its entry where nobody signed its day's price: disputed, that point lapses at the caller's cost | a price said as none is right unless a note or a citation is shown; with the day (step 5) |
+| T13 (medium) | "a part below a note's least is not paid" and "the call ends where what was paid is what is owed": a dust claim keeps a shard called for ever, and blocks the second class | a claim that is covered is paid whole whatever its size; the second class is paid of what is held beyond what the first is still owed |
+| T14 (medium) | where a claim has its class: "stated after the call's time" is computed by no applying script, and an owner backdates a call to push a user of an old leg down | **the class is decided where the note is applied, by its legs' times against the call's**; the call's step writes two amounts in one note; a note of several legs any of which is young is of the second class whole; nothing of the second class is set against an old loss or what the account owes |
+| T15 (medium) | **L4 is narrowed and not closed** (below) | said as it is; the gate, again, once the traces are there |
+| T5 (low) | who puts a row in and takes one out | a script of its own, signed by the owner, puts one in; a row with a day is taken out by anyone once the day has passed, one without by the owner; the owner pays for dead rows |
+
+**L4, as it stands with a second class** (the review's numbers: a shard of 19.9 KAS, a user's young gain of 15,
+an owner's own young long of 1,000 units; the band is each young leg's larger worth, at its entry or at the
+call, rounded up):
+
+| The price before the call's time | The user is paid |
+|---|---|
+| does not move (honest prices, or both edges) | 14.35 or 14.67: whole |
+| up 1 %, honest prices | 14.99: whole |
+| up 1 %, the owner's entry at its edge | 3.79 |
+| up 1 %, both edges | 2.12 |
+| up 2 %, both edges | 1.16 |
+| up 1 %, both edges, 10,000 units | 0.23 |
+| down 1 % | 13.71: whole; the owner loses nothing |
+
+An owner so has a bet that pays one way, of any size, on what a price moves while its own leg is young, and
+what it wins is what its newest users gained in the same time, no more: nothing of a leg older than T and a
+lateness, and nothing a user put in. Without the band the user has 2.1 for certain. **The review found no
+closure short of a gate at an entry** (no leg enters where the shard, with it, is below its level). The gate
+was cut by review 49 for what it cost before there were traces (a script, a second bond, a lapse of its own).
+With a draw and a call as traces (17.8a, 2) a gate is the same trace at the entry's prices: what it costs is
+then measured, and whether every entry carries it is decided there. Until then it is said to a user: what a
+leg gained is its user's for sure once the leg is T and a lateness old.
+
+Holds, with no finding: a leaf's place need not be in the leaf; a stale leaf-before does nothing; no row leaves
+under a pending draw or call; a user makes no row; nothing pins the fixed part across a call; a draw is held up
+no longer than today; a call dated ahead is not applied.
