@@ -120,7 +120,7 @@ contract KpfTCallEnd(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -130,8 +130,9 @@ contract KpfTCallEnd(int init_version) {
         byte[] mv = byte[](moving);
         byte[] tb = byte[](terms);
         byte[] rw = byte[](rows);
+        byte[] gb = byte[](gbook);
         byte[] sd = byte[](said);
-        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv);
+        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(11) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
@@ -205,7 +206,7 @@ contract KpfTCallEnd(int init_version) {
         if (ok == 1) {
             byte[] heads = rw.slice(0, 84) + rw.slice(102, 186) + rw.slice(204, 288) + rw.slice(306, 390);
             byte[32] call = blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(11) + i9(t0) + p33(blake2b(heads + sd.slice(8, 40))));
-            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((hd - pay) as byte[8]) + mv.slice(75, 130) + byte[](t0 as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - CALL_HOLD) as byte[8]) + byte[](0x02) + byte[](call) + byte[](CALL_HOLD as byte[8]);
+            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[]((hd - pay) as byte[8]) + mv.slice(75, 130) + byte[](t0 as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - CALL_HOLD) as byte[8]) + byte[](0x02) + byte[](call) + byte[](CALL_HOLD as byte[8]);
             if (pay > 0) {
                 due2 = due2 + byte[](0x01) + byte[](claimer) + byte[](pay as byte[8]);
             }

@@ -2576,7 +2576,7 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     // (The shard's committee, shown: the head of the row the leg is counted in, in the shard after.)
     let Some(row) = usize::try_from(said.r).ok().and_then(|r| next.rows.get(r)) else { return invalid("the entry names no row of the shard") };
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()),
         bv(seed.to_vec()), bv(row.head.committee.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
     let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
@@ -2761,7 +2761,7 @@ fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()),
         bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), iv(k as i64), bv(n.key.to_vec()), iv(n.asked), iv(tag),
     ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeftVoid", "void", args, 0)?;
@@ -2785,7 +2785,7 @@ fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving())];
+    let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving())];
     if n.legs.len() == 1 {
         args.extend([bv(crate::thin::leg_bytes(&n.legs[0])), iv(at[0] as i64)]);
     } else {
@@ -2828,7 +2828,7 @@ pub fn mark_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note:
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(crate::committee::blake2b(&s.rows_bytes()).to_vec()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.books_hash().to_vec()), bv(s.moving()),
         bv(crate::thin::leg_bytes(&n.leg)), iv(n.entry), bv(n.key.to_vec()), iv(n.asked),
     ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTMarkNote", "apply", args, 0)?;
@@ -3006,7 +3006,7 @@ pub fn owed_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note:
     let (s, n) = (&shard.s, &note.s);
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(crate::committee::blake2b(&s.rows_bytes()).to_vec()), bv(s.moving()), iv(n.amount)];
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.books_hash().to_vec()), bv(s.moving()), iv(n.amount)];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTOwed", "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
     let more = (next.held - s.held).max(0);
@@ -3022,7 +3022,7 @@ pub fn rest_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &O
     let (next, paid, rest) = s.rest_paid(n)?;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeft", "rest", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
     d.out((shard.value as i64 - paid) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
@@ -3222,7 +3222,7 @@ pub fn claim_pay_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     let (s, n) = (&shard.s, &note.s);
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTCallPay", "claim", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "claim", 0);
     let value = (shard.value as i64).checked_sub(paid).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the shard's output holds less than is paid".into()))?;
@@ -3247,7 +3247,7 @@ pub fn call_off_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, call: &
     let s = &shard.s;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), iv(call.s.time), bv(crate::committee::blake2b(&call.s.body()).to_vec())];
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), iv(call.s.time), bv(crate::committee::blake2b(&call.s.body()).to_vec())];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTCallPay", "off", args, 0)?;
     d.contract(call, OWhich::T(SLOT), pinned::kit().object(lib, &call.s.hash()), "go", vec![iv(1), iv(1)], "call", 0);
     d.out(shard.value + call.value, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
@@ -3317,7 +3317,7 @@ pub fn call_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Sh
 }
 
 fn shard_args(shard: &crate::reserve::Shard, who: Vec<u8>) -> Vec<Arg> {
-    vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.terms()), bv(shard.rows_bytes()), bv(shard.moving())]
+    vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.terms()), bv(shard.rows_bytes()), bv(shard.books_head()), bv(shard.moving())]
 }
 
 /// `KpfTShardEnd.answer`: the point 0 of a draw is answered: whether the shard holds its requirement at the prices

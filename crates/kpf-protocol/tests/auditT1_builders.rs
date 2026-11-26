@@ -7879,15 +7879,15 @@ fn t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_i
     // (Arguments: 6 the legs, 7 the rows named, 8 the key, 9 what is asked.)
     let rows = |v: &[i64]| bytes_arg(&v.iter().flat_map(|x| sm8(*x)).collect::<Vec<u8>>());
     for (what, at) in [("the rows the other way", vec![1i64, 0]), ("the first leg's row for both", vec![0, 0]), ("an empty row", vec![2, 1]), ("a row beyond the fourth", vec![4, 1]), ("a row below the first", vec![-1, 1]), ("a row for one leg only", vec![0]), ("three rows for two legs", vec![0, 1, 1])] {
-        no(&format!("the rows named: {what}"), with_arg(&b, 7, rows(&at)));
+        no(&format!("the rows named: {what}"), with_arg(&b, 8, rows(&at)));
     }
     let lb = |l: &XLeg| kpf_protocol::thin::leg_bytes(l);
-    no("the legs in the other order", with_arg(&b, 6, bytes_arg(&[lb(&l2), lb(&l1)].concat())));
-    no("one leg of the two", with_arg(&b, 6, bytes_arg(&lb(&l1))));
-    no("the third leg in the place of the second", with_arg(&b, 6, bytes_arg(&[lb(&l1), lb(&l3)].concat())));
-    no("another key than the note's", with_arg(&b, 8, bytes_arg(&xk(&w.w))));
+    no("the legs in the other order", with_arg(&b, 7, bytes_arg(&[lb(&l2), lb(&l1)].concat())));
+    no("one leg of the two", with_arg(&b, 7, bytes_arg(&lb(&l1))));
+    no("the third leg in the place of the second", with_arg(&b, 7, bytes_arg(&[lb(&l1), lb(&l3)].concat())));
+    no("another key than the note's", with_arg(&b, 9, bytes_arg(&xk(&w.w))));
     for d in [1i64, -1] {
-        no("another amount asked than the note's", with_arg(&b, 9, int_arg(note.asked + d)));
+        no("another amount asked than the note's", with_arg(&b, 10, int_arg(note.asked + d)));
     }
     // What is asked is held: no note of the rest, and none may be written.
     let held = shard_made45(Shard { held: 80 * KAS1, ..s }, 74);
@@ -7953,8 +7953,8 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     no("another key is paid", with(&|t| t.tx.outputs[k].script_public_key = p2pk_spk(&xk(&w.w))));
     no("the shard holds a sompi less", with(&|t| t.tx.outputs[0].value -= 1));
     no("the shard as it was", with(&|t| t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &rich.s.hash())));
-    no("another key than the note's (argument 6)", with_arg(&b, 6, bytes_arg(&xk(&w.w))));
-    no("a sompi more than the note's (argument 7)", with_arg(&b, 7, int_arg(rest.amount + 1)));
+    no("another key than the note's (argument 7)", with_arg(&b, 7, bytes_arg(&xk(&w.w))));
+    no("a sompi more than the note's (argument 8)", with_arg(&b, 8, int_arg(rest.amount + 1)));
     let id = rich.id.expect("an id");
     no("the note goes on though it is paid in full", with(&|t| t.tx.outputs.push(TransactionOutput { value: kpf_protocol::reserve::NOTE_MIN as u64, script_public_key: hash_spk(&w.lib, &rest.hash()), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: id }) })));
     // In part: the note that goes on is of what is left.
@@ -7982,12 +7982,12 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     // of nothing.)
     let called = of(50 * KAS1, 6_000);
     let mut t = b.clone();
-    args_of(&mut t, 1)[5] = bytes_arg(&called.s.moving());
+    args_of(&mut t, 1)[6] = bytes_arg(&called.s.moving());
     object_made(&mut t, &w.lib, 0, &called.s.hash());
     t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: 20 * KAS1, ..called.s }.hash());
     no("a note of the rest is paid by a shard that is called", t);
     let mut t = b.clone();
-    args_of(&mut t, 1)[7] = int_arg(0);
+    args_of(&mut t, 1)[8] = int_arg(0);
     object_made(&mut t, &w.lib, 2, &RestNote { amount: 0, ..rest }.hash());
     t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &rich.s.hash());
     no("a note of nothing is paid", t);
@@ -9081,8 +9081,8 @@ fn t1b_fixed_f76_a_note_of_two_to_six_legs_is_applied_whole_and_no_part_of_it() 
     // KpfTLeftAll shown one leg of the two, the object the note of two, the shard without that leg written.
     let lb = kpf_protocol::thin::leg_bytes(&legs[1]);
     let mut half = b2.clone();
-    args_of(&mut half, 1)[6] = bytes_arg(&lb);
-    args_of(&mut half, 1)[7] = bytes_arg(&sm8(0));
+    args_of(&mut half, 1)[7] = bytes_arg(&lb);
+    args_of(&mut half, 1)[8] = bytes_arg(&sm8(0));
     half.tx.outputs[0].script_public_key = hash_spk(&w.lib, &mid.hash());
     assert!(!taken30(&half, &w.keys), "F76 is open: KpfTLeftAll takes one leg of a note of two");
     // A note of one leg shown to KpfTLeftAll.
@@ -9278,10 +9278,10 @@ fn t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other() {
     assert!(taken30(&by_hand, &w.keys), "the control, written by hand");
     // (Review T3.) The account's leg says the statement's time and no committee; the row's head has the shard's.
     assert_eq!((time_t3(&hsaid.leg), hsaid.leg.committee[8..].to_vec(), hnext.rows[0].head.committee), (T0, vec![0u8; 24], ours));
-    assert!(matches!(&args_of(&mut by_hand.clone(), 1)[9], Arg::V(ArtifactValue::Bytes(c)) if c[..] == ours[..]) && matches!(&args_of(&mut by_hand.clone(), 1)[8], Arg::V(ArtifactValue::Bytes(c)) if c[..] == seed[..]), "arguments 8 and 9 are the seed and the committee");
+    assert!(matches!(&args_of(&mut by_hand.clone(), 1)[10], Arg::V(ArtifactValue::Bytes(c)) if c[..] == ours[..]) && matches!(&args_of(&mut by_hand.clone(), 1)[9], Arg::V(ArtifactValue::Bytes(c)) if c[..] == seed[..]) && matches!(&args_of(&mut by_hand.clone(), 1)[7], Arg::V(ArtifactValue::Bytes(c)) if c[..] == shard.s.books_head()[..]), "arguments 9 and 10 are the seed and the committee (second round: 7 is the books' 41 bytes)");
     // (1) The control shown another committee than the shard's.
     for other in [[0x99u8; 32], [0u8; 32], seed, shard.s.sid] {
-        assert!(!taken30(&with_arg(&by_hand, 9, bytes_arg(&other)), &w.keys), "F80 is open: an entry is stated with another committee shown");
+        assert!(!taken30(&with_arg(&by_hand, 10, bytes_arg(&other)), &w.keys), "F80 is open: an entry is stated with another committee shown");
     }
     // (2) Shown the shard's committee, the shard written with another committee in the head of the leg's row; and
     // the same shown that other committee.
@@ -9289,7 +9289,7 @@ fn t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other() {
     forged.rows[0].head.committee = [0x99; 32];
     let mut written = by_hand.clone();
     written.tx.outputs[2].script_public_key = hash_spk(&w.lib, &forged.hash());
-    assert!(!taken30(&written, &w.keys) && !taken30(&with_arg(&written, 9, bytes_arg(&[0x99; 32])), &w.keys), "F80 is open: an entry writes a row's head of another committee");
+    assert!(!taken30(&written, &w.keys) && !taken30(&with_arg(&written, 10, bytes_arg(&[0x99; 32])), &w.keys), "F80 is open: an entry writes a row's head of another committee");
     // (3) A shard whose row of the leg's market has a head of another committee (fabricated): the leg does not
     // enter that row (shown the shard's committee, by the head; shown the other, by the id), nor an empty row
     // beside it (the market has a row).
@@ -9302,7 +9302,7 @@ fn t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other() {
     let mut n_theirs = n_ours;
     n_theirs.rows[0].head.committee = [0x99; 32];
     let b = c_enter_state_as(&w.lib, &acct, &odd, &enter, seed, &hst, &hsaid, &n_theirs, w.payer(&w.a, &f));
-    assert!(b.is_ok_and(|b| matches!(&args_of(&mut b.clone(), 1)[9], Arg::V(ArtifactValue::Bytes(c)) if c[..] == [0x99u8; 32][..]) && !taken30(&b, &w.keys)), "F80 is open: a leg enters a row of another committee, that committee shown");
+    assert!(b.is_ok_and(|b| matches!(&args_of(&mut b.clone(), 1)[10], Arg::V(ArtifactValue::Bytes(c)) if c[..] == [0x99u8; 32][..]) && !taken30(&b, &w.keys)), "F80 is open: a leg enters a row of another committee, that committee shown");
     let (b, _, _, _) = enter_by_hand52(&w, &acct, &mark51(&acct.s, leg, 0), &[P10], &odd, 1, T0, seed);
     assert!(b.is_ok_and(|b| !taken30(&b, &w.keys)), "F80 is open: a second row of one market, of another committee than the first");
     // Another committee: the builder, and the script. (Review T3: `foreign` is the leg given the builder; by hand
@@ -9328,7 +9328,10 @@ fn t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other() {
     assert!(taken30(&theirs_own, &w.keys), "(control) a leg of a shard's own committee, whichever that is");
     // That transaction with this shard in the place of the other (its object, its moving part, and what it is
     // written as): the account's id is not the shard's.
-    let mut crossed = with_arg(&theirs_own, 7, bytes_arg(&shard.s.moving()));
+    // (Second round: the shard's moving part is argument 8. At 7 this was the books' 41 bytes, and the transaction
+    // was refused for its width: the refusal below is of the id again.)
+    assert!(matches!(&args_of(&mut theirs_own.clone(), 1)[8], Arg::V(ArtifactValue::Bytes(c)) if c[..] == twin.s.moving()[..]));
+    let mut crossed = with_arg(&theirs_own, 8, bytes_arg(&shard.s.moving()));
     object_made(&mut crossed, &w.lib, 2, &shard.s.hash());
     crossed.tx.outputs[2].script_public_key = hash_spk(&w.lib, &Shard { sid: shard.s.sid, ..twin_next }.hash());
     assert!(!taken30(&crossed, &w.keys), "F80 is open: an account of another shard's id brings a leg of that shard's committee into this one");
@@ -9633,11 +9636,13 @@ fn t1b_r51_an_entry_that_ended_is_undone_once_and_its_note_is_of_its_own_kind() 
     let (nb, books) = unentered_apply(&w.lib, &shard, &n_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
     assert!(taken30(&nb, &w.keys));
     assert_eq!((books.rows, books.basis, books.held), ([ShardRow::EMPTY; 4], 0, shard.s.held), "the books as they were");
-    // (Arguments of KpfTLeft.apply: 6 the leg, 7 its row, 8 the key, 9 what is asked, 10 the kind.)
-    assert!(!taken30(&with_arg(&nb, 10, int_arg(6)), &w.keys), "the note that a leg did not enter applied as a note that it left");
-    assert!(!taken30(&with_arg(&nb, 9, int_arg(1)), &w.keys), "the note that a leg did not enter, something asked");
+    // (Arguments of KpfTLeft.apply: 7 the leg, 8 its row, 9 the key, 10 what is asked, 11 the kind. Second round:
+    // each one more, the books' 41 bytes at 5.)
+    assert!(matches!(&args_of(&mut nb.clone(), 1)[11], Arg::V(ArtifactValue::Int(8))) && matches!(&args_of(&mut nb.clone(), 1)[10], Arg::V(ArtifactValue::Int(0))));
+    assert!(!taken30(&with_arg(&nb, 11, int_arg(6)), &w.keys), "the note that a leg did not enter applied as a note that it left");
+    assert!(!taken30(&with_arg(&nb, 10, int_arg(1)), &w.keys), "the note that a leg did not enter, something asked");
     let asking = blake2b(&[i9(12), p33(&sid52(&w)), i9(8), p33(&chain_of_one(&leg)), p33(&xk(&w.a)), i9(5)].concat());
-    let mut made = with_arg(&nb, 9, int_arg(5));
+    let mut made = with_arg(&nb, 10, int_arg(5));
     object_made(&mut made, &w.lib, 2, &asking);
     assert!(!taken30(&made, &w.keys), "a note of that kind that asks something is applied");
     // A note that the leg left (kind 6), asking nothing, of the same leg and key: another object; applied with its
@@ -9645,7 +9650,7 @@ fn t1b_r51_an_entry_that_ended_is_undone_once_and_its_note_is_of_its_own_kind() 
     let left = Left { sid: sid52(&w), legs: vec![leg], key: xk(&w.a), asked: 0 };
     assert_ne!(left.hash(), note.hash());
     let (lb6, _, _) = left_apply(&w.lib, &shard, &OLive { s: left.clone(), value: n_live.value, id: n_live.id, op: n_live.op, daa: n_live.daa }, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
-    assert!(taken30(&lb6, &w.keys) && !taken30(&with_arg(&lb6, 10, int_arg(8)), &w.keys));
+    assert!(taken30(&lb6, &w.keys) && !taken30(&with_arg(&lb6, 11, int_arg(8)), &w.keys));
     println!("T1b R51 an entry that ended: both bonds back; undone once, the fee of {fee} sompi to whoever undid it, {} other transactions refused; its note is applied with its own kind, asking nothing, and no other way", refused + 1);
 }
 
@@ -10106,11 +10111,12 @@ fn t1b_r52_what_the_spending_of_a_note_takes_and_refuses() {
             let c = t.tx.outputs[0].covenant.clone();
             t.tx.outputs.push(TransactionOutput { value: kpf_protocol::reserve::NOTE_MIN as u64, script_public_key: hash_spk(&w.lib, &ghost.s.hash()), covenant: c });
         })),
-        ("the kind of a note that a leg did not enter", with_arg(&b, 10, int_arg(8))),
-        ("a leg named beyond the note", with_arg(&b, 7, int_arg(1))),
-        ("a leg named below the first", with_arg(&b, 7, int_arg(-1))),
-        ("another key", with_arg(&b, 8, bytes_arg(&xk(&w.w)))),
-        ("something asked that the note does not say", with_arg(&b, 9, int_arg(5))),
+        // (Second round: each index one more, the books' 41 bytes at 5.)
+        ("the kind of a note that a leg did not enter", with_arg(&b, 11, int_arg(8))),
+        ("a leg named beyond the note", with_arg(&b, 8, int_arg(1))),
+        ("a leg named below the first", with_arg(&b, 8, int_arg(-1))),
+        ("another key", with_arg(&b, 9, bytes_arg(&xk(&w.w)))),
+        ("something asked that the note does not say", with_arg(&b, 10, int_arg(5))),
         ("the note of another shard", with(&|t| object_made(t, &w.lib, 2, &elsewhere.hash()))),
     ] {
         assert!(!taken30(&t, &w.keys), "{what}");
@@ -10132,7 +10138,7 @@ fn t1b_r52_what_the_spending_of_a_note_takes_and_refuses() {
     assert!(void(&thrice, 0) && void(&thrice, 1) && void(&thrice, 2) && shard.s.left(&thrice.s).is_err());
     // An object of kind 8 that asks something.
     let asking = blake2b(&[i9(12), p33(&SID47), i9(8), p33(&chain_of_one(&out)), p33(&key), i9(5)].concat());
-    let mut odd = with_arg(&with_arg(&b, 10, int_arg(8)), 9, int_arg(5));
+    let mut odd = with_arg(&with_arg(&b, 11, int_arg(8)), 10, int_arg(5));
     object_made(&mut odd, &w.lib, 2, &asking);
     let odd_spent = taken30(&odd, &w.keys);
     assert!(odd_spent, "an object of kind 8 that asks something is spent as any note of a leg in no row");
@@ -10577,7 +10583,11 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Review T3, 17.9, a leg says its time and its row is found by name, scale and limit, in every sizes test of
     // this file: KpfTCStep 4,829 from 4,113; KpfTEnterS 2,367 from 2,323; KpfTLeft 2,220 from 2,212; KpfTLeftAll
     // 3,873 from 3,825; KpfTLeftVoid 1,955 from 1,747; KpfTStepPrice 1,821 from 1,825.)
-    assert_eq!(sizes, vec![("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 1955)]);
+    // (Review T3, second round, 17.8a, the books' hash: every script that shows a shard's rows is shown 41 bytes
+    // more and hashes them. KpfTEnterS 2,463 from 2,367; KpfTLeft 2,374 from 2,220; KpfTLeftAll 4,226 from 3,873;
+    // KpfTLeftVoid 2,017 from 1,955; KpfTCallPay 1,691 from 1,562; KpfTCallEnd 3,695 from 3,622; KpfTShardPrice
+    // 1,810 from 1,772; and an argument more after the rows in each: every index after it is one more.)
+    assert_eq!(sizes, vec![("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 2017)]);
 }
 
 // ================================================================================================================
@@ -11739,7 +11749,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 4829), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2220), ("KpfTLeftAll", 3873), ("KpfTLeftVoid", 1955)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3695), ("KpfTCStep", 4829), ("KpfTCallPay", 1691), ("KpfTCallEnter", 1051), ("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTShardPrice", 1810), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12164,8 +12174,8 @@ fn t1b_fixed_f94_a_note_of_the_rest_is_counted_when_it_is_written_and_the_order_
     assert!(taken30(&cb, &w.keys));
     let uncounted = RestNote { amount: 71 * KAS1, ..a };
     assert!(on.s.claim_paid(&uncounted).is_err());
-    // (Arguments of KpfTCallPay.claim: 7 the amount.)
-    let mut t = with_arg(&cb, 7, int_arg(uncounted.amount));
+    // (Arguments of KpfTCallPay.claim: 8 the amount. Second round: one more.)
+    let mut t = with_arg(&cb, 8, int_arg(uncounted.amount));
     object_made(&mut t, &w.lib, second_at55(&cb), &uncounted.hash());
     assert!(!taken30(&t, &w.keys), "F94 is open: a claim of more than is owed is paid");
     let mut quiet = owing54(&w, 100 * KAS1, 20 * KAS1);
@@ -12175,8 +12185,8 @@ fn t1b_fixed_f94_a_note_of_the_rest_is_counted_when_it_is_written_and_the_order_
     let more = RestNote { amount: 50 * KAS1, ..r };
     // (Round 56, F96: it is spent for nothing: nothing paid, the shard as it is.)
     assert!(quiet.s.rest_paid(&more).is_ok_and(|x| x.1 == 0 && x.2.is_none() && x.0.hash() == quiet.s.hash()), "the model pays a note of 50 KAS where 20 are owed");
-    // (Arguments of KpfTLeft.rest: 7 the amount.)
-    let mut t = with_arg(&rb, 7, int_arg(more.amount));
+    // (Arguments of KpfTLeft.rest: 8 the amount. Second round: one more.)
+    let mut t = with_arg(&rb, 8, int_arg(more.amount));
     object_made(&mut t, &w.lib, second_at55(&rb), &more.hash());
     t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: 50 * KAS1, owed: 0, ..quiet.s }.hash());
     let k = t.tx.outputs.len() - 1;
@@ -12346,7 +12356,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2220), ("KpfTLeftAll", 3873), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1691), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -12434,8 +12444,8 @@ fn t1b_fixed_f96_a_note_of_the_rest_its_shard_does_not_owe_ends_no_draw_and_is_s
     let mut called = shard.clone();
     called.s.called = T0;
     assert!(called.s.rest_paid(&counted).is_err(), "the model pays a counted note by `KpfTLeft.rest` on a called shard");
-    // (Arguments of KpfTLeft.rest: 5 the shard's moving part.)
-    let mut t = with_arg(&pb, 5, bytes_arg(&called.s.moving()));
+    // (Arguments of KpfTLeft.rest: 6 the shard's moving part. Second round: one more.)
+    let mut t = with_arg(&pb, 6, bytes_arg(&called.s.moving()));
     object_made(&mut t, &w.lib, object_at53(&pb), &called.s.hash());
     t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { called: T0, ..next }.hash());
     assert!(!taken30(&t, &w.keys), "a counted note is paid by `KpfTLeft.rest` on a called shard");
@@ -13142,7 +13152,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1728, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2367, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1728, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2463, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13435,7 +13445,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2367), ("KpfTOpenC", 684)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2463), ("KpfTOpenC", 684)]);
 }
 
 // ================================================================================================================
@@ -13577,22 +13587,23 @@ fn t1b_r59_an_entry_shows_an_input_that_landed_at_its_time_and_what_an_owner_sti
         assert!(!taken30(t, &w.keys), "F105: an entry, {what}");
         refused.set(refused.get() + 1);
     };
-    // (Arguments of KpfTEnterS.state: 10 the time, 13 f. Review T3: one more than before, the committee at 9.)
+    // (Arguments of KpfTEnterS.state: 11 the time, 14 f. Review T3: the committee at 10; second round: the books'
+    // 41 bytes at 7.)
     let (eb, est, _, marked, _, _) = c_enter_state(&w.lib, &acct, &shard, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &coin(6_500))).unwrap();
-    assert_eq!((told58(&eb, 13), second_at55(&eb), eb.tx.inputs[0].sequence), (3, 2, 0));
+    assert_eq!((told58(&eb, 14), second_at55(&eb), eb.tx.inputs[0].sequence), (3, 2, 0));
     assert!(taken30(&eb, &w.keys) && taken30(&landed58(&eb, 3, 6_501), &w.keys));
     no("the coin a block older than its time", &landed58(&eb, 3, 6_499));
     let n = eb.tx.inputs.len() as i64;
     for f in [n, -1, i64::MAX] {
-        no(&format!("f said {f}"), &with_arg(&eb, 13, int_arg(f)));
+        no(&format!("f said {f}"), &with_arg(&eb, 14, int_arg(f)));
     }
     for (f, what) in [(2usize, "the shard"), (0, "the account"), (1, "the script's copy")] {
-        let t = with_arg(&eb, 13, int_arg(f as i64));
+        let t = with_arg(&eb, 14, int_arg(f as i64));
         no(&format!("f {what}, which landed a block before its time"), &landed58(&t, f, 6_499));
         assert!(taken30(&landed58(&t, f, 6_500), &w.keys), "an entry, f {what}, which landed at its time");
     }
     let unlanded = taken30(&landed58(&eb, 3, u64::MAX), &w.keys);
-    let at = |s: &OLive<Shard>, a: &OLive<Account>| c_enter_state(&w.lib, a, s, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &coin(0))).map(|e| told58(&e.0, 13));
+    let at = |s: &OLive<Shard>, a: &OLive<Account>| c_enter_state(&w.lib, a, s, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &coin(0))).map(|e| told58(&e.0, 14));
     let (s_now, a_now) = (OLive { daa: 6_500, ..shard.clone() }, OLive { daa: 6_500, ..acct.clone() });
     assert_eq!((at(&s_now, &acct).ok(), at(&shard, &a_now).ok(), at(&shard, &acct).ok()), (Some(2), Some(0), None), "the builder's choices");
     // No entry of a time ahead.
@@ -13600,7 +13611,7 @@ fn t1b_r59_an_entry_shows_an_input_that_landed_at_its_time_and_what_an_owner_sti
         assert!(c_enter_state(&w.lib, &acct, &shard, &enter, SEED52, small, 0, &[], t0, w.payer(&w.a, &coin(6_500))).is_err(), "the builder states an entry of {t0} with the chain at 6,500");
         let (hb, _, _, _) = enter_by_hand52(&w, &acct, &mark51(&acct.s, small, 0), &[P10], &shard, 0, t0, SEED52);
         let hb = hb.unwrap();
-        assert!(told58(&hb, 13) == 3 && taken30(&hb, &w.keys), "(control) as if a coin had landed at {t0}");
+        assert!(told58(&hb, 14) == 3 && taken30(&hb, &w.keys), "(control) as if a coin had landed at {t0}");
         no(&format!("of the time {t0}, the coin landed at 6,500"), &landed58(&hb, 3, 6_500));
     }
     // A row of entries of times behind the chain.
@@ -13880,7 +13891,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2367), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 4829), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2463), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 4829), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
 // ================================================================================================================
@@ -14610,7 +14621,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
-    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTEnterS", 2367), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1728), ("KpfTCStep", 4829), ("KpfTEnterS", 2463), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================

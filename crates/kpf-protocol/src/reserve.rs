@@ -140,8 +140,30 @@ impl Shard {
         self.rows.iter().flat_map(|r| r.bytes()).collect()
     }
 
+    /// The sum of the rows' gross units (a call ends where it is nothing).
+    pub fn gross_sum(&self) -> i64 {
+        self.rows.iter().fold(0i64, |a, x| a.saturating_add(x.gross))
+    }
+
+    /// The hash of the claims' numbers: three numbers of nothing until the claims are rewritten (docs 17.8a, 3).
+    pub fn claims_hash(&self) -> [u8; 32] {
+        blake2b(&[i9(0), i9(0), i9(0)].concat())
+    }
+
+    /// What a script that shows the rows is shown beside them, 41 bytes: the sum of the gross and the hash of the
+    /// claims' numbers.
+    pub fn books_head(&self) -> Vec<u8> {
+        [i9(self.gross_sum()), self.claims_hash().to_vec()].concat()
+    }
+
+    /// The books' hash (docs 17.6, 17.8a): of the sum of the rows' gross units, of the hash of the rows, and of the
+    /// hash of the claims' numbers. A script that touches no row carries it as 32 bytes.
+    pub fn books_hash(&self) -> [u8; 32] {
+        blake2b(&[i9(self.gross_sum()), p33(&blake2b(&self.rows_bytes())), p33(&self.claims_hash())].concat())
+    }
+
     pub fn fixed_hash(&self) -> [u8; 32] {
-        blake2b(&[self.terms(), p33(&blake2b(&self.rows_bytes()))].concat())
+        blake2b(&[self.terms(), p33(&self.books_hash())].concat())
     }
 
     /// The moving part, 171 bytes.
@@ -877,9 +899,9 @@ impl Shard {
         Ok(Shard { called: 0, ..*self })
     }
 
-    /// The form a statement on the shard shows: its terms and the hash of its rows.
+    /// The form a statement on the shard shows: its terms and the books' hash.
     pub fn form(&self) -> Vec<u8> {
-        [self.terms(), blake2b(&self.rows_bytes()).to_vec()].concat()
+        [self.terms(), self.books_hash().to_vec()].concat()
     }
 }
 

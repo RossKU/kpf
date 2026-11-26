@@ -116,9 +116,10 @@ contract KpfTShardOpen(int init_version) {
         int held = int(byte[8](mv.slice(67, 75)));
         require(held > 0);
         require(held <= MARGIN_MAX);
-        // Four empty rows.
+        // Four empty rows; the books' hash is of the sum of their gross units (nothing), of their hash, and of the
+        // hash of the claims' numbers (three of nothing): docs 17.8a.
         byte[] row = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
-        enters(j, rs, slotLen, blake2b(p33(blake2b(byte[](terms) + p33(blake2b(row + row + row + row)))) + mv), held + SHARD_CARRIER);
+        enters(j, rs, slotLen, blake2b(p33(blake2b(byte[](terms) + p33(blake2b(byte[](0x08) + byte[](0 as byte[8]) + p33(blake2b(row + row + row + row)) + p33(blake2b(byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]))))))) + mv), held + SHARD_CARRIER);
         goesOn();
     }
 

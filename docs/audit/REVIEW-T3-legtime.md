@@ -263,3 +263,140 @@ and `KpfTShardPrice` round the upper bound up and the lower down as before (read
 63 `test result` lines, **668 passed, 0 failed**, 0 ignored. `auditT1_builders`: 196 passed.
 `auditT3_legtime`: 12 passed (two of them, `t3_finding_l1_...` and `t3_finding_l4_...`, pass while the finding
 stands).
+
+# Second round: the books' hash
+
+27 November 2026. The working tree against a1cd15a (uncommitted): docs 17.8a, commit 1 of four, "the books'
+hash, on today's four rows". Read: the diff of the nine scripts, of `reserve.rs` and `thin_build.rs`; the entries
+of `KpfTAddC`, `KpfTOwed.apply`, `KpfTMarkNote.apply`, `KpfTChange`, `KpfTDrawNote`, `KpfTDrawEntry`,
+`KpfTJoinC` for what they do with a shard's 32 bytes. Not read: `run/gen/s286_books_sil.py`, 17.8a itself.
+Changed: `auditT1_builders.rs`, `auditT3_legtime.rs` (four tests more, `t3r2_...`), this file.
+
+## Verdict
+
+**No rule changed, by what was run; nothing found against the change.** Every entry that shows the rows holds
+the 41 bytes to the shard's hash; the scripts' running sum is the model's through entries, notes, a call and its
+end, and at the largest books; no shard of the old form and no other object is taken where the rows are shown;
+no script compared the 32 bytes with a hash of rows. Three things to know, none a hole (R1 to R3 below).
+
+## (A) The eleven tests
+
+Sizes, in bytes (the first seven by the tests; `KpfTShardOpen` and `KpfTShardEnd` before, by the artifacts of
+a1cd15a):
+
+| Script | Before | After |
+|---|---|---|
+| KpfTShardOpen | 679 | 730 (+51) |
+| KpfTEnterS | 2,367 | 2,463 (+96) |
+| KpfTLeft | 2,220 | 2,374 (+154) |
+| KpfTLeftAll | 3,873 | 4,226 (+353) |
+| KpfTLeftVoid | 1,955 | 2,017 (+62) |
+| KpfTCallPay | 1,562 | 1,691 (+129) |
+| KpfTShardEnd | 3,162 | 3,234 (+72) |
+| KpfTShardPrice | 1,772 | 1,810 (+38) |
+| KpfTCallEnd | 3,622 | 3,695 (+73) |
+
+| Transaction | Before (run in round one) | After (run) |
+|---|---|---|
+| an entry stated | 4,902 | 5,040 (the script +96, the 41 bytes and their push +42); compute 10,010 |
+| a note of one leg applied (`KpfTLeft`), a claim written | 4,209 | 4,405 (+154, +42) |
+| the same, no claim | 4,118 | 4,314 |
+| a note of two legs applied (`KpfTLeftAll`) | 5,897 (derived) | 6,292 |
+| a claim paid | 3,453 | 3,624 |
+
+The eight sizes tests (seven in `auditT1_builders.rs`, `t3_b5_...`): numbers updated; `t3_b5_...` now holds all
+nine. The three others, each **the argument list and nothing else**:
+
+| Test | What moved |
+|---|---|
+| `t1b_fixed_f80_...` | `KpfTEnterS.state`: the seed 8 -> 9, the committee 9 -> 10. And its last case put the other shard's moving part at 7, now the 41 bytes: 7 -> 8 (it was refused for the width; it is refused by the id again, and the test now asserts what argument 8 is) |
+| `t1b_r52_what_the_spending_of_a_note_takes_and_refuses` | `KpfTLeftVoid.void`: the leg named 7 -> 8, the key 8 -> 9, what is asked 9 -> 10, the kind 10 -> 11 |
+| `t1b_r59_an_entry_shows_an_input_that_landed_at_its_time_...` | `KpfTEnterS.state`: `f` 13 -> 14 |
+
+**R1 (my own tests; fixed).** Five more tests of `auditT1_builders.rs` PASSED and were wrong: they change an
+argument by its index and assert a refusal, and the index now named another argument, so each refusal was of a
+wrong width or type and not of what the test says. Brought along, with the refusals in `t1b_r52_...` and the
+last case of `t1b_fixed_f80_...` that had the same fault:
+`t1b_r46_a_note_that_legs_left_is_applied_once_...` (`KpfTLeftAll`: legs, rows, key, asked, each one more),
+`t1b_r46_a_note_of_the_rest_is_paid_once_...` and `t1b_fixed_f96_...` (`KpfTLeft.rest`: moving 5 -> 6, key
+6 -> 7, amount 7 -> 8), `t1b_fixed_f76_...` (`KpfTLeftAll`: 6, 7 -> 7, 8),
+`t1b_r51_an_entry_that_ended_is_undone_once_...` (`KpfTLeft.apply`: asked 9 -> 10, kind 10 -> 11; it now
+asserts what the two arguments are), `t1b_fixed_f94_...` (`KpfTCallPay.claim` and `KpfTLeft.rest`: amount
+7 -> 8). 196 of 196 pass. The other uses of an index in that file from round 45 on were looked at one by one:
+they are of scripts this change does not touch (`KpfTCStep`, `KpfTCallEnter`, `KpfTDrawNote`, `KpfTDrawEntry`,
+`KpfTAddC`, `KpfTPass`, `KpfTJoinC`, `KpfTOpenC`, `KpfTAcctEnd`, `KpfTEnterOff`, `KpfTAddSpot`). A change that
+adds an argument in the middle of a list will do this again: a count of failing tests does not show it.
+
+## (B) The attack (`auditT3_legtime.rs`, `t3r2_...`, all at the engine)
+
+**(1) Another `gbook`.** Ten entries, each in its builder's transaction (taken): `KpfTEnterS.state`,
+`KpfTLeft.apply`, `KpfTLeftAll.apply`, `KpfTLeftVoid.void`, `KpfTLeft.rest`, `KpfTCallPay.claim`,
+`KpfTCallPay.off`, `KpfTShardEnd.answer`, `KpfTShardPrice.answer`, `KpfTCallEnd.answer`. The argument after the
+rows is asserted to be the shard's 41 bytes. Shown a sum one more, one less, the largest, below nothing,
+nothing; a claims' hash with a bit changed, or of 32 bytes of nothing; another first byte; the 41 bytes of
+another shard: **88 transactions, all refused**.
+
+**(3) The old form, and what is no shard.** In each of the ten, the shard of the form of before (fixed part of
+the terms and the rows' hash alone; for the three answers, the disputed point of the statement on such a shard),
+an account, and a note, in the shard's place: **30 objects, all refused**, each also with six other 41 bytes.
+The control (the shard's own hash put in its place the same way) is taken in each.
+
+**(2) The sum kept.** One life (`t3r2_the_sum_of_the_gross_is_kept_...`): a shard of no row; a long of 10 units
+into a new row (10), a short of 4 into the row that is there (14), a long of 3 into a second row (17); a note of
+a leg of no row spent (17); called by a statement and applied (17: `KpfTChangeSettle` carries the hash); an
+account of two legs of ONE row stepped and its note applied by `KpfTLeftAll` (3); an account of one leg, by
+`KpfTLeft` (nothing, no row); the claim paid; the call ended. Every transaction taken; every shard returned has
+the sum of its rows' gross in its 41 bytes; after each entry and each note the shard written with another sum
+(one more, one less, as it was, nothing, twice the leg) is refused.
+The ends (`t3r2_the_sum_at_its_ends_...`): four rows at 2^60 - 1 units, the last a unit short: the unit enters,
+the sum is 4 (2^60 - 1), under 2^62; a unit more into any row is refused by the row's bound (the builder; not
+run past it); a leg leaves at the top. So **the model's saturating sum never saturates on a shard a script
+wrote, the script's addition never fails, and there is no reachable state where the two differ.** It cannot go
+below nothing either: a note takes off no more than its row has (`rg >= 0`), and the row's gross is in the sum.
+
+**R2 (to know; no hole today).** What holds the sum to the rows is the hash and two steps: an entry adds the
+leg's size where it writes the row, a note takes it off. **No script compares the sum it is shown with the rows
+it is shown.** Run on objects no script writes: a called shard of no row whose books say 5 has its call ended
+and goes on saying 5; a shard whose row has 10 units and whose books say 3 has the note of the 10 applied, and
+its books then say 7 below nothing. Unreachable (`KpfTShardOpen` writes a sum of nothing over four empty rows:
+read; the three scripts that rewrite a row each rewrite the sum in the same branch: read). It matters for the
+commit that reads the sum where `KpfTCallPay.off` reads the rows today: the induction is then the only thing
+that says a call ends on empty books; say so in 17.8a, and keep the base (`KpfTShardOpen`) and the three steps
+the only writers.
+The first of the 41 bytes is hashed as it is shown and written as 0x08 by the three writers; `KpfTShardOpen`
+writes 0x08: consistent (read; a first byte of 0x09 is refused in every entry: run).
+
+**(4) The 32 bytes carried unopened.**
+
+| Script | What it does with a shard's 32 bytes | |
+|---|---|---|
+| `KpfTAddC` | takes the fixed part whole, writes it again | run: R3 |
+| `KpfTOwed.apply` | the 32 bytes under the terms, hashed with them, written again (its argument is still named `rowsHash`) | read |
+| `KpfTMarkNote.apply` | the same (`rowsHash`); a mark moves no unit, so the books are as they were | read |
+| `KpfTJoinC` | the shard's fixed part whole (`sfixed`), the shard written as it is | read |
+| `KpfTChange` | the fixed part, and for kinds 2 and up the 122 bytes of the form (terms and 32 bytes) hashed to it; it reads the terms, not the 32 bytes | read |
+| `KpfTDrawNote`, `KpfTDrawEntry` | the fixed part whole, in the position of the statement | read |
+| `KpfTChangeSettle`, `KpfTChangeLate`, `KpfTPoint` | the position's hash, and the hashes of what it becomes | read |
+| `KpfTCallEnter`, `KpfTCStep` | no shard: the account, and the call's body (the rows' names and prices, which the books' hash is not in) | read |
+
+**No script outside the eight computes a hash of rows**, and inside them every `blake2b(rw)` stands in the new
+form (a test scans the sources for both: `t3r2_a_script_that_carries_...`). Nothing broke silently.
+
+**R3 (to know; no hole).** A script that carries the 32 bytes cannot tell the old form: `KpfTAddC` adds to an
+object that hashes as a shard of the form of before, and writes it in that form (run). No script of this
+library writes such a shard and none of the eight opens one: it could be added to and stated on, and no more.
+
+Left as they are, and stale: the head comment `shard fixed = blake2b(terms(90) + push(blake2b(rows)))` in seven
+contracts, and the argument name `rowsHash` in two.
+
+**Not done.** The generator was not read or run. `KpfTShardOpen` was not run with another form (it computes the
+hash itself: read; its opening is run by the tests of `auditT1_builders.rs`). `KpfTOwed.apply`,
+`KpfTMarkNote.apply` and `KpfTJoinC` were not run on an old-form shard (read: the same carrying as `KpfTAddC`).
+A draw's whole way was not rerun here (the developer's tests pass). The 160 tests of `auditT1_builders.rs`
+before round 45 were not read for indices (no shard exists there).
+
+## (C) The workspace
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`, once, after the last change to a test:
+63 `test result` lines, **674 passed, 0 failed**, 0 ignored (`auditT1_builders` 196, `auditT3_legtime` 16,
+`thin_draw` 43).

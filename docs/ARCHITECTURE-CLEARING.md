@@ -3229,12 +3229,96 @@ and a claim's payment read four rows today, and with a tree and no trace they ha
 not need the tree; the tree needs traces. Four commits, each with every test of today meaning what it meant:
 
 1. **The books' hash, on today's four rows**: the sum of the gross, the hash of the rows, the hash of the
-   claims' numbers. No rule changes; about 40 bytes more where rows are shown.
+   claims' numbers. No rule changes; about 40 bytes more where rows are shown. **Built** (`s286_books_sil.py`,
+   run after every other generator; `Shard::books_hash`): the nine scripts that show the rows take 41 bytes
+   beside them, and the three that rewrite a row rewrite the sum. Review T3's second round: nothing found; 88
+   transactions with another sum or another hash of the claims refused in the ten entries; the sum followed
+   through a shard's life (entries on a new row and on one that is there, a void note, a call, a note of two
+   legs of one row, a claim, the call's end); a shard of the old form, an account and a note refused in the
+   shard's place; no script that carries the 32 bytes compares them with rows. An entry stated is 5,040 bytes
+   (4,902), a note of one leg applied 4,314 (4,118), a claim paid 3,624 (3,453); the default workspace 674
+   tests, none failed. **To know:** no script compares the sum it is shown with the rows it is shown: it holds
+   by the hash from the opening on, since the three scripts that rewrite a row rewrite the sum in the same
+   branch. The commit that reads the sum where `KpfTCallPay.off` reads the four rows today (3) keeps both until
+   the tree. And: tests that change an argument by its place in the list were refusing for the wrong reason
+   after an argument was added (five of the review's own, found and corrected): a change that adds an argument
+   brings the places along.
 2. **A draw and a call as traces, on four rows**, with today's judgement of an end kept as what the trace is
    compared with; the call's object a list of prices.
 3. **The claims**: no claim paid while a row has a unit, what a called shard has paid (F114), two classes (L1,
    L4).
 4. **The tree**: it then touches only the scripts that read one row, and a row's answer.
+
+### 17.8b A draw and a call as traces, on four rows (17.8a, 2; on paper, reviewed)
+
+Today a draw says 40 bytes (an amount and a price a row), and one script, `KpfTShardEnd`, computes its end over
+the four rows: five points (the end, and a price a row). A call the same (`KpfTCallEnd`), and its object holds
+the four rows' heads and prices (368 bytes). This is what they become, with the rows still four and written
+whole: the rule is the same, and `draw_end_judged` and `call_end_judged` stay in the model as what a trace's
+verdict is compared with, on random shards.
+
+**What is said** (the bytes of a draw's and a call's statement):
+
+| | Bytes | |
+|---|---|---|
+| the amount | 8 | a draw's amount; nothing for a call (kind 11: its fee is the terms') |
+| E, and **the list of prices** | 8 + 56 a price | a market, plain (32), its price's limit (8), a day (8; nothing: the price now, and nothing else until the day is built) and the price (8); in the order of the keys (`books.rs`), no market and day twice; four at the most |
+| N, and **the rows** | 8 + 40 a row | the row's place in the books (8: its number among the four now, a leaf's place with the tree); the place of its price in the list (8); and the three sums up to it: what the net units are worth, what the gross units are worth, and what the clearing side's net units are worth signed |
+
+184 bytes and 56 a price: 240 at one market, 408 at four, where it is 40 today. N is four: a row with no market
+is a row of the trace, and its sums are the row before's.
+
+**The points:**
+
+| Point | What is answered | By |
+|---|---|---|
+| 0 | the end: the last row's sums against the rule (the upper level for a draw, the lower for a call), the amount, the outputs; and for a call that its object is the list | `KpfTShardEnd`, `KpfTCallEnd`: no row is read, the rule's arithmetic as today |
+| 1 to N | a row: the row of the books at that place (of the 408 bytes, until the tree), the price the list has at the place the trace's row names (the hash of its market the row's name, its limit the row's, its day nothing, the price within its limit: judged before any worth is computed; a row with no market adds nothing), the sums the row before's and this row's worths (a call's price moved the tolerance, by the row's net: the answer is told the kind) | a script of its own, `KpfTShardRow` |
+| N + 1 to N + E | a price of the list: within the tolerance of the committee's at the statement's time (the shard's id opened by the seed: 17.9), and strictly above the entry before it in the order (where the order is wrong, no citation is needed) | `KpfTShardPrice` |
+
+Five to nine points at four rows, five today. **Every point from nothing up is answered**, and a trace that is
+not well made is answered wrong and not by a script that fails: a point nobody can answer lapses at the
+stater's cost (`KpfTPoint.lapse`), and an owner's other key would end every call for nothing. So a point beyond
+the trace is answered right with nothing cited, and a place beyond the list or a count that is not the length's
+is wrong. The rates are counted once, at the end, on the totals, as `need_of` does: a trace of the three sums
+gives today's verdict bit for bit (where a worth or a sum does not fit 64 bits, the row's script or the end's
+fails, and the dispute lapses at the stater's cost). N is the shard's rows (four) by the end's reading of the statement's
+length; with the tree (commit 4) it is the list from the head, and a point more holds that the last leaf names
+none.
+
+**The call's object** is the list (E by 56 bytes, hashed flat as its body is today): 224 bytes at four markets,
+368 today. `KpfTCStep` reads a leg's price at the place its stepper names: the entry's market and limit are the
+leg's, its day nothing. No entry is twice in a list whose prices' points were open to dispute, so whoever steps
+has nothing to choose.
+
+**What changes:** `KpfTChange` (what a statement of kind 5 or 11 may say: a length of 184 to 408 bytes by steps of
+56, where it is 40: about 50 bytes more in every statement of every account, since the script is one),
+`KpfTShardEnd`, `KpfTCallEnd` (they read no row; the call's end hashes the list out of what is said),
+`KpfTShardPrice`, `KpfTCStep` (the entry a leg is shown: its market the leg's, its limit the leg's, its day
+nothing; a price of nothing stays a price), the new `KpfTShardRow`; `Draw`, `Called` and their builders. What
+does not: the rule, the bonds, the times, `KpfTPoint`, `KpfTCallPay.off` and `KpfTCallEnter` (they carry the
+hash of the call's body), `KpfTDrawNote` and `KpfTDrawEntry`, every script of an account.
+
+Sizes, estimated by the review: a draw stated 3,450 to 3,650 bytes (about 3,200 today) and a call stated 3,150
+to 3,350 (2,913); the ends answered about 3,500 (5,050 and 5,402); a row answered 4,300 to 4,500 (new); a
+price answered 8,390 to 8,560 (8,226); a step of one leg 6,520 to 6,750 (6,890). A draw lives no longer than
+its lateness and two dispute periods whatever the number of points, and a stall costs a bond a period, as
+today.
+
+**Said beside 14.7's lines (T23, of today's form as well):** a row of a market the committee does not sign makes
+a shard that cannot be called (that price has no citation). Whoever watches disputes any entry whose price
+nobody can cite; a user reads the markets of a shard before it enters.
+
+The checks of each script, as lists to build from, are in `docs/audit/REVIEW-T4-tree.md` ("Second round").
+
+**The row's gate (for commit 3, with numbers in the model first).** A gate of the whole books at every entry
+is a trace on every entry (5.2 to 5.4 kB now, about 3 kB more at sixty rows): not that. But `KpfTEnterS` reads
+the leg's own row, and can hold, with nothing more shown and about 200 bytes of script, that **what the shard
+holds less what it owes is at least the upper requirement of that row with the leg, at the leg's own entry**.
+The 1,000 units of L4's play ask 1,012 KAS of a shard that holds 19.9: refused; 14.7 units enter. With it the
+review has L4's user whole at moves of 1 % and 2 % with one row, and with all four rows at their caps and
+every market moving the owner's way 12.3 of 15.3 at 1 % and 9.1 of 16.0 at 2 % (2.12 and 1.16 with no gate).
+It counts what is held and not the equity, and a row at a time: it bounds a leg, it is not the rule of 12.
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
