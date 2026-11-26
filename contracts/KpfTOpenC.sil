@@ -108,6 +108,11 @@ contract KpfTOpenC(int init_version) {
         require(bm >= 0);
         require(am <= MARGIN_MAX);
         require(bm <= MARGIN_MAX);
+        // Where a position has its asks a covered account counts its legs and keeps the time before which its
+        // user states nothing again: none and none at its opening. (The bytes: an account opened with a count
+        // below zero took legs without end. Review 49, R6.)
+        require(mv.slice(121, 129) == byte[](0 as byte[8]));
+        require(mv.slice(130, 138) == byte[](0 as byte[8]));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         enters(j, rs, slotLen, blake2b(p33(blake2b(byte[](terms) + byte[](0x20) + z32)) + mv), am + bm);
         goesOn();

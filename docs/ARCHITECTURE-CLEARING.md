@@ -1485,3 +1485,20 @@ corrected in place of ending (14.3); an entry final when it is stated.
   where a leg entered and where it leaves. It is a term of the shard (the tolerance), and a smaller tolerance
   makes it smaller and makes an honest price wrong more often; the correction of 14.3, left for later, is what
   would let it be small without that.
+
+### 14.10 Built of it (26 November 2026; at the engine only)
+
+**(a) 14.1 and 14.2.** The life of a statement: the end of every answer pays a quarter of the disputer's bond to
+the claimer and a quarter to whoever answered, who is anyone; a statement that stands again keeps its lateness
+beside its mark; `KpfTChangeSettle` applies at once a statement written at or after the last time to dispute;
+`KpfTPoint.lapse` takes only a dispute that landed by that time, and `KpfTPoint.dismiss` dismisses one that
+landed after (`KpfTPoint` is 2,499 bytes; it was 1,487). The answerer does not name the next point in the same
+transaction: a claimer that answered its own key's dispute could then keep everybody out with no gap; as it is,
+the statement stands undisputed between two rounds and anyone's dispute may land.
+
+A covered account: `KpfTOpenC` holds the count of legs and the time to nothing; `KpfTCEnd` (3,145 bytes) holds a
+take and a leaving to the account's time and writes the next one (its own time and twice the lateness and two
+dispute periods), counts a leg less where one leaves alone, takes a take of an account of no leg, and leaves an
+account of no leg where its only leg leaves alone. A note is applied whole: `KpfTLeft` (one leg; 2,069 bytes)
+and `KpfTLeftAll` (two to six; 3,767). Not yet: side B's margin refused, and the other refusals of 14.2 (with
+the entry, in (b)).

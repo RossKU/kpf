@@ -13,6 +13,9 @@
 //!   of what all are worth): it decides a step. **What leaves as coins** (a take; what a leg that gained is asked
 //!   of the shard where it leaves alone) leaves the coins at the maintenance of the legs that stay and at what
 //!   those have lost, each counted alone: a gain of a leg that stays is no coin.
+//! - Six legs at most, counted in the moving part where a position has its first ask; and, where it has its
+//!   second, the time before which the user states nothing again: a take and a leaving write their own time and
+//!   twice the longest a statement lives, so that between two of them the account is free for a step.
 //! - A leaving is of one leg or of all. Of all, the shard is asked the account's net, once, beyond the band. A leg
 //!   that lost leaves alone where the coins pay what it lost.
 //! - What a leaving writes is one note to the shard ([`Left`]): the legs, the user's key, and what the shard is
@@ -33,6 +36,8 @@ pub const KIND_C_LEAVE: i64 = 8;
 pub const KIND_C_STEP: i64 = 9;
 /// In the place of the leg that leaves: every leg.
 pub const ALL: i64 = -1;
+/// The most legs a covered account has (what one transaction steps under a call, and one note takes out).
+pub const C_LEGS_MAX: usize = 6;
 
 fn p33(h: &[u8; 32]) -> Vec<u8> {
     [&[0x20][..], h].concat()
@@ -168,17 +173,39 @@ impl Account {
 
     /// The hash of this account with other coins of its user's and another chain of legs.
     pub fn c_hash(&self, coins: i64, chain: &[u8; 32]) -> [u8; 32] {
-        let next = Account { a_margin: coins, ..self.clone() };
+        self.c_next(coins, chain, self.a_min_counter, self.b_min_counter)
+    }
+
+    /// The same, with another count of legs and another time (where a position has its asks: `docs` 14.2).
+    pub fn c_next(&self, coins: i64, chain: &[u8; 32], count: i64, time: i64) -> [u8; 32] {
+        let next = Account { a_margin: coins, a_min_counter: count, b_min_counter: time, ..self.clone() };
         blake2b(&[p33(&blake2b(&[self.terms(), p33(chain)].concat())), next.moving()].concat())
+    }
+
+    /// A covered account of this form: under a shard, of no more than six legs, each a leg, counted; nothing of
+    /// a second party's; a bond.
+    pub fn c_check(&self) -> Result<()> {
+        if !self.legs.is_empty() {
+            self.check()?;
+        }
+        if self.shard.is_none() || self.legs.len() > C_LEGS_MAX || self.a_min_counter != self.legs.len() as i64 || self.b_margin != 0 || self.bond() <= 0 {
+            return Err(Error::Invalid("not a covered account of this form: under a shard, six legs at most and counted, nothing of a second party's, coins enough for a bond".into()));
+        }
+        Ok(())
     }
 
     /// `KpfTCEnd`: what the end of a statement's trace makes of this account holding `held`, by the last row's
     /// sums. `None`: the script takes neither verdict (a sum does not fit). `Some(None)`: the statement is not the
     /// rule's. Else what the account becomes and the outputs that say so.
-    pub fn c_end(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], held: i64) -> Option<Option<COutcome>> {
+    pub fn c_end(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<COutcome>> {
         let Some(sid) = self.shard else { return Some(None) };
         let n = s.rows.len() as i64;
-        let Some(row) = s.rows.last() else { return Some(None) };
+        // (An account of no leg takes a take, stated with no row.)
+        if n < 1 && kind != KIND_C_TAKE {
+            return Some(None);
+        }
+        let zero = Row::ZERO;
+        let row = s.rows.last().unwrap_or(&zero);
         let (gain, w, ws, ls, gl) = (row.gain, row.wa, row.wb, row.ea, row.eb);
         if !(KIND_C_TAKE..=KIND_C_STEP).contains(&kind) || row.g != self.legs_root() || w < 0 || ws < 0 || ws > w || ls < 0 || self.b_margin != 0 {
             return Some(None);
@@ -188,6 +215,15 @@ impl Account {
         let m = sub(coins, NOTE_MIN)?;
         let g = self.t.g_bps;
         let up = add(self.t.mmr_bps, g)?;
+        // The legs counted, and the time before which the user states nothing again; what a statement of the
+        // user's writes there: its own time and twice the longest a statement lives.
+        let (count, quiet) = (self.a_min_counter, self.b_min_counter);
+        let life = add(self.t.late_daa, ck(self.dispute_daa.checked_mul(2))?)?;
+        let next = add(t0, ck(life.checked_mul(2))?)?;
+        let when = if kind == KIND_C_STEP { quiet } else { next };
+        if kind != KIND_C_STEP && t0 < quiet {
+            return Some(None);
+        }
         let out = |v: Vec<(Out, bool)>, after: Option<Account>, paid: i64, fee: i64, note: Option<Left>| Outs::with_notes(&v).map(|outs| COutcome { after, paid, fee, note, outs });
         if kind == KIND_C_TAKE {
             if s.skip != 0 || *claimer != self.a_key || s.amount <= 0 {
@@ -197,11 +233,11 @@ impl Account {
                 return Some(None);
             }
             let left = sub(coins, s.amount)?;
-            let after = Account { a_margin: left, ..self.clone() };
-            let v = vec![(Out { key: false, to: self.c_hash(left, &self.legs_root()), value: sub(held, s.amount)? }, false), (Out { key: true, to: *claimer, value: s.amount }, false)];
+            let after = Account { a_margin: left, b_min_counter: when, ..self.clone() };
+            let v = vec![(Out { key: false, to: self.c_next(left, &self.legs_root(), count, when), value: sub(held, s.amount)? }, false), (Out { key: true, to: *claimer, value: s.amount }, false)];
             return Some(out(v, Some(after), s.amount, 0, None));
         }
-        let mut all = s.skip == ALL || row.h == [0; 32];
+        let mut all = s.skip == ALL;
         if s.skip == 0 || s.skip < ALL || s.skip > n || (kind == KIND_C_LEAVE && *claimer != self.a_key) || (kind == KIND_C_STEP && s.skip < 1) {
             return Some(None);
         }
@@ -272,10 +308,10 @@ impl Account {
             let k = s.skip as usize - 1;
             let leg = self.legs.get(k).copied();
             let legs: Vec<XLeg> = self.legs.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, l)| *l).collect();
-            let after = Account { legs, a_margin: left, ..self.clone() };
+            let after = Account { legs, a_margin: left, a_min_counter: sub(count, 1)?, b_min_counter: when, ..self.clone() };
             // (The note names the leg by the chain the statement says: its row holds that to the leg.)
             let note = leg.map(|l| Left { sid, legs: vec![l], key: self.a_key, asked });
-            let mut o = vec![(Out { key: false, to: self.c_hash(left, &row.h), value: sub(sub(held, pay)?, fee)? }, false)];
+            let mut o = vec![(Out { key: false, to: self.c_next(left, &row.h, sub(count, 1)?, when), value: sub(sub(held, pay)?, fee)? }, false)];
             if fee > 0 {
                 o.push((Out { key: true, to: *claimer, value: fee }, false));
             }
@@ -290,14 +326,14 @@ impl Account {
     }
 
     /// `KpfTCEnd`'s verdict on the end of a statement with the outputs `outs` (`None`: neither).
-    pub fn c_end_judged(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], outs: &Outs, held: i64) -> Option<bool> {
-        Some(self.c_end(kind, s, claimer, held)?.is_some_and(|o| o.outs == *outs))
+    pub fn c_end_judged(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64) -> Option<bool> {
+        Some(self.c_end(kind, s, claimer, held, t0)?.is_some_and(|o| o.outs == *outs))
     }
 
     /// The first point of a statement on this covered account that is wrong at the committee's prices `c` (one a
     /// leg), for whoever disputes: 0 the end, 2i - 1 row i, 2i the price of row i. `None`: it is the rule's.
-    pub fn c_wrong_point(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], outs: &Outs, held: i64, c: &[i64]) -> Option<i64> {
-        if self.c_end_judged(kind, s, claimer, outs, held) == Some(false) {
+    pub fn c_wrong_point(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64]) -> Option<i64> {
+        if self.c_end_judged(kind, s, claimer, outs, held, t0) == Some(false) {
             return Some(0);
         }
         self.rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_row_judged(&before.g, l, before, row, i as i64 + 1, s))
@@ -308,7 +344,7 @@ impl Account {
     /// `skip` (9, by `claimer`).
     #[allow(clippy::too_many_arguments)]
     pub fn c_state(&self, kind: i64, amount: i64, skip: i64, a: &[i64], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, CSaid, COutcome)> {
-        self.check()?;
+        self.c_check()?;
         let no = |why: &str| Error::Invalid(format!("no statement on this covered account: {why}"));
         if a.len() != self.legs.len() || !(0..LOCK_TIME_THRESHOLD).contains(&t0) || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
             return Err(no("it is stated with one price a leg, within its market's limit, and a time"));
@@ -320,13 +356,13 @@ impl Account {
         if kind == KIND_C_STEP {
             for fee in self.c_fees(&s) {
                 s.amount = fee;
-                if let Some(Some(o)) = self.c_end(kind, &s, &claimer, held) {
+                if let Some(Some(o)) = self.c_end(kind, &s, &claimer, held, t0) {
                     return Ok((self.c_stated(kind, &s, &o, t0, held, claimer), s, o));
                 }
             }
             return Err(no("the user is not below its maintenance at these prices, or the leg named gained while another lost"));
         }
-        let o = self.c_end(kind, &s, &claimer, held).flatten().ok_or_else(|| no("the rule does not allow it at these prices (a take, or what a leg that gained is asked, leaves the coins at the maintenance of the legs that stay and at what they have lost; a leg that lost leaves alone where the coins pay what it lost; the user states it)"))?;
+        let o = self.c_end(kind, &s, &claimer, held, t0).flatten().ok_or_else(|| no("the rule does not allow it at these prices and this time (a take, or what a leg that gained is asked, leaves the coins at the maintenance of the legs that stay and at what they have lost; a leg that lost leaves alone where the coins pay what it lost; the user states it, and not before the time its account says)"))?;
         Ok((self.c_stated(kind, &s, &o, t0, held, claimer), s, o))
     }
 

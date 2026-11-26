@@ -624,25 +624,14 @@ fn bare(w: &World) -> OLive<Shard> {
     OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..x.s }, ..x }
 }
 
-/// A note that legs left, applied a leg at a time to its end: the shard after, what was paid, the note of the
-/// rest, and the last transaction.
+/// A note that legs left, applied (whole, by the script for its number of legs): the shard after, what was paid,
+/// the note of the rest, and the transaction.
 fn left_all(w: &World, what: &str, shard: &OLive<Shard>, note: &OLive<Left>) -> (OLive<Shard>, i64, Option<Rest>, OSigned) {
     let f = [fund(xk(&w.w), 43)];
-    let (mut shard, mut note) = (shard.clone(), note.clone());
-    loop {
-        let (b, next, rest, more) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.w, &f)).unwrap();
-        let sg = signed(&format!("{what}: a leg of {} applied", note.s.legs.len()), &b, &w.keys);
-        let paid = if more.is_none() { (shard.s.held - next.held).max(0) } else { 0 };
-        let daa = shard.daa + 1;
-        shard = nth(&sg, 0, next, daa);
-        match more {
-            Some(m) => {
-                assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (note.value, &hash_spk(&w.lib, &m.hash())), "the note goes on, holding what it held");
-                note = nth(&sg, 2, m, note.daa);
-            }
-            None => return (shard, paid, rest, sg),
-        }
-    }
+    let (b, next, rest) = left_apply(&w.lib, shard, note, &w.script(left_script(note.s.legs.len())), w.payer(&w.w, &f)).unwrap();
+    let sg = signed(&format!("{what}: a note of {} applied", note.s.legs.len()), &b, &w.keys);
+    let paid = (shard.s.held - next.held).max(0);
+    (nth(&sg, 0, next, shard.daa + 1), paid, rest, sg)
 }
 
 fn left_note(shard: &OLive<Shard>, n: &Left, k: u8) -> OLive<Left> {
@@ -687,19 +676,21 @@ fn the_note_that_legs_left_takes_them_out_of_the_books_whatever_the_order() {
         assert_eq!((shard.s.rows, shard.s.basis, shard.s.held, shard.value), ([ShardRow::EMPTY; 4], 0, 97 * KAS1, (97 * KAS1 + SHARD_CARRIER) as u64), "order {order:?}");
     }
     // A leg that leaves at its entry with nothing asked changes nothing of the equity at that price.
-    let (after, at, paid, rest, more) = s.left(&Left { sid, legs: vec![legs[2]], key: xk(&w.w), asked: 0 }).unwrap();
-    assert_eq!((at, paid, rest, more, after.equity(&[P10, P10, 2 * P10, 0])), (1, 0, None, None, s.equity(&[P10, P10, 2 * P10, 0])));
-    // A note of seven legs is applied as any (review 47, F72): a leg at a time, the books as they began.
+    let (after, at, paid, rest) = s.left(&Left { sid, legs: vec![legs[2]], key: xk(&w.w), asked: 0 }).unwrap();
+    assert_eq!((at, paid, rest, after.equity(&[P10, P10, 2 * P10, 0])), (vec![1], 0, None, s.equity(&[P10, P10, 2 * P10, 0])));
+    // A note is of six legs at most (an account has no more: section 14.2): of six it is applied in one
+    // transaction, the books as they began; of seven by nothing.
     let seven: Vec<XLeg> = (0..7).map(|k| fleg(&w, k % 3, 2 + k as i64, if k % 2 == 0 { LONG } else { SHORT }, P10 + k as i64 * KAS1)).collect();
     let mut t = base.s;
-    for l in &seven {
+    for l in &seven[..6] {
         t = t.booked(l).unwrap();
     }
-    let note = Left { sid, legs: seven, key: xk(&w.c), asked: 7 * KAS1 };
+    let note = Left { sid, legs: seven[..6].to_vec(), key: xk(&w.c), asked: 7 * KAS1 };
     let full = OLive { s: t, ..base.clone() };
-    let (end, paid, rest, _) = left_all(&w, "seven legs left", &full, &left_note(&full, &note, 9));
+    let (end, paid, rest, _) = left_all(&w, "six legs left", &full, &left_note(&full, &note, 9));
     assert_eq!((end.s.rows, end.s.basis, end.s.held, paid, rest), ([ShardRow::EMPTY; 4], 0, 93 * KAS1, 7 * KAS1, None));
-    assert_eq!(t.left_whole(&note).unwrap(), (end.s, 7 * KAS1, None));
+    let more = OLive { s: t.booked(&seven[6]).unwrap(), ..base.clone() };
+    assert!(more.s.left(&Left { sid, legs: seven, key: xk(&w.c), asked: 0 }).is_err(), "a note of seven legs");
 }
 
 /// What a shard does not hold goes on as a note of the rest; nothing is paid while it is called; and what is no
@@ -715,7 +706,7 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     let script = w.script("KpfTLeft");
     // 130 KAS are asked of a shard that holds 100: it pays the 100, and 30 go on.
     let n = Left { sid: s.sid, legs: vec![leg], key: xk(&w.c), asked: 130 * KAS1 };
-    let (b, next, rest, _) = left_apply(&w.lib, &shard, &left_note(&shard, &n, 0), &script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &left_note(&shard, &n, 0), &script, w.payer(&w.w, &f)).unwrap();
     let sg = signed("legs left: more asked than the shard holds", &b, &w.keys);
     let rest = rest.expect("the rest goes on");
     let k = sg.tx.outputs.len();
@@ -733,11 +724,11 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     // applied (the leg is out of the books).
     let called = OLive { s: Shard { called: 6_400, ..s }, ..shard.clone() };
     assert!(left_apply(&w.lib, &called, &left_note(&called, &n, 0), &script, w.payer(&w.w, &f)).is_err());
-    let (open_next, at, paid, open_rest, _) = s.left(&n).unwrap();
-    let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), at, Shard { called: 6_400, ..open_next }, paid, open_rest, None, &script, w.payer(&w.w, &f));
+    let (open_next, at, paid, open_rest) = s.left(&n).unwrap();
+    let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at, Shard { called: 6_400, ..open_next }, paid, open_rest, &script, w.payer(&w.w, &f));
     assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "a called shard pays a note");
     let quiet = Left { asked: 0, ..n.clone() };
-    let (b, out, _, _) = left_apply(&w.lib, &called, &left_note(&called, &quiet, 1), &script, w.payer(&w.w, &f)).unwrap();
+    let (b, out, _) = left_apply(&w.lib, &called, &left_note(&called, &quiet, 1), &script, w.payer(&w.w, &f)).unwrap();
     signed("legs left a called shard's books, nothing asked", &b, &w.keys);
     assert_eq!((out.rows, out.basis, out.called), ([ShardRow::EMPTY; 4], 0, 6_400));
     let paid_rest = rest_apply(&w.lib, &OLive { s: Shard { called: 6_400, ..funded.s }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f));
@@ -749,41 +740,38 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     assert!(left_apply(&w.lib, &shard, &left_note(&shard, &other, 2), &script, w.payer(&w.w, &f)).is_err());
     let big = Left { legs: vec![fleg(&w, 0, 11, LONG, P10)], ..quiet.clone() };
     assert!(left_apply(&w.lib, &shard, &left_note(&shard, &big, 3), &script, w.payer(&w.w, &f)).is_err());
-    let (good, at, _, _, _) = s.left(&quiet).unwrap();
-    let lies: Vec<(&str, usize, Shard)> = vec![
-        ("the leg read out of another row", 1, good),
-        ("the leg left in its row", at, Shard { rows: s.rows, ..good }),
-        ("what the legs were entered at left as it was", at, Shard { basis: s.basis, ..good }),
-        ("more held than there was", at, Shard { held: good.held + 1, ..good }),
+    let (good, at, _, _) = s.left(&quiet).unwrap();
+    let lies: Vec<(&str, Vec<usize>, Shard)> = vec![
+        ("the leg read out of another row", vec![1], good),
+        ("the leg left in its row", at.clone(), Shard { rows: s.rows, ..good }),
+        ("what the legs were entered at left as it was", at.clone(), Shard { basis: s.basis, ..good }),
+        ("more held than there was", at.clone(), Shard { held: good.held + 1, ..good }),
     ];
     for (what, at, next) in lies {
-        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), at, next, 0, None, None, &script, w.payer(&w.w, &f));
+        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, next, 0, None, &script, w.payer(&w.w, &f));
         assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
     }
-    let (b, _, _, _) = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), at, good, 0, None, None, &script, w.payer(&w.w, &f)).unwrap();
+    let (b, _, _) = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, good, 0, None, &script, w.payer(&w.w, &f)).unwrap();
     assert!(accepted(&b, &w.keys), "the control");
-    // A note of two legs: its first applying settles nothing and writes the note on; said to settle, or with the
-    // note dropped, or the note written on holding less, it is refused.
+    // A note of two legs is applied by the script of two to six, in one transaction: both legs out and what is
+    // asked paid. There is no state of the books between the two (review 48, F76): with one leg left in, with
+    // the other's row as it was, or by the script of one leg, it is refused.
     let two = fleg(&w, 1, 3, SHORT, P10);
     let both = OLive { s: s.booked(&two).unwrap(), ..shard.clone() };
     let pair = Left { sid: s.sid, legs: vec![leg, two], key: xk(&w.c), asked: 4 * KAS1 };
     let pnote = left_note(&both, &pair, 5);
-    let (mid, at, paid, rest, more) = both.s.left(&pair).unwrap();
-    assert_eq!((paid, rest, more.clone().map(|m| m.legs)), (0, None, Some(vec![leg])));
-    let (b, _, _, _) = left_apply_as(&w.lib, &both, &pnote, at, mid, 0, None, more.clone(), &script, w.payer(&w.w, &f)).unwrap();
-    let sg = signed("the first leg of a note of two applied", &b, &w.keys);
-    let mut t = b.clone();
-    t.tx.outputs[2].value -= 1;
-    assert!(!accepted(&t, &w.keys), "the note goes on holding less");
-    let r = left_apply_as(&w.lib, &both, &pnote, at, Shard { held: mid.held - 4 * KAS1, ..mid }, 4 * KAS1, None, None, &script, w.payer(&w.w, &f));
-    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "paid before its last leg");
-    let r = left_apply_as(&w.lib, &both, &pnote, at, mid, 0, None, None, &script, w.payer(&w.w, &f));
-    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "the note dropped with a leg in it");
-    // The note that goes on is of the leg that is left, and is applied to its end.
-    let (end, paid, rest, _) = left_all(&w, "the rest of a note of two", &nth(&sg, 0, mid, 6_300), &nth(&sg, 2, more.unwrap(), 6_300));
-    assert_eq!((end.s.rows, end.s.basis, end.s.held, paid, rest), ([ShardRow::EMPTY; 4], 0, 96 * KAS1, 4 * KAS1, None));
+    let all = w.script("KpfTLeftAll");
+    let (done, at, paid, rest) = both.s.left(&pair).unwrap();
+    assert_eq!((done.rows, done.basis, done.held, paid, rest), ([ShardRow::EMPTY; 4], 0, 96 * KAS1, 4 * KAS1, None));
+    let (b, _, _) = left_apply_as(&w.lib, &both, &pnote, &at, done, paid, None, &all, w.payer(&w.w, &f)).unwrap();
+    signed("a note of two legs applied whole", &b, &w.keys);
+    let half = Shard { rows: s.rows, basis: s.basis, ..done };
+    let r = left_apply_as(&w.lib, &both, &pnote, &at, half, paid, None, &all, w.payer(&w.w, &f));
+    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "one leg left in the books");
+    let r = left_apply_as(&w.lib, &both, &pnote, &[at[0], at[0]], done, paid, None, &all, w.payer(&w.w, &f));
+    assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "the second leg read out of the first's row");
+    assert!(left_apply(&w.lib, &both, &pnote, &script, w.payer(&w.w, &f)).is_err() || !accepted(&left_apply(&w.lib, &both, &pnote, &script, w.payer(&w.w, &f)).unwrap().0, &w.keys), "by the script of one leg");
 }
-
 
 /// Until the note that legs left is applied the books have legs that are gone: what they lost reads as the shard's
 /// equity. A draw stated meanwhile is ended by that note, whatever it asks; and by a note of the rest, which is
@@ -828,7 +816,7 @@ use kpf_protocol::covered::{CSaid, ALL, KIND_C_LEAVE, KIND_C_STEP, KIND_C_TAKE};
 
 /// A covered account of the user's (`w`) under the shard: its coins, its legs, nothing of the clearing side.
 fn cov(w: &World, shard: &OLive<Shard>, legs: &[XLeg], coins: i64) -> OLive<Account> {
-    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.w), b_key: xk(&w.c), a_margin: coins, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.s.sid) };
+    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.w), b_key: xk(&w.c), a_margin: coins, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: legs.len() as i64, b_min_counter: 0, shard: Some(shard.s.sid) };
     OLive { s, value: coins as u64, id: shard.id, op: op(80), daa: 6_100 }
 }
 
@@ -860,7 +848,7 @@ fn c_applied(w: &World, what: &str, acct: &OLive<Account>, kind: i64, amount: i6
     let f = [fund(xk(claimer), 33)];
     let (b, st, s, o) = c_state(&w.lib, acct, &w.script("KpfTChange"), kind, amount, skip, a, T0, xk(claimer), w.payer(claimer, &f)).unwrap();
     let sg = signed(&format!("{what}: stated"), &b, &w.keys);
-    assert_eq!(acct.s.c_wrong_point(kind, &s, &st.claimer, &st.outs, acct.value as i64, a), None, "{what}");
+    assert_eq!(acct.s.c_wrong_point(kind, &s, &st.claimer, &st.outs, acct.value as i64, T0, a), None, "{what}");
     let live = nth(&sg, 0, st, 6_510);
     let b = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(claimer, &f)).unwrap();
     let sg2 = signed(&format!("{what}: applied"), &b, &w.keys);
@@ -906,7 +894,7 @@ fn a_take_from_a_covered_account_leaves_the_coins_at_the_maintenance_and_at_what
     let more = CSaid { amount: max + 1, ..s.clone() };
     let outs = Outs::of(&[Out { key: false, to: acct.s.c_hash(keep - 1, &acct.s.legs_root()), value: keep - 1 }, Out { key: true, to: xk(&w.w), value: max + 1 }]).unwrap();
     let lie = Stated { arg: more.arg(), outs, ..live.s };
-    assert_eq!(acct.s.c_wrong_point(KIND_C_TAKE, &more, &lie.claimer, &lie.outs, acct.value as i64, &a), Some(0));
+    assert_eq!(acct.s.c_wrong_point(KIND_C_TAKE, &more, &lie.claimer, &lie.outs, acct.value as i64, T0, &a), Some(0));
     end_answered(&w, "a take of a sompi more", &acct, &acct_stated(&w, &acct, &lie, &more.said()), &more, false);
     // The rule's take paid to another key: wrong.
     let outs = Outs::of(&[live.s.outs.list()[0], Out { key: true, to: xk(&w.f), value: max }]).unwrap();
@@ -936,7 +924,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let (k, v) = out_of(&sg, &hash_spk(&w.lib, &note.hash()));
     assert_eq!(v, NOTE_MIN as u64);
     end_answered(&w, "a leg that gained leaves alone", &acct, &live, &s, true);
-    let (b, next, rest, _) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
     let ap = signed("its note applied", &b, &w.keys);
     // (The short stays in the row it was booked in; the long's row is no market's again.)
     let alone = base.s.booked(&legs[1]).unwrap();
@@ -961,7 +949,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let asked = Left { sid: shard.s.sid, legs: vec![legs[0]], key: xk(&w.w), asked: 188 * KAS1 / 10 };
     let outs = Outs::with_notes(&[(Out { key: false, to: poor.s.c_hash(5 * KAS1, &lone.rows[1].h), value: 5 * KAS1 }, false), (Out { key: false, to: asked.hash(), value: NOTE_MIN }, true)]).unwrap();
     let lie = Stated { kind: KIND_C_LEAVE, arg: lone.arg(), outs, ..live.s };
-    assert_eq!(poor.s.c_wrong_point(KIND_C_LEAVE, &lone, &lie.claimer, &lie.outs, poor.value as i64, &a), Some(0));
+    assert_eq!(poor.s.c_wrong_point(KIND_C_LEAVE, &lone, &lie.claimer, &lie.outs, poor.value as i64, T0, &a), Some(0));
     end_answered(&w, "a leg that gained leaves alone from coins that do not hold the other", &poor, &acct_stated(&w, &poor, &lie, &lone.said()), &lone, false);
 
     // (c) The short, which lost 5, leaves alone: the account pays the 5, and the note holds them.
@@ -971,7 +959,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let (k, v) = out_of(&sg, &hash_spk(&w.lib, &note.hash()));
     assert_eq!(v, (NOTE_MIN + 5 * KAS1) as u64);
     end_answered(&w, "a leg that lost leaves alone", &acct, &live, &s, true);
-    let (b, next, rest, _) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
     let ap = signed("the note of a leg that lost applied", &b, &w.keys);
     assert_eq!((next.rows, next.basis, next.held, rest, ap.tx.outputs[0].value), (base.s.booked(&legs[0]).unwrap().rows, base.s.booked(&legs[0]).unwrap().basis, 105 * KAS1, None, (105 * KAS1 + SHARD_CARRIER) as u64));
 
@@ -1030,11 +1018,70 @@ fn a_step_of_a_covered_accounts_liquidation_takes_a_leg_that_lost_or_every_leg()
     assert_eq!(out_of(&sg, &hash_spk(&w.lib, &note.hash())).1, (53 * KAS1 / 10) as u64);
     end_answered(&w, "a step in which every leg leaves", &small, &live, &s, true);
 
-    // An account of one leg: the step ends it. 9 KAS, long 10 from 10 at 9.5: 5 lost, the fee of 95, the rest back.
+    // An account of one leg: the step takes it and leaves an account of no leg, with the coins that are left. 9
+    // KAS, long 10 from 10 at 9.5: 5 lost, and the fee of 95.
     let one = vec![legs[0]];
     let single = cov(&w, &OLive { s: base.s.booked(&one[0]).unwrap(), ..base.clone() }, &one, 9 * KAS1);
     let (_, s, o, _) = c_applied(&w, "a step on an account of one leg", &single, KIND_C_STEP, 0, 1, &a[..1], &w.f);
-    assert_eq!((o.after.clone(), s.amount, o.paid, o.note.clone().unwrap().asked), (None, fee, 9 * KAS1 - 5 * KAS1 - fee, -5 * KAS1));
+    let after = o.after.clone().unwrap();
+    assert_eq!((after.legs.len(), after.a_min_counter, after.a_margin, s.amount, o.note.clone().unwrap().asked), (0, 0, 9 * KAS1 - 5 * KAS1 - fee, fee, -5 * KAS1));
+    assert_eq!(after.b_min_counter, 0, "a step writes no time");
+}
+
+/// The legs are counted and the account says a time (section 14.2). A take and a leaving write their own time and
+/// twice the longest a statement lives, and a statement of the user's before the time the account says has a
+/// wrong end; a step is held to no time. An account of no leg takes a take, stated with no row.
+#[test]
+fn a_covered_account_counts_its_legs_and_says_the_time_before_which_its_user_states_nothing() {
+    let w = world();
+    let base = bare(&w);
+    let legs = two_legs(&w);
+    let a = [P10, P10];
+    let f = [fund(xk(&w.w), 33)];
+    let acct = cov(&w, &base, &legs, 100 * KAS1);
+    let life = acct.s.t.late_daa + 2 * acct.s.dispute_daa;
+    // A take: the account it leaves says the time.
+    let (_, _, o, _) = c_applied(&w, "a take that writes its time", &acct, KIND_C_TAKE, KAS1, 0, &a, &w.w);
+    let after = o.after.clone().unwrap();
+    assert_eq!((after.a_min_counter, after.b_min_counter), (2, T0 + 2 * life));
+    // Before that time its user states nothing: not a take, not a leaving; a step is held to no time.
+    let held = OLive { s: after.clone(), value: after.a_margin as u64, ..acct.clone() };
+    for (kind, amount, skip) in [(KIND_C_TAKE, KAS1, 0), (KIND_C_LEAVE, 0, 1), (KIND_C_LEAVE, 0, ALL)] {
+        assert!(c_state(&w.lib, &held, &w.script("KpfTChange"), kind, amount, skip, &a, T0 + 2 * life - 1, xk(&w.w), w.payer(&w.w, &f)).is_err(), "kind {kind} before the account's time");
+        assert!(c_state(&w.lib, &held, &w.script("KpfTChange"), kind, amount, skip, &a, T0 + 2 * life, xk(&w.w), w.payer(&w.w, &f)).is_ok(), "kind {kind} at the account's time");
+    }
+    // Stated all the same before the time: its end is answered wrong.
+    let early = Account { b_min_counter: T0 + 1, ..acct.s.clone() };
+    let early = OLive { s: early, ..acct.clone() };
+    let (st, s, _) = Account { b_min_counter: 0, ..early.s.clone() }.c_state(KIND_C_TAKE, KAS1, 0, &a, T0, early.value as i64, xk(&w.w)).unwrap();
+    let lie = Stated { position: early.s.hash(), ..st };
+    assert_eq!(early.s.c_end_judged(KIND_C_TAKE, &s, &lie.claimer, &lie.outs, early.value as i64, T0), Some(false));
+    end_answered(&w, "a take before the account's time", &early, &acct_stated(&w, &early, &lie, &s.said()), &s, false);
+    // A step of an account that says a time (its user below its maintenance) is the rule's.
+    let low = [P10 * 9 / 10, P10 * 11 / 10];
+    let poor = cov(&w, &base, &legs, 6 * KAS1);
+    let poor = OLive { s: Account { b_min_counter: T0 + 1_000, ..poor.s.clone() }, ..poor };
+    let (_, _, o, _) = c_applied(&w, "a step before the account's time", &poor, KIND_C_STEP, 0, 1, &low, &w.f);
+    assert!(o.after.is_none(), "every leg left: the coins do not pay what both lost");
+    // A leaving of one leg counts one less, and writes the time.
+    let (_, _, o, _) = c_applied(&w, "a leaving that counts a leg less", &acct, KIND_C_LEAVE, 0, 2, &a, &w.w);
+    let after = o.after.clone().unwrap();
+    assert_eq!((after.legs.len(), after.a_min_counter, after.b_min_counter), (1, 1, T0 + 2 * life));
+    // The account's only leg leaves alone: an account of no leg is left, and it takes a take stated with no row.
+    let one = cov(&w, &base, &legs[..1], 50 * KAS1);
+    let (_, _, o, _) = c_applied(&w, "the only leg leaves alone", &one, KIND_C_LEAVE, 0, 1, &a[..1], &w.w);
+    let none = o.after.clone().unwrap();
+    assert_eq!((none.legs.len(), none.a_min_counter, none.a_margin), (0, 0, 50 * KAS1));
+    let empty = OLive { s: Account { b_min_counter: 0, ..none.clone() }, value: 50 * KAS1 as u64, ..one.clone() };
+    let (live, s, o, sg) = c_applied(&w, "a take from an account of no leg", &empty, KIND_C_TAKE, 50 * KAS1 - NOTE_MIN, 0, &[], &w.w);
+    assert_eq!((s.rows.len(), o.after.clone().unwrap().a_margin, sg.tx.outputs[0].value), (0, NOTE_MIN, NOTE_MIN as u64));
+    end_answered(&w, "a take from an account of no leg", &empty, &live, &s, true);
+    assert!(c_state(&w.lib, &empty, &w.script("KpfTChange"), KIND_C_TAKE, 50 * KAS1 - NOTE_MIN + 1, 0, &[], T0, xk(&w.w), w.payer(&w.w, &f)).is_err(), "a note's least stays");
+    assert!(c_state(&w.lib, &empty, &w.script("KpfTChange"), KIND_C_LEAVE, 0, ALL, &[], T0, xk(&w.w), w.payer(&w.w, &f)).is_err(), "no leaving of no leg");
+    // An account whose count is not its legs', or of seven legs, is none of this form.
+    assert!(Account { a_min_counter: 1, ..acct.s.clone() }.c_check().is_err());
+    let seven: Vec<XLeg> = (0..7).map(|_| legs[0]).collect();
+    assert!(Account { legs: seven, a_min_counter: 7, ..acct.s.clone() }.c_check().is_err());
 }
 
 /// The rows and the prices of a statement on a covered account are answered a point at a time; and a point nobody
@@ -1169,10 +1216,65 @@ fn on_random_covered_accounts_the_end_is_the_models() {
         // not the fee.
         let more = CSaid { amount: s.amount + 1, ..s.clone() };
         let lie = Stated { arg: more.arg(), ..st };
-        assert_eq!(acct.s.c_end_judged(kind, &more, &lie.claimer, &lie.outs, acct.value as i64), Some(false), "{what}");
+        assert_eq!(acct.s.c_end_judged(kind, &more, &lie.claimer, &lie.outs, acct.value as i64, T0), Some(false), "{what}");
         end_answered(&w, &format!("{what}, a sompi more"), &acct, &acct_stated(&w, &acct, &lie, &more.said()), &more, false);
     }
     println!("random covered accounts: {} takes, {} leavings, {} steps stated and answered; {refused} the rule did not allow", stated[0], stated[1], stated[2]);
     assert!(stated.iter().all(|k| *k >= 5), "{stated:?}");
 }
 
+
+/// The life of a statement (section 14.1). A right answer is anyone's, and of the disputer's bond a quarter is the
+/// claimer's and a quarter whoever answered's. The statement stands again and keeps its lateness: written at or
+/// after the last time to dispute (its time, its lateness and a dispute period) it is applied at once. A dispute
+/// that landed after that time is dismissed by anyone, and lapses nothing.
+#[test]
+fn a_statement_lives_no_longer_than_its_lateness_and_two_dispute_periods() {
+    let w = world();
+    let base = bare(&w);
+    let legs = two_legs(&w);
+    let a = [P10 * 12 / 10, P10 * 11 / 10];
+    let acct = cov(&w, &OLive { s: base.s.booked(&legs[0]).unwrap().booked(&legs[1]).unwrap(), ..base.clone() }, &legs, 100 * KAS1);
+    let f = [fund(xk(&w.f), 36)];
+    let (b, st, s, o) = c_state(&w.lib, &acct, &w.script("KpfTChange"), KIND_C_LEAVE, 0, 1, &a, T0, xk(&w.w), w.payer(&w.w, &[fund(xk(&w.w), 33)])).unwrap();
+    let live = nth(&signed("a leaving stated", &b, &w.keys), 0, st, 6_510);
+    let last = st.last_dispute();
+    assert_eq!((last, st.again().late, st.again().lateness(), st.again().last_dispute(), st.again().again()), (T0 + acct.s.t.late_daa + 50, kpf_protocol::thin::LATE_AGAIN + acct.s.t.late_daa, acct.s.t.late_daa, last, st.again()));
+    // Its end is disputed in time, and answered right by a third party (the funder): a quarter of the disputer's
+    // bond each to the claimer and to it, half to the copy.
+    let q = w.pointed(&live, 0);
+    assert!((q.daa as i64) <= last);
+    let (b, right) = c_end(&w.lib, &q, &acct.s, &s, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.f, &f), None).unwrap();
+    assert!(right);
+    let sg = signed("the end answered right by a third party", &b, &w.keys);
+    let quarter = st.bond / 4;
+    assert!(pays(&sg, &xk(&w.w), quarter) && pays(&sg, &xk(&w.f), quarter));
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key, sg.tx.outputs[1].value), (live.value, &hash_spk(&w.lib, &st.again().hash()), w.script("KpfTCEnd").value + (200_000 + st.bond - 2 * quarter) as u64));
+    assert!(point_dismiss(&w.lib, &q, &w.script("KpfTPoint"), xk(&w.f), w.payer(&w.f, &f)).is_err(), "a dispute in time is not dismissed");
+    // The statement that stands again, written at the last time to dispute: applied at once. Written before it:
+    // after a dispute period.
+    for (daa, age) in [(last as u64, 0u64), (last as u64 - 1, 50)] {
+        let again = nth(&sg, 0, st.again(), daa);
+        let b = stated_settle(&w.lib, &again, &w.script("KpfTChangeSettle"), w.payer(&w.f, &f)).unwrap();
+        assert_eq!(b.tx.inputs[0].sequence, age, "written at {daa}");
+        let ap = signed(&format!("the statement that stands again, written at {daa}, applied"), &b, &w.keys);
+        assert_eq!(&ap.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &o.after.clone().unwrap().hash()));
+    }
+    // A dispute of the statement that stands again, landed after the last time: dismissed by anyone, a quarter of
+    // its bond to the claimer and a quarter to who dismissed it; it does not lapse.
+    let again = nth(&sg, 0, st.again(), last as u64);
+    let (b, late) = point_dispute(&w.lib, &again, &w.script("KpfTPoint"), xk(&w.c), 0, w.payer(&w.c, &[fund(xk(&w.c), 37)])).unwrap();
+    let dsg = b.sign(&w.keys).expect("disputed");
+    assert!(kpf_protocol::verify::verify(&dsg.tx, &dsg.entries).is_ok(), "a dispute cannot be held to a time when it is made");
+    let lq = nth(&dsg, 0, late, last as u64 + 1);
+    assert!(point_lapse(&w.lib, &lq, &w.script("KpfTPoint"), w.payer(&w.f, &f)).is_err(), "it lapses nothing");
+    let b = point_dismiss(&w.lib, &lq, &w.script("KpfTPoint"), xk(&w.f), w.payer(&w.f, &f)).unwrap();
+    let ds = signed("a dispute that landed after the last time, dismissed", &b, &w.keys);
+    assert!(pays(&ds, &xk(&w.w), quarter) && pays(&ds, &xk(&w.f), quarter));
+    assert_eq!((ds.tx.outputs[0].value, &ds.tx.outputs[0].script_public_key), (again.value, &hash_spk(&w.lib, &st.again().hash())), "the statement again, as it stood");
+    // One that landed at the last time is in time: not dismissed; it lapses (at the claimer's cost, for this kind).
+    let inq = nth(&dsg, 0, late, last as u64);
+    assert!(point_dismiss(&w.lib, &inq, &w.script("KpfTPoint"), xk(&w.f), w.payer(&w.f, &f)).is_err());
+    let b = point_lapse(&w.lib, &inq, &w.script("KpfTPoint"), w.payer(&w.f, &f)).unwrap();
+    signed("a dispute that landed at the last time lapses", &b, &w.keys);
+}

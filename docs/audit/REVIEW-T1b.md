@@ -7504,3 +7504,262 @@ leaving is stepped by nothing for that statement's life either way.
 ```
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 149 passed, 0 failed
 ```
+
+# Round 50
+
+Scope: the first part built of section 14, "(a) 14.1 and 14.2", at the engine: the life of a statement (the
+quarter split, a right answer from anyone, the lateness kept beside the mark, the last time to dispute in
+`KpfTPoint.lapse`, `KpfTPoint.dismiss` and `KpfTChangeSettle`), and a covered account's count of legs, its time,
+the opening, and the note applied whole by two scripts. My files brought along; the whole workspace run once.
+Committed: 970caa7 and c513757; (a) is in the working tree. No src, contract or `kpf-out` file touched; no
+commit.
+
+## Headline
+
+- (a) does what section 14.10 says it does. The differential tests agree again on the changed scripts: 0
+  partings on 180 ends (now with the account's time about the statement's and counts that are not the legs'),
+  180 rows, 240 notes over the two note scripts.
+- **Three findings.** **F77 (Medium)**: the two quarters of a right answer are outputs too small to be mined
+  where the bond is under 0.2 KAS: the builder writes no right answer on an account of fewer than 20 KAS (bond at
+  1 %); before (a) it wrote one at 5. **F79 (Medium, one line)**: a lateness of the mark or more makes a
+  statement as first stated read as one that stands again: it is applied at once, with no dispute; an account
+  with such a lateness is opened. **F78 (Low)**: `KpfTHand` reads the account's time as a least margin.
+- F72, F73, F75, F76 and R6 are closed. F74 and F68 are open, as you said they would be until (b).
+- The whole workspace, run once at the end: 1,275 tests passed, none failed.
+- The third writing, before (b): nothing in it that I would call wrong; two remarks, under "The third writing".
+
+## Findings
+
+### F77 (Medium). The two quarters of a right answer cannot be mined where the bond is small
+
+A right answer now pays two outputs, a quarter of the disputer's bond each. An output of value v costs
+10^12 / v grams of storage mass (KIP-9) and a block takes 500,000: two outputs under about 0.04 KAS each fit in
+no transaction. The builder fills a small payout up to 0.025 KAS (400,000 grams): one such output fitted, two do
+not, and it writes nothing ("too small to be mined").
+
+`t1b_finding_f77_the_two_quarters_of_a_right_answer_are_outputs_too_small_to_be_mined_where_the_bond_is_small`,
+the end of a take of the rule's, disputed, on accounts with the bond at 1 %:
+
+| Coins | Bond | A right answer written and taken, from a third key | from the claimer |
+|---|---|---|---|
+| 5, 10, 16 KAS | 0.05, 0.10, 0.16 KAS | no | no |
+| 20 KAS and up | 0.20 KAS and up | yes | yes |
+
+Round 47's test had the answer written and taken at 5 KAS (one output of half the bond). So between 5 and 20
+KAS of coins (and ten times that at a bond of a tenth of a per cent) a right statement that somebody disputes is
+answered by nobody who uses these builders; for kinds 5 and up it lapses at its claimer's cost, half its bond to
+whoever disputed. A step of such an account is ended by its user's dispute. Two of my older tests ran into it
+and had to be given larger bonds (`t1b_fixed_f57_...`, `t1b_r42_...`).
+
+The script asks "at least" a quarter, so an answer with both outputs filled up to about 0.05 KAS is taken. For
+the claimer that is its own coins to itself. For anybody else it is a gift to the claimer larger than the
+quarter it earns: below a bond of 0.2 KAS "whoever answers is paid" pays nobody but the claimer.
+
+Closing it: the builder fills the two outputs to what the transaction's storage mass allows (it knows the
+number: its refusal prints it); and, so that a third party is not out of pocket, the script pays whoever
+answered only where a quarter is a payable amount (the terms' carrier, say), the claimer having the half
+otherwise.
+
+### F79 (Medium; one line). A lateness of the mark or more: a statement applied at once, with no dispute
+
+A statement that stands again is told from one as first stated by its lateness being 499,999,999,999 or more.
+Nothing holds an object's own lateness below that: no opening reads those bytes of the moving part, and
+`KpfTChange` writes whatever stands there into the statement. With a lateness of exactly the mark,
+`KpfTChangeSettle` reads a statement as first stated as standing again with a lateness of nothing: its last time
+to dispute is its time and one dispute period. It is never late (`KpfTChangeLate` and `KpfTPoint.dispute` compare
+with the whole number), so it is stated at a time of any age; stated at a time a dispute period ago it "was
+written after the last time to dispute" and is applied at once. A dispute of it has landed late whenever it
+lands: it lapses nothing and is dismissed at its disputer's cost.
+
+`t1b_finding_f79_a_lateness_of_the_mark_is_a_statement_applied_at_once_with_no_dispute`: an account of 100 KAS
+with that lateness is opened by `KpfTOpenC` (engine; under the id its own terms give). A stranger states on it a
+statement of kind 9 with no trace whose one output pays the stranger all the account holds; it is applied in the
+next transaction (engine, at no age); a dispute of it is dismissed (engine). The same on an account of the
+tests' lateness waits its period. (Kind 1 is applied by the same `KpfTChangeSettle`, so "kind 1 is untouched" holds
+for every lateness below the mark and not for one at it: a position with such a lateness is the same.)
+
+Before (a) such a lateness was an old price that could still be disputed for a period. It is a term both
+parties signed, and a tool that holds the terms to their bounds opens no such account (the builder does not);
+so Medium. But the paper's "the terms keep the lateness short" now carries more than a price of the past, and
+one line holds it: `KpfTChange.state` (and `KpfTEnter.state`) refuse a moving part whose lateness is the mark or
+more.
+
+### F78 (Low). `KpfTHand` reads the account's time as a least margin
+
+`KpfTHand` asks that whoever takes side A's place holds at least what stands where a position has side B's ask.
+On a covered account that is now its time, a DAA score, read as sompi.
+`t1b_finding_f78_the_hand_reads_the_accounts_time_as_a_least_margin`: an account of 2 KAS is handed over before
+its first statement; with a time of 300,000,400 (testnet-10's scores are of that order and more) it is not
+(model and engine); with 4 KAS it is. A line in `KpfTHand` (the hand of a covered account asks no least
+margin), or in (b) with the other refusals. The old take's end (`KpfTStepEnd`) reads the same two places as
+floors, until (b) refuses the old kinds.
+
+## What held
+
+### a. The life of a statement
+
+`t1b_r50_the_life_of_a_statement_a_right_answer_from_anyone_a_late_dispute_dismissed_applied_at_once_after`, on
+an account whose bond is 10 KAS and 3 sompi (no multiple of four); time 6,500, lateness 100, period 50: the last
+time to dispute is 6,650.
+
+| | At the engine |
+|---|---|
+| a right answer by a third key, by the claimer, by the disputer | taken; a quarter (2.5 KAS) to the claimer in the last output, a quarter to whoever answered in the one before; the copy keeps 5 KAS and 3 sompi, and not a sompi less; the two quarters the other way round are refused |
+| the statement after it | stands again with the mark and its lateness; disputed again in time and answered right again it is the same state |
+| a dispute that landed at 6,650 | lapses; is not dismissed |
+| a dispute that landed at 6,651 | is dismissed (the statement again, a quarter each, the copy's part to the sompi); does not lapse. The same of a statement that stands again |
+| a late dispute, answered | right where the point is right; wrong where the statement is wrong (it ends) |
+| the settlement of a statement as first stated | waits a dispute period (the age said less is refused) |
+| of one that stands again, landed at 6,600 or 6,649 | waits a dispute period |
+| of one that stands again, landed at 6,650, 6,651, 9,000 | applied at once; the landing read is the statement's own |
+
+A draw under it (`t1b_r50_a_draw_under_the_new_life_and_its_guard_on_a_draw_that_stands_again`): answered right
+by a third key; standing again it is ended by a note that landed before (and not by one that landed with its
+last landing); a late dispute of it is dismissed; after the last time it is applied at once. Kinds 2 to 6: every
+test of mine on their answers passes on the new `ends` (rounds 34 to 46), with the claimer's half now a quarter
+where a test asked the amount.
+
+Your questions, by reading where not run:
+
+- **Kept beyond `t0 + late + 2 * window`.** Three ways, none for nothing. (1) Late disputes: `KpfTPoint.dispute`
+  cannot refuse one, each is dismissed by anyone at once for a quarter, and costs its maker a whole bond; whoever
+  dismisses builds the settlement on the output it made. (`dispute` could refuse a statement whose own output
+  landed at or after the last time: one line, and then there are none after the first.) (2) A dispute in time
+  that nobody answers and nobody lapses stands until somebody does; anyone may, and for kinds 2 to 4 nobody is
+  paid to. (3) For kinds 5 and up, a claimer whose other key disputes a price nobody else can answer and lets it
+  lapse loses half a bond a period and may state again at once (an ended statement writes no time): a shard is
+  kept under draws so for half its bond a period. That is a price, not a bound; it is R7's residue and wants
+  saying in 14.5.
+- **`LATE_AGAIN + late` against readers of the plain number.** `KpfTChangeLate` and `KpfTPoint.dispute` compare
+  with the whole number: a statement that stands again is never late, as before. `KpfTDrawNote` is shown the
+  lateness and hashes it (run). `KpfTKind` and kind 1's family do not read it. The readers (`aobj.rs`,
+  `acmds.rs`) keep the number as it is and use `again()`. What does read the mark as a threshold is F79.
+- **A late dispute answered wrong: is it right that it is taken.** Yes. A wrong statement ends whenever it is
+  shown wrong; what the last time takes away is the lapse, which is the claimer's to show, and that is right
+  too.
+- **The quarter at 1, 2, 3.** A quarter of nothing: no output is asked and the copy keeps the bond. Not run
+  (no such output is written by anything); by reading. **A key that cannot be paid**: an output nobody spends;
+  nothing else follows. **Who takes the answerer's quarter**: whoever lands first, with the proof the first one
+  showed. For a citation that is the citation's writer's work taken; it costs the protocol nothing.
+- **"Applied at once" against a dispute in the same block**: they spend the same output; one lands. If it is
+  the dispute, it is late by construction and dismissed.
+- **Not naming the next point in the same transaction.** I agree with leaving it out. A transaction that
+  spends the output of the answer can be sent with the answer by whoever answers, claimer or watcher, so the
+  two forms give each the same move; and as built a round costs the claimer half a bond. What decides is who
+  can answer, which no form changes.
+
+### b. The count and the time
+
+`t1b_r50_the_count_of_legs_and_the_time_of_a_covered_account`: a take at 6,500 is applied and the account says
+6,900 (2 * (100 + 2 * 50) after its time); a take, a leaving of one leg and of all stated before 6,900 are wrong
+at the engine, written as the rule would write them; at 6,900 and after, right. A statement whose time is after
+its landing is neither disputed nor applied (engine): a user cannot state before its time by saying a later
+one, and cannot say a time that is not yet. A step stated at 6,501 on the same account, once it is below its
+maintenance, is right; it writes the time the account had and counts one leg less. One leg of two leaving
+counts one; the only leg leaving alone leaves an account of no leg (count nothing, the chain of no leg), which
+takes a take stated with no row (48 bytes), all but a note's least, and no other kind; a take with no row on an
+account that has legs is wrong.
+
+The two places against the scripts that are shown them: `KpfTOpenC` holds both to nothing (engine;
+`t1b_fixed_r6_...` and a case in `t1b_fixed_f64_...`); `KpfTCEnd` writes them; `KpfTAddC`, `KpfTLegAdd`,
+`KpfTLegOut`, `KpfTLegMove` and the old kinds' ends copy them; `KpfTHand` and `KpfTStepEnd` read them (F78).
+None but `KpfTCEnd` writes a number there. What does come apart until (b) is the count and the legs: a leg
+added by `KpfTLegAdd` or taken out by the old leaving is not counted.
+
+**A count that is not the legs'** is copied and counted down by the script, which holds it to nothing (run: one
+leg counted as five leaves alone, and four are counted); the model's `c_check` states on no such account. So
+at (b) the count is exactly as good as the three things that write it: the opening (nothing), the entry (one
+more, and it should refuse a count below nothing as well as a sixth), a leg leaving alone and `KpfTEnterOff`
+(one less). With the old leg scripts refused in the same transaction as the entry, as 14.2 has it, I see no
+fourth.
+
+Overflow: `t0` is below 500,000,000,000 at stating. The next time is computed for every kind, a step too, from
+the lateness and the period in the moving part: an account whose periods do not fit has no end anybody can
+answer (the model says the same: neither verdict). Such periods are the account's own terms.
+
+### c. The two note scripts
+
+`t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says`, brought back to the note applied whole: 240 notes
+on random books, of one leg by `KpfTLeft` and of two to six by `KpfTLeftAll`: 103 applied as the script's
+arithmetic written out gives (and not with a sompi more paid), 137 refused (a leg of another size, entry,
+direction or market, the same leg twice where it is once in the books, no leg, seven legs, what is asked beyond
+64 bits, a called shard); the model and the arithmetic part on none. Asked below zero by a sompi, by up to 300
+KAS, and at the 64-bit end; the note holding what was paid or only a note's least. The one-note test: 28
+transactions refused around a note of two legs. `t1b_fixed_f76_...`: a note of two legs is applied in one
+transaction and in no part (`KpfTLeft` shown one of its legs; `KpfTLeftAll` shown one leg; a note of one leg
+shown to `KpfTLeftAll`: all refused); two notes in either order leave the same shard. The statements' notes:
+54 notes of statements of the rule's applied whole, 3 waited on a called shard.
+
+### d. My tests of rounds 45 to 49
+
+| Test | Now |
+|---|---|
+| F72 (`t1b_fixed_f72_six_legs_at_most_...`) | closed: the model states on no account of seven legs; the note that six legs left is applied whole in one transaction (6.3 kB). The script that will refuse a seventh leg is the entry's, in (b) |
+| F73, F75 | closed, unchanged |
+| F76 | closed: `t1b_fixed_f76_...` |
+| R6 (round 49's probe) | closed: `t1b_fixed_r6_...` |
+| F74, F68 (both paths), item f of round 47 | open until (b), as said |
+| the test of what a shard is good for | passes: 23,556 statements, each stated at or after the account's time; accounts of no leg in it |
+| the two differential tests of round 47 | pass: 180 ends (65 right, 110 wrong, 5 neither), 180 rows; 0 partings |
+| round 47's "a leaving held open by the same point" | replaced by the test of the life: a point is still disputed again until the last time, for half a bond a round |
+| round 47's "an account of five KAS is answered" | is F77 |
+| round 47's P1 (an ask read as a mark) | removed: the two places are a count and a time, and the mark is in the length |
+| round 48's interleaving of notes a leg at a time | gone with it; either order of two whole notes is in `t1b_fixed_f76_...` |
+| round 46's two tests of the note | back to the note whole, over the two scripts |
+| F53 (round 30) | moved: the state that stands again is the mark and the lateness; a quarter where it asked half |
+| F57, round 42's M1 | given a bond of a tenth: F77 |
+| the table (`auditT1_tests.rs`) | 59 scripts, 68 entries, 57 `release`; `KpfTPoint` reads the oracle fee a fourth time (the dismissal) |
+
+## The third writing, before (b)
+
+Nothing I would call wrong. Two remarks.
+
+1. **A price nobody answers ends an entry at nobody's cost.** Right between the two signers. It also makes a
+   false entry free to try for two who are one: the watcher that disputes its price and waits for the lapse
+   costs them nothing. Whoever watches should answer such a price wrong, with the citation (the user's bond,
+   half to the answerer), and leave the lapse for when there is no citation to be had. Worth a line in 14.7.
+2. **"The owner signs first; the user signs last and lands it."** Right for the late landing. What it leaves is
+   an owner's signature that the user holds: for the lateness an entry or not as the price went, and after it a
+   leg the user can put into the shard's books at any later time for the price of its bond (it lands late, is
+   ended, undone, its note applied: a phantom for as long as that takes, at a moment the user picks). The owner
+   keeps it short by spending an output of its own in the transaction it signs, which it spends elsewhere when
+   the entry has not landed in its lateness. A rule for the owner's tool, as the price margin is.
+
+And F79's line belongs in `KpfTEnterS` too, when it is written.
+
+## Not reached
+
+- A bond of 1, 2 or 3 sompi and a key that cannot be paid: read, not run.
+- The age a lapse asks (`int(ageb) >= window`): the builders set the age and the slot holds the script's word
+  to the input's; I ran the settlement's age (less than a period: refused) and not the lapse's.
+- `KpfTAcctEnd` on an account of no leg that has a time; the old kinds on an account with a count and a time
+  beyond reading which places they read.
+- `thin_read.rs` and the CLI's readers of a statement that stands again: read by a search, not run.
+- Sizes: only what the tests print (the note of six legs applied whole: 6.3 kB).
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F77 | Medium | open: `t1b_finding_f77_...` |
+| F79 | Medium (one line) | open: `t1b_finding_f79_...` |
+| F78 | Low | open: `t1b_finding_f78_...` |
+| F72, F73, F75, F76, R6 | | fixed, verified |
+| F74, F68 | | open until (b) |
+| F61, F66, F67, F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 151 tests pass. Brought along as the table in d says. New:
+  `t1b_finding_f77_...`, `f78`, `f79`; `t1b_fixed_f76_...`; `t1b_r50_the_life_of_a_statement_...`,
+  `t1b_r50_a_draw_under_the_new_life_...`, `t1b_r50_the_count_of_legs_and_the_time_...`.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 59 scripts, 68 entries, 57 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`, `crates/kpf-protocol/tests/auditT1_solvency.rs`: unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+```
+CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2    # 1,275 passed, 0 failed, 140 result lines
+                                                                      # auditT1_builders 151, auditT1_tests 55,
+                                                                      # auditT1_cli 47, auditT1_solvency 11;
+                                                                      # thin_draw 18, thin_account 13, thin_enter 8
+```

@@ -1,0 +1,208 @@
+pragma silverscript ^0.1.0;
+
+// The forms (docs/ARCHITECTURE-CLEARING.md, 6a). A covered account and a shard are accounts (4b) whose moving part
+// is 171 bytes: the 138 of a position, then push(sid).
+//   moving     push(A key) push(B key) A margin, B margin, lease, lateness, dispute period, bond rate, A's ask, B's ask
+//              (each 8 bytes after 0x08), then push(sid)
+//   account    fixed = blake2b(terms(90) + push(root)), root the chain of its legs (32 zero bytes: no leg);
+//              side B is the clearing party, sid the shard that covers it
+//   shard      fixed = blake2b(terms(90) + push(blake2b(rows))), rows four of 102 bytes: push(market)
+//              push(committee) scale, price limit, net, gross; A is its owner, B's key 32 zero bytes, A's margin
+//              what it holds, sid its own id
+//   note       an object whose state is blake2b(push8(12) + push(sid) + push8(kind) + head(84) + push8(net) +
+//              push8(gross) + push(key) + push8(amount)); head: a leg's market, committee, scale and price limit as
+//              they stand in it (for kind 4: push(side B's key) and nothing more); kinds: 1 a leg entered, 2 a leg
+//              left, 3 a deposit, 4 what a user is owed
+// The scripts of a position are typed for 138 bytes and do not open these: a covered account is opened, changed and
+// ended by scripts that write the note of what they did.
+//
+// The note that legs left a covered account is applied to its shard (docs/ARCHITECTURE-CLEARING.md 13, 14.2).
+// A covered account holds its user's coins and its legs, six at most, and nothing of the clearing side: the other
+// side is the shard's books (its rows of net and gross units, and what its legs were entered at, one number where a
+// position has an ask). Where legs leave (one, or all an account has), the statement's settlement writes this note:
+//   blake2b(push8(12) + push(sid) + push8(6) + push(the chain of the legs that left) + push(the user's key)
+//           + push8(what the shard is asked for them))
+// the chain as an account's is (g_0 = 32 zero bytes, g_i = blake2b(g_(i-1) + leg_i)): for all an account's legs
+// it is the account's own. What is asked is below zero where the account paid the shard (the legs lost): the note
+// holds those coins.
+// It is applied whole, by anyone, in one transaction: each leg is taken out of its row (the row named for it,
+// which must be its market's) and out of what the legs were entered at (by its units and its entry: a leg's entry
+// does not move in a covered account); what is asked is paid to the user's key as far as the shard holds, and what
+// the shard does not hold goes on as a note of the rest:
+//   blake2b(push8(12) + push(sid) + push8(7) + push(the user's key) + push8(the rest))
+// or, below zero, what the note holds is added to what the shard holds. (Applied a leg at a time, the books
+// between two legs were neither those before nor those after: review 48, F76.)
+// While the shard is called nothing is paid by this script: a note that asks something waits (the call's own
+// scripts pay every note the same share).
+// KpfTLeftAll: a note of two to six legs.
+//   apply(who, ageb, slotLen, terms, rows, moving, legs, at, key, asked)    anyone; `at`: the row of each leg, 8 bytes a leg.
+contract KpfTLeftAll(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant NOTE_TAG = 12;
+    int constant LEFT = 6;
+    int constant REST = 7;
+    int constant FUTURES_TAG = 14;
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // What a shard's output holds beside what the shard holds for its users: a shard that paid everything out is
+    // still an output a block takes.
+    int constant SHARD_CARRIER = 100000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, byte[] legs, byte[] at, byte[32] key, int asked) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        int n = int(byte[8](who.slice(8, 16)));
+        require(who.slice(16, 24) == who.slice(8, 16));
+        require(n != j);
+        byte[] rs = slotOf(j, slotLen);
+        byte[] ns = slotOf(n, slotLen);
+        byte[] mv = byte[](moving);
+        byte[] tb = byte[](terms);
+        byte[] rw = byte[](rows);
+        // The shard (an object with no second key).
+        require(blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        require(mv.slice(34, 66) == z32);
+        // A note to it that these legs left: two to six (a note of one leg is KpfTLeft's).
+        require(legs.length >= 222);
+        require(legs.length <= 666);
+        require(legs.length % 111 == 0);
+        require(at.length * 111 == legs.length * 8);
+        byte[32] lh = byte[32](z32);
+        for (i, 0, 6, 6) {
+            if (i * 111 < legs.length) {
+                lh = blake2b(byte[](lh) + legs.slice(i * 111, i * 111 + 111));
+            }
+        }
+        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(LEFT) + p33(lh) + p33(key) + i9(asked)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        int held = int(byte[8](mv.slice(67, 75)));
+        int basis = int(byte[8](mv.slice(121, 129)));
+        int v = tx.inputs[j].value;
+        byte[] empty = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
+        // Each leg out of its row, and out of what the legs were entered at.
+        for (k, 0, 6, 6) {
+            if (k * 111 < legs.length) {
+                byte[] lg = legs.slice(k * 111, k * 111 + 111);
+                int r = int(byte[8](at.slice(8 * k, 8 * k + 8)));
+                int sc = int(byte[8](lg.slice(67, 75)));
+                int size = int(byte[8](lg.slice(85, 93)));
+                int dir = int(byte[8](lg.slice(94, 102)));
+                int e = int(byte[8](lg.slice(103, 111)));
+                // (A futures leg: under a shard there is no other in this form.)
+                require(dir == DIR_LONG || dir == DIR_SHORT);
+                require(sc > 0);
+                require(size > 0);
+                require(e > 0);
+                require(r >= 0);
+                require(r <= 3);
+                byte[] row = rw.slice(102 * r, 102 * r + 102);
+                require(row.slice(0, 84) == byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33))) + lg.slice(33, 84));
+                // Side B's units in the leg: the size below zero where A is long.
+                int rn = int(byte[8](row.slice(85, 93)));
+                int rg = int(byte[8](row.slice(94, 102))) - size;
+                int we = (size / sc) * e + (size % sc) * (e / sc) + ((size % sc) * (e % sc)) / sc;
+                if (dir == DIR_LONG) {
+                    rn = rn + size;
+                    basis = basis + we;
+                } else {
+                    rn = rn - size;
+                    basis = basis - we;
+                }
+                require(rg >= 0);
+                byte[] hd = row.slice(0, 84);
+                if (rn == 0 && rg == 0) { hd = empty; }
+                rw = rw.slice(0, 102 * r) + hd + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
+            }
+        }
+        byte[32] id = OpInputCovenantId(j);
+        require(OpInputCovenantId(n) == id);
+        require(OpCovInputCount(id) == 2);
+        // What is asked is paid as far as the shard holds, and not while it is called. Below zero, it is what the
+        // account paid for the legs, and the note holds it: it is added to what the shard holds.
+        int pay = 0;
+        int left = 0;
+        if (asked < 0) {
+            held = held - asked;
+            v = v - asked;
+        } else {
+            pay = asked;
+            if (pay > held) { pay = held; }
+            if (int(byte[8](mv.slice(130, 138))) != 0) {
+                require(asked == 0);
+            }
+            held = held - pay;
+            v = v - pay;
+            left = asked - pay;
+        }
+        if (pay > 0) {
+            int m = tx.outputs.length - 1 - 4 * j;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
+            require(tx.outputs[m].value >= pay);
+        }
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v);
+        if (left > 0) {
+            require(OpCovOutputCount(id) == 2);
+            int c1 = OpCovOutputIdx(id, 1);
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].value >= NOTE_MIN);
+        } else {
+            require(OpCovOutputCount(id) == 1);
+        }
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

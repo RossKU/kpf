@@ -37,6 +37,7 @@ pragma silverscript ^0.1.0;
 // (kind 6) and of a draw (kind 5) the claimer's bond is lost to the disputer: their prices are the claimer's to show.
 //   dispute(who, ageb, slotLen, position, kind, t0, arg, outs, bond, claimer, window, late, held, dkey, point)   anyone.
 //   lapse(the same)                                                                                      anyone, after.
+//   dismiss(the same, rkey)                                  anyone: a dispute that landed after the last time to dispute.
 contract KpfTPoint(int init_version) {
     int version = init_version;
 
@@ -122,6 +123,10 @@ contract KpfTPoint(int init_version) {
         byte[] rs = slotOf(j, slotLen);
         require(blake2b(i9(POINT_TAG) + p33(changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held)) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(int(ageb) >= window);
+        // (A dispute that landed after the last time to dispute is no dispute: it is dismissed, and lapses nothing.)
+        int lateness = late;
+        if (late >= LATE_AGAIN) { lateness = late - LATE_AGAIN; }
+        require(OpTxInputDaaScore(j) <= t0 + lateness + window);
         int v = tx.inputs[j].value;
         require(bond > 0);
         require(v >= bond + bond);
@@ -146,6 +151,44 @@ contract KpfTPoint(int init_version) {
             require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
             require(tx.outputs[m - 1].value >= bond);
         }
+        goesOn();
+    }
+
+    // A dispute that landed after the last time to dispute (the statement's time, its lateness and a dispute
+    // period; a script cannot hold a transaction to "no later than", so the landing is read here): anyone
+    // dismisses it at once. The statement stands again; the disputer's bond is lost, a quarter to the claimer (the
+    // last output), a quarter to whoever dismissed it (the one before), half to this script's copy.
+    entry dismiss(byte[24] who, byte[8] ageb, int slotLen, byte[32] position, int kind, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, byte[32] rkey) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        require(blake2b(i9(POINT_TAG) + p33(changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held)) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int lateness = late;
+        int again = late;
+        if (late >= LATE_AGAIN) {
+            lateness = late - LATE_AGAIN;
+        } else {
+            again = LATE_AGAIN + late;
+        }
+        require(OpTxInputDaaScore(j) > t0 + lateness + window);
+        int v = tx.inputs[j].value;
+        require(bond > 0);
+        require(v >= bond + bond);
+        becomes(j, rs, slotLen, changeHash(position, kind, t0, arg, outs, bond, claimer, window, again, held), v - bond);
+        int quarter = bond / 4;
+        int m = tx.outputs.length - 1 - 4 * j;
+        require(m - 1 >= tx.inputs.length);
+        if (quarter > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
+            require(tx.outputs[m].value >= quarter);
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m - 1].value >= quarter);
+        }
+        int self = this.activeInputIndex;
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - quarter - quarter);
         goesOn();
     }
 

@@ -581,8 +581,12 @@ fn a_covered_account_is_opened_only_with_its_shards_terms_and_periods() {
     let open = |a: &Account| account_open_c(&w.lib, &w.anchors[1], &w.script("KpfTOpenC"), a, seed, committee, w.payer(&w.a, &f));
     let honest = open(&base).unwrap();
     assert!(accepted(&honest, &w.keys));
-    // Its lease and what each party asks of the other are its own.
-    assert!(open(&Account { expiry: 77, a_min_counter: 5 * KAS1, b_min_counter: KAS1, ..base.clone() }).is_ok_and(|b| accepted(&b, &w.keys)));
+    // Its lease is its own. Where a position has its asks a covered account counts its legs and keeps the time
+    // before which its user states nothing again: none and none at its opening (review 49, R6).
+    assert!(open(&Account { expiry: 77, ..base.clone() }).is_ok_and(|b| accepted(&b, &w.keys)));
+    for (count, time) in [(5 * KAS1, 0), (0, KAS1), (-58, 0), (6, 0)] {
+        assert!(!open(&Account { a_min_counter: count, b_min_counter: time, ..base.clone() }).is_ok_and(|b| accepted(&b, &w.keys)), "opened with {count} legs counted and the time {time}");
+    }
     let mut loose = w.terms();
     loose.g_bps = 5_000;
     let mut bare = w.terms();

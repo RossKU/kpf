@@ -20,10 +20,14 @@ pragma silverscript ^0.1.0;
 // account has nothing of a second party's, and by the last row's sums (m: the user's coins less a note's least,
 // which stays with the user whatever happens and is no coin of the account's in any test; up: the maintenance
 // rate and the tolerance; the band: twice the tolerance of what the legs that leave are worth):
-//   7, a take (the user's key; no leg leaves): the coins that stay are at `up` of W and at LS.
-//      outs: the account with the amount less; the amount to the user.
-//   8, a leaving (the user's key). Of every leg (-1, or no leg stays): the account ends. Of one leg that gained:
-//      the coins are at `up` of WS and at LS. Of one that lost: the coins pay what it lost.
+// The account's moving part has, where a position has its asks, the legs counted and the time before which its
+// user states nothing again. A take and a leaving are stated at or after that time, and write their own time and
+// twice the longest a statement lives; a step is held to no time and writes none (docs 14.2).
+//   7, a take (the user's key; no leg leaves): the coins that stay are at `up` of W and at LS. (Of an account of
+//      no leg: stated with no row.) outs: the account with the amount less; the amount to the user.
+//   8, a leaving (the user's key). Of every leg (-1): the account ends. Of one leg that gained: the coins are at
+//      `up` of WS and at LS. Of one that lost: the coins pay what it lost. (The account's only leg leaving alone
+//      leaves an account of no leg.)
 //   9, a step (anyone; the fee is stated): the coins and G are below the maintenance, counted the tolerance less, of
 //      W. The leg named lost, and the coins pay what it lost, the fee of its worth, and what the legs that stay
 //      have lost (a fee is not taken before a loss: review 47): it leaves. Else (it lost and they do not; or no
@@ -78,9 +82,11 @@ contract KpfTCEnd(int init_version) {
         return rs;
     }
 
-    // The answer of a point. The point is right (1): the statement stands again (its dispute period begins again:
-    // another point of it may be disputed; it is not held to its time again), and the disputer's bond is lost, half
-    // to the claimer.
+    // The answer of a point. The point is right (1), by anyone's answer: the statement stands again (its dispute
+    // period begins again; another point of it may be disputed until the last time to dispute; it is not held to
+    // its time again), and the disputer's bond is lost: a quarter to the claimer (the last output), a quarter to
+    // whoever answered (the one before), half to this script's copy (a claimer that answers its own other key's
+    // dispute loses half a bond a round: docs 14.1).
     // The point is wrong (0): the position again, the disputer's bond back (the output before the last) and half of
     // the claimer's to whoever answered (the last). The other half of the bond lost stays in this script's copy.
     function ends(int j, byte[] rs, int slotLen, int verdict, byte[32] c0, byte[32] position, int bond, byte[32] claimer, byte[32] dkey, byte[32] rkey) {
@@ -89,16 +95,23 @@ contract KpfTCEnd(int init_version) {
         int v = tx.inputs[j].value;
         require(v >= bond + bond);
         int half = bond / 2;
+        int kept = bond - half;
         byte[32] id = OpInputCovenantId(j);
         require(OpCovInputCount(id) == 1);
         require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
         int m = tx.outputs.length - 1 - 4 * j;
         if (verdict == 1) {
-            require(rkey == claimer);
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m >= tx.inputs.length);
+            require(m - 1 >= tx.inputs.length);
+            half = bond / 4;
+            kept = bond - half - half;
+            if (half > 0) {
+                require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+                require(tx.outputs[m - 1].value >= half);
+            }
+            rkey = claimer;
         } else {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond - bond);
@@ -114,7 +127,7 @@ contract KpfTCEnd(int init_version) {
         byte[32] lib = OpInputCovenantId(self);
         require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
         require(OpOutputCovenantId(self) == lib);
-        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + kept);
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
@@ -132,7 +145,11 @@ contract KpfTCEnd(int init_version) {
         byte[] rows = said.slice(48, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
-        byte[32] c1 = blake2b(pre + i9(LATE_AGAIN) + i9(held));
+        // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
+        // it is counted from its time by it.)
+        int again = late;
+        if (late < LATE_AGAIN) { again = LATE_AGAIN + late; }
+        byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
         int n = rows.length / 112;
@@ -153,7 +170,10 @@ contract KpfTCEnd(int init_version) {
         int ls = int(byte[8](row.slice(32, 40)));
         int gl = int(byte[8](row.slice(40, 48)));
         int ok = 1;
-        if (n < 1) { ok = 0; }
+        if (n < 1) {
+            // (An account of no leg takes a take, stated with no row.)
+            if (kind != 7) { ok = 0; }
+        }
         if (byte[32](row.slice(48, 80)) != root) { ok = 0; }
         if (w < 0) { ok = 0; }
         if (ws < 0) { ok = 0; }
@@ -166,6 +186,17 @@ contract KpfTCEnd(int init_version) {
         if (int(byte[8](mv.slice(76, 84))) != 0) { ok = 0; }
         int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
         int up = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) + g;
+        // Where a position has its asks: the legs counted, and the time before which the user states nothing
+        // again. A statement of the user's writes its own time and twice the longest a statement lives (the
+        // lateness and two dispute periods): between two of them the account is free for a step.
+        int count = int(byte[8](mv.slice(121, 129)));
+        int quiet = int(byte[8](mv.slice(130, 138)));
+        int next = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
+        int when = quiet;
+        if (kind != 9) {
+            if (t0 < quiet) { ok = 0; }
+            when = next;
+        }
         byte[] due = byte[](0x00);
         if (kind == 7) {
             if (skip != 0) { ok = 0; }
@@ -175,12 +206,11 @@ contract KpfTCEnd(int init_version) {
                 if (m - amount < (w / BPS) * up + ((w % BPS) * up + BPS - 1) / BPS + ls) { ok = 0; }
             }
             if (ok == 1) {
-                due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 67) + byte[]((coins - amount) as byte[8]) + mv.slice(75, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
+                due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 67) + byte[]((coins - amount) as byte[8]) + mv.slice(75, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
             }
         } else {
             int all = 0;
             if (skip == 0 - 1) { all = 1; }
-            if (row.slice(80, 112) == z32) { all = 1; }
             if (skip == 0) { ok = 0; }
             if (skip < 0 - 1) { ok = 0; }
             if (skip > n) { ok = 0; }
@@ -254,7 +284,7 @@ contract KpfTCEnd(int init_version) {
                         asked = gl - ((wl / BPS) * g2 + ((wl % BPS) * g2 + BPS - 1) / BPS);
                         if (asked < 0) { asked = 0; }
                     }
-                    due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(80, 112))) + mv.slice(0, 67) + byte[]((coins - pay - fee) as byte[8]) + mv.slice(75, 171))) + byte[]((held - pay - fee) as byte[8]);
+                    due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(80, 112))) + mv.slice(0, 67) + byte[]((coins - pay - fee) as byte[8]) + mv.slice(75, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - fee) as byte[8]);
                     if (fee > 0) {
                         due = due + byte[](0x01) + byte[](claimer) + byte[](fee as byte[8]);
                     }

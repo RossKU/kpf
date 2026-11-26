@@ -80,9 +80,11 @@ contract KpfTStepEnd(int init_version) {
         return rs;
     }
 
-    // The answer of a point. The point is right (1): the statement stands again (its dispute period begins again:
-    // another point of it may be disputed; it is not held to its time again), and the disputer's bond is lost, half
-    // to the claimer.
+    // The answer of a point. The point is right (1), by anyone's answer: the statement stands again (its dispute
+    // period begins again; another point of it may be disputed until the last time to dispute; it is not held to
+    // its time again), and the disputer's bond is lost: a quarter to the claimer (the last output), a quarter to
+    // whoever answered (the one before), half to this script's copy (a claimer that answers its own other key's
+    // dispute loses half a bond a round: docs 14.1).
     // The point is wrong (0): the position again, the disputer's bond back (the output before the last) and half of
     // the claimer's to whoever answered (the last). The other half of the bond lost stays in this script's copy.
     function ends(int j, byte[] rs, int slotLen, int verdict, byte[32] c0, byte[32] position, int bond, byte[32] claimer, byte[32] dkey, byte[32] rkey) {
@@ -91,16 +93,23 @@ contract KpfTStepEnd(int init_version) {
         int v = tx.inputs[j].value;
         require(v >= bond + bond);
         int half = bond / 2;
+        int kept = bond - half;
         byte[32] id = OpInputCovenantId(j);
         require(OpCovInputCount(id) == 1);
         require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
         int m = tx.outputs.length - 1 - 4 * j;
         if (verdict == 1) {
-            require(rkey == claimer);
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m >= tx.inputs.length);
+            require(m - 1 >= tx.inputs.length);
+            half = bond / 4;
+            kept = bond - half - half;
+            if (half > 0) {
+                require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+                require(tx.outputs[m - 1].value >= half);
+            }
+            rkey = claimer;
         } else {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond - bond);
@@ -116,7 +125,7 @@ contract KpfTStepEnd(int init_version) {
         byte[32] lib = OpInputCovenantId(self);
         require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
         require(OpOutputCovenantId(self) == lib);
-        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + kept);
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
@@ -139,7 +148,11 @@ contract KpfTStepEnd(int init_version) {
         byte[] rows = said.slice(116, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(2) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
-        byte[32] c1 = blake2b(pre + i9(LATE_AGAIN) + i9(held));
+        // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
+        // it is counted from its time by it.)
+        int again = late;
+        if (late < LATE_AGAIN) { again = LATE_AGAIN + late; }
+        byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         // The point answered is the one disputed; or any other, where the answer is that it is wrong (a statement
         // with a wrong point is not kept by a dispute of a point nobody can answer).

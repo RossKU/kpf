@@ -1015,8 +1015,9 @@ pub struct Stated {
     pub held: i64,
 }
 
-/// The lateness of a statement that stands again after a point of it was answered right: it was held to its time
-/// when it was disputed, and is not held to it again.
+/// The mark, in the place of its lateness, of a statement that stands again after a point of it was answered
+/// right: it was held to its time when it was disputed, and is not held to it again. Its lateness is kept beside
+/// the mark (the place holds the two, added): the last time to dispute it is counted by it.
 pub const LATE_AGAIN: i64 = 499_999_999_999;
 
 impl Stated {
@@ -1031,7 +1032,22 @@ impl Stated {
 
     /// The statement as it stands again after a point of it was answered right.
     pub fn again(&self) -> Stated {
-        Stated { late: LATE_AGAIN, ..*self }
+        Stated { late: if self.late < LATE_AGAIN { LATE_AGAIN + self.late } else { self.late }, ..*self }
+    }
+
+    /// The statement's lateness, standing again or not.
+    pub fn lateness(&self) -> i64 {
+        if self.late >= LATE_AGAIN {
+            self.late - LATE_AGAIN
+        } else {
+            self.late
+        }
+    }
+
+    /// The last time to dispute a point of it: its time, its lateness and a dispute period. A dispute that landed
+    /// later is dismissed by anyone; a statement written at or after it is applied at once (`docs` 14.1).
+    pub fn last_dispute(&self) -> i64 {
+        self.t0 + self.lateness() + self.window
     }
 
     pub fn in_time(&self, landed: u64) -> bool {

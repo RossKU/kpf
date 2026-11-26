@@ -70,11 +70,18 @@ contract KpfTChangeSettle(int init_version) {
         require(who.slice(16, 24) == who.slice(0, 8));
         byte[] rs = slotOf(j, slotLen);
         require(changeHash(position, kind, t0, arg, blake2b(outs), bond, claimer, window, late, held) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
-        require(int(ageb) >= window);
         // The statement priced at t0 and landed within the position's lateness of it (else KpfTChangeLate ends it).
         int landed = OpTxInputDaaScore(j);
         require(landed >= t0);
         require(landed - t0 <= late);
+        // It stood a dispute period; or it stands again and was written at or after the last time to dispute it
+        // (its time, its lateness and a dispute period): nothing disputes it any more, and it is applied at once
+        // (docs 14.1; 499999999999 and up: the mark that it stands again, and its lateness).
+        int lateness = late;
+        if (late >= 499999999999) { lateness = late - 499999999999; }
+        if (landed < t0 + lateness + window) {
+            require(int(ageb) >= window);
+        }
         int n = outs.length / 41;
         require(n >= 1);
         require(n <= 4);

@@ -629,7 +629,7 @@ const RELEASE: [&str; 6] = [
     "require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));",
     "require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));",
 ];
-const SCRIPTS: [&str; 58] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTLegOut", "KpfTEnter", "KpfTStepEnter", "KpfTLeft", "KpfTCRow", "KpfTCEnd", "KpfTSweep", "KpfTPay"];
+const SCRIPTS: [&str; 59] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTLegOut", "KpfTEnter", "KpfTStepEnter", "KpfTLeft", "KpfTCRow", "KpfTCEnd", "KpfTLeftAll", "KpfTSweep", "KpfTPay"];
 /// Round 30. The two services of the library are spent not to move an object named by `who` but to write or cite a
 /// price note: their first argument is not the 24 bytes of the places, and their "going on" is their own (a note
 /// writer writes two outputs under the id, a citation ties the counts). The who-based lints (A3's entry shape, R19's
@@ -758,7 +758,9 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
         // third time (a liquidation beside a vouch, a kind that keeps half a bond).
         // (Round 39: KpfTPoint too, where the lapse of a point of an entry keeps half of the claimers' bond in the
         // copy: the copy holds at least what it held, the fee and that half.)
-        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if ["KpfTLiq", "KpfTKind", "KpfTPoint"].contains(&name) { 3 } else { 2 }, "{name}: ORACLE_FEE is read where the copy goes on and nowhere else");
+        // (Round 50: and a fourth time, where a dispute that landed after the last time is dismissed: the copy holds
+        // the fee and what is left of the disputer's bond after the two quarters.)
+        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if name == "KpfTPoint" { 4 } else if ["KpfTLiq", "KpfTKind"].contains(&name) { 3 } else { 2 }, "{name}: ORACLE_FEE is read where the copy goes on and nowhere else");
         // Where the four conditions live: the entry body, plus any `goesOn`/`ends` the entry calls.
         let func = |n: &str| -> Option<String> { code.split(&format!("function {n}()")).nth(1).map(|b| b.split("\n    }").next().unwrap().to_string()) };
         let ends_fn = code.split("function ends(").nth(1).map(|b| b.split("\n    }").next().unwrap().to_string());
@@ -820,7 +822,7 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     pinned.sort();
     assert_eq!(sorted, pinned, "every script of the library");
     assert_eq!(COLLECTORS, kpf_protocol::thin_artifacts::COLLECTORS);
-    assert_eq!((entries, releases), (66, 56));
+    assert_eq!((entries, releases), (68, 57));
 }
 
 /// Round 19, the places over the sources. `release` (and `KpfSlot.go`, `KpfFeePool.go`) asks only to be named at a

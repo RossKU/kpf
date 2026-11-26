@@ -198,11 +198,14 @@ fn the_end_of_a_take_is_answered_right_or_wrong_and_never_both() {
     let (b, right) = step_end(&w.lib, &q, x, &tk, &w.script("KpfTStepEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
     let s = signed("end answered: right", &b, &w.keys);
-    let half = st.bond / 2;
+    // (Of the disputer's bond a quarter is the claimer's, a quarter whoever answered's, half the copy's: docs 14.1.)
+    let quarter = st.bond / 4;
     assert_eq!((s.tx.outputs[0].value, &s.tx.outputs[0].script_public_key), (live.value, &hash_spk(&w.lib, &st.again().hash())), "the statement again");
+    assert_eq!((st.again().lateness(), st.again().again()), (st.late, st.again()), "it keeps its lateness");
     let n = s.tx.outputs.len();
-    assert_eq!((s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), (half as u64, &p2pk_spk(&xk(&w.b))));
-    assert_eq!(s.tx.outputs[1].value, w.script("KpfTStepEnd").value + (ORACLE_FEE + st.bond - half) as u64);
+    assert_eq!((s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), (quarter as u64, &p2pk_spk(&xk(&w.b))));
+    assert_eq!((s.tx.outputs[n - 2].value, &s.tx.outputs[n - 2].script_public_key), (quarter as u64, &p2pk_spk(&xk(&w.w))), "who answered");
+    assert_eq!(s.tx.outputs[1].value, w.script("KpfTStepEnd").value + (ORACLE_FEE + st.bond - 2 * quarter) as u64);
     let forced = step_end(&w.lib, &q, x, &tk, &w.script("KpfTStepEnd"), xk(&w.w), w.payer(&w.w, &f), Some(false));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "a right end is answered wrong");
 
@@ -226,7 +229,7 @@ fn the_end_of_a_take_is_answered_right_or_wrong_and_never_both() {
         assert_eq!((s.tx.outputs[0].value, &s.tx.outputs[0].script_public_key), (account.value, &hash_spk(&w.lib, &x.hash())), "{what}: the account again");
         let n = s.tx.outputs.len();
         assert_eq!((s.tx.outputs[n - 2].value, &s.tx.outputs[n - 2].script_public_key), (lie.bond as u64, &p2pk_spk(&xk(&w.w))), "{what}: the disputer's bond back");
-        assert_eq!(s.tx.outputs[n - 1].value, half as u64, "{what}: half of the bond lost");
+        assert_eq!(s.tx.outputs[n - 1].value, (lie.bond / 2) as u64, "{what}: half of the bond lost");
         let forced = step_end(&w.lib, &q, x, &tk, &w.script("KpfTStepEnd"), xk(&w.w), w.payer(&w.w, &f), Some(true));
         assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered right");
     }
