@@ -3108,7 +3108,10 @@ changes a row is shown the row and its path (six hashes: 192 bytes).
 - **The key** of a row is written plain, not hashed, 78 bytes: the underlying's market, the scale, the price's
   limit, the day, what it is (futures; calls; puts) and the strike. No committee: a shard has one, in its id
   (17.9). Futures: a day and a strike of nothing. Keys are compared as numbers of 8 bytes (the market's 32
-  bytes as four), so that the rows of one underlying are next to one another, its futures first.
+  bytes as four), so that the rows of one underlying are next to one another, its futures first. **The key
+  of nothing is below every key by rule, not by its numbers**: eight bytes of a market's id with their top bit
+  set read as a number below nothing, and such a key would be below the head's (found by the model:
+  `books.rs`, not yet the form of any script).
 - **A leaf** holds its row (the key, the clearing side's net units, the gross, what its legs were entered at)
   and **the hash of the key of the leaf after it**: 147 bytes hashed. The key after is shown plain only where a
   row is put in or taken out. A leaf and an inner node are hashed under different tags; an empty leaf is one

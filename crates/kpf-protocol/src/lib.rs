@@ -62,6 +62,7 @@ pub use legacy::pending;
 pub use legacy::sim;
 pub use legacy::state;
 pub mod aobj;
+pub mod books;
 pub mod cite;
 pub mod covered;
 pub mod error;
