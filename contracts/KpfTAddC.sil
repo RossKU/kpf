@@ -82,9 +82,15 @@ contract KpfTAddC(int init_version) {
         byte[] mv = byte[](moving);
         require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(delta > 0);
-        // The object has stood a lateness. (An addition is made at will and costs no bond: one made in every
-        // block would keep the object from every other transaction, a step's or a call's. Review 55, F98.)
-        require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
+        // An account has stood a lateness. (An addition is made at will and costs no bond: one made in every
+        // block would keep the account from every other transaction, a step's or a call's. Review 55, F98.)
+        // A shard is added to at no age, a note's least or more at a time: anybody's note or join makes its
+        // output young, and its owner adds while its users leave, which is when a call comes (review 56, F101).
+        if (mv.slice(34, 66) == byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])) {
+            require(delta >= NOTE_MIN);
+        } else {
+            require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
+        }
         // (Side A alone: a covered account has nothing of a second party's, and a shard has no second party.)
         require(side == SIDE_A);
         int at = 67;

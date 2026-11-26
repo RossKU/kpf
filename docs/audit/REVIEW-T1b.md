@@ -9733,3 +9733,361 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests     
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed (in the workspace run)
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
 ```
+
+# Round 57
+
+Scope, at the engine: what closes round 56's findings (F101, F100, F102: "where no age can be asked the bond is
+the price", docs 15.8); and a check of the tests that left the default run (the feature `legacy` in three
+crates). My files brought along; the workspace run twice (default, and with the features). Working tree after
+6eea704; no src, contract, `Cargo.toml` or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **F101 is closed.** A shard is added to and drawn at no age; less than a note's least is not added; two keys
+  that are not the owner's no longer spend a shard by a join.
+- **F100 is closed for what it named on an account and for an entry**: kinds 7 to 9 and an entry have a bond of
+  0.2 KAS at the least, and an entry asks a lateness of its account and of its shard. **F102 is closed for a
+  covered account** (the wrong answer on the least bond is a transaction) and left for an account no shard
+  covers, as the paper says.
+- **The rest of F88 is open again, by the decision of 15.8, and priced**: no age holds a draw, so the owner's
+  next draw and anyone's call are both stated on the output of its round at once. A round costs the owner
+  0.529 KAS on a shard of 1 or 10 KAS and 5.03 KAS on one of 1,000 KAS. I do not call it a finding at that
+  price; it is no longer "a call is stated between two draws".
+- **Two findings, both of the age that is left** (an age is of an OUTPUT, and whoever spends the object makes
+  it young: the root of F101, which round 57 took away from a shard's addition and draw and put on an entry):
+  - **F103 (Medium)**: an entry and a join ask the SHARD's age, and every note applied, every addition, every
+    draw, every call and every entry makes the shard young. A shard in use takes entries and joins only in its
+    pauses: with notes applied at random at 1, 2, 3 and 5 a lateness, 0.59, 0.30, 0.16 and 0.03 entries a
+    lateness are taken where 0.99 would be; with a note every 99 blocks, none. A third party ends a pause with
+    a call that is not due for 0.130 KAS a lateness on a small shard and 5.03 KAS on the largest.
+  - **F104 (Medium)**: an addition to an ACCOUNT asks the account's age, and a step is anybody's statement at
+    no age. Two keys that are not the account's give it back young for half a bond and three fees (0.129 KAS
+    on every account of 20 KAS or less at 1 %), and its user adds nothing to it for a lateness, again and
+    again. It has been so since round 56 (F98's closing); I did not see it then.
+- **The tests behind `legacy`**: every test file of the three crates is listed exactly once (70, 20 and 37
+  entries for 70, 20 and 37 files); nothing of the thin form, of the committee's own tests or of mine is behind
+  the feature; nothing behind it is the only cover of the committee's signing, the epoch table, the citation,
+  the fee pool or the slot. No file to bring back.
+- The workspace: by default 600 passed, 0 failed in 60 targets (3 min 30 s); with the three features 1,294 passed, 0 failed
+  in 138 targets (14 min 11 s).
+
+## What closes round 56
+
+### F101: closed
+
+`t1b_fixed_f101_a_shard_is_added_to_and_drawn_at_no_age_and_a_join_asks_the_shards_owner` (it replaces the
+finding's test).
+
+- **An addition at no age.** A note is applied to a shard of 100 KAS by a key that is not its owner's (signed
+  with that key alone): the shard in a new output. On it the owner adds 0.2 KAS three times in a row, each on
+  the output of the one before, each told no age and with a sequence of 0: taken. The same after a join made
+  by a user's key alone. An addition of a sompi under a note's least: the builder refuses, and the transaction
+  written with it (the amount said, the output's coins and state) is refused by `KpfTAddC`; of one sompi,
+  refused; of a sompi over, taken.
+- **An account's addition still asks the age**: `t1b_fixed_f98_an_addition_to_an_account_asks_that_it_has_stood_a_lateness`
+  (renamed; its shard half now asserts no age): three additions in a row each carry the lateness, 12
+  transactions at the edges refused.
+- **A draw at no age**, and its bond: the shard's rate of what it holds and a KAS at the least. On shards of
+  1, 99, 100, 100.0001 and 1,000 KAS at 1 %: 1, 1, 1, 1.000001 and 10 KAS; a statement that says a sompi less
+  or more is not stated (10 refused).
+- **A join asks the shard's owner.** Two accounts under the shard's id with two keys of a third party: the
+  model and the builder refuse. Under a shard whose owner IS their second key the two keys join them alone
+  (control); that transaction with the real shard put in (its moving part, its object, its output) is refused;
+  with another shard of that owner put in the same way it is taken (the control of the writing).
+- **`KpfTOpenC` asks both keys' signatures**: an account whose second key is the shard's owner is opened with
+  that key and not without (the source: `signedBy(sb, mv.slice(34, 66))`).
+
+**Is there still a way for a third party to spend a shard at will?** By the sources, what takes a shard that is
+not under a statement, and who signs:
+
+| Script | Signed by | Age | A third party |
+|---|---|---|---|
+| `KpfTAddC` | the owner | none | no |
+| `KpfTChange` kind 5 | the claimer (a draw by another key is answered wrong: 1 KAS of bond) | none | priced |
+| `KpfTChange` kind 11 | anyone | none | priced: half a call's bond (0.2 to 10 KAS) and three fees where it is not due |
+| `KpfTEnterS` | the user and the owner | a lateness, both objects | no |
+| `KpfTJoinC` | the user (accounts of the owner's second key, which `KpfTOpenC` has the owner sign) | a lateness, all three | once a pair of accounts the owner signed, once a lateness |
+| `KpfTLeft.apply`, `KpfTLeftAll`, `KpfTLeftVoid` | nobody | none | once a note; a note comes of a leg, a leg of an entry the owner signed |
+| `KpfTLeft.rest` | nobody | none | once a note of the rest, which a script writes |
+| `KpfTCallPay`, `KpfTCallEnter`, `KpfTCStep` | nobody | none | a called shard's only |
+
+So: nothing unbounded and free. A third party spends a shard once for every note it holds and every pair of
+accounts it joins, and at a price by a call. What that is worth to it since round 57 is F103.
+
+### The price of a draw's round, and the rest of F88
+
+`t1b_r57_what_the_owners_round_of_a_draw_costs_at_no_age_and_an_honest_small_draw` (the test of the rest of F88
+is gone with the age it asserted).
+
+| Shard | The bond | Answered wrong at once (3 blocks) | Left to lapse (a dispute period) |
+|---|---|---|---|
+| 1 KAS | 1 KAS | 0.5292 KAS | 0.5266 KAS |
+| 10 KAS | 1 KAS | 0.5292 KAS | 0.5266 KAS |
+| 1,000 KAS | 10 KAS | 5.0292 KAS | 5.0266 KAS |
+
+Half the bond stays in the library's copy; the three fees are 0.0232 KAS. On the output the round gives back
+the owner's next draw is stated AT ONCE (no age), and so is anyone's call on the two shards where one is due:
+both are taken on the same output. Round 56 closed the rest of F88 with "its next draw is no transaction for
+a lateness, and a call is stated on it at once"; that is no longer so. What is left is a race in every round
+that costs the owner 0.53 KAS a round on a small shard (at three blocks a round and ten blocks a second: about
+1.8 KAS a second), and a third key that answers the owner's dispute first takes half its bond. I do not call it
+a finding at this price; the paper's table says "closed by" the bond, which is the right word only for the
+price.
+
+**An honest small draw is still made**: 0.5 KAS out of a shard of 3 KAS with no leg is stated with a bond of
+1 KAS (twice the draw: the owner needs a KAS free for a lateness and a dispute period) and applied; the owner
+has the draw and its bond, less 0.0157 KAS of two fees.
+
+### F100: closed for statements and for an entry; F102: closed for a covered account
+
+`t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor_and_an_entry_asks_a_lateness` (it
+replaces the finding's test). 51 transactions refused.
+
+- **The floor at its edge, kinds 7, 8 and 9** (a rate of 1 %): on accounts of 0.25, 3, 19.9999, 20 and
+  20.0001 KAS the bond is 0.2, 0.2, 0.2, 0.2 and 0.200001 KAS. Each statement is stated with it; with a sompi
+  less or more, or with the rate's own bond, the builder refuses and `KpfTChange` refuses.
+- **The floor of an entry** (the accounts of these tests have 10 %): on accounts of 1, 2 and 2.0001 KAS the
+  bond is 0.2, 0.2 and 0.20001 KAS; a sompi less or more, or the rate's, refused.
+- **The round of a false step** by two keys of one party, on accounts of 3 and of 20 KAS: the bond is 0.2 KAS
+  on both, and the round costs **0.1287 KAS answered wrong at once and 0.1266 KAS left to lapse** (round 56:
+  0.042 KAS on 3 KAS, and no wrong answer written). The wrong answer on the least bond is a transaction: F102
+  is closed for a covered account. An account no shard covers (kinds 2 to 4) has no floor: left, as 15.8 says.
+- **An entry's age.** An entry is built with the lateness (100) as the age its script is told and as the
+  sequence of BOTH inputs, the account's and the shard's, and taken. Refused: the script told a block less
+  with both inputs that old; told nothing at no age; told a block less; the account a block younger than
+  told; the shard a block younger than told. A block older, told so: taken.
+
+**Does the floor break anything honest?**
+`t1b_r57_a_bond_above_an_accounts_coins_is_posted_and_comes_back_at_the_end_and_under_a_call`. No:
+
+- The bond is the claimer's own coins beside the account's (`KpfTChange` asks the output to hold what the input
+  held and the bond). Accounts of 0.25, 0.3 and 0.45 KAS with a leg of a hundredth of a unit: the leaving of
+  every leg is stated with a bond of 0.2 KAS and applied; the user has all its coins.
+- The same leaving disputed and answered right: a quarter of the disputer's 0.2 KAS (0.05 KAS) is the
+  claimer's and a quarter whoever answered's: both are outputs (the least bond is exactly four of the least
+  quarter of round 50).
+- Under a call, `KpfTCStep` over a statement on an account of 0.3 KAS, standing (form 1) and disputed
+  (form 2): taken, and each bond of 0.2 KAS is paid back in full (the arithmetic written out says the same).
+  The least bond IS the least payment, so no bond of kinds 7 to 10 is under it any more: the case of F92 (a
+  bond that whoever steps keeps) is made by no statement of `KpfTChange` or `KpfTEnterS` now. The test of F92
+  still runs it on an object made by hand.
+
+## Findings
+
+### F103 (Medium). A shard that is spent in every lateness takes no entry and no join
+
+`t1b_finding_f103_a_shard_that_is_spent_in_every_lateness_takes_no_entry_and_no_join`.
+
+`KpfTEnterS` (round 57) and `KpfTJoinC` (round 56) are told the lateness as the age, and the slot holds the
+SHARD's input to it as well as the account's. An age is of an output. A shard's output is made young by
+everything that spends it, most of which its owner neither makes nor stops: a note applied (anybody, no
+signature, no age: every leaving of every user ends in one), the owner's addition, a draw's statement and its
+end, a call that is not due and its end, an entry, a join. This is the root of F101; round 57 took it away from
+a shard's addition and draw, and put it on an entry.
+
+At the engine, on shards as they come out of (a) a note applied by a key that is not the owner's, (b) the
+owner's addition of 0.2 KAS, (c) a call by a third party that is not due, disputed and answered wrong by that
+party: an entry and a join are built with the lateness as the shard's age, and the same transactions with the
+shard a block younger are refused. (a), (b) and (c) are all made at no age.
+
+- **In use.** One entry is always waiting; notes are applied at random (a count over 2,000 latenesses):
+
+  | Notes applied a lateness | 0 | 0.5 | 1 | 2 | 3 | 5 |
+  |---|---|---|---|---|---|---|
+  | Entries taken a lateness | 0.99 | 0.76 | 0.59 | 0.30 | 0.16 | 0.03 |
+
+  With a note every 99 blocks: no entry, ever. In these terms a lateness is 100 blocks (ten seconds): a shard
+  whose users leave three times in ten seconds takes one entry a minute; five times, one in five and a half
+  minutes. The
+  busier a shard is, the fewer entries it takes.
+- **The stock of 15.3** is built by entries: at the best one a lateness, less every pause that something else
+  ends. And the paper's own way to a size (accounts of 20, 10, 5 and 2 joined to 37) is three joins: three
+  latenesses of the shard at the least, in each of which its owner enters nothing and no other user joins.
+  Entries and joins of all a shard's users share one a lateness.
+- **By a third party.** A call that is not due is anybody's statement at no age: stated, disputed and answered
+  wrong by one key, it gives the shard back young for half its bond and three fees: **0.1301 KAS** on a shard
+  whose rate of what it holds is under 0.2 KAS, and 5.03 KAS at the most (the call's cap of 10 KAS of bond) on
+  a shard of any size. Stated at the block the shard has stood 99, it costs that a lateness and the shard takes
+  no entry and no join at all. The longer the lateness, the less it costs an hour. A user that holds notes
+  (one a leg it left, applied when it likes) does the same once a note, for a fee.
+
+For a user that enters: its account has to have stood a lateness too (that half holds: nobody but a statement
+makes an account young, see F104), so an entry on a new account is a lateness after its opening, and a second
+leg a lateness after the first entry has ended.
+
+Direction: the lateness F100 wants is between two acts of ONE party, not of the output. A shard already says a
+time that an entry writes (`KpfTEnterS`: the later of what it says and the entry's time, lateness and two
+periods): an entry that asks its own time to be a lateness after a time of the last ENTRY written in the shard
+(or in the account, for an owner's entries on its own accounts) is held by the lock time and is reset by
+nothing a third party does. A join can ask the same of the accounts alone: it writes the shard as it is.
+
+### F104 (Medium). Anyone keeps an account young for half a bond, and its user adds nothing to it
+
+`t1b_finding_f104_anyone_keeps_an_account_young_for_half_a_bond_and_its_user_adds_nothing_to_it`.
+
+`KpfTAddC` asks no age of a shard since round 57 and still asks it of an account (F98). A step (kind 9) is
+anybody's statement and asks no age. Two keys that are neither the user's nor the owner's state a step of the
+account that is not the rule's, dispute it and answer it wrong: the account again as it was, in a new output.
+On that output (run on accounts of 3, 20 and 1,000 KAS at 1 %):
+
+- the user's addition of 1 KAS is built with the lateness and refused a block young, and at no age;
+- the same false step is stated again at no age, by the two keys alone;
+- the user's leaving is stated at no age: it can go, it cannot add (nor enter, hand the account over or join
+  it: all three ask the age).
+
+| Account | The bond | The round costs the two keys |
+|---|---|---|
+| 3 KAS | 0.2 KAS | 0.1287 KAS |
+| 20 KAS | 0.2 KAS | 0.1287 KAS |
+| 1,000 KAS | 10 KAS | 5.0287 KAS |
+
+Stated again at the block the account has stood 99, that is the price a lateness of an account whose user never
+adds a sompi. Scenario: an account of 60 KAS, long 100 units from 10 (its maintenance is 50 KAS at 5 %); the
+price falls and its user sends 30 KAS. A key that wants the step's fee (0.5 % of the legs' worth: about 5 KAS
+here) keeps the account young for 0.329 KAS a lateness (half a bond of 0.6 KAS and the fees) until the price
+is under the maintenance, and steps it: fifteen latenesses are paid by one fee. The user's only way is out.
+
+It is the same root as F103, on the account's side, and it is not new with round 57: the age came with F98's
+closing in round 56 (the floor of round 57 raised the price on an account of 3 KAS from the 0.042 KAS of round
+56 to 0.129 KAS).
+I did not report it in round 56.
+
+Direction: either an account is added to at no age by a note's least or more at a time, as a shard now is (what
+holds the account from a step is then coins that stay in it: F98's hold at 0.2 KAS a block of its own margin,
+which is a cure); or the lateness is asked between two additions by a time written in the account, which a
+third party's statement, giving the account back as it was, does not move.
+
+## What is left of "landed again at will" (item 4)
+
+The price is of one round; "at once" is three blocks (stated, disputed, answered).
+
+| On | By | How | The price of a round | A finding? |
+|---|---|---|---|---|
+| a shard | its owner | an addition, every block | 0.2 KAS that stay in the shard, and 0.0067 KAS (the fee and the copy) | no: the coins are the users' cover and are paid out under a call |
+| a shard | its owner | a draw that is not the rule's, its own dispute and answer | 0.529 KAS (5.03 on 1,000 KAS) | no; F88's rest is a race again (above) |
+| a shard | its owner | an entry on an account of its own | fees; once a lateness | closed |
+| a shard | its owner, a user | a note it holds | a fee (the note's least comes back); once a note | as 15.8 leaves it; counted in F103 |
+| a shard | a user | a join of two accounts of its own | fees; once a lateness, once a pair | closed as F101; counted in F103 |
+| a shard | anyone | a call that is not due | 0.130 to 5.03 KAS | F103, for what it now stops |
+| a covered account | its user's other key | a statement of kinds 7 to 9 that is not the rule's | 0.1287 KAS at once; 0.1266 KAS by a lapse, which holds it a dispute period unless a third key answers first and takes 0.1 KAS | no, at this price |
+| a covered account | anyone | the same | the same (half of 1 % of the coins above 20 KAS) | F104, for what it stops |
+| a covered account | its user | an addition, a hand-over, a join, an entry | fees; once a lateness | closed |
+| an account no shard covers | its own keys | a statement of kinds 2 to 4 that is not the rule's | half its rate of the coins, no floor; under about 0.13 KAS of bond no wrong answer is written | F102 (Low), left by 15.8 |
+
+## The tests behind `legacy` (item 5)
+
+Read from the three `Cargo.toml` files and the `tests` directories (a script, not by eye):
+
+| Crate | Test files | `[[test]]` entries | Twice | Not listed | Listed, no file | Behind `legacy` | Default |
+|---|---|---|---|---|---|---|---|
+| kpf-tests | 70 | 70 | 0 | 0 | 0 | 54 | 16 |
+| kpf-cli | 20 | 20 | 0 | 0 | 0 | 13 | 7 |
+| kpf-protocol | 37 | 37 | 0 | 0 | 0 | 11 | 26 |
+
+Each has `autotests = false` and `legacy = []`; every entry's path is `tests/<name>.rs`; the ten `.rs` files in
+subdirectories of `kpf-tests/tests` are modules (`mod.rs` and theirs), no targets. kpf-artifacts is as it was
+(its fresh-compile check runs by default).
+
+- **Nothing of the thin form is behind the feature**: no file behind it names a `KpfT` script, `KpfSlot`, or
+  the modules `thin`, `thin_build`, `thin_artifacts`, `thin_read`, `reserve`, `covered` or `cite`.
+- **Nothing of mine**: the four `auditT1_*` files are in the default run.
+- **The committee's own tests stay**: `committee_tests`, `committee_paths_tests`, `roster_tests`,
+  `auditC1` to `auditC5` and `auditC8` (kpf-tests), `auditC2` to `auditC8` builders (kpf-protocol),
+  `committee_cli` and `auditC3` to `auditC6` (kpf-cli). Behind the feature of the committee family: the cross
+  accounts (`cross_tests`, `auditC9` to `auditC11` in kpf-tests; `auditC9_cli`), the earlier families'
+  `cosign` (`auditC11_cli` to `auditC16_cli`; the thin family's own `cosign` is run by `auditT1_cli` and
+  `committee_cli`), and `c_experiments_tests` (four tests on the probe script `probes/C1Attest.sil`, not on
+  `KpfEpochTable`).
+- **The only cover of something the thin form uses?** No. In the default run: the committee's signing and the
+  epoch table are named in 29 files (12 behind the feature) (`roster_tests`: a quorum accepted, below the quorum and an unsigned price
+  refused, the window; `auditC1_tests`; `thin_proof`; `thin_fees`; mine); the citation in 8
+  (`cite_probe_tests`, `thin_account`, `thin_change`, `thin_draw`, `thin_notes`, `thin_option`, mine), none
+  behind the feature; the fee pool in 7 (`thin_fees`, `thin_notes`, `thin_probe_tests`, `committee_cli`,
+  mine), none behind it; the slot in 5 (`thin_probe_tests`, `thin_builders`, `thin_proof`, mine).
+  `kpf-protocol/tests/pinned.rs`, behind the feature, checks the artifacts of the forms before
+  (`contracts/legacy/artifacts`); the thin form's manifest and checksums are checked by `thin_model` (default)
+  and by kpf-artifacts.
+- What the default run no longer says, to know and not to bring back: the weighted median and quorum of the
+  probe (`c_experiments_tests`); the model `cross` against `KpfCrossC` at the edges (`auditC9_tests`). The thin
+  form reads `cross::XTerms` and `XLeg` as types, and its own arithmetic is run against its own scripts.
+- One thing to keep in mind: with `autotests = false` a new test file that is not listed is silently not run
+  (the paper says so). A check that the entries are the files would be one small test.
+
+## Sizes (item 7)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTAddC` | 563 | 528 |
+| `KpfTChange` | 1,571 | 1,571 |
+| `KpfTJoinC` | 1,565 | 1,550 |
+| `KpfTEnterS` | 2,309 | 2,282 |
+| `KpfTEnterOff` | 719 | 719 (a comment and an unused constant) |
+
+`t1b_r57_the_sizes_of_the_scripts_that_changed`. The transactions of this round: a shard's addition 1,647
+bytes (fee 0.0047 KAS); a draw's statement 2,935; a dispute 3,578; the wrong end of a draw 4,941; of a step
+4,677; a lapse 3,630.
+
+## Notes on the paper
+
+- 15.8 says an age is asked "of what a party does at will on an object that nobody else spends without it: an
+  addition to an account, a hand-over, a join, an entry". An account is spent by anybody's statement (F104),
+  and an entry and a join are held to the shard's age, which anybody's note moves (F103): the premise holds
+  for none of the four.
+- 15.8's rows say "on an account of any size" (0.1 KAS and three fees) and "on a shard of any size" (half a
+  KAS and three fees): that is the least. It is the rate above 20 KAS and above 100 KAS at 1 % (5.03 KAS on
+  1,000 KAS, both).
+- 15.3 still says a user that is handed an account and wants out in the same second "hands it on: nothing
+  waits". A hand-over asks a lateness since round 56 (N1).
+
+## Not reached
+
+- The command line for the new floors and the entry's age (the CLI's tests pass; I ran no command by hand).
+- An entry and a join under real block times: an age is the input's sequence at the engine; that a block
+  refuses a transaction whose input is younger than its sequence is the consensus rule, not run here.
+- F103's count is a count (a loop in the test), not transactions.
+- A hand-over under F104 (it asks the age by round 56's test; the round of F104 was not run against it).
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F101 | Medium | fixed (round 57), verified |
+| F100 | Medium | fixed for a covered account's statements and an entry, verified; the notes made ahead left by 15.8 |
+| F102 | Low | fixed for a covered account, verified; left for an account no shard covers |
+| F88, the rest | Medium | open again by the decision of 15.8, priced at half a bond of a KAS a round; no finding at that price |
+| F103 | Medium | open, new: a shard in use takes entries and joins only in its pauses |
+| F104 | Medium | open, new (there since round 56): anyone keeps an account young and its user adds nothing |
+| F98 | Medium | fixed for an account (the test renamed); for a shard taken away by 15.8 |
+| F95 | Medium | open by decision |
+| F97, F99 | Low | left, said in the paper |
+| F92 | Low | the paper's rule; made by no statement of `KpfTChange` or `KpfTEnterS` now |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 176 tests (was 172). Brought along: `enter_by_hand52` (the
+  entry's bond with its floor), `t1b_fixed_f91_...` (a call's bond is of the rate, not of `Shard::bond`),
+  `t1b_r53_the_sizes_...` (`KpfTAddC` 563), `t1b_r54_an_entry_under_a_call_...` (the small entry's bond is
+  0.2 KAS), `t1b_fixed_f98_...` (renamed, for an account). Gone: the tests of F100 and F101 as findings, and
+  `t1b_fixed_f88_between_two_draws_...`. New: `stated57`, `spent57`, and seven tests (`t1b_fixed_f101_...`,
+  `t1b_fixed_f100_...`, `t1b_r57_what_the_owners_round_of_a_draw_costs_...`,
+  `t1b_r57_a_bond_above_an_accounts_coins_...`, `t1b_finding_f103_...`, `t1b_finding_f104_...`,
+  `t1b_r57_the_sizes_of_the_scripts_that_changed`).
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11), `crates/kpf-tests/tests/auditT1_tests.rs` (55),
+  `crates/kpf-cli/tests/auditT1_cli.rs` (48): unchanged.
+
+## The workspace, twice (item 6)
+
+One cargo command each, two jobs, on a build that was warm (the test binaries of the three crates were built
+before; my file was built by my own runs).
+
+| Run | Command | Targets | Passed | Failed | Wall time | Of it, tests |
+|---|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 600 | 0 | 210 s | 165 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,294 | 0 | 851 s | 810 s |
+
+No test failed in either, so there is no name to give. The default is 596 and 4 (my file went from 172 to 176
+tests). With the features it is round 56's 1,290 and the same 4: every test of the workspace as it was is still
+run by the second command, so the listing dropped none. (The second run counts kpf-artifacts, 4 targets and 2
+tests, which the count of 1,288 in 134 on the three crates did not.) Of mine in both: `auditT1_builders` 176,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 32, `committee_cli` 13,
+`clearing_cli` 1.

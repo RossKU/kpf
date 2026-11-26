@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [dev-dependencies]
 blake3.workspace = true
@@ -19,3 +20,343 @@ secp256k1.workspace = true
 kpf-protocol.workspace = true
 silverscript-abi.workspace = true
 silverscript-lang.workspace = true
+
+[features]
+# The tests of the forms before the thin one (they are not in the default run).
+legacy = []
+
+# Every test file is listed here (autotests is off): one that is not listed is not run.
+
+[[test]]
+name = "audit10_tests"
+path = "tests/audit10_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit11_tests"
+path = "tests/audit11_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit11_walk_tests"
+path = "tests/audit11_walk_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit12_tests"
+path = "tests/audit12_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit12_walk_tests"
+path = "tests/audit12_walk_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit2_tests"
+path = "tests/audit2_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit3_tests"
+path = "tests/audit3_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit4_tests"
+path = "tests/audit4_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit5_tests"
+path = "tests/audit5_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit6_book_tests"
+path = "tests/audit6_book_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit6_tests"
+path = "tests/audit6_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit7_book_tests"
+path = "tests/audit7_book_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit7_tests"
+path = "tests/audit7_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit8_tests"
+path = "tests/audit8_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit9_tests"
+path = "tests/audit9_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "auditC10_tests"
+path = "tests/auditC10_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "auditC11_tests"
+path = "tests/auditC11_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "auditC1_tests"
+path = "tests/auditC1_tests.rs"
+
+[[test]]
+name = "auditC1_walk_tests"
+path = "tests/auditC1_walk_tests.rs"
+
+[[test]]
+name = "auditC2_tests"
+path = "tests/auditC2_tests.rs"
+
+[[test]]
+name = "auditC3_tests"
+path = "tests/auditC3_tests.rs"
+
+[[test]]
+name = "auditC4_tests"
+path = "tests/auditC4_tests.rs"
+
+[[test]]
+name = "auditC5_tests"
+path = "tests/auditC5_tests.rs"
+
+[[test]]
+name = "auditC8_tests"
+path = "tests/auditC8_tests.rs"
+
+[[test]]
+name = "auditC9_tests"
+path = "tests/auditC9_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "auditT1_tests"
+path = "tests/auditT1_tests.rs"
+
+[[test]]
+name = "audit_tag_tests"
+path = "tests/audit_tag_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "bond_attack_tests"
+path = "tests/bond_attack_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "c_experiments_tests"
+path = "tests/c_experiments_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "cite_probe_tests"
+path = "tests/cite_probe_tests.rs"
+
+[[test]]
+name = "committee_paths_tests"
+path = "tests/committee_paths_tests.rs"
+
+[[test]]
+name = "committee_tests"
+path = "tests/committee_tests.rs"
+
+[[test]]
+name = "cross_tests"
+path = "tests/cross_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "econ_walk_tests"
+path = "tests/econ_walk_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "guarantee_attack_tests"
+path = "tests/guarantee_attack_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "invariant_walk_tests"
+path = "tests/invariant_walk_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "judge_attack_tests"
+path = "tests/judge_attack_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_bond_metrics_tests"
+path = "tests/kpf_bond_metrics_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_bond_tests"
+path = "tests/kpf_bond_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_bounds_tests"
+path = "tests/kpf_bounds_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_close_tests"
+path = "tests/kpf_close_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_evidence_tests"
+path = "tests/kpf_evidence_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_guarantee_tests"
+path = "tests/kpf_guarantee_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_judge_metrics_tests"
+path = "tests/kpf_judge_metrics_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_judge_tests"
+path = "tests/kpf_judge_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_kob_codec_tests"
+path = "tests/kpf_kob_codec_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_layout_tests"
+path = "tests/kpf_layout_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_metrics_tests"
+path = "tests/kpf_metrics_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_open_tests"
+path = "tests/kpf_open_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_pair_tests"
+path = "tests/kpf_pair_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_transfer_tests"
+path = "tests/kpf_transfer_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_two_step_tests"
+path = "tests/kpf_two_step_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "kpf_x6_conservation_tests"
+path = "tests/kpf_x6_conservation_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "oracle_attack_tests"
+path = "tests/oracle_attack_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "oracle_conservation_tests"
+path = "tests/oracle_conservation_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "oracle_metrics_tests"
+path = "tests/oracle_metrics_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "oracle_tests"
+path = "tests/oracle_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "roster_tests"
+path = "tests/roster_tests.rs"
+
+[[test]]
+name = "thin_probe_tests"
+path = "tests/thin_probe_tests.rs"
+
+[[test]]
+name = "toolchain_tests"
+path = "tests/toolchain_tests.rs"
+
+[[test]]
+name = "trim_tests"
+path = "tests/trim_tests.rs"
+
+[[test]]
+name = "two_step_attack_tests"
+path = "tests/two_step_attack_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "value_probe_tests"
+path = "tests/value_probe_tests.rs"
+
+[[test]]
+name = "x12_template_change_tests"
+path = "tests/x12_template_change_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "x1_genesis_tests"
+path = "tests/x1_genesis_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "x2_split_tests"
+path = "tests/x2_split_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "x5_claim_tests"
+path = "tests/x5_claim_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "z_experiments_tests"
+path = "tests/z_experiments_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "z_judge_experiments_tests"
+path = "tests/z_judge_experiments_tests.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "z_oracle_experiments_tests"
+path = "tests/z_oracle_experiments_tests.rs"
+required-features = ["legacy"]

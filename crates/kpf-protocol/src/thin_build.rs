@@ -1852,7 +1852,9 @@ fn stated_head(age: u64, c: &Stated, outs_whole: bool) -> Vec<Arg> {
 /// `KpfTChange.state` on an account: the statement `st` as it is given (its claimer signs).
 pub fn account_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, st: &Stated, said: &[u8], p: Payer) -> Result<OBuilt> {
     let a = &account.s;
-    if st.position != a.hash() || st.bond != a.bond() || st.window != a.dispute_daa || st.late != a.t.late_daa {
+    // (A covered account's own kinds have a bond of a note's least at the least: review 56, F100.)
+    let bond = if (crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) { a.c_bond() } else { a.bond() };
+    if st.position != a.hash() || st.bond != bond || st.window != a.dispute_daa || st.late != a.t.late_daa {
         return invalid("the statement is not one on this account (its hash, its bond, its dispute period or its lateness)");
     }
     state_raw(lib, account, &a.fixed_hash(), &a.moving(), st, said, if st.kind >= 2 { a.form() } else { vec![] }, script, p)
@@ -1865,8 +1867,7 @@ pub fn state_raw<T>(lib: &[u8; 32], obj: &OLive<T>, fixed: &[u8; 32], moving: &[
     if crate::committee::blake2b(said) != st.arg {
         return invalid("what is shown as stated is not what the statement's argument is the hash of");
     }
-    // (A draw is stated on a shard that has stood a lateness: review 55, F98.)
-    let age = if st.kind == crate::thin::KIND_DRAW { st.lateness().max(0) } else { 0 };
+    let age = 0i64;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let args = vec![bv(vec![0; 24]), bv(sm8(age).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
     let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, age as u64)?;
@@ -2269,8 +2270,13 @@ fn add_c<T>(lib: &[u8; 32], obj: &OLive<T>, script: &LibScript, fixed: [u8; 32],
     }
     let h = crate::committee::blake2b(&[&[0x20][..], &fixed, &moving].concat());
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    // (The object has stood a lateness: `KpfTAddC` asks it, and the input's age says it. Review 55, F98.)
-    let late = moving.get(94..102).map(crate::state::int8).filter(|x| *x >= 0).ok_or_else(|| Error::Invalid("the moving part has no lateness".into()))?;
+    // (An account has stood a lateness: `KpfTAddC` asks it, and the input's age says it. Review 55, F98. A shard is
+    // added to at no age, a note's least or more at a time: review 56, F101.)
+    let shard = moving.get(34..66).is_some_and(|k| k.iter().all(|x| *x == 0));
+    if shard && delta < crate::reserve::NOTE_MIN {
+        return invalid("a shard is added to by a note's least or more at a time");
+    }
+    let late = if shard { 0 } else { moving.get(94..102).map(crate::state::int8).filter(|x| *x >= 0).ok_or_else(|| Error::Invalid("the moving part has no lateness".into()))? };
     let mut args = vec![bv(vec![0; 24]), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64)];
     args.extend([bv(fixed.to_vec()), bv(moving), iv(side), iv(delta), Arg::Sig(key)]);
     let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, late as u64)?;
@@ -2489,12 +2495,14 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    // (The account and the shard have stood a lateness: review 56, F100.)
+    let late = a.t.late_daa.max(0);
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
+        bv(who), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
         bv(seed.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
-    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
-    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, late as u64)?;
+    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", late as u64);
     d.lock(st.t0 as u64);
     d.out(account.value + (said.add + st.bond) as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated entry", None);
     keep(&mut d, script, lid)?;

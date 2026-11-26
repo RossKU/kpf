@@ -381,13 +381,19 @@ impl Account {
     }
 
     fn c_stated(&self, kind: i64, s: &CSaid, o: &COutcome, t0: i64, held: i64, claimer: [u8; 32]) -> Stated {
-        Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind, t0, arg: s.arg(), outs: o.outs, bond: self.bond(), claimer, held }
+        Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind, t0, arg: s.arg(), outs: o.outs, bond: self.c_bond(), claimer, held }
     }
 }
 
 // ---------------------------------------------------------------- an entry (kind 10; docs 14.3)
 
 impl Account {
+    /// The bond of a statement on a covered account (kinds 7 to 10): the account's, and a note's least at the
+    /// least (`KpfTChange`, `KpfTEnterS`: where no age can be asked the bond is the price. Review 56, F100).
+    pub fn c_bond(&self) -> i64 {
+        self.bond().max(NOTE_MIN)
+    }
+
     /// `KpfTPass`: this covered account in another user's hands: the key `to` where its user's was, and nothing
     /// else of it changed (`docs/ARCHITECTURE-CLEARING.md` 15.1). Its shard's books are as they were.
     pub fn passed(&self, to: [u8; 32]) -> Result<Account> {
@@ -401,7 +407,7 @@ impl Account {
         self.c_check()?;
         other.c_check()?;
         let same = self.a_key == other.a_key && self.b_key == other.b_key && self.t == other.t && self.expiry == other.expiry && self.dispute_daa == other.dispute_daa && self.bond_bps == other.bond_bps && self.shard == other.shard;
-        if !same || self.shard != Some(shard.sid) || shard.called != 0 || self.legs.len() + other.legs.len() > C_LEGS_MAX {
+        if !same || self.shard != Some(shard.sid) || self.b_key != shard.owner || shard.called != 0 || self.legs.len() + other.legs.len() > C_LEGS_MAX {
             return Err(Error::Invalid("two accounts are joined where they are one user's under one shard, the same but for their legs, coins and time; the shard is not called; and they have six legs at most between them".into()));
         }
         let coins = add(self.a_margin, other.a_margin).ok_or_else(|| Error::Invalid("the coins of the two are beyond what is counted".into()))?;
@@ -672,7 +678,7 @@ impl Account {
         let s = CEnterSaid { add: more, r, leg, rows };
         let held = held.checked_add(more).ok_or_else(|| no("what it holds is beyond what is counted"))?;
         let (after, outs) = Account::c_enter_end(&marked, &s, &self.a_key, held, t0).flatten().ok_or_else(|| no("the user does not stand at its maintenance with the leg, at these prices"))?;
-        let st = Stated { position: marked.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_C_ENTER, t0, arg: s.arg(), outs, bond: marked.0.bond(), claimer: self.a_key, held };
+        let st = Stated { position: marked.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_C_ENTER, t0, arg: s.arg(), outs, bond: marked.0.c_bond(), claimer: self.a_key, held };
         Ok((st, s, marked, after))
     }
 }

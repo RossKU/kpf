@@ -2232,16 +2232,26 @@ fn an_account_that_holds_less_than_it_says_is_stepped_and_a_small_shards_draw_ha
     signed("its note applied", &b, &w.keys);
     assert_eq!((after.held, after.rows), (called.s.held + 30 * KAS1, [ShardRow::EMPTY; 4]));
 
-    // A shard of 1 KAS at a tenth: its bond would be 0.1 KAS; a draw's is a note's least.
+    // A shard of 1 KAS at a tenth: its bond would be 0.1 KAS; a draw's is a KAS at the least (review 56, F101).
     let small = OLive { s: Shard { held: KAS1, ..base.s }, value: (KAS1 + SHARD_CARRIER) as u64, ..base.clone() };
-    assert_eq!(small.s.bond(), NOTE_MIN);
+    assert_eq!(small.s.bond(), KAS1);
     let fc = [fund(xk(&w.c), 30)];
     let (b, st, d) = shard_draw(&w.lib, &small, &w.script("KpfTChange"), KAS1 / 2, [0; 4], T0, w.payer(&w.c, &fc)).unwrap();
     let sg = signed("a small shard's draw stated", &b, &w.keys);
-    assert_eq!((st.bond, sg.tx.outputs[0].value), (NOTE_MIN, small.value + NOTE_MIN as u64));
+    assert_eq!((st.bond, sg.tx.outputs[0].value), (KAS1, small.value + KAS1 as u64));
     let cheap = Stated { bond: KAS1 / 10, ..st };
     let b = state_raw(&w.lib, &small, &small.s.fixed_hash(), &small.s.moving(), &cheap, &d.said(), small.s.form(), &w.script("KpfTChange"), w.payer(&w.c, &fc)).unwrap();
-    assert!(!accepted(&b, &w.keys), "a draw stated at the shard's rate of what it holds, below a note's least");
+    assert!(!accepted(&b, &w.keys), "a draw stated at the shard's rate of what it holds, below a KAS");
+    // And a covered account's statement has a bond of a note's least at the least (F100): an account of 1 KAS.
+    let leg1 = fleg(&w, 1, 1, LONG, P10);
+    let tiny = cov(&w, &shard, &[leg1], KAS1);
+    assert_eq!((tiny.s.bond(), tiny.s.c_bond()), (KAS1 / 10, NOTE_MIN));
+    let (st, said, _) = tiny.s.c_state(KIND_C_LEAVE, 0, ALL, &[P10], T0, tiny.value as i64, xk(&w.w)).unwrap();
+    assert_eq!(st.bond, NOTE_MIN);
+    acct_stated(&w, &tiny, &st, &said.said());
+    assert!(account_state(&w.lib, &tiny, &w.script("KpfTChange"), &Stated { bond: KAS1 / 10, ..st }, &said.said(), w.payer(&w.w, &[fund(xk(&w.w), 34)])).is_err());
+    let b = state_raw(&w.lib, &tiny, &tiny.s.fixed_hash(), &tiny.s.moving(), &Stated { bond: KAS1 / 10, ..st }, &said.said(), tiny.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &[fund(xk(&w.w), 34)])).unwrap();
+    assert!(!accepted(&b, &w.keys), "a leaving stated at the account's rate of its coins, below a note's least");
 }
 
 // ---------------------------------------------------------------- an account changes hands (docs 15)

@@ -413,6 +413,8 @@ pub const KIND_CALL: i64 = 11;
 pub const NOTE_CALL: i64 = 11;
 /// A call's bond is no more than so many of the terms' least fee of a keeper.
 pub const CALL_BOND_FEES: i64 = 100;
+/// A draw's bond is this at the least.
+pub const DRAW_BOND_MIN: i64 = 100_000_000;
 /// What a call holds, out of its shard's carrier.
 pub const CALL_HOLD: i64 = SHARD_CARRIER / 2;
 
@@ -497,9 +499,10 @@ fn need_of(wn: i64, wg: i64, t: &crate::cross::XTerms, up: bool) -> Option<i64> 
 impl Shard {
     /// The bond of a statement on the shard: its bond rate of what it holds (`KpfTChange`'s arithmetic).
     pub fn bond(&self) -> i64 {
-        // (No less than a note's least: `KpfTChange`, of a draw and of a call. A draw that is not the rule's,
-        // answered wrong by its owner's other key, gives the shard back for half of it: review 54, F88.)
-        self.shell().bond().max(NOTE_MIN)
+        // (A draw's bond is a KAS at the least: `KpfTChange`. A draw that is not the rule's, answered wrong by
+        // its owner's other key, gives the shard back for half of it, and no age holds a draw: reviews 54 and
+        // 56, F88, F101.)
+        self.shell().bond().max(DRAW_BOND_MIN)
     }
 
     /// (The worth of the net units summed, of the gross, and what side B's net units are worth: above zero where it

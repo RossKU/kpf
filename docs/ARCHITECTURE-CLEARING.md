@@ -1950,3 +1950,41 @@ block's 500,000 at the smallest account, the largest join 103,557. The whole wor
 | F100 (medium) | an account and a shard are still landed again at will where no age is asked: a false step by the user's other key, disputed and answered wrong (0.129 KAS a round on an account of 20 KAS; 0.042 on one of 3, held a whole dispute period); the owner's entry on an account of both its keys (0.012 KAS); a note the owner made ahead (nothing) |
 | F102 (low) | a wrong answer on a bond under 0.13 KAS is written by no builder: half of it is an output a block does not take |
 
+### 15.8 After review 56 (26 November 2026; at the engine, my tests; the reviewer's are round 57)
+
+**Where no age can be asked the bond is the price.** An age is asked of what a party does at will on an object
+that nobody else spends without it: an addition to an account, a hand-over, a join, an entry. It is not asked
+of a shard's addition or draw: anybody's note or join makes a shard's output young, and an owner must be able to
+add while its users leave. What is left is priced:
+
+| Finding | Closed by |
+|---|---|
+| F101 | a shard is added to at no age, a note's least or more at a time (`KpfTAddC`; an account's addition keeps the age). A draw is stated at no age, and its bond is a KAS at the least: a round of a draw that is not the rule's costs its owner half a KAS and three fees, on a shard of any size. A join asks that the accounts' second key is the shard's owner: two keys that are not the owner's no longer spend a shard by joining accounts that say its id |
+| F100 | a covered account's statements (kinds 7 to 9) and an entry have a bond of a note's least at the least: a false step by the user's other key, disputed and answered wrong, costs 0.1 KAS and three fees a round on an account of any size. An entry asks that the account and the shard have stood a lateness: an owner's entries of its own no longer follow one another in every block (and a shard takes one entry a lateness: 15.3's stock is built at that pace). Not closed: a note the owner made ahead and applies when it likes, which is as many notes as it had legs leave |
+| F102 | with the floors: half of a bond of a note's least is an amount a transaction pays. Left for an account no shard covers |
+
+**The tests of the forms before the thin one are out of the default run** (the KOB evidence form, the oracle
+form, the committee form's cross accounts: 78 files of 127). Each crate lists its tests and those are behind the
+feature `legacy` (`cargo test -p kpf-tests --features legacy`); no file moved, and a test file that is added is
+listed in its crate's `Cargo.toml` or it is not run. The default run is 596 tests in 60 targets (it was 1,290 in
+138). The committee's own tests stay: every price of this form is the committee's.
+
+### 15.9 Review 57, at the engine
+
+F101, F100 and F102 are closed for what they named: a shard is added to at no age after anybody's note or join,
+0.2 KAS at a time; a draw's bond is a KAS on shards of 1 to 100 KAS, and the owner's round of a draw that is not
+the rule's costs 0.529 KAS (5.03 on a shard of 1,000); a join of accounts whose second key is not the shard's
+owner is refused; the floors of kinds 7 to 9 and of an entry at the edge, and a false step's round at 0.1287 KAS
+on accounts of 3 and 20 KAS; nothing honest breaks by a floor (a leaving on an account of 0.25 KAS is stated and
+applied). The tests behind `legacy`: every file listed once, nothing of the thin form or of the committee behind
+the feature, and nothing behind it the only cover of what the thin form uses. The default workspace: 600 tests in
+60 targets, 210 seconds; with the features, 1,294 in 138, 851 seconds; none failed. Sizes: `KpfTAddC` 563 bytes,
+`KpfTChange` 1,571, `KpfTJoinC` 1,565, `KpfTEnterS` 2,309.
+
+What the age of an output does not hold (and 15.8 said it did):
+
+| Finding | What it is |
+|---|---|
+| F103 (medium) | a shard that is spent in every lateness takes no entry and no join: both ask the shard's output age, and every note applied, addition, draw, call, entry and join makes it young. With two notes a lateness three entries in ten are taken; a third party's call that is not due, timed at the lateness, costs it 0.13 KAS a lateness of no entry |
+| F104 (medium) | anyone keeps an account young for half a bond, and its user adds nothing to it: an addition asks the account's age, a false step by two keys that are not the account's lands it again at no age (0.1287 KAS a round). A key that wants a step's fee keeps the user from adding margin until the price is below its maintenance |
+

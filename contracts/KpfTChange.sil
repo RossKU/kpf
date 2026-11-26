@@ -87,6 +87,9 @@ contract KpfTChange(int init_version) {
     // terms' least fee of a keeper, and no less than a note's least (a shard that holds nothing is called still).
     int constant CALL_FEE_AT = 37;
     int constant CALL_BOND_MIN = 20000000;
+    // A draw's bond is a KAS at the least: what a round of a draw that is not the rule's costs its owner is half
+    // of it, and no age holds a draw (a third party makes a shard's output young at will). Review 56, F101.
+    int constant DRAW_BOND_MIN = 100000000;
 
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));
@@ -133,16 +136,16 @@ contract KpfTChange(int init_version) {
                 if (bond > cap) { bond = cap; }
             }
         }
-        // (A statement on a shard has a bond of a note's least at the least: a draw that is not the rule's,
-        // disputed and answered wrong by its owner's other key, gives the shard back for half a bond, and keeps
-        // it from a call and from every note meanwhile. Review 54, F88.)
-        if (kind == 5 || kind == 11) {
-            if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
-        }
-        // (And a draw is stated on a shard that has stood a lateness: between two statements of its owner's
-        // anyone's call lands. Review 55, F98.)
+        // (Where no age can be asked the bond is the price. A statement that is not the rule's, disputed and
+        // answered wrong by its maker's other key, gives the object back for half a bond, and keeps it from
+        // everybody meanwhile: a draw has a bond of a KAS at the least, a call and a covered account's
+        // statements of a note's least. Reviews 54 and 56: F88, F100, F101. And half of such a bond is an
+        // amount a transaction pays: F102.)
         if (kind == 5) {
-            require(int(ageb) >= iAt(mv, LATE_AT));
+            if (bond < DRAW_BOND_MIN) { bond = DRAW_BOND_MIN; }
+        }
+        if (kind == 11 || (kind >= 7 && kind <= 9)) {
+            if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
         }
         require(bond > 0);
         // What is stated and what the position becomes are shown as they are and hashed here: whoever watches reads

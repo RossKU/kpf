@@ -98,6 +98,9 @@ contract KpfTEnterOff(int init_version) {
     // terms' least fee of a keeper, and no less than a note's least (a shard that holds nothing is called still).
     int constant CALL_FEE_AT = 37;
     int constant CALL_BOND_MIN = 20000000;
+    // A draw's bond is a KAS at the least: what a round of a draw that is not the rule's costs its owner is half
+    // of it, and no age holds a draw (a third party makes a shard's output young at will). Review 56, F101.
+    int constant DRAW_BOND_MIN = 100000000;
 
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));

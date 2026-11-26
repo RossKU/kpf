@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autotests = false
 
 [dependencies]
 blake3.workspace = true
@@ -23,3 +24,168 @@ serde_json.workspace = true
 sha2.workspace = true
 silverscript-abi.workspace = true
 thiserror.workspace = true
+
+[features]
+# The tests of the forms before the thin one (they are not in the default run).
+legacy = []
+
+# Every test file is listed here (autotests is off): one that is not listed is not run.
+
+[[test]]
+name = "audit3_tooling"
+path = "tests/audit3_tooling.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit4_tooling"
+path = "tests/audit4_tooling.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "audit7_tooling"
+path = "tests/audit7_tooling.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "auditC2_builders"
+path = "tests/auditC2_builders.rs"
+
+[[test]]
+name = "auditC3_builders"
+path = "tests/auditC3_builders.rs"
+
+[[test]]
+name = "auditC4_builders"
+path = "tests/auditC4_builders.rs"
+
+[[test]]
+name = "auditC5_builders"
+path = "tests/auditC5_builders.rs"
+
+[[test]]
+name = "auditC6_builders"
+path = "tests/auditC6_builders.rs"
+
+[[test]]
+name = "auditC7_builders"
+path = "tests/auditC7_builders.rs"
+
+[[test]]
+name = "auditC8_builders"
+path = "tests/auditC8_builders.rs"
+
+[[test]]
+name = "auditT1_builders"
+path = "tests/auditT1_builders.rs"
+
+[[test]]
+name = "auditT1_solvency"
+path = "tests/auditT1_solvency.rs"
+
+[[test]]
+name = "bond_model"
+path = "tests/bond_model.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "builders"
+path = "tests/builders.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "charge_builders"
+path = "tests/charge_builders.rs"
+
+[[test]]
+name = "codec"
+path = "tests/codec.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "evidence"
+path = "tests/evidence.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "judge_model"
+path = "tests/judge_model.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "oracle_builders"
+path = "tests/oracle_builders.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "pinned"
+path = "tests/pinned.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "research_option_spot"
+path = "tests/research_option_spot.rs"
+
+[[test]]
+name = "research_reserve"
+path = "tests/research_reserve.rs"
+
+[[test]]
+name = "research_reserve_objects"
+path = "tests/research_reserve_objects.rs"
+
+[[test]]
+name = "research_solvency"
+path = "tests/research_solvency.rs"
+
+[[test]]
+name = "research_solvency_accounts"
+path = "tests/research_solvency_accounts.rs"
+
+[[test]]
+name = "research_solvency_notes"
+path = "tests/research_solvency_notes.rs"
+
+[[test]]
+name = "thin_account"
+path = "tests/thin_account.rs"
+
+[[test]]
+name = "thin_builders"
+path = "tests/thin_builders.rs"
+
+[[test]]
+name = "thin_change"
+path = "tests/thin_change.rs"
+
+[[test]]
+name = "thin_draw"
+path = "tests/thin_draw.rs"
+
+[[test]]
+name = "thin_fees"
+path = "tests/thin_fees.rs"
+
+[[test]]
+name = "thin_mark"
+path = "tests/thin_mark.rs"
+
+[[test]]
+name = "thin_model"
+path = "tests/thin_model.rs"
+
+[[test]]
+name = "thin_notes"
+path = "tests/thin_notes.rs"
+
+[[test]]
+name = "thin_option"
+path = "tests/thin_option.rs"
+
+[[test]]
+name = "thin_proof"
+path = "tests/thin_proof.rs"
