@@ -76,6 +76,8 @@ contract KpfTPass(int init_version) {
         byte[] rs = slotOf(j, slotLen);
         byte[] mv = byte[](moving);
         require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // (An account that owes its shard is handed to nobody: docs 16.18.)
+        require(mv.slice(76, 84) == byte[](0 as byte[8]));
         // (No shard: a shard has no second key, and its owner is no user of it.)
         require(mv.slice(34, 66) != byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
         require(f >= 0);

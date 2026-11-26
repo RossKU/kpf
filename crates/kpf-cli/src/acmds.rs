@@ -184,6 +184,7 @@ fn show(o: &AObj, net: Network) {
             println!("    {}", leg_line(&n.leg));
         }
         AObj::Ticket(n) => println!("  a ticket: the token leg of the chain {} left its account; its vault pays {}", to_hex(&n.chain), p2pk_address(&n.key, net)),
+        AObj::Owed(n) => println!("  to the shard {}: {} KAS paid of what an account owed it", to_hex(&n.sid), fmt_kas(n.amount as i128)),
         AObj::Stated { on, st, said } => show_stated(on, st, said, None, net),
         AObj::Pointed { on, q, said } => show_stated(on, &q.st, said, Some((q.disputer, q.point)), net),
     }

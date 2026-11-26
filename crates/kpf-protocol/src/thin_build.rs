@@ -1878,7 +1878,8 @@ fn stated_head(age: u64, c: &Stated, outs_whole: bool) -> Vec<Arg> {
 pub fn account_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, st: &Stated, said: &[u8], p: Payer) -> Result<OBuilt> {
     let a = &account.s;
     // (A covered account's own kinds have a bond of a note's least at the least: review 56, F100.)
-    let bond = if crate::covered::c_kind(st.kind) { a.c_bond() } else { a.bond() };
+    // (A sale's bond is no less than a hundredth of what it says it pays.)
+    let bond = if crate::covered::c_kind(st.kind) { a.c_bond_for(st.kind, if said.len() >= 8 { crate::state::int8(&said[..8]) } else { 0 }) } else { a.bond() };
     if st.position != a.hash() || st.bond != bond || st.window != a.dispute_daa || st.late != a.t.late_daa {
         return invalid("the statement is not one on this account (its hash, its bond, its dispute period or its lateness)");
     }
@@ -2853,6 +2854,49 @@ pub fn tok_lapse(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, ender:
     d.finish()
 }
 
+/// `KpfTOwed.pay`: anyone pays `amount` of what a covered account owes its shard. Output 0 is the account, owing
+/// that much less; output 2 the note that holds the coins.
+pub fn owed_pay(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, amount: i64, p: Payer) -> Result<(OBuilt, Account, crate::reserve::Owed)> {
+    let (next, note) = account.s.owed_paid(amount)?;
+    let b = owed_pay_as(lib, account, script, amount, &next, &note, p)?;
+    Ok((b, next, note))
+}
+
+/// As `owed_pay`, with the outputs said (for whoever tests what the script refuses).
+pub fn owed_pay_as(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, amount: i64, next: &Account, note: &crate::reserve::Owed, p: Payer) -> Result<OBuilt> {
+    let a = &account.s;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.fixed_hash().to_vec()), bv(a.moving()), iv(amount)];
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTOwed", "pay", args, 0)?;
+    d.out(account.value, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.out(note.value() as u64, hash_spk(lib, &note.hash()), Some((0, id)), "note", None);
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTOwed.apply`: a note of what was paid of what an account owed is applied to its shard. Input 0 is the
+/// shard, input 2 the note; output 0 the shard, holding that much more.
+pub fn owed_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Owed>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard)> {
+    let next = shard.s.paid_in(&note.s, note.value as i64)?;
+    Ok((owed_apply_as(lib, shard, note, next, script, p)?, next))
+}
+
+/// As `owed_apply`, with the shard after said.
+pub fn owed_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Owed>, next: crate::reserve::Shard, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let (s, n) = (&shard.s, &note.s);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(crate::committee::blake2b(&s.rows_bytes()).to_vec()), bv(s.moving()), iv(n.amount)];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTOwed", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    let more = (next.held - s.held).max(0);
+    d.out(shard.value + more as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
 /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
 pub fn rest_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
     let (s, n) = (&shard.s, &note.s);
@@ -2992,7 +3036,7 @@ pub fn call_step<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood: Op
     }
     let v = (obj.value as i64).checked_sub(bonds).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the object holds less than its bonds".into()))?;
     let over = stood.map(|(st, pointed)| (st.bond, st.claimer, pointed.is_some()));
-    let step = account.call_step_over(&call.s, v, over).ok_or_else(|| Error::Invalid("no step of this account under this call: another shard's, no leg, or a leg of no row of the call".into()))?;
+    let step = account.call_step_at(&call.s, v, over, obj.daa as i64).ok_or_else(|| Error::Invalid("no step of this account under this call: another shard's, no leg, or a leg of no row of the call".into()))?;
     Ok((call_step_as(lib, obj, account, stood, call, &step, script, p)?, step))
 }
 
@@ -3019,6 +3063,11 @@ pub fn call_step_as<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood:
     d.out(call.value, hash_spk(lib, &call.s.hash()), Some((0, id)), "call", None);
     keep(&mut d, script, lid)?;
     d.out((crate::reserve::NOTE_MIN + step.pay) as u64, hash_spk(lib, &step.note.hash()), Some((0, id)), "note", None);
+    // (An account that holds token legs goes on with them: it holds its coins, and a note's least at the least,
+    // which whoever steps puts in where the coins are less.)
+    if let Some(next) = &step.after {
+        d.out(next.a_margin.max(crate::reserve::NOTE_MIN) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    }
     d.fund(p.funds, &p.change_to);
     // The payments, the last the user's: the disputer's bond, the claimer's, the user. (No output of the fee: what
     // the transaction leaves is its funder's.)

@@ -2650,3 +2650,73 @@ so that no step of every leg is needed and no note names a token leg):
 - **The payment**: anyone pays what an account owes, in part or whole, by a script that writes the same note.
 - An account that owes nothing is an account as any: its tokens leave by its user's statement.
 
+### 16.19 Built: step 4, an account that owes (27 November 2026; at the engine, my tests; the reviewer's are round 64)
+
+As 16.18 says it. `KpfTOwed` is new; the library has 68 scripts. No token enters an account yet (step 5).
+
+- **The number.** Bytes 76 to 84 of a covered account's moving part are what it owes its shard. `KpfTAddC` (an
+  account's branch) and `KpfTPass` ask that it is nothing (N36); `KpfTChange` states, of an account that owes, a
+  step and a sale and nothing else, and counts no debt in the bond; the ends of a take, a leaving, a split, a
+  mark, an entry and tokens leaving ask that it is nothing, as they did. (An entry's stating asked already; a
+  join asks it of both.)
+- **A step of one leg** (`KpfTCEnd`, kind 9) on an account that holds tokens and whose coins do not pay the leg:
+  no turn to every leg. The leg leaves; the coins, a note's least apart, pay what they can of what it lost, then
+  of the fee; the account owes the rest, and says the time of the statement, a lateness and a dispute period. A
+  leg that gained, named where no leg lost, leaves alone too. The standing a step is due by counts what is owed
+  against the account. A step of every leg is not the rule's while tokens are held, as before.
+- **The call's step** (`KpfTCStep`): a token leg is passed by in the sum; the note names the futures legs alone;
+  the account goes on, a third output under the id, with its token legs, what is left of its coins (no payment
+  to the user's key), and owing what its futures legs lost beyond what the coins paid; where that is something it
+  says the time its output landed, a lateness and a dispute period. The output holds a note's least at the
+  least, which whoever steps puts in where the coins are less. An account of token legs alone is not stepped.
+  It ends a sale that stands, as the other kinds.
+- **A sale** (`KpfTCTok`, kind 15): of an account that owes, at or after its time; the claimer pays at least the
+  leg's worth less the liquidation fee's rate; of that the shard has what is owed, by a note that holds it, and
+  the account's coins the rest; the account owes that much less. Its bond is no less than a hundredth of what it
+  pays (`KpfTChange`), and one nobody applies is ended at an age of a lateness and a dispute period (F111). The
+  token leg named counts for nothing in the sixth sum, sold or leaving.
+- **The payment** (`KpfTOwed.pay`): anyone, of an account that owes: all of it, or a KAS or more; the account
+  owes that much less and the same note holds the coins. `KpfTOwed.apply`: the shard holds what the note's
+  output holds above a note's least, and no more than it says; called or not.
+
+Run (`tests/thin_draw.rs`, 40 pass): an account of a long, 10 tokens and 10 KAS, the long down 500: the step
+takes the long, the coins pay 9.8, the account owes 490.2 and says its time; a second leg stepped adds what it
+lost; an account that owes takes nothing out, is handed to nobody. A sale of 10 tokens of an account that owes
+30: the claimer pays 99.5, 30 to the shard by its note, the rest the account's; a sompi less, an account that
+owes nothing, before its time: wrong; more owed than paid: all of it the shard's. The note applied (to a called
+shard too; one that holds less gives what it holds). The payment, whole and of a KAS; less than a KAS, more
+than is owed, nothing: refused at the engine. A sale nobody applied ended at its life and not a block before.
+Under a call: an account of a long, 10 tokens and 5 KAS at a call's price of 8: the note of the long alone, 4.8
+paid, the account on with its tokens owing 15.2; written otherwise in five ways, refused; one whose coins pay
+owes nothing and keeps what is left; one that owed already owes both.
+
+Left, and said (N40): a claim is paid its share of what the shard holds when it is shown, and is then spent
+whole; the call ends when nothing is owed by claims, and what the shard holds then is its owner's again. So coins
+that come late (what accounts that owe pay) are shared among the claims not yet shown, and after the last, the
+owner's. A holder that waits loses nothing by others going first (what is held and what is owed fall together:
+the share of those who wait is as it was), and has its part of what comes late; one that goes first has given
+that up. Whoever holds a claim sees the accounts that owe its shard, and waits or not. An account that owes more than its tokens are worth owes for good (N41). What the three
+outputs of the call's step weigh is asked of round 64 (N38).
+
+### 16.20 Review 64
+
+At the engine, step 4. Of 31 steps of a futures leg the model allows on random accounts that hold token legs (a
+quarter of them owing already) none ends the account and 22 leave it owing more; 24 were stated, disputed at the
+end and answered: right taken, wrong not. Of 14 accounts below the lower level none had no way on. An account
+that owes is refused an addition by the engine, a hand-over and a join by the builder, and the stating of kinds
+7, 8, 12, 13 and 14 by the engine; a step is stated. What it owes is paid by a key that is not its own, with no
+signature: all, a KAS, two; less than a KAS that is not all, more than is owed, nothing: refused. A sale of an
+account that owes 8 KAS for 50: 8 to the shard in its note, 42 to the coins, the ticket the claimer's, the bond
+(a hundredth: 0.5 KAS) back; not applied, ended after 150 blocks. The note applied, to a called shard too. The
+call's step: three outputs under the id, nothing to the user's key, and the account it leaves is sold from at
+its time and paid for. The default workspace: 625 tests, 297 seconds; with the features 1,319, 963 seconds; none
+failed. `KpfTOwed` is 1,154 bytes, `KpfTCStep` 4,001 (it was 3,257), `KpfTCEnd` 3,726, `KpfTCTok` 3,492.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| F112 (medium; by the rule, not run) | a gain is paid out of the shard to a user whose account owes the shard: a leg that gained, stepped off an account that owes 20, is paid 15 to the user's key | what a leg that gained asks is set against what the account owes, in a step and in the call's step (16.21) |
+| F113 (medium; measured) | the call's step on an account that goes on with no coins weighs 483,526 of the 500,000 a block takes (291,533 where the note holds what was paid); with a bond paid out beside, more | an account that goes on keeps a KAS of its coins back and owes that much more; its output holds a KAS at the least (16.21) |
+| said | a stepper that names a small leg that lost first takes its fee out of coins a larger loss would have had whole: the shard is paid less by that fee at the most | left: bounded by a fee |
+| said | where the coins are gone a step has no fee: the shard's owner is who has a reason to step | so |
+| N40 | a claim paid at a share is closed, and the call's end gives what is left to the owner | said as it is in 16.19: whoever waits shares what comes late |
+

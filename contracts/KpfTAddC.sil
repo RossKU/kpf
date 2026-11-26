@@ -94,6 +94,9 @@ contract KpfTAddC(int init_version) {
         if (mv.slice(34, 66) == byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])) {
             require(delta >= NOTE_MIN);
         } else {
+            // (An account that owes its shard takes no addition: what is paid for it is paid to the shard. The
+            // number where a position has side B's margin is what a covered account owes: docs 16.18.)
+            require(mv.slice(76, 84) == byte[](0 as byte[8]));
             require(f >= 0);
             require(f < tx.inputs.length);
             require(OpTxInputDaaScore(f) >= int(byte[8](wt)));

@@ -57,6 +57,8 @@ pub enum AObj {
     Mark(crate::reserve::MarkNote),
     /// The ticket of a token leg that left a covered account.
     Ticket(crate::covered::Ticket),
+    /// The note of a payment of what a covered account owed its shard.
+    Owed(crate::reserve::Owed),
     Stated { on: Host, st: Stated, said: Vec<u8> },
     Pointed { on: Host, q: Pointed, said: Vec<u8> },
 }
@@ -81,6 +83,7 @@ pub fn outcome(on: &Host, st: &Stated, said: &[u8]) -> Vec<AObj> {
                 v.extend(o.split.map(AObj::Account));
                 v.extend(o.mark.map(AObj::Mark));
                 v.extend(o.ticket.map(AObj::Ticket));
+                v.extend(o.owed.map(AObj::Owed));
             }
         }
         Host::Account(x) => {
@@ -246,6 +249,7 @@ impl AObj {
             AObj::Rest(n) => n.hash(),
             AObj::Mark(n) => n.hash(),
             AObj::Ticket(n) => n.hash(),
+            AObj::Owed(n) => n.hash(),
             AObj::Stated { st, .. } => st.hash(),
             AObj::Pointed { q, .. } => q.hash(),
         }
@@ -259,6 +263,7 @@ impl AObj {
             AObj::Rest(_) => "note of the rest",
             AObj::Mark(_) => "note that a leg was marked",
             AObj::Ticket(_) => "ticket of a token leg",
+            AObj::Owed(_) => "note of a payment of what an account owed",
             AObj::Stated { on: Host::Shard(_), .. } => "stated draw",
             AObj::Stated { .. } => "statement",
             AObj::Pointed { on: Host::Shard(_), .. } => "disputed draw",
@@ -275,6 +280,7 @@ impl AObj {
             AObj::Rest(n) => n.value(),
             AObj::Mark(n) => n.value(),
             AObj::Ticket(n) => n.value(),
+            AObj::Owed(n) => n.value(),
             AObj::Stated { st, .. } => st.held + st.bond,
             AObj::Pointed { q, .. } => q.st.held + 2 * q.st.bond,
         }
@@ -288,6 +294,7 @@ impl AObj {
             AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
             AObj::Mark(n) => [vec![29], n.sid.to_vec(), leg_bytes(&n.leg), i9(n.entry), n.key.to_vec(), i9(n.asked)].concat(),
             AObj::Ticket(n) => [vec![30], n.chain.to_vec(), n.key.to_vec()].concat(),
+            AObj::Owed(n) => [vec![31], n.sid.to_vec(), i9(n.amount)].concat(),
             AObj::Stated { on, st, said } => [vec![23], stated_bytes(on, st, said)].concat(),
             AObj::Pointed { on, q, said } => [vec![24], stated_bytes(on, &q.st, said), q.disputer.to_vec(), i9(q.point)].concat(),
         }
@@ -316,6 +323,7 @@ impl AObj {
                 AObj::Left(Left { sid, legs, key: r.key()?, asked: r.int()? })
             }
             25 => AObj::Rest(Rest { sid: r.key()?, key: r.key()?, amount: r.int()? }),
+            31 => AObj::Owed(crate::reserve::Owed { sid: r.key()?, amount: r.int()? }),
             30 => AObj::Ticket(crate::covered::Ticket { chain: r.key()?, key: r.key()? }),
             29 => AObj::Mark(crate::reserve::MarkNote { sid: r.key()?, leg: leg_of(&mut r)?, entry: r.int()?, key: r.key()?, asked: r.int()? }),
             23 => {

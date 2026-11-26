@@ -251,7 +251,7 @@ contract KpfTCRow(int init_version) {
                         // as it stands before the sale.)
                         h = byte[32](before.slice(88, 120));
                         gl = worth;
-                        if (kind == 14) { tkd = 0; }
+                        tkd = 0;
                     }
                 } else if (leaves == 1) {
                     gl = d;

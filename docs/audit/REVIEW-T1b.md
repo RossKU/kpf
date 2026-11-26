@@ -11740,3 +11740,212 @@ now is the default should be 621.
 
 Of mine: `auditT1_builders` 191, `auditT1_solvency` 11, `auditT1_tests` 55 (after the change), `auditT1_cli`
 48; `thin_draw` 38.
+
+# Round 64
+
+Scope, at the engine: step 4 of spot as margin as built (16.18, 16.19): an account that owes its shard; a step
+of one leg that makes it owe; the sale of an account that owes; `KpfTOwed`; the call's step with token legs.
+My three files brought along; the workspace run twice. Working tree after 92a4fed; no src, contract,
+`Cargo.toml` or `kpf-out` file touched; no commit. As in rounds 62 and 63 this is less than the list: what was
+run is said as run, what is reasoning as reasoning, and the rest is under "Not reached".
+
+## Headline
+
+- **What I ran holds.** 31 steps of a futures leg that the model allows on accounts that hold token legs: none
+  ends the account, 22 leave it owing more, 24 of them answered right and not wrong at the engine. An account
+  that owes is refused an addition, a hand-over, a join in either place and every statement but a step and a
+  sale. What it owes is paid by anybody. A sale of it is the model's at its edges, and its settlement pays the
+  shard first. The call's step leaves the account with its tokens, owing. Of 14 random accounts below the
+  lower level, none is without a way on.
+- **F112 (Medium, by the rule as 16.19 states it; not run): a leg that gained is stepped off an account that
+  owes, and the shard pays the user's key what the leg gained while the account owes the shard.** What is
+  asked should be set against what is owed.
+- **F113 (Medium, measured): the call's step on an account that holds a token leg weighs 483,526 of a block's
+  500,000 where the account has a note's least of coins, and 291,533 where it has 5 KAS.** The account that
+  goes on is written with 0.2 KAS whatever it had. A block takes one such step and little else.
+- F111 (round 63) is priced now: a sale's bond is a hundredth of what it says it pays, and its life is 150
+  blocks.
+- The workspace: by default 625 passed, 0 failed in 60 targets (297 s); with the three features 1,319 passed, 0 failed in 138
+  targets (963 s).
+
+## What was run
+
+`t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does`, and the test of round 62 on kinds 14
+and 15 rewritten for the sale of an account that owes.
+
+- **The step that makes an account owe** (item 2). 80 random accounts of two to five legs, one or two of them
+  token legs, 2 to 4.5 KAS of coins, a quarter of them owing already, prices 20 % either way. Every step of a
+  futures leg the model allows (31): the account goes on with its token legs and owes no less than before; 22
+  leave it owing more; the first 24, stated, disputed at their end and answered: right taken, wrong not.
+- **No way on?** Of the same accounts, 14 are below the lower level by the sums of a take's trace (the coins,
+  what all gained, the tokens' sum, less what is owed, against the maintenance less the tolerance of the
+  worth: my reading of the level, not a number taken from the model). On each a step of a leg, a step of every
+  leg, a sale or a payment is the rule's.
+- **An account that owes, before the scripts** (item 3; 3 KAS of coins, owing 5 KAS, a long and a token leg):
+
+  | Shown to | Refused by |
+  |---|---|
+  | `KpfTAddC` (an addition) | the engine |
+  | `KpfTPass`, `KpfTJoinC` in either place | the builder (the model) |
+  | `KpfTChange`, kinds 7, 8, 12, 13, 14 | the engine |
+  | `KpfTChange`, kind 9 | stated |
+
+  So the ends of 7, 8, 12, 13 and 14 never see an account that owes by a statement of `KpfTChange`. Not run at
+  the engine: the hand-over and the join past the builder; `KpfTEnterS`, `KpfTOpenC` (both ask the number to
+  be nothing by a line read in rounds 57 and 59), `KpfTAcctEnd`.
+- **Paid** (`KpfTOwed.pay`, 2,258 bytes): by a key that is not the account's, with no signature of the
+  account's: 5 KAS (all), 1 KAS, 2 KAS: the account owes that much less, its coins as they were, and a note
+  that holds a note's least and the amount. Less than a KAS that is not all, more than is owed, nothing, below
+  nothing: refused.
+- **The sale** (item 4; an account of 1 KAS that owes 8 KAS, a token leg of 5 units, sold for 50 KAS by a
+  third key): the rule's at the least it pays (the worth less the fee's rate) and not a sompi under; not of an
+  account that owes nothing; not before the account's time. The statement holds the account's value and the
+  bond; the bond is 0.5 KAS (a hundredth of what is paid). Applied (2,770 bytes; storage mass 229,572): 8 KAS
+  to the shard in a note that holds them, 42 KAS to the coins, the account owing nothing, the ticket the
+  claimer's, its bond back. The user itself may be the claimer. The ticket written to another key: answered
+  wrong. Not applied: ended after 150 blocks; the claimer has lost its bond, whoever ended it has half.
+- **The note of what was paid** (`KpfTOwed.apply`): the shard holds 8 KAS more and nothing else of it changed;
+  the same on a called shard.
+- **The call's step** (item 6; a long of 10 units that lost 20 KAS at the call's price, and a token leg):
+
+  | Coins | Owed before | Paid | Coins after | Owed after | The account's output | Storage mass |
+  |---|---|---|---|---|---|---|
+  | 0.2 KAS | 0 | 0 | 0 | 20 KAS | 0.2 KAS | 483,526 |
+  | 5 KAS | 0 | 4.8 KAS | 0 | 15.2 KAS | 0.2 KAS | 291,533 |
+  | 5 KAS | 2 KAS | 4.8 KAS | 0 | 17.2 KAS | 0.2 KAS | 291,533 |
+
+  Each 6,268 bytes, three outputs under the id, the account going on with its token leg, nothing to the
+  user's key. The account it leaves (no coins, its time the landing and 150) is sold from at that time (a bond
+  of 0.5 KAS for 50 KAS) and is paid for: it has its two ways on.
+
+## Findings
+
+### F112 (Medium; not run). A gain is paid out of the shard to a user whose account owes the shard
+
+16.19: a step of one leg where the leg GAINED, on an account that holds tokens, lets the leg "leave alone with
+the fee of its worth". A leg that gained leaves by a note that asks what it gained, paid to the user's key.
+Nothing in what you describe sets that against the number at 76..84, and `KpfTLeft` knows nothing of it.
+
+Scenario: an account owes 20 KAS after its short was stepped; it still has a long that gained 15 KAS and a
+token leg; it is below its level (it owes). Anyone, its user's other key first, steps the long: the shard pays
+15 KAS (less the band) to the user's key. The account still owes 20 KAS, which only its tokens can pay.
+
+Direction: in the one-leg outputs of `KpfTCEnd`, what a leg that gained asks is first set against what the
+account owes (the note asks the rest; the account owes that much less): one subtraction where `owing` is
+computed. I did not write this case at the engine; if the end already does it, the test is a few lines.
+
+### F113 (Medium; measured). What the call's step with a token leg weighs
+
+The table above. The account that goes on is written with a note's least whatever the account had, and by
+14.6's figure 0.2 KAS weighs 200,000 before what the inputs take off; the note and the call are small outputs
+beside it. At 483,526 one step is a block's whole storage; the builder would refuse it a few thousand sompi
+lower in the account. A called shard with many such accounts is stepped one a block, and anything else that
+is heavy waits.
+
+Direction: the account that goes on holds a KAS or more (whoever steps puts in what is missing, as it puts in
+the note's least today, and has it back when the account ends); the same for the account a step of one leg
+leaves, and for the settlement of a sale (229,572 with a ticket and a note at a note's least each).
+
+## The reasoning asked for (item 2), in short
+
+- **A note that asks less than the leg lost.** Right. Applied, the shard's books take the leg out at its entry
+  and hold what was paid: the equity falls by what was not paid, which is the truth (a debt counted at
+  nothing). Before the step the equity counted the whole paper loss of an account that could not pay it, as it
+  does of any account under water today; after the note it does not. An owner cannot draw against the debt:
+  no book has it. When the debt is paid the shard holds more.
+- **The order.** A stepper that names a small leg that lost first is paid its fee out of coins that a larger
+  loss would have taken whole; the shard is paid less by that fee (the fee's rate of the small leg's worth at
+  the most). Bounded; say it, or take no fee where what the account's legs lost together is more than its
+  coins.
+- **The fee where the coins are gone**: nothing; who steps then is whoever is owed, the shard's owner. It has
+  the reason and nobody else has.
+- **The time written** (the statement's time, a lateness and a period): a step is in its time only within a
+  lateness of the time it says, so an old time shortens the grace by a lateness at the most: a dispute period
+  is left. Pushing it for ever: each step takes a leg out, and there are six; a step answered wrong writes
+  nothing. A sale that is not applied lapses after 150 blocks and costs half of a hundredth of what it said.
+- **"Every leg" with tokens** stays refused; with the step of one leg that owes, none of the accounts I made is
+  left without a way.
+
+## N40 as left (item 7)
+
+"Coins late to a called shard are the shard's; a claim's holder waits." Scenario: a called shard holds 100 KAS
+against claims of 200 and pays each at a half; an account that the call's step left owing 60 KAS is sold from
+a day later, and 60 KAS reach the shard. If the unpaid half of every claim is still owed by the shard and is
+paid from what it comes to hold, this is right and needs nothing. If a claim paid at a share is closed, and
+`off` then gives what the shard holds to its owner, the claimants have lost 100 KAS and the owner has 60 of
+them: that should not be left. I did not read `KpfTCallPay` for which it is; one line in 16.19 should say.
+
+## What step 5 needs of this
+
+- A ticket and the note of what is owed are objects under the account's id: the vault says that id (N23).
+- The sale's claimer and the user of a kind 14 hold tickets that only `KpfTVaultPay` reads: until it exists a
+  ticket is worth nothing, and every sale in these tests buys nothing. No token should enter before it.
+- F113's direction (what an account that goes on holds) is also what a vault and a custody hold (N34).
+- `KpfTAddSpot` appends a leg to an account: it must ask that the account owes nothing, as an addition does.
+
+## Sizes (item 8)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTOwed` | 1,154 | new |
+| `KpfTCStep` | 4,001 | 3,257 |
+| `KpfTCEnd` | 3,726 | 3,342 |
+| `KpfTCTok` | 3,492 | 3,394 |
+| `KpfTChange` | 1,728 | 1,629 |
+| `KpfTCRow` | 2,547 | 2,574 |
+| `KpfTAddC` | 630 | 618 |
+| `KpfTPass` | 614 | 602 |
+
+68 scripts.
+
+## Not reached
+
+- Item 2: the fees a step may say; the account written with what it owes a sompi off, another time, other
+  coins (I have no way to rewrite a statement's outputs with their flags from the model's statement, and did
+  not write these ends by hand).
+- Item 3: `KpfTCEnd`, `KpfTCSplit`, `KpfTCMark`, `KpfTCTok` shown an account that owes past `KpfTChange` (by
+  an object made by hand); `KpfTEnterS`, `KpfTAcctEnd`, `KpfTOpenC` at the engine; a hand-over and a join
+  written past the builder.
+- Item 4: sales on random accounts with several token legs; a sale's rows; a sale standing when the call's
+  step comes, and stated after it.
+- Item 5: a note that holds more or less than it says; a shard that was called off; a payment racing a sale.
+- Item 6: random accounts under the call's step, accounts under a statement of each kind, the note of the
+  futures legs applied by `KpfTLeft` and `KpfTLeftAll`, a call reaching its end with such accounts.
+- F112 at the engine.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F112 | Medium | open, new, not run: a gain paid to a user whose account owes |
+| F113 | Medium | open, new, measured: the call's step with a token leg weighs a block |
+| F111 | Low | priced: a sale's bond is a hundredth of what it says, its life 150 blocks |
+| F109, F110 | Medium | fixed (round 63) |
+| N36, N39 | paper | built as decided, verified in part (the table; the sale's time) |
+| N37, N42 | paper | not needed, by the step of one leg; the sale before any debt is gone |
+| N40 | paper | as left: one line wanted (above) |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 193 tests (was 191). Brought along: 68 scripts and the sizes
+  in eleven tests; kind 15 among the notes `t1b_fixed_f85_...` knows; the test of round 47 no longer writes a
+  second party's sompi into an account (that place is what it owes); the test of round 62 on kinds 14 and 15
+  rewritten for a sale of an account that owes. New:
+  `t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does`,
+  `t1b_r64_the_sizes_of_the_scripts_that_changed`.
+- `crates/kpf-tests/tests/auditT1_tests.rs` (55): 68 scripts with `KpfTOwed`; 80 entries and 66 `release`.
+- `crates/kpf-cli/tests/auditT1_cli.rs` (48): a library of 68 scripts.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11): unchanged.
+
+## The workspace, twice
+
+One cargo command after the other, two jobs.
+
+| Run | Command | Targets | Passed | Failed | Wall time |
+|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 625 | 0 | 297 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,319 | 0 | 963 s |
+
+No test failed in either, so there is no name to give. Of mine in both: `auditT1_builders` 193,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 40.

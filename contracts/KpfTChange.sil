@@ -131,6 +131,14 @@ contract KpfTChange(int init_version) {
         require(iAt(mv, LATE_AT) >= 0);
         require(iAt(mv, LATE_AT) < 499999999999);
         int pot = iAt(mv, AMARGIN_AT) + iAt(mv, BMARGIN_AT);
+        if (kind >= 7 && kind != 11) {
+            // (A covered account's own kinds. Its second number is what it owes its shard: no coin of its pot.
+            // And of an account that owes, a step and a sale are stated, and nothing else: docs 16.18.)
+            if (iAt(mv, BMARGIN_AT) != 0) {
+                require(kind == 9 || kind == 15);
+                pot = iAt(mv, AMARGIN_AT);
+            }
+        }
         int bond = (pot / BPS) * iAt(mv, BOND_AT) + ((pot % BPS) * iAt(mv, BOND_AT)) / BPS;
         if (kind == 11) {
             // (The cap where it is a number: terms of a fee beyond anything cap nothing. Review 54, F91.)
@@ -149,6 +157,12 @@ contract KpfTChange(int init_version) {
         }
         if (kind == 11 || (kind >= 7 && kind <= 9) || kind == 12 || kind == 13 || kind == 14 || kind == 15) {
             if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
+            if (kind == 15) {
+                // (A sale's bond is no less than a hundredth of what it pays: one that is never applied holds the
+                // account meanwhile. Review 63, F111.)
+                int saleb = int(byte[8](said.slice(0, 8))) / 100;
+                if (bond < saleb) { bond = saleb; }
+            }
         }
         require(bond > 0);
         // What is stated and what the position becomes are shown as they are and hashed here: whoever watches reads

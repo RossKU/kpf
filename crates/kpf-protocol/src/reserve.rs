@@ -243,6 +243,27 @@ impl MarkNote {
     }
 }
 
+/// The note that holds what was paid of what a covered account owes its shard (`KpfTOwed`; docs 16.18).
+pub const NOTE_OWED: i64 = 15;
+
+/// The note of a payment of what an account owes: the shard and the amount. It holds a note's least and the
+/// amount, and its shard takes what it holds above the least, no more than it says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Owed {
+    pub sid: [u8; 32],
+    pub amount: i64,
+}
+
+impl Owed {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_OWED), i9(self.amount)].concat())
+    }
+
+    pub fn value(&self) -> i64 {
+        NOTE_MIN.saturating_add(self.amount.max(0))
+    }
+}
+
 /// What a note that legs left asked and the shard did not pay: counted in what the shard owes when it is written,
 /// and paid as far as the shard holds, later; or, of a called shard, at one share once no row has a unit (docs
 /// 14.6; review 54, F94).
@@ -451,6 +472,17 @@ impl Shard {
         s.held -= pay;
         s.owed = s.owed.checked_add(n.asked - pay).ok_or_else(beyond)?;
         Ok((s, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+    }
+
+    /// `KpfTOwed.apply`: the shard once a note of what an account paid of what it owed is applied, the note's
+    /// output holding `holds`: the shard holds what that is above a note's least, and no more than the note says.
+    pub fn paid_in(&self, n: &Owed, holds: i64) -> Result<Shard> {
+        if n.sid != self.sid || n.amount <= 0 {
+            return Err(Error::Invalid("the note of a payment is to this shard, and of something".into()));
+        }
+        let more = holds.saturating_sub(NOTE_MIN).clamp(0, n.amount);
+        let held = self.held.checked_add(more).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
+        Ok(Shard { held, ..*self })
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
