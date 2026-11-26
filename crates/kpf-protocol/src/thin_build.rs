@@ -83,6 +83,17 @@ pub fn fee_pool_spk(of: &FeePoolOf) -> ScriptPublicKey {
     pay_to_script_hash_script(&of.script())
 }
 
+/// The least each copy of a library of `copies` copies of each script holds for its genesis to be one transaction
+/// a block takes, in whole KAS. An output under a covenant id weighs 4 x 10^12 over its value in sompi, and a
+/// block takes 500,000: so the least follows the count of scripts (with 70 scripts, 7 KAS for one copy of each
+/// and 13 for two). Review 66, F115.
+pub fn lib_copy_least(copies: usize) -> u64 {
+    // (The copies, the second copy of the citation's script where there is one of each, and a fee pool.)
+    let outputs = (copies * SCRIPTS.len() + 2) as u64;
+    let sompi = outputs * 4_000_000_000_000 / 450_000;
+    (sompi.div_ceil(100_000_000) * 100_000_000).max(SCRIPT_VALUE_MIN)
+}
+
 /// A library's genesis without a fee pool: what its operations leave in the copies stays there.
 pub fn lib_genesis(copies: usize, script_value: u64, p: Payer) -> Result<(OBuilt, [u8; 32])> {
     lib_genesis_for(copies, script_value, None, p)
@@ -2852,6 +2863,111 @@ pub fn tok_lapse(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, ender:
         d.last(half, &ender, "half the bond, to who ended the sale", &p.change_to);
     }
     d.finish()
+}
+
+/// What a vault's output and a token output hold, in KAS: a carrier a block takes beside the others.
+pub const VAULT_VALUE: u64 = 100_000_000;
+
+/// The token input of a transaction: a holding of the reference program, its leader (the first input of the
+/// token's id), which says the next states. `key`: the owner's key where a key owns it; none where a covenant id
+/// does (a vault's presence is the leave).
+fn token_in(d: &mut ODraft, tokens: &OLive<crate::kob::TokenState>, next: &[crate::kob::TokenState], key: Option<[u8; 32]>) -> Result<(usize, Hash)> {
+    let id = tokens.id.ok_or_else(|| Error::Invalid("the tokens carry no covenant id".into()))?;
+    let witness = match key {
+        Some(k) => Arg::LeaderSig(k),
+        None => Arg::V(ArtifactValue::Bytes(vec![0x00])),
+    };
+    let args = vec![Arg::V(ArtifactValue::Array(next.iter().map(|s| s.value()).collect())), witness];
+    let entry = kaspa_consensus_core::tx::UtxoEntry::new(tokens.value, tokens.s.spk(), tokens.daa, false, Some(id));
+    let i = d.input(tokens.op, entry, OPlan::Contract { which: OWhich::Token, redeem: tokens.s.redeem(), entry: "transfer", args }, "tokens", 0);
+    Ok((i, id))
+}
+
+/// `KpfTAddSpot`: `amount` of the user's tokens `tokens` enter a covered account as a token leg at the discount
+/// `disc` (basis points), priced in units of `scale` up to `price_max`. Input 0 is the account, input 2 the
+/// tokens, input 3 the funder's first coin (which gives birth to the vault); output 0 the account with the leg,
+/// output 2 the vault, output 3 the tokens owned by the vault's id, output 4 the user's token change. The user
+/// and the shard's owner sign. Returns also the account after, the vault, the leg and the tokens' state.
+#[allow(clippy::too_many_arguments)]
+pub fn spot_add(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, tokens: &OLive<crate::kob::TokenState>, amount: i64, disc: i64, scale: i64, price_max: i64, p: Payer) -> Result<(OBuilt, Account, crate::covered::Vault, crate::cross::XLeg, crate::kob::TokenState)> {
+    let a = &account.s;
+    let rid = account.id.ok_or_else(|| Error::Invalid("the account carries no covenant id".into()))?;
+    let tid = tokens.id.ok_or_else(|| Error::Invalid("the tokens carry no covenant id".into()))?;
+    let Some(coin) = p.funds.first() else { return invalid("tokens enter with a coin of the funder's: it gives birth to the vault") };
+    if amount <= 0 || amount > tokens.s.amount || tokens.s.scheme != crate::kob::SCHEME_P2PK || tokens.s.owner != a.a_key {
+        return invalid("the tokens are the user's own (owned by its key), and no fewer than enter");
+    }
+    let token = crate::covered::TokenOf::reference(tid.as_bytes(), tokens.s.ext.as_bytes());
+    let vault = crate::covered::Vault { rid: rid.as_bytes(), token, amount };
+    // (The vault's id is of the coin that gives birth to it and of its output, the third: it is known before the
+    // leg that names it is written.)
+    let born = kaspa_consensus_core::tx::TransactionOutput { value: VAULT_VALUE, script_public_key: hash_spk(lib, &vault.hash()), covenant: None };
+    let vid = kaspa_consensus_core::hashing::covenant_id::covenant_id(coin.outpoint, std::iter::once((2u32, &born)));
+    let leg = crate::cross::XLeg { market: token.market(), committee: vid.as_bytes(), scale, price_max, size: amount, dir: crate::covered::DIR_SPOT, entry: disc };
+    let next = a.spot_added(&leg, &token, account.daa as i64)?;
+    // An input that landed at or after the account's time: the funder's coin (input 3), or the account (0).
+    let f = if coin.daa as i64 >= a.expiry {
+        3
+    } else if account.daa as i64 >= a.expiry {
+        0
+    } else {
+        return invalid("the account says a time before which nothing is done on it at will: fund with a coin that landed at or after it");
+    };
+    let custody = crate::kob::TokenState::covid(amount, vid, tokens.s.ext);
+    let change = (tokens.s.amount > amount).then(|| crate::kob::TokenState::p2pk(tokens.s.amount - amount, tokens.s.owner, tokens.s.ext));
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let args = vec![
+        bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(crate::thin::leg_bytes(&leg)),
+        bv(token.id.to_vec()), bv(token.tpl.to_vec()), iv(token.pre), iv(token.suf), bv(token.ext.to_vec()), iv(2), iv(2), iv(3), iv(f), iv(3), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTAddSpot", "add", args, 0)?;
+    let states: Vec<crate::kob::TokenState> = std::iter::once(custody.clone()).chain(change.clone()).collect();
+    let (ti, _) = token_in(&mut d, tokens, &states, Some(tokens.s.owner))?;
+    d.out(account.value, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    let vo = d.genesis_script(hash_spk(lib, &vault.hash()), VAULT_VALUE, 3, false, "vault");
+    let co = d.out(VAULT_VALUE, custody.spk(), Some((ti as u16, tid)), "the vault's tokens", None);
+    if let Some(c) = &change {
+        d.out(tokens.value.max(VAULT_VALUE), c.spk(), Some((ti as u16, tid)), "the user's tokens", None);
+    }
+    if (ti, vo, co) != (2, 2, 3) {
+        return invalid("the places of the tokens, the vault and its tokens are not the ones the script is told");
+    }
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next, vault, leg, custody))
+}
+
+/// `KpfTVaultPay`: a ticket is paid. Input 0 is the vault, input 2 the ticket, input 3 the vault's tokens; output
+/// 0 the tokens, owned by the ticket's key. The vault ends and the ticket is spent. `leg`: the token leg the
+/// ticket is of.
+pub fn vault_pay(lib: &[u8; 32], vault: &OLive<crate::covered::Vault>, ticket: &OLive<crate::covered::Ticket>, tokens: &OLive<crate::kob::TokenState>, leg: &crate::cross::XLeg, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::kob::TokenState)> {
+    let (v, t) = (&vault.s, &ticket.s);
+    let vid = vault.id.ok_or_else(|| Error::Invalid("the vault carries no covenant id".into()))?;
+    let tid = tokens.id.ok_or_else(|| Error::Invalid("the tokens carry no covenant id".into()))?;
+    if crate::covered::chain_of_one(leg) != t.chain || leg.committee != vid.as_bytes() || leg.size != v.amount || ticket.id.map(|x| x.as_bytes()) != Some(v.rid) {
+        return invalid("the ticket is of the leg shown, under the id the vault says; the leg names this vault and its amount");
+    }
+    if tokens.s.amount != v.amount || tokens.s.owner != vid.as_bytes() || tokens.s.scheme != crate::kob::SCHEME_COVID || tid.as_bytes() != v.token.id {
+        return invalid("the tokens are the vault's: of its token and amount, owned by its id");
+    }
+    let paid = crate::kob::TokenState::p2pk(v.amount, t.key, tokens.s.ext);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let k = &v.token;
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(v.rid.to_vec()), bv(k.id.to_vec()), bv(k.tpl.to_vec()), iv(k.pre), iv(k.suf), bv(k.ext.to_vec()),
+        bv(crate::thin::leg_bytes(leg)), bv(t.key.to_vec()), iv(3), iv(0),
+    ];
+    let (_, lid) = enter_hash(&mut d, lib, vault, &v.hash(), "vault", script, "KpfTVaultPay", "pay", args, 0)?;
+    d.contract(ticket, OWhich::T(SLOT), pinned::kit().object(lib, &t.hash()), "go", vec![iv(1), iv(1)], "ticket", 0);
+    let (ti, _) = token_in(&mut d, tokens, std::slice::from_ref(&paid), None)?;
+    d.out(tokens.value.max(VAULT_VALUE), paid.spk(), Some((ti as u16, tid)), "the tokens, to the ticket's key", None);
+    keep(&mut d, script, lid)?;
+    if ti != 3 {
+        return invalid("the place of the tokens is not the one the script is told");
+    }
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, paid))
 }
 
 /// `KpfTOwed.pay`: anyone pays `amount` of what a covered account owes its shard. Output 0 is the account, owing

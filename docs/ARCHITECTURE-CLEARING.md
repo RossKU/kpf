@@ -2756,3 +2756,208 @@ other kinds (by reasoning there is no way to one: a statement stands on the acco
 comes to owe only by an end or a call's step, each of which writes a new account); sales on random accounts; a
 payment racing a sale.
 
+### 16.23 Built: step 5, the vault (27 November 2026; at the engine, my tests; the reviewer's are round 66)
+
+`KpfTAddSpot` and `KpfTVaultPay`; the library has 70 scripts. With them tokens enter an account and leave it: the
+goal's row "a token held in the account counts at a discount" runs whole at the script engine, beside the
+reference KCC-20's own script (`vendor/kob`: the token's program, its state and its transfer were already in this
+crate from the order book's evidence; an input's plan takes the token's program as it takes a script of the
+library).
+
+- **Tokens enter** (`KpfTAddSpot.add`), as 16.12 (d) says, with one thing learned at the engine: **a covenant's
+  counts do not see an output that is born.** "No input under the vault's id and one output" cannot be asked by
+  counting. The script recomputes the id as the consensus derives it for a genesis of that one output (the hash,
+  keyed "CovenantID", of an input's outpoint, the count one, the output's index, value and script), and holds the
+  output's id to it: so the id is new (an outpoint is spent once), it is the id of nothing else, and a second
+  output under it would have made another id (N24). The script is told the input whose outpoint it is; the
+  funder's coin.
+- What it holds the transaction to: the account owes nothing, has a second key and fewer than six legs; the leg
+  is written as a leg is, of direction 7, with an amount, a scale and a price limit its worth is counted at; its
+  discount is the liquidation fee's rate and the tolerance twice at the least; its market is the hash of the token
+  (N25); it names the vault's id; the vault's state says the id the account is under (N23), the token and the
+  amount, under a tag of its own (N27); a token input shows the program, held to the template's hash; the tokens'
+  output is that program with the vault's amount, owned by the vault's id, borrowing off, under the token's id;
+  the account's output has the leg at the end of its chain and a leg more counted; an input landed at or after
+  the account's time, which is written; the user and the shard's owner sign.
+- **A ticket is paid** (`KpfTVaultPay.pay`), as 16.12 (e): the vault's state; the leg shown hashes to the ticket's
+  chain, is a token leg, names the vault's id and has its amount; the ticket is an input under the id the vault
+  says; one input under the vault's id and no output; one input under the account's id (the ticket) and no
+  output; the token input is the program, owned by the vault's id (scheme 4), borrowing off, of the vault's
+  amount and extension commitment; the tokens' output is that program with the amount, owned by the ticket's key.
+
+Run (`tests/thin_draw.rs`, 42 pass): of a user's 150 tokens 100 enter an account of one long at a discount of 20
+% (6,446 bytes): the vault under an id of its own, the tokens owned by it, 50 back to the user; the tokens'
+output written to another owner or of another amount, or the account without the leg: refused. They count: the
+user takes its coins out, which the long alone would not allow. They leave by the user's statement (3,342
+bytes stated, 2,643 applied), which writes the ticket; the vault pays it (5,403 bytes): the tokens owned by the
+user's key again, nothing under the vault's id; to another key or fewer: refused; a ticket of the same leg to
+another key (a sale's claimer) is paid to that key; a ticket of another leg, or under another id than the vault
+says, pays nothing (the tool; by hand at the engine is round 66's).
+
+Not built: the commands; a deposit beside a fill of the order book's ask (16.12 (g): the places are free, not
+run); the entry that binds a vault; tokens of another program than the reference's (the template's hash and the
+two lengths are the vault's to say, but the tool makes the reference's only).
+
+### 16.24 Review 66
+
+At the engine, with the reference token's script running: one deposit (6,446 bytes; storage mass 124,873; the
+vault and the tokens' output a KAS each), one payment (5,403 bytes; 43,216; built and signed by a key that is
+neither the user's nor the owner's), and 34 transactions rewritten by hand, all refused: a second output under
+the vault's id, the vault holding a sompi more than hashed, the input the id is of said to be each other input,
+one beyond the last or below nothing, the vault's output said to be the tokens', the account's, the copy's or
+none; the tokens' output under no id, with borrowing on, of another extension, owned by the account's id or by
+the user's key, a unit fewer or more; the leg of direction 1, of a discount under the floor or over the whole,
+of a unit more, of another market, of another vault's id, of scale nothing; without the owner's signature or the
+user's; the payment's tokens to another key, a unit fewer, owned by the vault's id again, under no id; a ticket
+under an attacker's own id (N23), of another key, of another leg. N23 and N24 are closed at the engine. The
+preimage of the vault's id matches the node's field for field. Whoever pays a ticket has 1.187 KAS more after
+(the vault's KAS, the tokens' carrier, the ticket's least, less the fee): a ticket is paid. `KpfTAddSpot` is
+1,466 bytes, `KpfTVaultPay` 955.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| F115 (medium) | the library's genesis is over what a block takes: with 70 scripts two copies at 11 KAS a copy weigh 509,043. The worlds of three of my test files made that library, and 32 tests failed (I had run my own file and a compile after step 5, not the workspace) | the least a copy holds follows the count of scripts (`lib_copy_least`: an output under an id weighs 4 x 10^12 over its value; 7 KAS for one copy of each of 70 scripts, 13 for two). The workspace again: 629 tests, none failed. Every script added raises it: at 100 scripts two copies are 18 KAS each |
+
+**Not yet reviewed, and said so by the review:** that no script of the library but `KpfTVaultPay` can be made to
+name a vault and pass (N27: every entry listed by the places it names and the state it holds each to); the
+bearer rule with a real vault (a split, a join, a hand-over, a step, a sale and a call's step, with the vault's
+payment at each end); the time of a deposit; and, read and not run: no ticket, the same ticket twice, a ticket
+and a vault of different amounts, a continuation under an existing vault's id as the output that is born, a
+look-alike token program, the token's delegates, legs of other lengths, an account that owes or has six legs.
+Round 67.
+
+Stuck for good, by reasoning: the tokens of a leg that left by a wrong statement nobody disputed (no ticket was
+written: its user's loss, as with any wrong statement); the tokens of an account that owes more than they are
+worth (N41).
+
+## 17. Options under a shard, and the books in a tree (27 November 2026; on paper, nothing built)
+
+The goal's first row is that everything a user holds (spot, futures, options) is netted in one account, behind one
+bond. Futures and spot are there (sections 13 to 16). Options are legs of an account no shard covers (4b). This
+section is the form that puts them under a shard. The user's decision of 27 November: the form that holds the
+goal, not a smaller one. Review 59 found four things in the way (N19 to N21); each is taken as a problem to
+solve.
+
+### 17.1 What an option is here, and what was missing
+
+An option leg (4b) is counted at what it is worth exercised: a call of strike K is worth the price less K, or
+nothing; its gain is that worth at the price less the same at its entry; its leaving is its exercise. No time is
+in it. That was enough between two parties who sign everything. Under a shard four things are missing:
+
+1. **An end.** With no last day a written option is owed for ever.
+2. **The premium.** No committee signs it, and it must not be a gain the day it is sold (N19).
+3. **What a holder is asked** (N20): not the maintenance of the whole underlying.
+4. **The books.** A shard knows what its side gained by one number because a futures leg gains its units times
+   the price. An option's worth bends at its strike, so a row must be of one strike; and four rows a shard are
+   then a shard a series (N21).
+
+### 17.2 An end: a dated market
+
+**A market's name can say its last day.** The name of a dated market is the hash of its underlying's name and
+a day: blake2b(push8(19) + push(underlying) + push8(the last day)). A committee prices it as any market; from the
+last day on it signs one price for every time, the settlement price. No script moves anything on that day.
+
+- A script that needs the day is shown the underlying and the day, which hash to the leg's market.
+- **A leg whose market has ended leaves by anyone's statement** (a new kind): at a time at or after the last
+  day, at the price stated (the settlement price, answered by the committee's as any), the leg leaves as a leg
+  leaves by its user's statement: what it gained is asked of the shard less the band; what it lost the coins
+  pay. Futures legs of dated markets and options alike. So nothing is owed past its end by anybody's silence.
+- An option on a market with no last day is not entered under a shard.
+
+### 17.3 The premium is in the entry, and belongs to whoever kept the option to its end
+
+An option leg's gain is its worth exercised at the price less its worth exercised at its entry. So **an option
+bought for a premium P is entered at the price at which it is worth exercised what it is worth now and P more.**
+At its entry its holder has lost P, unrealized, and its writer gained P. No coin moves at an entry, no script
+knows a premium, and an entry that ends is undone as any.
+
+- **The holder pays** the premium as any leg that lost pays what it lost: when the leg leaves. Meanwhile it is
+  what the leg has lost, counted alone: the coins stand for it and are not taken out.
+- **The writer has the premium when the option has ended or was exercised, and not before.** A written option's
+  gain counts for nothing while the leg stands: it is no margin and no mark takes it out. Else a writer sells
+  an option far from its strike, takes the premium out, and lets itself be stepped: the option would leave worth
+  nothing exercised, and the premium would be kept for an option that was never borne.
+- **Whoever ends an option before its end by its own default does not have the premium.** In a step of a user
+  who wrote an option, the option leaves and what it gained is not asked: the shard, which paid for an option it
+  no longer has, keeps the premium. Under a call (the clearing side's default) an option a user holds leaves and
+  what it lost is not paid: the user, whose option the clearing side no longer writes, keeps the premium. What
+  the option is worth exercised is settled either way.
+
+### 17.4 The option leg in a covered account
+
+The seven sums of a row (section 16.12's six: the price row's; W; WS; LS; GL; TK), for a leg whose direction says
+an option (3 a call the user holds, 4 a call it wrote, 5 a put it holds, 6 a put it wrote; the strike above):
+
+| | The user holds it | The user wrote it |
+|---|---|---|
+| what all gained | its worth exercised at the price less at its entry | what it lost so (never above nothing: 17.3) |
+| what all are worth: the maintenance's base | its worth exercised at the price (what it can still lose) | its underlying's worth at the price |
+| what it lost, counted alone | what it lost | what it lost |
+
+- A holder that has nothing else is asked the premium it has not paid and the maintenance of what the option is
+  worth exercised: an option far from its strike asks the premium and no more (N20).
+- **Exercise.** The user's option leaves by the user's statement (a leaving of one leg). An option the user
+  wrote is exercised by **the shard's owner's statement** (a new kind, the owner's key): the leg leaves, the
+  coins pay what it lost; at or after the last day anyone states it (17.2).
+- A mark (16.3) names no option leg. A split and a hand-over move one as any leg.
+
+### 17.5 The books in a tree
+
+**A shard's rows are a tree.** Today a shard's four rows are written whole (408 bytes) in every transaction that
+shows it. Instead the shard's fixed part holds the root of a tree of rows; a script that reads or changes a row
+is shown the row and its path (six hashes for sixty-four rows: 192 bytes).
+
+- A row is of one market and one kind: a market's futures legs; its calls of one strike; its puts of one strike.
+  Its numbers are as today: the clearing side's net units, and the gross.
+- What a row is worth to the shard at a price is its net units times what a unit is worth there: the price; or
+  what a call or a put of that strike is worth exercised. Options of one strike net exactly. What the legs were
+  entered at stays one number over all rows. So the shard's equity at any prices is exact, as today.
+- The requirement of an option row: the rate on the underlying's worth of what the clearing side wrote net; of
+  what it holds net, no more than the row is worth.
+- An entry, a note that legs left, a mark's note: each shows one row and its path, and writes the new root.
+- **It also takes away the limit of four markets a shard**, for futures.
+
+### 17.6 A draw and a call are traces
+
+With any number of rows no script reads them all. **A draw is stated as an account's statements are**: a price
+a market, a row of sums a row of the books (what the net is worth, what the requirement asks), and the last sums
+held to the rule. A dispute names the end, a row (opened by its path, and its place: every row once, in the
+tree's order) or a price. A call the same.
+
+- The call's object holds the root of the prices it was called at; the call's step shows, for each of an
+  account's legs, the price of its market by a path.
+- **What a called shard has paid** is a number in it: a claim is paid up to its part of all the shard has paid
+  and holds, and is not spent until it is paid whole. So what accounts that owe pay late is the claims', not the
+  owner's (review 65, F114).
+
+### 17.7 What it touches, and the order
+
+Every script that shows a shard's rows: `KpfTShardOpen`, `KpfTShardEnd`, `KpfTShardPrice`, `KpfTDrawNote`,
+`KpfTDrawEntry`, `KpfTEnterS`, `KpfTLeft`, `KpfTLeftAll`, `KpfTLeftVoid`, `KpfTCallEnd`, `KpfTCStep`,
+`KpfTCallPay`, `KpfTCallEnter`, `KpfTJoinC`, `KpfTAddC` (the shard's branch), and by the hash of the rows alone
+`KpfTMarkNote`, `KpfTOwed`. And for the option leg: `KpfTCRow`, the ends, the step, the notes.
+
+1. Dated markets and the kind by which a leg whose market has ended leaves: futures only, nothing else changed.
+2. The books in a tree, futures only: every test of today passing on a tree of rows.
+3. A draw and a call as traces; what a called shard has paid (F114).
+4. The option leg in a covered account's rows and ends (the account's side), accounts made by hand.
+5. Option rows in the tree; the entry, the exercise by either side, the step and the call's step of an option.
+
+### 17.8 Asked of the review, on paper
+
+- N-h. 17.3: is "the premium in the entry" sound (an entry at a price that is not the market's: what holds it;
+  the band at the leaving against a premium; a holder that cannot pay the premium at the end); is "no gain for
+  the writer while the leg stands" enough against a premium taken and a default chosen, and what it costs a
+  writer in capital; is the forfeit in a step and under a call fair, and can either be provoked by the party
+  that gains by it (a clearing party that lets itself be called to keep premiums it was paid?).
+- N-i. 17.2: the settlement price (one price for ever: what if the committee signs none; what a leg is worth
+  between the last day and its leaving); who states the leaving of an ended leg and for what; a market's name
+  that says a day in the past at its entry.
+- N-j. 17.4: the holder's base; a holder under a step; options and futures of one market in one account (a call
+  written against a long: asked both whole, or netted); six legs.
+- N-k. 17.5: a tree or a longer list; the order of rows and "every row once" in a trace (a draw that leaves a
+  row out; a row twice); an empty row; what an entry does where the row is new; sixty-four rows enough.
+- N-l. 17.6: the size and the cost of a draw's statement on a shard of many rows; a draw disputed row by row
+  (how many disputes hold a draw up); the call's prices by a path; F114's number and its arithmetic.
+- N-m. The order: is step 2 (the tree, futures only) the right first large piece, or should the option leg on
+  the account's side come first to find what the rows must hold.

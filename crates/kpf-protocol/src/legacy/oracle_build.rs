@@ -39,6 +39,8 @@ pub enum OWhich {
     C(crate::committee_build::CWhich),
     /// A script of the thin family, by its name (`crate::thin_artifacts`).
     T(&'static str),
+    /// The reference KCC-20 token program (a token input beside the thin family's: docs 16.12).
+    Token,
 }
 
 impl OWhich {
@@ -51,6 +53,7 @@ impl OWhich {
             OWhich::Stake => pinned::stake_base(),
             OWhich::C(w) => w.base(),
             OWhich::T(n) => crate::thin_artifacts::base(n).expect("a script of the thin family"),
+            OWhich::Token => crate::artifacts::token_base(),
         }
     }
 }

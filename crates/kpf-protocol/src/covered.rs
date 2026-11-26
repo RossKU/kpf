@@ -56,6 +56,52 @@ pub fn c_kind(kind: i64) -> bool {
     (KIND_C_TAKE..=KIND_C_STEP).contains(&kind) || (KIND_C_SPLIT..=KIND_C_TOK_SOLD).contains(&kind)
 }
 
+/// The tag of a vault's state, and of a token's market's name.
+pub const VAULT_TAG: i64 = 16;
+pub const SPOT_TAG: i64 = 18;
+
+/// The token a vault holds: its covenant id, the hash of its program's template, the lengths of the program
+/// before and after its state, and its extension commitment (`docs/ARCHITECTURE-CLEARING.md` 16.12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenOf {
+    pub id: [u8; 32],
+    pub tpl: [u8; 32],
+    pub pre: i64,
+    pub suf: i64,
+    pub ext: [u8; 32],
+}
+
+impl TokenOf {
+    /// A token of the reference KCC-20 program (the one this crate has: `vendor/kob`).
+    pub fn reference(id: [u8; 32], ext: [u8; 32]) -> TokenOf {
+        let t = crate::artifacts::token_template();
+        TokenOf { id, tpl: t.hash, pre: t.prefix.len() as i64, suf: t.suffix.len() as i64, ext }
+    }
+
+    /// The name of the market that prices the token: the hash of the token. No token is priced as another.
+    pub fn market(&self) -> [u8; 32] {
+        let i9 = |v: i64| [&[8u8][..], &sm8(v)].concat();
+        blake2b(&[i9(SPOT_TAG), p33(&self.id), p33(&self.tpl), p33(&self.ext)].concat())
+    }
+}
+
+/// A vault: an object under a covenant id of its own, which is the owner of the tokens held for one token leg of
+/// a covered account. It says the id its account's objects are under, the token, and the amount.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Vault {
+    pub rid: [u8; 32],
+    pub token: TokenOf,
+    pub amount: i64,
+}
+
+impl Vault {
+    pub fn hash(&self) -> [u8; 32] {
+        let i9 = |v: i64| [&[8u8][..], &sm8(v)].concat();
+        let t = &self.token;
+        blake2b(&[i9(12), i9(VAULT_TAG), p33(&self.rid), p33(&t.id), p33(&t.tpl), i9(t.pre), i9(t.suf), p33(&t.ext), i9(self.amount)].concat())
+    }
+}
+
 /// A ticket: the note, under the account's id, that the token leg of the chain `chain` (the leg alone) left its
 /// account, to the key `key`. The leg names its vault and the amount; the vault pays the ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +388,34 @@ impl Account {
     /// As `c_next`, of an account that owes `owes`.
     pub fn c_next_owing(&self, coins: i64, chain: &[u8; 32], count: i64, time: i64, owes: i64) -> [u8; 32] {
         Account { b_margin: owes, ..self.clone() }.c_next(coins, chain, count, time)
+    }
+
+    /// `KpfTAddSpot`: this covered account with the token leg `leg` appended, done on an output that landed at
+    /// `landed`: a leg more counted, and the time before which nothing is done on it at will. The account owes
+    /// nothing and has room for a leg; the leg is a token leg of the token `token` (its market is the token's
+    /// name), with an amount, and a discount of the liquidation fee's rate and the tolerance twice at the least.
+    pub fn spot_added(&self, leg: &XLeg, token: &TokenOf, landed: i64) -> Result<Account> {
+        self.c_check()?;
+        self.owes_nothing()?;
+        let no = |why: &str| Err(Error::Invalid(format!("no tokens enter this account: {why}")));
+        if self.legs.len() >= C_LEGS_MAX {
+            return no("it has six legs");
+        }
+        if leg.dir != DIR_SPOT || leg.size <= 0 || leg.scale <= 0 || leg.price_max <= 0 || worth(leg.size, leg.scale, leg.price_max).is_none() {
+            return no("the leg is a token leg with an amount, a scale and a price limit its worth is counted at");
+        }
+        if leg.market != token.market() {
+            return no("the leg's market is not the token's name");
+        }
+        let least = self.t.liq_fee_bps.checked_add(2 * self.t.g_bps).filter(|x| *x >= 0);
+        if least.is_none_or(|x| leg.entry < x) || leg.entry > BPS || self.t.g_bps < 0 || self.t.liq_fee_bps < 0 {
+            return no("the discount is the liquidation fee's rate and the tolerance twice at the least, the whole at the most");
+        }
+        let mut legs = self.legs.clone();
+        legs.push(*leg);
+        let next = Account { legs, a_min_counter: self.a_min_counter + 1, expiry: self.at_will(landed), ..self.clone() };
+        next.c_check()?;
+        Ok(next)
     }
 
     /// Whether this covered account owes its shard nothing: what every script but a step, a sale and a payment

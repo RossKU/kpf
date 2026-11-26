@@ -265,7 +265,8 @@ fn world() -> World {
     }
     let funds = vec![fund(xk(&f), 200, 3_000)];
     // (Round 51: 11 KAS a copy; at 10 the genesis of a library of 63 scripts in two copies is above the storage mass of a block.)
-    let (g, lib) = lib_genesis(2, 11 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    // (Round 66: 13 KAS a copy; at 11 the genesis of a library of 70 scripts in two copies weighs 509,043.)
+    let (g, lib) = lib_genesis(2, 13 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis", &g, &keys);
     let scripts = lib_scripts(&gs.tx, 6_000);
     let mut x = samples::position().x;
@@ -5760,7 +5761,7 @@ fn nw_of(copies: usize) -> NW {
     let table = OLive { s: EpochTable { members: table, total: 67 * KAS1, from: 6_000, until: 9_000, quorum_bps: rp.quorum_bps, spread_bps: rp.spread_bps }, value: KAS1 as u64, id: Some(rid), op: op(20), daa: 6_000 };
     let funds = vec![fund(xk(&f), 200, 3_000)];
     // (Round 51: 11 KAS a copy; at 10 the genesis of a library of 63 scripts in two copies is above the storage mass of a block.)
-    let (g, lib) = lib_genesis(copies, 11 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let (g, lib) = lib_genesis(copies, 13 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = g.sign(&keys).expect("genesis");
     NW { a, b, w, f, members, keys, rid, markets, table, lib, scripts: lib_scripts(&gs.tx, 6_000), genesis: gs.tx.clone(), chain: RefCell::new(vec![]) }
 }
@@ -9621,7 +9622,7 @@ fn t1b_r51_the_time_of_a_shard_a_draw_is_held_to_and_writes() {
         }
     }
     readers.sort();
-    assert_eq!(readers, vec!["KpfTAddC", "KpfTEnterS", "KpfTJoinC", "KpfTOpenC", "KpfTPass", "KpfTShardEnd"], "the scripts that read the place of the expiry in a moving part (a shard's: an entry and a draw; round 58, an account's: an addition, a hand-over, a join, the opening)");
+    assert_eq!(readers, vec!["KpfTAddC", "KpfTAddSpot", "KpfTEnterS", "KpfTJoinC", "KpfTOpenC", "KpfTPass", "KpfTShardEnd"], "the scripts that read the place of the expiry in a moving part (a shard's: an entry and a draw; round 58, an account's: an addition, a hand-over, a join, the opening)");
     // A time after its landing.
     let shard = shard51(&w, &legs, 500 * KAS1, 0);
     let fb = [fund(xk(&w.b), 55, 1_000)];
@@ -10192,7 +10193,7 @@ fn t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_wr
 fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, and what is owed, paid)");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, and what is owed, paid)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10217,7 +10218,7 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     // alone, where it answers a take of kind 2.)
     // (Round 54: KpfTCallEnd and KpfTCallPay read a shard's call and basis; KpfTCStep an account's count of legs.)
     // (Round 56, F85 taken out: KpfTStepEnd takes 138 bytes alone, and is no reader of a covered account's places.)
-    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCMark", "KpfTCSplit", "KpfTCStep", "KpfTCTok", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTMarkNote", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
+    assert_eq!(readers, vec!["KpfTAddSpot", "KpfTCEnd", "KpfTCMark", "KpfTCSplit", "KpfTCStep", "KpfTCTok", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTMarkNote", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
 }
 
 /// Rounds 45 and 47, F68 (High), closed by the removal: a leg is in a shard's rows and in its basis by one
@@ -11579,7 +11580,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R54 sizes of the scripts: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let mut rows = vec![];
     let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
@@ -12217,7 +12218,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
@@ -12640,7 +12641,7 @@ fn t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scr
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTPass", "KpfTJoinC", "KpfTAddC", "KpfTChange", "KpfTDrawNote", "KpfTLeft", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTAcctEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R56 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let fa = [fund(xk(&w.a), 44, 1_000)];
     let legs: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
@@ -13010,7 +13011,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     // (Round 58: the three that changed again.)
     assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1728, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
 }
@@ -13304,7 +13305,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2323), ("KpfTOpenC", 684)]);
 }
 
@@ -13744,7 +13745,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1825), ("KpfTCStep", 4113), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
@@ -14113,7 +14114,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2547), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTStepPrice", 1825), ("KpfTPoint", 2588)]);
 }
 
@@ -14176,7 +14177,7 @@ fn t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
 /// Round 61: `KpfTDrawNote`, in bytes, and what it was.
 #[test]
 fn t1b_r61_the_size_of_the_script_that_changed() {
-    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_700, 68), "(it was 1,406)");
+    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_700, 70), "(it was 1,406)");
 }
 
 // ================================================================================================================
@@ -14472,7 +14473,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1825), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTEnterS", 2323), ("KpfTPoint", 2588)]);
 }
 
@@ -14605,7 +14606,7 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
 fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 70);
     assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 4113), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
@@ -14673,4 +14674,121 @@ fn t1b_fixed_f112_f113_a_gain_is_set_against_what_is_owed_and_the_account_that_g
     println!("T1b R65 F112: a step of a long that gained on an account that owes 60 KAS (the note asks, the account then owes): {one:?}; under a call at 11.5 (legs, owed, the note asks, owed after): {under_call:?}. F113: the call's step with a token leg (coins, owed, paid, the fee, coins after, owed after, the account's output, what whoever steps has after it, storage mass): {stepped:?}");
     // (Where nothing is paid the note holds a note's least alone, and that output is 200,000 of what is left.)
     assert!(one.is_some() && stepped.iter().all(|s| s.8 < 330_000 && (s.2 == 0 || s.8 < 150_000)), "F112 or F113 is open: {one:?} {stepped:?}");
+}
+
+// ================================================================================================================
+// Round 66. Spot as margin, step 5: the vault (`KpfTAddSpot`, `KpfTVaultPay`), with the reference token's own
+// script run beside ours.
+
+use kpf_protocol::kob::TokenState;
+
+/// Round 66, items 2 and 4, as far as it went. A deposit of 100 of a user's 150 tokens into an account of 30 KAS
+/// (the user and the shard's owner sign), and the vault's payment of a ticket of that leg; each transaction built
+/// by the builders, run with the token's script, and then written otherwise by hand.
+///  - **The deposit refused**: a second output under the vault's id (the vault's output written twice); the
+///    vault holding a sompi more than the id was computed of; the input the id is computed from said to be any
+///    other input, or none; the vault's place said to be the tokens' output, or the account's; the tokens'
+///    output under no id, with borrowing on, of another extension, of another owner, of another amount; the leg
+///    said with a direction of 1, a discount under the floor, an amount a unit more, another market; without the
+///    owner's signature; without the user's.
+///  - **The payment refused**: the tokens' output to another key, of a unit fewer, under no id; a ticket under
+///    another id than the vault says (an object of the same state under an id of an attacker's own); a ticket of
+///    another key than the one paid; a ticket of another leg.
+///  - What each transaction is in bytes and in storage mass, and what whoever pays the ticket has after it.
+#[test]
+fn t1b_r66_a_deposit_and_a_vaults_payment_written_otherwise_are_refused() {
+    let w = ow();
+    let long = w.fut(0, 10, LONG, P10);
+    let acct = cov47(&w, &[long], 30 * KAS1, 0);
+    let (scale, pmax) = (w.markets[0].p.scale, w.markets[0].p.price_max);
+    let token_id = Hash::from_bytes([0x7c; 32]);
+    let mine = OLive { s: TokenState::p2pk(150 * scale, xk(&w.a), Hash::from_bytes([0; 32])), value: KAS1 as u64, id: Some(token_id), op: op(50), daa: T0 as u64 };
+    let fa = [fund(xk(&w.a), 44, 1_000)];
+    let (b, next, vault, leg, custody) = spot_add(&w.lib, &acct, &w.script("KpfTAddSpot"), &mine, 100 * scale, 2_000, scale, pmax, w.payer(&w.a, &fa)).unwrap();
+    let sg = signed("tokens enter an account", &b, &w.keys);
+    let vid = sg.tx.outputs[2].covenant.unwrap().covenant_id;
+    assert_eq!((next.legs.clone(), leg.dir, leg.committee, custody.owner, custody.scheme, custody.borrow), (vec![long, leg], DIR_SPOT, vid.as_bytes(), vid.as_bytes(), 4, 0));
+    assert_eq!((&sg.tx.outputs[2].script_public_key, &sg.tx.outputs[3].script_public_key), (&hash_spk(&w.lib, &vault.hash()), &custody.spk()));
+    let refused = RefCell::new(Vec::<String>::new());
+    let no = |what: &str, t: OBuilt, keys: &KeySet| {
+        assert!(!taken30(&t, keys), "round 66: {what}: TAKEN");
+        refused.borrow_mut().push(what.to_string());
+    };
+    let with = |g: &dyn Fn(&mut OBuilt)| {
+        let mut t = b.clone();
+        g(&mut t);
+        t
+    };
+    // The vault's id.
+    no("a second output under the vault's id", with(&|t| {
+        let twin = t.tx.outputs[2].clone();
+        t.tx.outputs.push(twin);
+    }), &w.keys);
+    no("the vault holding a sompi more than its id was computed of", with(&|t| t.tx.outputs[2].value += 1), &w.keys);
+    // (Arguments of KpfTAddSpot.add: 6 the leg, 12 the token's input, 13 the vault's output, 14 the tokens' output,
+    // 15 the input that shows the time, 16 the input the vault's id is computed from.)
+    let ga = told58(&b, 16);
+    for other in (0..b.tx.inputs.len() as i64).filter(|i| *i != ga).chain([b.tx.inputs.len() as i64, -1]) {
+        no(&format!("the vault's id said to be computed from input {other}"), with_arg(&b, 16, int_arg(other)), &w.keys);
+    }
+    for (what, place) in [("the tokens' output", 3i64), ("the account's output", 0), ("the copy's output", 1), ("no output", 9)] {
+        no(&format!("the vault's place said to be {what}"), with_arg(&b, 13, int_arg(place)), &w.keys);
+    }
+    // The tokens' output.
+    no("the tokens' output under no id", with(&|t| t.tx.outputs[3].covenant = None), &w.keys);
+    let zero = Hash::from_bytes([0; 32]);
+    for (what, state) in [
+        ("with borrowing on", TokenState { borrow: 1, ..custody.clone() }),
+        ("of another extension", TokenState::covid(100 * scale, vid, Hash::from_bytes([9; 32]))),
+        ("owned by the account's id", TokenState::covid(100 * scale, acct.id.unwrap(), zero)),
+        ("owned by the user's key", TokenState::p2pk(100 * scale, xk(&w.a), zero)),
+        ("of a unit fewer", TokenState::covid(100 * scale - 1, vid, zero)),
+        ("of a unit more", TokenState::covid(100 * scale + 1, vid, zero)),
+    ] {
+        let spk = state.spk();
+        no(&format!("the tokens' output {what}"), with(&|t| t.tx.outputs[3].script_public_key = spk.clone()), &w.keys);
+    }
+    // The leg.
+    for (what, l) in [("of direction 1", XLeg { dir: LONG, ..leg }), ("of a discount under the floor", XLeg { entry: w.terms().liq_fee_bps + 2 * w.terms().g_bps - 1, ..leg }), ("of a discount over the whole", XLeg { entry: 10_001, ..leg }), ("of a unit more", XLeg { size: leg.size + 1, ..leg }), ("of another market", XLeg { market: long.market, ..leg }), ("of another vault", XLeg { committee: [7; 32], ..leg }), ("of a scale of nothing", XLeg { scale: 0, ..leg })] {
+        no(&format!("the leg said {what}"), with_arg(&b, 6, bytes_arg(&kpf_protocol::thin::leg_bytes(&l))), &w.keys);
+    }
+    // The signatures.
+    no("without the owner's signature", b.clone(), &only_keys(&[&w.a]));
+    no("without the user's signature", b.clone(), &only_keys(&[&w.b]));
+    let deposit = (sg.mass.size, sg.mass.storage, sg.tx.outputs[2].value, sg.tx.outputs[3].value, refused.borrow().len());
+    // The payment.
+    let pay = w.script("KpfTVaultPay");
+    let (vault_live, custody_live) = (nth(&sg, 2, vault, 6_700), nth(&sg, 3, custody.clone(), 6_700));
+    let ticket = Ticket { chain: kpf_protocol::covered::chain_of_one(&leg), key: xk(&w.a) };
+    let ticket_of = |t: Ticket, id: Option<Hash>| OLive { s: t, value: NOTE_MIN as u64, id, op: op(95), daa: 6_800 };
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let (pb, paid_out) = vault_pay(&w.lib, &vault_live, &ticket_of(ticket, acct.id), &custody_live, &leg, &pay, w.payer(&w.f, &ff)).unwrap();
+    let ps = signed("a ticket paid by its vault, by a key that is neither's", &pb, &only_keys(&[&w.f]));
+    assert_eq!((paid_out.amount, paid_out.owner, paid_out.scheme, &ps.tx.outputs[0].script_public_key, ps.tx.outputs[0].covenant.map(|c| c.covenant_id)), (100 * scale, xk(&w.a), 0, &paid_out.spk(), Some(token_id)));
+    assert!(ps.tx.outputs.iter().all(|o| o.covenant.map(|c| c.covenant_id) != Some(vid)), "nothing goes on under the vault's id");
+    let before = refused.borrow().len();
+    for (what, state) in [("to another key", TokenState::p2pk(100 * scale, xk(&w.f), zero)), ("of a unit fewer", TokenState::p2pk(100 * scale - 1, xk(&w.a), zero)), ("owned by the vault's id again", TokenState::covid(100 * scale, vid, zero))] {
+        let spk = state.spk();
+        let mut t = pb.clone();
+        t.tx.outputs[0].script_public_key = spk;
+        no(&format!("the payment's tokens {what}"), t, &w.keys);
+    }
+    let mut t = pb.clone();
+    t.tx.outputs[0].covenant = None;
+    no("the payment's tokens under no id", t, &w.keys);
+    for (what, tk, id) in [
+        ("a ticket under an id of an attacker's own", ticket, Some(Hash::from_bytes([0x66; 32]))),
+        ("a ticket of another key (the tokens to the vault's leg's user)", Ticket { key: xk(&w.f), ..ticket }, acct.id),
+        ("a ticket of another leg", Ticket { chain: kpf_protocol::covered::chain_of_one(&long), ..ticket }, acct.id),
+    ] {
+        // (The transaction of the honest payment, with the ticket's input made that object.)
+        let live = ticket_of(tk, id);
+        let mut t = pb.clone();
+        let n_in = second_at55(&pb);
+        object_made(&mut t, &w.lib, n_in, &tk.hash());
+        t.entries[n_in].covenant_id = live.id;
+        no(what, t, &w.keys);
+    }
+    let payment = (ps.mass.size, ps.mass.storage, paid(&ps, &xk(&w.f)) - 1_000 * KAS1, refused.borrow().len() - before);
+    println!("T1b R66 the vault: a deposit (bytes, storage mass, what the vault holds, what the tokens' output holds, transactions written otherwise and refused): {deposit:?}; a ticket paid (bytes, storage mass, what whoever paid has after it, refused): {payment:?}; refused: {:?}", refused.borrow());
 }

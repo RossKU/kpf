@@ -3207,3 +3207,107 @@ fn what_a_leg_that_gained_asks_is_set_against_what_its_account_owes() {
     let (_, _, o) = some.s.c_state(KIND_C_STEP, 0, 1, &a, T0, some.value as i64, xk(&w.f)).unwrap();
     assert_eq!((o.note.unwrap().asked, o.after.unwrap().b_margin), (0, 105 * KAS1 - asks));
 }
+
+// ---------------------------------------------------------------- the vault (docs 16.12, step 5)
+
+use kpf_protocol::covered::Vault;
+use kpf_protocol::kob::TokenState;
+
+/// The covenant id of the tests' token (the reference KCC-20 program).
+const TOKEN_ID: [u8; 32] = [0x7c; 32];
+
+/// `amount` base units of the tests' token owned by `key`, in an output of a KAS that landed at the tests' time.
+fn tokens_of(key: [u8; 32], amount: i64, n: u8) -> OLive<TokenState> {
+    OLive { s: TokenState::p2pk(amount, key, Hash::from_bytes([0; 32])), value: KAS1 as u64, id: Some(Hash::from_bytes(TOKEN_ID)), op: op(n), daa: T0 as u64 }
+}
+
+/// Signed and run through the engine (the token's own script beside ours), with no test of each output's value:
+/// what a vault and a token output hold is whoever funds them's to say.
+fn run(what: &str, b: &OBuilt, keys: &KeySet) -> OSigned {
+    let sg = b.sign(keys).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let v = kpf_protocol::verify::verify(&sg.tx, &sg.entries);
+    assert!(v.is_ok(), "{what}: {:?}", v.errors());
+    println!("{what}: {} bytes, fee {} sompi", sg.mass.size, sg.fee);
+    sg
+}
+
+/// Tokens enter a covered account: a token leg at the end of its legs, a vault born for it under an id of its
+/// own, and the tokens owned by that id. They count as coins from there. They leave by the user's statement, which
+/// writes a ticket, and the vault pays the ticket: the tokens to its key, the vault ended.
+#[test]
+fn tokens_enter_an_account_by_a_vault_born_for_them_and_leave_by_a_ticket() {
+    let w = world();
+    let base = seeded(&w);
+    let long = fleg(&w, 0, 10, LONG, P10);
+    let shard = OLive { s: base.s.booked(&long).unwrap(), ..base.clone() };
+    let acct = cov(&w, &shard, &[long], 30 * KAS1);
+    let (scale, pmax) = (w.markets[0].p.scale, w.markets[0].p.price_max);
+    let fw = [fund(xk(&w.w), 44)];
+    let add = w.script("KpfTAddSpot");
+    // Of the user's 150 tokens, 100 enter at a discount of 20 %. The user and the shard's owner sign.
+    let mine = tokens_of(xk(&w.w), 150 * scale, 50);
+    let (b, next, vault, leg, custody) = spot_add(&w.lib, &acct, &add, &mine, 100 * scale, 2_000, scale, pmax, w.payer(&w.w, &fw)).unwrap();
+    let sg = run("tokens enter an account", &b, &w.keys);
+    assert_eq!((next.legs.clone(), next.a_min_counter, next.a_margin, next.b_margin), (vec![long, leg], 2, 30 * KAS1, 0));
+    assert_eq!((leg.dir, leg.size, leg.entry, leg.market), (DIR_SPOT, 100 * scale, 2_000, vault.token.market()));
+    assert_eq!((vault.rid, vault.amount, vault.token.id), (acct.id.unwrap().as_bytes(), 100 * scale, TOKEN_ID));
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (acct.value, &hash_spk(&w.lib, &next.hash())));
+    // The vault is born under an id of its own, which the leg names and the tokens are owned by.
+    let vid = sg.tx.outputs[2].covenant.unwrap().covenant_id;
+    assert_eq!((leg.committee, custody.owner, custody.scheme, custody.borrow, custody.amount), (vid.as_bytes(), vid.as_bytes(), 4, 0, 100 * scale));
+    assert_ne!(Some(vid), acct.id);
+    assert_eq!(sg.tx.outputs[2].script_public_key, hash_spk(&w.lib, &vault.hash()));
+    assert_eq!((&sg.tx.outputs[3].script_public_key, sg.tx.outputs[3].covenant.unwrap().covenant_id), (&custody.spk(), Hash::from_bytes(TOKEN_ID)));
+    assert_eq!(sg.tx.outputs[4].script_public_key, TokenState::p2pk(50 * scale, xk(&w.w), Hash::from_bytes([0; 32])).spk(), "the rest of the user's tokens");
+    // (The tokens written to another owner, or of another amount; the account without the leg: refused.)
+    for (k, spk) in [(3usize, TokenState::covid(100 * scale, acct.id.unwrap(), Hash::from_bytes([0; 32])).spk()), (3, TokenState::covid(99 * scale, vid, Hash::from_bytes([0; 32])).spk()), (0, hash_spk(&w.lib, &acct.s.hash()))] {
+        let mut t = b.clone();
+        t.tx.outputs[k].script_public_key = spk;
+        assert!(!accepted(&t, &w.keys), "the deposit with output {k} written otherwise");
+    }
+    // What the tool refuses: an account that owes, a discount under the fee's rate and the tolerance twice, more
+    // tokens than the user has, another's tokens.
+    let t = w.terms();
+    assert!(spot_add(&w.lib, &OLive { s: Account { b_margin: KAS1, ..acct.s.clone() }, ..acct.clone() }, &add, &mine, 100 * scale, 2_000, scale, pmax, w.payer(&w.w, &fw)).is_err());
+    assert!(spot_add(&w.lib, &acct, &add, &mine, 100 * scale, t.liq_fee_bps + 2 * t.g_bps - 1, scale, pmax, w.payer(&w.w, &fw)).is_err());
+    assert!(spot_add(&w.lib, &acct, &add, &mine, 100 * scale, t.liq_fee_bps + 2 * t.g_bps, scale, pmax, w.payer(&w.w, &fw)).is_ok());
+    assert!(spot_add(&w.lib, &acct, &add, &mine, 151 * scale, 2_000, scale, pmax, w.payer(&w.w, &fw)).is_err());
+    assert!(spot_add(&w.lib, &acct, &add, &tokens_of(xk(&w.f), 150 * scale, 51), 100 * scale, 2_000, scale, pmax, w.payer(&w.w, &fw)).is_err());
+
+    // The tokens count: the account's take is carried by them (the long alone asks 6 KAS of maintenance and
+    // tolerance at these terms' rates, whatever they are; with the tokens the user takes its coins out).
+    let held = OLive { s: next.clone(), value: acct.value, id: acct.id, op: op(92), daa: 6_700 };
+    let a = [P10, P10];
+    assert_eq!(held.s.c_trace(&a, 0).unwrap()[1].tk, counted(100, P10));
+    assert!(held.s.c_state(KIND_C_TAKE, 30 * KAS1 - NOTE_MIN, 0, &a, T0, held.value as i64, xk(&w.w)).is_ok());
+    assert!(acct.s.c_state(KIND_C_TAKE, 30 * KAS1 - NOTE_MIN, 0, &a[..1], T0, acct.value as i64, xk(&w.w)).is_err());
+
+    // They leave: the user's statement writes a ticket, and the vault pays it.
+    let (_, _, o, sg2) = c_applied(&w, "tokens leave the account they entered", &held, KIND_C_TOK_OUT, 0, 2, &a, &w.w);
+    let ticket = o.ticket.unwrap();
+    assert_eq!((ticket.key, o.after.clone().unwrap().legs), (xk(&w.w), vec![long]));
+    let (k, _) = out_of(&sg2, &hash_spk(&w.lib, &ticket.hash()));
+    let (vault_live, ticket_live, custody_live) = (nth(&sg, 2, vault, 6_700), nth(&sg2, k, ticket, 6_800), nth(&sg, 3, custody.clone(), 6_700));
+    assert_eq!((vault_live.id, ticket_live.id, custody_live.id), (Some(vid), acct.id, Some(Hash::from_bytes(TOKEN_ID))));
+    let pay = w.script("KpfTVaultPay");
+    let (b, paid) = vault_pay(&w.lib, &vault_live, &ticket_live, &custody_live, &leg, &pay, w.payer(&w.w, &fw)).unwrap();
+    let sg3 = run("a ticket paid by its vault", &b, &w.keys);
+    assert_eq!((paid.amount, paid.owner, paid.scheme), (100 * scale, xk(&w.w), 0));
+    assert_eq!((&sg3.tx.outputs[0].script_public_key, sg3.tx.outputs[0].covenant.unwrap().covenant_id), (&paid.spk(), Hash::from_bytes(TOKEN_ID)));
+    assert!(sg3.tx.outputs.iter().all(|x| x.covenant.is_none_or(|c| c.covenant_id != vid)), "nothing goes on under the vault's id");
+    // (The tokens to another key, or fewer of them: refused. A ticket to another key, of another leg, or under
+    // another id than the vault says, pays nothing.)
+    for spk in [TokenState::p2pk(100 * scale, xk(&w.f), Hash::from_bytes([0; 32])).spk(), TokenState::p2pk(99 * scale, xk(&w.w), Hash::from_bytes([0; 32])).spk()] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = spk;
+        assert!(!accepted(&t, &w.keys), "the tokens paid otherwise");
+    }
+    let other_key = OLive { s: Ticket { key: xk(&w.f), ..ticket }, ..ticket_live.clone() };
+    let b2 = vault_pay(&w.lib, &vault_live, &other_key, &custody_live, &leg, &pay, w.payer(&w.f, &[fund(xk(&w.f), 36)])).unwrap().0;
+    run("a ticket of the same leg to another key (the claimer of a sale) paid", &b2, &w.keys);
+    let other_leg = XLeg { size: 99 * scale, ..leg };
+    assert!(vault_pay(&w.lib, &vault_live, &ticket_live, &custody_live, &other_leg, &pay, w.payer(&w.w, &fw)).is_err());
+    let elsewhere = OLive { id: Some(Hash::from_bytes([0x55; 32])), ..ticket_live.clone() };
+    assert!(vault_pay(&w.lib, &vault_live, &elsewhere, &custody_live, &leg, &pay, w.payer(&w.w, &fw)).is_err(), "a ticket under another id than the vault says");
+    let _ = Vault { ..vault };
+}

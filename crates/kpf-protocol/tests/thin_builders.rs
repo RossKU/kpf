@@ -173,11 +173,11 @@ fn world() -> World {
     }
     let funds = vec![fund(xk(&f), 200, 3_000)];
     // (63 scripts in two copies at 10 KAS weigh 504,002 grams of storage mass, above a block's 500,000: 11 KAS a copy.)
-    let (g, lib) = lib_genesis(2, 11 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    let (g, lib) = lib_genesis(2, lib_copy_least(2), Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis (11 scripts, 2 copies)", &g, &keys);
     let scripts = lib_scripts(&gs.tx, 6_000);
     assert_eq!(scripts.len(), 2 * kpf_protocol::thin_artifacts::SCRIPTS.len());
-    assert!(scripts.iter().all(|s| s.id.map(|h| h.as_bytes()) == Some(lib) && s.value == 11 * KAS1 as u64));
+    assert!(scripts.iter().all(|s| s.id.map(|h| h.as_bytes()) == Some(lib) && s.value == lib_copy_least(2)));
     let mut x = samples::position().x;
     x.a_key = xk(&a);
     x.b_key = xk(&b);

@@ -12090,3 +12090,157 @@ out beside the call's step for F113.
 `cargo test --workspace --no-fail-fast --jobs 2`: 60 targets, 627 passed, 0 failed, 203 s. No test failed, so
 there is no name to give. Of mine: `auditT1_builders` 194, `auditT1_solvency` 11, `auditT1_tests` 55,
 `auditT1_cli` 48; `thin_draw` 41.
+
+# Round 66
+
+Scope, at the engine: step 5 of spot as margin: the vault (`KpfTAddSpot`, `KpfTVaultPay`; 16.12 (a), (d), (e);
+16.23), with the reference token's own script run beside ours. My three files brought along; the workspace run
+twice. Working tree after 16cfb59; no src, contract, `Cargo.toml` or `kpf-out` file touched; no commit.
+
+**This round is a part of what was asked, and custody deserves the rest.** Run at the engine, with the token's
+script: one deposit and one payment, and 34 transactions written otherwise by hand, all refused. Read and not
+run: `KpfTVaultPay.pay` whole; of `KpfTAddSpot` the line that recomputes the vault's id, against the node's
+function; the token's script (round 61). Not done at all: item 1 (the list of every entry by the places it
+names: the proof of custody), item 3 (the bearer rule through a split, a join, a hand-over, a step, a sale and
+a call with a real vault), 2e, and the cases marked below. Until item 1 and item 3 are done I would not call
+the vault reviewed.
+
+## Headline
+
+- **I found no way to the tokens in what I ran or read.** N23 (a ticket under an attacker's id) and N24 (a
+  second output under the vault's id) are closed at the engine; borrowing, the owner, the extension, the
+  amount, the token's id of the custody are each held; the payment goes to the ticket's key and nowhere else.
+- **The vault's id is computed as the node computes it**: the preimage in `KpfTAddSpot` (the outpoint's id, its
+  index in four bytes, one output in eight, the output's index in four, its value in eight, the script's
+  version in two, its length in eight, the script) is `covenant_id`'s in
+  `consensus/core/src/hashing/covenant_id.rs`, field for field; and the honest deposit passing the script's
+  equality says the same of the bytes.
+- **F115 (Medium): the library's genesis is over a block's weight, and the default run fails by it.** With 70
+  scripts, two copies at 11 KAS weigh 509,043. Two test worlds of mine needed 13 KAS a copy; three test files
+  that are not mine (`thin_builders`, `thin_change`, `thin_fees`) fail whole on it. One copy at 6 KAS is about
+  466,700; at 75 scripts it is over.
+- The workspace: **the default run is red**: 597 passed, 32 failed in 60 targets (274 s); with the three features 1291
+  passed, 32 failed in 138 targets (1,059 s). Every failure is the library's genesis over a block's weight (F115),
+  and none is in a file of mine.
+
+## What was run
+
+`t1b_r66_a_deposit_and_a_vaults_payment_written_otherwise_are_refused`. An account of 30 KAS with a long; 100
+of its user's 150 tokens enter at a discount of 20 %, signed by the user and the shard's owner; then a ticket
+of that leg (made by hand under the account's id) is paid by the vault, the transaction built and signed by a
+key that is neither the user's nor the owner's.
+
+- **The deposit** (6,446 bytes; storage mass 124,873; the vault holds 1 KAS, the tokens' output 1 KAS): the
+  leg of direction 7 naming the vault's id; the tokens owned by that id, scheme 4, borrowing off.
+- **The payment** (5,403 bytes; storage mass 43,216): 100 tokens to the ticket's key, under the token's id;
+  nothing goes on under the vault's id. Whoever paid it has 1.187 KAS more than before: the vault's KAS, the
+  tokens' carrier and the ticket's least, less its fee and what the paid output holds.
+
+Refused, each a transaction of the builder's rewritten by hand (27 of the deposit, 7 of the payment):
+
+| What was asked | Run at the engine, refused |
+|---|---|
+| 2b, the vault's id | the vault's output written twice (a second output under the id); the vault holding a sompi more than its id was computed of; the input the id is computed from said to be each other input, one beyond the last, and below nothing; the vault's place said to be the tokens' output, the account's, the copy's, none |
+| 2b, the tokens' output | under no id; with borrowing on; of another extension; owned by the account's id; owned by the user's key; of a unit fewer; of a unit more |
+| 2c, the leg | direction 1; a discount under the floor; a discount over the whole; a unit more than the vault's; another market than the token's hash; another vault's id; a scale of nothing |
+| 2d, the signatures | without the shard's owner's; without the user's |
+| 2a, the payment | the tokens to another key; of a unit fewer; owned by the vault's id again; under no id; a ticket under an id of an attacker's own (the same state: N23); a ticket of another key than the paid output's; a ticket of another leg |
+
+## Read, not run
+
+- **2a.** No ticket: the script opens the second place by a ticket's hash, there is no path without. The same
+  ticket twice: it is spent, and nothing may go on under its id in that transaction. A ticket and a vault of
+  different amounts: both hashes take the amount from the one leg shown. A second token output: the token
+  conserves its sum, the script pins the whole of the vault's amount to the key; what else is in the
+  transaction (a stray sent to the vault's id, the payer's own tokens) is the payer's. A ticket for a leg
+  still in its account: only by a statement nobody disputed (rounds 62 and 63).
+- **2b.** A continuation under an existing vault's id as the "born" output: its id is not the hash of this
+  transaction's outpoint and one output, so the equality fails (by the hash; not run). A token program that is
+  not the one hashed: the market's name is the hash of the token's id, the template and the extension, and the
+  script holds the token input's own script to that template; a look-alike of the same lengths has another
+  hash. `ti` naming the account, the vault or an input under no token id: the id's equality fails. The
+  token's delegates: each authorizes itself by its own owner; none is the custody's.
+- **2c.** A leg of other lengths (the argument is 111 bytes by its type); a worth beyond 64 bits (the engine
+  stops); an account that owes, of six legs, under a statement, marked, or a shard in the account's place.
+- **2d.** The two keys the same; the owner's own tokens into a user's account. The user's signature is what
+  stops the second, and should: a leg takes one of six places and the deposit writes the account's time for
+  what is done at will.
+- **2e.** The time: nothing run.
+
+## Stuck vaults (item 5), by reasoning
+
+- A ticket nobody pays: whoever pays it gains over a KAS; it is paid.
+- A token leg that leaves its account by a wrong statement nobody disputed (kinds 8, 9, 12 or 13 naming it,
+  whose row is wrong): no ticket exists for it; its tokens are in nobody's reach, for good. The user's loss;
+  and a step is anybody's statement, so a user watches its own account.
+- An account that ends: `KpfTAcctEnd` asks that it has no leg; a token leg is one.
+- An account that owes more than its tokens are worth (N41): it owes for good and its tokens stay; the shard
+  has the loss it had at the step, the user tokens worth less than the debt.
+
+## Findings
+
+### F115 (Medium). The library's genesis is over what a block weighs
+
+`lib_genesis` writes every script's copies in one transaction, and by 14.6's figure an output of v sompi
+weighs 4 x 10^12 over v. Seventy scripts in two copies at 11 KAS: 509,043; the builder refuses it. Two of my
+test worlds made such a library and failed until a copy held 13 KAS (dozens of my tests failed on this and
+nothing else). The worlds of `thin_builders.rs`, `thin_change.rs` and `thin_fees.rs` make the same library and
+fail the same way: 32 tests in the default run. One copy at 6 KAS, the command line's, is about 466,700 with 70 scripts and over 500,000 with
+75. Nothing is wrong on a chain today (no script is at fault); the default run is red, and the next five scripts make the genesis of a library a transaction no block takes
+at the values the tools write. Direction: the least a copy holds follows the count of scripts, or the genesis
+is two transactions.
+
+## What a vault and a custody hold (item 4)
+
+A KAS each, put in by whoever funds the deposit; a ticket holds a note's least. Whoever pays the ticket has
+all three, less its fee and what it gives the paid output to hold. A user that pays its own ticket has its KAS
+back; one that leaves it to others pays about 1.2 KAS for the service. Say it.
+
+## Sizes
+
+`KpfTAddSpot` 1,466 bytes; `KpfTVaultPay` 955; 70 scripts.
+
+## Not reached
+
+- **Item 1**: every entry of every script by the three places it names and the state it holds each to, and
+  that a vault's state (it begins with the numbers 12 and 16) passes none but `KpfTVaultPay.pay`. My static
+  tests of the places pass with the two new scripts in their list; that is not this proof.
+- **Item 3**: after a deposit, the account split, joined, handed over, stepped, sold from, under a call's
+  step, with the vault's payment at each end.
+- **2e**; and of 2a to 2d the cases listed under "Read, not run".
+- The every case of `KpfTAddSpot` beyond the line of the id: I did not read the script whole.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F115 | Medium | open, new: the library's genesis is over a block's weight; 32 tests of the default run fail by it |
+| N23, N24 | High, on paper | closed at the engine (a ticket under another id; a second output under the vault's id) |
+| N25 | High, on paper | closed by the market's name (run: another market refused; a look-alike program: read) |
+| N27 | Medium, on paper | NOT verified: item 1 |
+| F114 | Medium | as round 65 left it |
+| F113, the note at its least | Low | as round 65 left it |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 195 tests (was 194). Brought along: 70 scripts; a copy of
+  the library holds 13 KAS in two test worlds; `KpfTAddSpot` among the readers of two lists. New:
+  `t1b_r66_a_deposit_and_a_vaults_payment_written_otherwise_are_refused`.
+- `crates/kpf-tests/tests/auditT1_tests.rs` (55): 70 scripts with the two; 82 entries and 68 `release`.
+- `crates/kpf-cli/tests/auditT1_cli.rs` (48): a library of 70 scripts.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11): unchanged.
+
+## The workspace, twice
+
+One cargo command after the other, two jobs.
+
+| Run | Targets | Passed | Failed | Wall time |
+|---|---|---|---|---|
+| default (`cargo test --workspace --no-fail-fast --jobs 2`) | 60 | 597 | 32 | 274 s |
+| with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1291 | 32 | 1,059 s |
+
+Failed, default: thin_builders.rs (18 of 19); thin_change.rs (8 of 8); thin_fees.rs (6 of 6). Failed, with the features: thin_builders.rs (18 of 19); thin_change.rs (8 of 8); thin_fees.rs (6 of 6). Each of them stops at its world's `lib_genesis` with "the
+transaction's storage mass is 509,041 (or 509,043, or 512,678) grams, above the block limit 500000" (32 and 32
+such messages in the two logs): F115. I did not touch those files. Of mine in both runs: `auditT1_builders` 195,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48, none failed; `thin_draw` 42 passed.

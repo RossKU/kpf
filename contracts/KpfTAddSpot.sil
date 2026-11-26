@@ -1,0 +1,185 @@
+pragma silverscript ^0.1.0;
+
+// Spot tokens as margin (docs/ARCHITECTURE-CLEARING.md 16.12). A token (KCC-20) moves where its owner allows; an
+// owner that is a covenant id (scheme 4) allows it wherever an input under that id is spent, and says nothing of
+// where the tokens go. So tokens held for a covered account are owned by the id of a VAULT: an object under a
+// covenant id of its own, born by a genesis output, whose script is the slot every object has (it is spent only
+// where a script of this library names it). In every transaction that spends a vault, a script of the library
+// pins where the tokens go.
+//   the vault's state   blake2b(push8(12) + push8(16) + push(the id its account's objects are under)
+//                               + push(the token's id) + push(the hash of its program's template)
+//                               + push8(prefix length) + push8(suffix length) + push(its extension commitment)
+//                               + push8(the amount))
+//   a token leg         push(market) push(the vault's id) scale, price limit, the amount, 7, the discount
+//                       market = blake2b(push8(18) + push(the token's id) + push(the template's hash)
+//                                        + push(the extension commitment)): no token is priced as another.
+//   a token's state     push8(amount) push(owner) push1(owner scheme) push1(borrow scheme) push(borrow guard)
+//                       push(extension commitment): 112 bytes, between the program's prefix and suffix.
+// The token's program is no constant here: a token input of the transaction shows it (its redeem script ends its
+// signature script), it is held to the template's hash, and an output's script is rebuilt from it.
+//
+// KpfTAddSpot: tokens enter a covered account. No statement (more margin is safe at once); the user and the shard's
+// owner sign (the owner for the amount and the discount, and by it that its shard takes this token). One
+// transaction: the account with the token leg appended (a leg more counted; six at the most; it owes nothing), the
+// vault born here (its id is read of its output and recomputed as the id of a genesis of that one output: it is
+// new, and nothing else is under it), the tokens owned by that id with the vault's amount and borrowing off. The
+// discount is at least the liquidation fee's rate and the tolerance twice. It is done at will, by the account's
+// own time, which it writes.
+//   add(who, ageb, slotLen, terms, root, moving, leg, token, tpl, pre, suf, ext, ti, vo, co, f, ga, s1, s2)
+//       ti: a token input; vo: the vault's output; co: the tokens' output; f: an input that landed at or after
+//       the account's time; ga: the input whose outpoint the vault's id is of; s1 the user, s2 the shard's owner.
+contract KpfTAddSpot(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant NOTE_TAG = 12;
+    int constant LEFT = 6;
+    int constant REST = 7;
+    int constant FUTURES_TAG = 14;
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // What a shard's output holds beside what the shard holds for its users: a shard that paid everything out is
+    // still an output a block takes.
+    int constant SHARD_CARRIER = 100000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry add(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[111] leg, byte[32] token, byte[32] tpl, int pre, int suf, byte[32] ext, int ti, int vo, int co, int f, int ga, sig s1, sig s2) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[] tb = byte[](terms);
+        byte[] lg = byte[](leg);
+        require(blake2b(p33(blake2b(tb + p33(root))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        // An account (a shard has no second key) that owes nothing, with room for a leg.
+        require(mv.slice(34, 66) != z32);
+        require(mv.slice(76, 84) == byte[](0 as byte[8]));
+        int count = int(byte[8](mv.slice(121, 129)));
+        require(count >= 0);
+        require(count < 6);
+        // The leg: a token leg, written as a leg is.
+        require(lg.slice(0, 1) == byte[](0x20));
+        require(lg.slice(33, 34) == byte[](0x20));
+        require(lg.slice(66, 67) == byte[](0x08));
+        require(lg.slice(75, 76) == byte[](0x08));
+        require(lg.slice(84, 85) == byte[](0x08));
+        require(lg.slice(93, 94) == byte[](0x08));
+        require(lg.slice(102, 103) == byte[](0x08));
+        int scale = int(byte[8](lg.slice(67, 75)));
+        int pmax = int(byte[8](lg.slice(76, 84)));
+        int amount = int(byte[8](lg.slice(85, 93)));
+        int disc = int(byte[8](lg.slice(103, 111)));
+        require(int(byte[8](lg.slice(94, 102))) == 7);
+        require(scale > 0);
+        require(pmax > 0);
+        require(amount > 0);
+        // (Its worth at its market's limit is counted: a trace sums it.)
+        int wmax = (amount / scale) * pmax + (amount % scale) * (pmax / scale) + ((amount % scale) * (pmax % scale)) / scale;
+        require(wmax >= 0);
+        // The discount: the liquidation fee's rate and the tolerance twice at the least, the whole at the most.
+        int g = int(byte[8](tb.slice(19, 27)));
+        int liq = int(byte[8](tb.slice(28, 36)));
+        require(g >= 0);
+        require(liq >= 0);
+        require(disc >= liq + g + g);
+        require(disc <= 10000);
+        // The market's name is the hash of the token.
+        require(lg.slice(1, 33) == byte[](blake2b(i9(18) + p33(token) + p33(tpl) + p33(ext))));
+        // The vault, born here: its id is new, and it is the leg's.
+        byte[32] rid = OpInputCovenantId(j);
+        byte[32] vid = OpOutputCovenantId(vo);
+        require(lg.slice(34, 66) == byte[](vid));
+        // (A covenant's counts do not see an output that is born: the id is recomputed, as the consensus derives
+        // it, of the outpoint of the input `ga` and of this one output. So it is new, it is the id of nothing
+        // else, and a second output under it would have made another id.)
+        require(ga >= 0);
+        require(ga < tx.inputs.length);
+        byte[] vspk = tx.outputs[vo].scriptPubKey;
+        require(vspk.length == 37);
+        require(byte[](vid) == byte[](blake2bWithKey(byte[](OpOutpointTxId(ga)) + byte[](OpOutpointIndex(ga) as byte[4]) + byte[](1 as byte[8]) + byte[](vo as byte[4]) + byte[](tx.outputs[vo].value as byte[8]) + vspk.slice(0, 2) + byte[](35 as byte[8]) + vspk.slice(2, 37), byte[]("CovenantID"))));
+        // The token's program, shown by a token input and held to the template's hash.
+        require(OpInputCovenantId(ti) == token);
+        require(pre >= 0);
+        require(pre <= 64);
+        require(suf >= 0);
+        require(suf <= 20000);
+        int size = pre + 112 + suf;
+        int tl = OpTxInputScriptSigLen(ti);
+        require(tl >= size);
+        byte[] trs = OpTxInputScriptSigSubstr(ti, tl - size, tl);
+        require(tx.inputs[ti].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](pre as byte[8]) + trs.slice(0, pre) + byte[](suf as byte[8]) + trs.slice(pre + 112, size)) == tpl);
+        require(tx.outputs[vo].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + i9(16) + p33(rid) + p33(token) + p33(tpl) + i9(pre) + i9(suf) + p33(ext) + i9(amount))) + rs.slice(STATE_AT + 32, slotLen))));
+        // The tokens: the vault's amount, owned by the vault's id (scheme 4), borrowing off.
+        require(OpOutputCovenantId(co) == token);
+        require(tx.outputs[co].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs.slice(0, pre) + byte[](0x08) + byte[](amount as byte[8]) + byte[](0x20) + byte[](vid) + byte[](0x01040100) + byte[](0x20) + z32 + byte[](0x20) + byte[](ext) + trs.slice(pre + 112, size))));
+        // The account: the leg at the end of its chain, a leg more counted; at will, by its own time.
+        require(f >= 0);
+        require(f < tx.inputs.length);
+        int wt = int(byte[8](mv.slice(85, 93)));
+        require(OpTxInputDaaScore(f) >= wt);
+        int w = OpTxInputDaaScore(j) + int(byte[8](mv.slice(94, 102)));
+        if (w < wt) { w = wt; }
+        require(OpCovInputCount(rid) == 1);
+        require(OpCovOutputCount(rid) == 1);
+        int c = OpCovOutputIdx(rid, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(byte[](root) + lg)))) + mv.slice(0, 85) + byte[](w as byte[8]) + mv.slice(93, 121) + byte[]((count + 1) as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value);
+        // The user, and the shard's owner.
+        require(checkSig(s1, pubkey(byte[32](mv.slice(1, 33)))));
+        require(checkSig(s2, pubkey(byte[32](mv.slice(34, 66)))));
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}
