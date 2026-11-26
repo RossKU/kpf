@@ -134,7 +134,8 @@ contract KpfTStepEnd(int init_version) {
 
     entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
         byte[] mv = moving;
-        require(mv.length == 138 || mv.length == 171);
+        // (An account no shard covers: a covered account has kinds of its own, 7 to 9.)
+        require(mv.length == 138);
         byte[] tb = byte[](terms);
         byte[32] position = blake2b(p33(blake2b(tb + p33(root))) + mv);
         require(version == 1);
@@ -206,15 +207,7 @@ contract KpfTStepEnd(int init_version) {
         }
         if (ask > floor) { floor = ask; }
         if (floor > due) { floor = due; }
-        // A covered account pays its side B nothing: a take for B is stated by anyone, and is a deposit to the
-        // account's shard.
-        int deposit = 0;
-        if (mv.length == 171) {
-            if (side == SIDE_B) { deposit = 1; }
-        }
-        if (deposit == 0) {
-            if (key != byte[](claimer)) { ok = 0; }
-        }
+        if (key != byte[](claimer)) { ok = 0; }
         if (amount < 0) { ok = 0; }
         if (am < 0) { ok = 0; }
         if (bm < 0) { ok = 0; }
@@ -222,11 +215,7 @@ contract KpfTStepEnd(int init_version) {
         if (ok == 1) {
             byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(80, 112))) + mv.slice(0, 67) + byte[](am as byte[8]) + byte[](0x08) + byte[](bm as byte[8]) + mv.slice(84, mv.length))) + byte[]((held - amount) as byte[8]);
             if (amount > 0) {
-                if (deposit == 1) {
-                    due2 = due2 + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(3) + byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + i9(0) + i9(0) + mv.slice(33, 66) + i9(amount))) + byte[]((amount + NOTE_MIN) as byte[8]);
-                } else {
-                    due2 = due2 + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
-                }
+                due2 = due2 + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
             }
             if (blake2b(due2) != outs) { ok = 0; }
         }

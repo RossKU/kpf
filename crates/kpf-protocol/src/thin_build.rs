@@ -1865,9 +1865,11 @@ pub fn state_raw<T>(lib: &[u8; 32], obj: &OLive<T>, fixed: &[u8; 32], moving: &[
     if crate::committee::blake2b(said) != st.arg {
         return invalid("what is shown as stated is not what the statement's argument is the hash of");
     }
+    // (A draw is stated on a shard that has stood a lateness: review 55, F98.)
+    let age = if st.kind == crate::thin::KIND_DRAW { st.lateness().max(0) } else { 0 };
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
-    let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, 0)?;
+    let args = vec![bv(vec![0; 24]), bv(sm8(age).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
+    let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, age as u64)?;
     d.lock(st.t0 as u64);
     d.out(obj.value + st.bond as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
     keep(&mut d, script, lid)?;
@@ -2267,9 +2269,11 @@ fn add_c<T>(lib: &[u8; 32], obj: &OLive<T>, script: &LibScript, fixed: [u8; 32],
     }
     let h = crate::committee::blake2b(&[&[0x20][..], &fixed, &moving].concat());
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let mut args = slot_head();
+    // (The object has stood a lateness: `KpfTAddC` asks it, and the input's age says it. Review 55, F98.)
+    let late = moving.get(94..102).map(crate::state::int8).filter(|x| *x >= 0).ok_or_else(|| Error::Invalid("the moving part has no lateness".into()))?;
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64)];
     args.extend([bv(fixed.to_vec()), bv(moving), iv(side), iv(delta), Arg::Sig(key)]);
-    let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, late as u64)?;
     d.out(obj.value + delta as u64, hash_spk(lib, &next), Some((0, id)), label, None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);
@@ -2771,6 +2775,48 @@ pub fn shard_call(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
     Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
 }
 
+/// `KpfTPass.pass`: a covered account's user hands its side to the key `to` (docs 15.1): both sign, the taker (the
+/// funder here) pays the leaver `paid` in plain coins in the same transaction, and the account's output has stood
+/// a lateness. Nothing else of the account changes, and its shard is not shown.
+pub fn account_pass(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, to: [u8; 32], paid: i64, p: Payer) -> Result<(OBuilt, Account)> {
+    let a = &account.s;
+    let next = a.passed(to)?;
+    let late = a.t.late_daa.max(0);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let args = vec![bv(vec![0; 24]), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.fixed_hash().to_vec()), bv(a.moving()), bv(to.to_vec()), Arg::Sig(a.a_key), Arg::Sig(to)];
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTPass", "pass", args, late as u64)?;
+    d.out(account.value, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.payout(paid, &a.a_key, "what the taker pays the leaver");
+    }
+    Ok((d.finish()?, next))
+}
+
+/// `KpfTJoinC.join`: two covered accounts of one user under one shard become one (docs 15.2), by the user's
+/// signature. The shard is shown and written again as it is (it is not called), and every object has stood a
+/// lateness.
+pub fn account_join(lib: &[u8; 32], first: &OLive<Account>, second: &OLive<Account>, shard: &OLive<crate::reserve::Shard>, script: &LibScript, p: Payer) -> Result<(OBuilt, Account)> {
+    let (a, b, s) = (&first.s, &second.s, &shard.s);
+    let next = a.joined(b, s)?;
+    let late = a.t.late_daa.max(0);
+    let legs = |x: &Account| -> Vec<u8> { x.legs.iter().flat_map(crate::thin::leg_bytes).collect() };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 3].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(legs(a)), bv(a.moving()), bv(legs(b)), bv(b.moving()), bv(s.fixed_hash().to_vec()), bv(s.moving()), Arg::Sig(a.a_key),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, first, &a.hash(), "account", script, "KpfTJoinC", "join", args, late as u64)?;
+    d.contract(second, OWhich::T(SLOT), pinned::kit().object(lib, &b.hash()), "go", vec![iv(1), iv(1)], "second account", late as u64);
+    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(2)], "shard", late as u64);
+    d.out(first.value + second.value, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+    keep(&mut d, script, lid)?;
+    d.out(shard.value, hash_spk(lib, &s.hash()), Some((0, id)), "shard", None);
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next))
+}
+
 /// Whether a statement is of a call's time or after, as `KpfTCStep` and `KpfTCallEnter` read it: its own time is at
 /// or after the call's; or it stands as it was stated (not disputed, and not standing again) and landed at or
 /// after it. (A statement that stands again, or is disputed, is an object no older than the answer or the
@@ -3052,6 +3098,9 @@ pub fn draw_note_rest<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: O
     let n = &note.s;
     if n.sid != shard.sid {
         return invalid("the note is to another shard");
+    }
+    if n.amount > shard.owed {
+        return invalid("the shard owes less than the note asks: it was never counted, and ends no draw (it is spent for nothing)");
     }
     draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_REST, vec![], n.key, n.amount), script, rkey, p)
 }

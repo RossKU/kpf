@@ -139,6 +139,11 @@ contract KpfTChange(int init_version) {
         if (kind == 5 || kind == 11) {
             if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
         }
+        // (And a draw is stated on a shard that has stood a lateness: between two statements of its owner's
+        // anyone's call lands. Review 55, F98.)
+        if (kind == 5) {
+            require(int(ageb) >= iAt(mv, LATE_AT));
+        }
         require(bond > 0);
         // What is stated and what the position becomes are shown as they are and hashed here: whoever watches reads
         // them on the chain (a statement that could not be checked could only be disputed blind). What is stated has

@@ -24,10 +24,10 @@
     },
     "KpfTAcctEnd": {
       "artifact": "KpfTAcctEnd.json",
-      "artifact_sha256": "b2d015a13e92b0cd89cca59bb8bf6f0bf394b0621aeaa08890a670492d1918d4",
-      "script_len": 682,
+      "artifact_sha256": "4d1e5664522249eab396b5e97350abf03bf96f77a4bbefbcb25fabc1ce019941",
+      "script_len": 505,
       "source": "contracts/KpfTAcctEnd.sil",
-      "source_sha256": "a74ef5e33b3e7ad6ab87f717f7e356c90e343fd6e42cabd9d5994c082ae69620"
+      "source_sha256": "0d088173498186e86b6fde3a11e250debba1ed7cdbd7601de68d99b7cf1465e9"
     },
     "KpfTAdd": {
       "artifact": "KpfTAdd.json",
@@ -38,10 +38,10 @@
     },
     "KpfTAddC": {
       "artifact": "KpfTAddC.json",
-      "artifact_sha256": "e87aa0817ebcc2b9c98000247813cac4dbdbbd6843e149a8a7ae63c6d6fe589c",
-      "script_len": 516,
+      "artifact_sha256": "d36502faf59639642b0dc93d5a1af6e532c0d27148b179e82c8b827b3c67bc5a",
+      "script_len": 528,
       "source": "contracts/KpfTAddC.sil",
-      "source_sha256": "9886b5e7eeb57c66b39bd23cbd61d7880ec79d3304870d51647eb44c4157ed20"
+      "source_sha256": "f6000a73179b3663387fbe87ebbfca9b6ff2eb400f8a4b16c454fc8bdfb86da6"
     },
     "KpfTBoth": {
       "artifact": "KpfTBoth.json",
@@ -108,10 +108,10 @@
     },
     "KpfTChange": {
       "artifact": "KpfTChange.json",
-      "artifact_sha256": "e75131821ce7cc0f58e2b38d515675b070e02764ee240e9723a7117feff9f235",
-      "script_len": 1543,
+      "artifact_sha256": "e3adad65fb7f3671dbee1dfc5680716f1e3339d6282fbd0dfd7fbf698d4dcbf4",
+      "script_len": 1571,
       "source": "contracts/KpfTChange.sil",
-      "source_sha256": "208fc6490917fe5ac02e2b0167a1550571ab7cfe2ae3d33e780f33baa06295f7"
+      "source_sha256": "5f89d2671aa267babb2032fcc718c3d26db2254f07c36f55d794fd6481f9336e"
     },
     "KpfTChangeDispute": {
       "artifact": "KpfTChangeDispute.json",
@@ -171,10 +171,10 @@
     },
     "KpfTDrawNote": {
       "artifact": "KpfTDrawNote.json",
-      "artifact_sha256": "abad1a6408b21e68961217d30b3c603833af03e697037505541dd83293b8b84c",
-      "script_len": 1393,
+      "artifact_sha256": "d1675f27952937cf7b8e1c99d9b5d036bf1391653582f709379fac9a76d5a2a5",
+      "script_len": 1406,
       "source": "contracts/KpfTDrawNote.sil",
-      "source_sha256": "c01dbcdfc74cf3ed43d0ec5d6b57e5a94c5116686a4db036814038cd7a3ff5e3"
+      "source_sha256": "b90cd9b31892079905b1480b81658d15596ecdcb5bbb4ad3f76e569d2880d36c"
     },
     "KpfTEnterOff": {
       "artifact": "KpfTEnterOff.json",
@@ -225,6 +225,13 @@
       "source": "contracts/KpfTJoin.sil",
       "source_sha256": "efcdbbce397c3d9bcab0cfd78f22dbdbe0b083a929e7c3b0f8178c0d1a049b28"
     },
+    "KpfTJoinC": {
+      "artifact": "KpfTJoinC.json",
+      "artifact_sha256": "9f912019be44fb1c528d91d4203954c94d6c97ea065f57882fa51cdccabe0f19",
+      "script_len": 1550,
+      "source": "contracts/KpfTJoinC.sil",
+      "source_sha256": "f18b1e5bc42d5d18071e077fc55093136903d13648cb281eb018fab0567a7ab0"
+    },
     "KpfTKind": {
       "artifact": "KpfTKind.json",
       "artifact_sha256": "3a32111d054c834434960248a3bccb5851eaeec8f4a857a875f46cd409491957",
@@ -248,10 +255,10 @@
     },
     "KpfTLeft": {
       "artifact": "KpfTLeft.json",
-      "artifact_sha256": "96b4c690fa9c30c5f82001257faa4190fa82ce78efcfa1c1dd602b216ded3fc5",
-      "script_len": 2197,
+      "artifact_sha256": "e6acdfe07982ff164f3dd26647cca9c16897a15d2dd51d2c5ff6c7bd8eb1a1ca",
+      "script_len": 2212,
       "source": "contracts/KpfTLeft.sil",
-      "source_sha256": "b3c1f9cd125e6da876560605c8439c9edf0f5d582cf4cc461e1faf10634b7cc1"
+      "source_sha256": "89a2bbfc43c33e3b52a3caf75e551a1f5957534a184aa19938e15bcd2cdeb211"
     },
     "KpfTLeftAll": {
       "artifact": "KpfTLeftAll.json",
@@ -337,6 +344,13 @@
       "source": "contracts/KpfTOpenC.sil",
       "source_sha256": "5ede9b851740a59af03de30888c4033fa2a41ee0044bfd9bc299e3ea87589aab"
     },
+    "KpfTPass": {
+      "artifact": "KpfTPass.json",
+      "artifact_sha256": "a9a46ed33adfb0d02c94047fda22ac9851c3dc639739167d528b2054573f08f5",
+      "script_len": 537,
+      "source": "contracts/KpfTPass.sil",
+      "source_sha256": "55a8a1927f904cc32dae8f4a9cf38b65d1fbaf098114360a81fc1fc47e521523"
+    },
     "KpfTPay": {
       "artifact": "KpfTPay.json",
       "artifact_sha256": "475604559f343f8dbf1fe147b45989189c66b0a392b874268f59b23e766bd68d",
@@ -402,31 +416,31 @@
     },
     "KpfTStepEnd": {
       "artifact": "KpfTStepEnd.json",
-      "artifact_sha256": "d072d2901bef912bd51db468004c81e0dcf6a76c391878b189ced1ab22c79ff9",
-      "script_len": 2175,
+      "artifact_sha256": "1446c611c4827099016c03b8e89faceaab2823831ac25daf8fce3a85812181c4",
+      "script_len": 1954,
       "source": "contracts/KpfTStepEnd.sil",
-      "source_sha256": "52670eae532d6aa725872d5170b48b74e35d18523d048a790dc76b15cfb01c33"
+      "source_sha256": "18cb30b20e454e48e07ecfe5a57949da6200ede787e154b88aa7949bd724c8a3"
     },
     "KpfTStepLiq": {
       "artifact": "KpfTStepLiq.json",
-      "artifact_sha256": "016c55de10c20205d763be3bf6869cdece2284a923edb037c07ddb7bcc688b81",
-      "script_len": 2783,
+      "artifact_sha256": "f2ddc034a33476457017a95dd05dc8014a9198517dc2bcacc518599358012f96",
+      "script_len": 2487,
       "source": "contracts/KpfTStepLiq.sil",
-      "source_sha256": "c6d1608e4761d434d09ac228369a859bd450e9cc7855f3a5f10bf465ed23ad22"
+      "source_sha256": "58053cd2f2ff644208f32fbb659a127141f68077f94a3a0dbffcef4440951237"
     },
     "KpfTStepPrice": {
       "artifact": "KpfTStepPrice.json",
-      "artifact_sha256": "38bdb8a0b73783a49093207ce5dfcb2e8b7675d3d6e206f43e56ebb41c9b3e92",
-      "script_len": 1698,
+      "artifact_sha256": "a9658a304edad710ae8f40d49c3f7442ff765156d9464c4fc1846eb1e6566654",
+      "script_len": 1687,
       "source": "contracts/KpfTStepPrice.sil",
-      "source_sha256": "bf0ea105a8fbbbb69ae3623c44970f70f7c6dc8c6e7769d8c1417a1106334b66"
+      "source_sha256": "d8a53c4fb9fe23df90284740b71e57e0eb04163f0f6019a1b4ad79020fb107bb"
     },
     "KpfTStepRow": {
       "artifact": "KpfTStepRow.json",
-      "artifact_sha256": "23c7a9a13bc007277cdffae7f539f692e81b7663d372abe1ea75b4b2b6547925",
-      "script_len": 3589,
+      "artifact_sha256": "4acab855f459c6d182e51d55fcaa09c6614c39d076af4e91827a686f22810534",
+      "script_len": 2693,
       "source": "contracts/KpfTStepRow.sil",
-      "source_sha256": "8275d24ccd2bc435a1320ffab1bac41975a2ea16b41d3aabd6e71e02071a78ad"
+      "source_sha256": "ec1cf8adf6f4dcf1fe0a4d71ace23f24bc21193da89ee86428d275323132431a"
     },
     "KpfTSweep": {
       "artifact": "KpfTSweep.json",

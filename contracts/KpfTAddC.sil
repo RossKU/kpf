@@ -82,6 +82,9 @@ contract KpfTAddC(int init_version) {
         byte[] mv = byte[](moving);
         require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(delta > 0);
+        // The object has stood a lateness. (An addition is made at will and costs no bond: one made in every
+        // block would keep the object from every other transaction, a step's or a call's. Review 55, F98.)
+        require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
         // (Side A alone: a covered account has nothing of a second party's, and a shard has no second party.)
         require(side == SIDE_A);
         int at = 67;

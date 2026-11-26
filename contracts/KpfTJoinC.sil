@@ -1,0 +1,151 @@
+pragma silverscript ^0.1.0;
+
+// Two covered accounts of one user under one shard become one (docs/ARCHITECTURE-CLEARING.md 15.2), by that
+// user's signature: the legs of the first then the legs of the second (six at most), the coins of both, the
+// later of the two times before which the user states nothing. Neither account carries a statement or a mark
+// (those are other objects), and the two are the same in everything but their legs, coins, count and time.
+// The shard is shown, and written again as it is: it is not called. (Under a call a gain is paid at a share and a
+// loss in full: an account that lost, joined after the call to one that gained, would set the one off against the
+// other at par, out of what the other users are owed. Review 55, N3. A shard that carries a statement, a draw or a
+// call, is another object: nothing is joined while one stands.) Its books are as they were.
+// Every object has stood a lateness (as an addition asks: what is done at will leaves everybody else the time to
+// land, on the accounts and on the shard).
+// The other way, one account made two, is not here: it would leave the legs that lost in an account of no coins.
+//   join(who, ageb, slotLen, terms, legs1, moving1, legs2, moving2, sfixed, smoving, s)      the user signs;
+//        `who`: the first account, the second, the shard.
+contract KpfTJoinC(int init_version) {
+    int version = init_version;
+
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // What a shard's output holds beside what the shard holds for its users: a shard that paid everything out is
+    // still an output a block takes.
+    int constant SHARD_CARRIER = 100000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    function signedBy(sig s, byte[] key) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, pubkey(byte[32](key))));
+    }
+
+    entry join(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[] legs1, byte[171] moving1, byte[] legs2, byte[171] moving2, byte[32] sfixed, byte[171] smoving, sig s) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        int n = int(byte[8](who.slice(8, 16)));
+        int h = int(byte[8](who.slice(16, 24)));
+        require(n != j);
+        require(h != j);
+        require(h != n);
+        byte[] rs = slotOf(j, slotLen);
+        byte[] ns = slotOf(n, slotLen);
+        byte[] ss = slotOf(h, slotLen);
+        byte[] m1 = byte[](moving1);
+        byte[] m2 = byte[](moving2);
+        byte[] sm = byte[](smoving);
+        byte[] tb = byte[](terms);
+        byte[] z8 = byte[](0 as byte[8]);
+        // One user's, under one shard, in one form: the same but for the coins, the count and the time.
+        require(m1.slice(0, 67) == m2.slice(0, 67));
+        require(m1.slice(34, 66) != z8 + z8 + z8 + z8);
+        require(m1.slice(75, 121) == m2.slice(75, 121));
+        require(m1.slice(138, 171) == m2.slice(138, 171));
+        require(m1.slice(76, 84) == z8);
+        require(int(ageb) >= int(byte[8](m1.slice(94, 102))));
+        // Their shard, not called.
+        require(blake2b(p33(sfixed) + sm) == byte[32](ss.slice(STATE_AT, STATE_AT + 32)));
+        require(sm.slice(34, 66) == z8 + z8 + z8 + z8);
+        require(sm.slice(138, 171) == m1.slice(138, 171));
+        require(sm.slice(130, 138) == z8);
+        int n1 = int(byte[8](m1.slice(121, 129)));
+        int n2 = int(byte[8](m2.slice(121, 129)));
+        require(n1 >= 0);
+        require(n2 >= 0);
+        require(n1 + n2 <= 6);
+        require(legs1.length == 111 * n1);
+        require(legs2.length == 111 * n2);
+        // The chain of each account's legs, and of the two in a row.
+        byte[32] zero = byte[32](z8 + z8 + z8 + z8);
+        byte[] all = legs1 + legs2;
+        byte[32] g = zero;
+        byte[32] g1 = zero;
+        byte[32] g2 = zero;
+        for (i, 0, 6, 6) {
+            if (i < n1 + n2) {
+                byte[] lg = all.slice(111 * i, 111 * i + 111);
+                g = blake2b(byte[](g) + lg);
+                if (i < n1) { g1 = g; } else { g2 = blake2b(byte[](g2) + lg); }
+            }
+        }
+        require(blake2b(p33(blake2b(tb + p33(g1))) + m1) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(g2))) + m2) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        signedBy(s, m1.slice(1, 33));
+        int coins = int(byte[8](m1.slice(67, 75))) + int(byte[8](m2.slice(67, 75)));
+        require(coins <= MARGIN_MAX);
+        int time = int(byte[8](m1.slice(130, 138)));
+        if (int(byte[8](m2.slice(130, 138))) > time) { time = int(byte[8](m2.slice(130, 138))); }
+        byte[32] id = OpInputCovenantId(j);
+        require(OpInputCovenantId(n) == id);
+        require(OpInputCovenantId(h) == id);
+        require(OpCovInputCount(id) == 3);
+        require(OpCovOutputCount(id) == 2);
+        int c = OpCovOutputIdx(id, 0);
+        int c1 = OpCovOutputIdx(id, 1);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(g))) + m1.slice(0, 67) + byte[](coins as byte[8]) + m1.slice(75, 121) + byte[]((n1 + n2) as byte[8]) + m1.slice(129, 130) + byte[](time as byte[8]) + m1.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value + tx.inputs[n].value);
+        require(tx.outputs[c1].scriptPubKey == tx.inputs[h].scriptPubKey);
+        require(tx.outputs[c1].value >= tx.inputs[h].value);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

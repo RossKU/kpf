@@ -1,0 +1,102 @@
+pragma silverscript ^0.1.0;
+
+// A covered account changes hands (docs/ARCHITECTURE-CLEARING.md 15.1). Its user's side is handed to another
+// key by the signatures of its user and of whoever takes it: the account again, the key `to` where the user's was,
+// and nothing else of it changed (its legs and their entries, its coins, its count, its time, its shard). The shard
+// is not shown: its books are as they were, and no price is read or said. What the two pay each other is theirs:
+// plain coins in the same transaction, which both sign or neither.
+// The account's output has stood a lateness: what its user does at will and for no bond leaves everybody else the
+// time to land (a step, a call's step), as an addition does (review 55, N1, F98). And whoever takes it signs: no
+// account is handed to a key nobody has, or to anyone without leave (N11).
+// It is a covered account as it stands (a moving part of 171 bytes whose second key is a key): a shard, a marked
+// account, and an account under a statement are other objects, and are not handed over here.
+//   pass(who, ageb, slotLen, fixed, moving, to, s, t)       the user signs (s), and whoever takes it (t).
+contract KpfTPass(int init_version) {
+    int version = init_version;
+
+    int constant SIDE_A = 1;
+    int constant SIDE_B = 2;
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // What a shard's output holds beside what the shard holds for its users: a shard that paid everything out is
+    // still an output a block takes.
+    int constant SHARD_CARRIER = 100000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    function signedBy(sig s, byte[] key) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, pubkey(byte[32](key))));
+    }
+
+    entry pass(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, byte[32] to, sig s, sig t) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // (No shard: a shard has no second key, and its owner is no user of it.)
+        require(mv.slice(34, 66) != byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
+        require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
+        signedBy(s, mv.slice(1, 33));
+        signedBy(t, byte[](to));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(fixed) + mv.slice(0, 1) + byte[](to) + mv.slice(33, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

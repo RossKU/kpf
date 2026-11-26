@@ -650,8 +650,16 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     let (b, pafter, pmore) = rest_apply(&w.lib, &part, &rnote, &script, w.payer(&w.w, &f)).unwrap();
     signed("the rest paid in part", &b, &w.keys);
     assert_eq!((pafter.held, pafter.owed, pmore), (0, 20 * KAS1, Some(Rest { amount: 20 * KAS1, ..rest })));
-    // A note of the rest that its shard never counted is paid out of nothing.
-    assert!(rest_apply(&w.lib, &OLive { s: Shard { owed: 0, ..funded.s }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f)).is_err());
+    // A note of the rest of more than its shard owes was never counted: it is spent, and nothing is paid (so that
+    // it ends no draw for good), called or not.
+    for called in [0, 6_400] {
+        let never = OLive { s: Shard { owed: 29 * KAS1, called, ..funded.s }, ..funded.clone() };
+        let (b, same, gone) = rest_apply(&w.lib, &never, &rnote, &script, w.payer(&w.w, &f)).unwrap();
+        let sg = signed("a note of the rest that was never counted, spent", &b, &w.keys);
+        assert_eq!((same, gone), (never.s, None));
+        assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (never.value, &hash_spk(&w.lib, &never.s.hash())));
+        assert!(!pays(&sg, &rnote.s.key, 30 * KAS1) && !pays(&sg, &rnote.s.key, 29 * KAS1));
+    }
 
     // While the shard is called nothing is paid here: all that a note asks goes on as the note of the rest, counted
     // (the call's own script pays it its share: docs 14.6); one that asks nothing is applied (the leg is out of
@@ -731,7 +739,8 @@ fn a_note_that_legs_left_or_a_note_of_the_rest_that_is_not_applied_ends_a_draw()
     let base = bare(&w);
     // A user is short 10 units from 10: the shard's side is long them.
     let leg = fleg(&w, 0, 10, SHORT, P10);
-    let s = base.s.booked(&leg).unwrap();
+    // (It owes 5 KAS by a note of the rest, which it counted when the note was written.)
+    let s = Shard { owed: 5 * KAS1, ..base.s.booked(&leg).unwrap() };
     let shard = OLive { s, ..base.clone() };
     // The leg left at 12; its note is not applied. At 12 the books read 20 KAS gained, and the owner draws on them.
     let at12 = [P10 * 12 / 10, 0, 0, 0];
@@ -753,6 +762,14 @@ fn a_note_that_legs_left_or_a_note_of_the_rest_that_is_not_applied_ends_a_draw()
     let rest = OLive { s: Rest { sid: s.sid, key: xk(&w.w), amount: 5 * KAS1 }, value: NOTE_MIN as u64, id: shard.id, op: op(71), daa: 6_400 };
     let b = draw_note_rest(&w.lib, &live, &st, None, &s, &rest, &script, xk(&w.w), w.payer(&w.w, &f)).unwrap();
     signed("a draw ended by a note of the rest", &b, &w.keys);
+    // One of more than the shard owes was never counted: it ends no draw (review 55, F96), and is spent for nothing.
+    let never = OLive { s: Rest { amount: 5 * KAS1 + 1, ..rest.s }, ..rest.clone() };
+    assert!(draw_note_rest(&w.lib, &live, &st, None, &s, &never, &script, xk(&w.w), w.payer(&w.w, &f)).is_err());
+    let mut t = b.clone();
+    for o in t.tx.outputs.iter_mut().filter(|o| o.script_public_key == hash_spk(&w.lib, &rest.s.hash())) {
+        o.script_public_key = hash_spk(&w.lib, &never.s.hash());
+    }
+    assert!(!accepted(&t, &w.keys), "a note of the rest that was never counted ends a draw");
     // A note of other legs than the object shown is no such note: the transaction of the one, with the other's legs.
     let (mut t, other) = (b.clone(), Rest { amount: 6 * KAS1, ..rest.s });
     t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &other.hash());
@@ -2226,3 +2243,91 @@ fn an_account_that_holds_less_than_it_says_is_stepped_and_a_small_shards_draw_ha
     let b = state_raw(&w.lib, &small, &small.s.fixed_hash(), &small.s.moving(), &cheap, &d.said(), small.s.form(), &w.script("KpfTChange"), w.payer(&w.c, &fc)).unwrap();
     assert!(!accepted(&b, &w.keys), "a draw stated at the shard's rate of what it holds, below a note's least");
 }
+
+// ---------------------------------------------------------------- an account changes hands (docs 15)
+
+/// A covered account is handed to another key by its user and whoever takes it: the account again under the other
+/// key, nothing else of it changed, the shard not shown; what the taker pays the leaver is in the transaction. And
+/// two accounts of one user under one shard become one: the legs and the coins of both, the later time; the shard
+/// shown, as it is, and not called.
+#[test]
+fn an_account_changes_hands_and_two_of_one_user_become_one() {
+    let w = world();
+    let base = seeded(&w);
+    let (l1, l2) = (fleg(&w, 0, 10, LONG, P10), fleg(&w, 1, 5, SHORT, P10));
+    let shard = OLive { s: base.s.booked(&l1).unwrap().booked(&l2).unwrap(), ..base.clone() };
+    let a1 = cov(&w, &shard, &[l1], 20 * KAS1);
+    // The watcher's account goes to the funder, who pays 3 KAS for it.
+    let ff = [fund(xk(&w.f), 36)];
+    let (b, mine) = account_pass(&w.lib, &a1, &w.script("KpfTPass"), xk(&w.f), 0, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("an account handed over", &b, &w.keys);
+    assert_eq!(mine, Account { a_key: xk(&w.f), ..a1.s.clone() });
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (a1.value, &hash_spk(&w.lib, &mine.hash())));
+    // (What the taker pays the leaver is in the same transaction, and no script's: the two signatures hold it.)
+    let (paid, _) = account_pass(&w.lib, &a1, &w.script("KpfTPass"), xk(&w.f), 3 * KAS1, w.payer(&w.f, &ff)).unwrap();
+    assert!(accepted(&paid, &w.keys));
+    assert!(pays(&paid.sign(&w.keys).unwrap(), &xk(&w.w), 3 * KAS1), "the leaver is paid in the same transaction");
+    assert_eq!(sg.tx.inputs.len(), 3, "the account, the script and the taker's coin: no shard");
+    // Not: the account written with other coins, another leg's entry, another time, or holding less.
+    for (what, other) in [
+        ("a coin more in it", Account { a_margin: mine.a_margin + 1, ..mine.clone() }),
+        ("a leg at another entry", Account { legs: vec![XLeg { entry: P10 / 2, ..l1 }], ..mine.clone() }),
+        ("no time before which its user states nothing", Account { b_min_counter: mine.b_min_counter + 1, ..mine.clone() }),
+        ("another shard", Account { shard: Some([0x44; 32]), ..mine.clone() }),
+        ("the clearing party's key changed with it", Account { b_key: xk(&w.f), ..mine.clone() }),
+    ] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &other.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    let mut t = b.clone();
+    t.tx.outputs[0].value -= 1;
+    assert!(!accepted(&t, &w.keys), "the account holds a sompi less");
+    // Whoever takes it signs: the same transaction signed without the taker's key on the account is refused.
+    let mut only = KeySet::new();
+    only.add_keypair(w.w);
+    assert!(b.sign(&only).is_err() || !accepted(&b, &only), "handed over without the taker's signature");
+    // The account is the taker's from there: a statement of its own, and the old user states none.
+    let held = a1.value as i64;
+    assert!(mine.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, held, xk(&w.f)).is_ok() && mine.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, held, xk(&w.w)).is_err());
+
+    // Two accounts of one user: a long of 10 with 20 KAS, a short of 5 with 8 KAS and a time; joined.
+    let a2 = { let x = cov(&w, &shard, &[l2], 8 * KAS1); OLive { s: Account { b_min_counter: 7_000, ..x.s.clone() }, op: op(81), ..x } };
+    let fw = [fund(xk(&w.w), 37)];
+    let join = w.script("KpfTJoinC");
+    let (b, one) = account_join(&w.lib, &a1, &a2, &shard, &join, w.payer(&w.w, &fw)).unwrap();
+    let sg = signed("two accounts joined", &b, &w.keys);
+    assert_eq!((one.legs.clone(), one.a_margin, one.a_min_counter, one.b_min_counter), (vec![l1, l2], 28 * KAS1, 2, 7_000));
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (a1.value + a2.value, &hash_spk(&w.lib, &one.hash())));
+    assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (shard.value, &hash_spk(&w.lib, &shard.s.hash())), "the shard as it is");
+    // (One account of the two: a gain of the one's leg stands for the other's in its user's standing.)
+    assert!(one.c_check().is_ok());
+    for (what, other) in [
+        ("a coin more than the two had", Account { a_margin: one.a_margin + 1, ..one.clone() }),
+        ("the earlier of the two times", Account { b_min_counter: 0, ..one.clone() }),
+        ("one leg of the two", Account { legs: vec![l1], a_min_counter: 1, ..one.clone() }),
+        ("the legs the other way round", Account { legs: vec![l2, l1], ..one.clone() }),
+    ] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &other.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    let mut t = b.clone();
+    t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &Shard { held: shard.s.held + 1, ..shard.s }.hash());
+    assert!(!accepted(&t, &w.keys), "the shard written otherwise");
+    // Not joined: under a called shard; another user's; of another shard; more than six legs between them.
+    let called = OLive { s: Shard { called: 6_400, ..shard.s }, ..shard.clone() };
+    assert!(account_join(&w.lib, &a1, &a2, &called, &join, w.payer(&w.w, &fw)).is_err());
+    let theirs = OLive { s: mine.clone(), ..a1.clone() };
+    assert!(account_join(&w.lib, &theirs, &a2, &shard, &join, w.payer(&w.w, &fw)).is_err());
+    let elsewhere = OLive { s: Account { shard: Some([0x44; 32]), ..a2.s.clone() }, ..a2.clone() };
+    assert!(account_join(&w.lib, &a1, &elsewhere, &shard, &join, w.payer(&w.w, &fw)).is_err());
+    let four = cov(&w, &shard, &[l1, l1, l1, l1], 20 * KAS1);
+    let three = OLive { op: op(82), ..cov(&w, &shard, &[l2, l2, l2], 20 * KAS1) };
+    assert!(account_join(&w.lib, &four, &three, &shard, &join, w.payer(&w.w, &fw)).is_err());
+    let two = OLive { op: op(83), ..cov(&w, &shard, &[l2, l2], 20 * KAS1) };
+    let (b, six) = account_join(&w.lib, &four, &two, &shard, &join, w.payer(&w.w, &fw)).unwrap();
+    signed("four legs and two joined: six", &b, &w.keys);
+    assert_eq!((six.legs.len(), six.a_min_counter), (6, 6));
+}
+

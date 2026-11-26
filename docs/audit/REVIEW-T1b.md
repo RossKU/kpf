@@ -9413,3 +9413,323 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests     
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed (in the workspace run)
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
 ```
+
+# Round 56
+
+Scope, at the engine: (A) what closes round 55's findings (F98, F96, the rest of F88); (B) F85 taken out of the
+five scripts; (C) section 15 as built (`KpfTPass`, `KpfTJoinC`). My files brought along; the whole workspace
+run once. Working tree after 2d46e3a; no src, contract or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **F98, F96 and the rest of F88 are closed** for what was found, and **F85 is out**: each test says so.
+- **Section 15 as built holds what the paper says of it**: a hand-over refuses 18 other transactions and a join
+  31, and I found no way through either. N3 as decided holds (no join under a called shard); what a join
+  before the call does to the others is measured below.
+- **Three findings.**
+  - **F101 (Medium)**: the age that closes F98 is of the shard's OUTPUT, and anybody's transaction makes that
+    young. A shard that is spent in every lateness is neither added to nor drawn by its owner; and a third
+    party spends it with a join of two accounts it opened itself, with no key of the owner's. An owner that has
+    the coins cannot put them in while its users leave.
+  - **F100 (Medium)**: the same holding of an object that F98 priced is still done at no age by other
+    transactions its own party makes: a false step on an account by its user's second key (0.129 KAS a round
+    on 20 KAS; 0.042 on 3 KAS, holding it a whole dispute period); an owner's entry on an account of its own
+    (0.012 KAS); a note the owner made ahead (nothing).
+  - **F102 (Low)**: the wrong answer of a statement whose bond is under about 0.13 KAS is written by no
+    builder (half of it is an output a block does not take). Such a statement is ended by a lapse alone, a
+    dispute period later.
+- The whole workspace, once: 1,290 passed, 0 failed.
+
+# Part A: what closes round 55
+
+### F98: closed
+
+`t1b_fixed_f98_an_addition_and_a_draws_statement_ask_that_the_object_has_stood_a_lateness`. An addition to an
+account, an addition to a shard (three in a row each, each on the output of the one before) and a draw's
+statement: each is built with the lateness (100 blocks in these terms) as the age its script is told and as its
+input's own age, and is taken. At the edges, 28 refused: the script told a block less; told none; the input a
+block younger than the script is told (the slot); the script told a block more than the input's age (the
+slot). So the second addition is no transaction for a lateness after the first. A call is stated at no age.
+
+Asked beside it:
+
+- *Is a lateness long enough for another's transaction to land?* By the scripts, yes: the next addition is not
+  a transaction until the lateness has passed, and a step's statement or a call is one from the first block.
+  In the terms in use it is 10 blocks, a second: enough for a program that watches, and for nothing slower.
+  The lateness is also how old a price a statement may say (F97 wants it short). The two uses pull apart; the
+  terms have a quiet period that nothing reads, which could be this one.
+- *Does anything else its own party does at will still land an object again?* Yes: F100.
+- *Does the age on a draw let anyone keep an owner from drawing?* Yes: F101.
+
+### F88, the rest of it: closed
+
+`t1b_fixed_f88_between_two_draws_of_its_owners_a_call_is_stated`. The owner's round of round 54 still gives the
+shard back as it was. On that output the owner's next draw carries the lateness (a block young, or told no
+age: refused), and anyone's call is stated at once, at no age.
+
+### F96: closed
+
+`t1b_fixed_f96_a_note_of_the_rest_its_shard_does_not_owe_ends_no_draw_and_is_spent_for_nothing`, on a shard of
+100 KAS that owes 30:
+
+- a note of 30 KAS ends a draw; one of 30 KAS and a sompi does not (the builder refuses; the same transaction
+  with the note and its amount put in is refused by `KpfTDrawNote`);
+- the note of a sompi more is spent by `KpfTLeft.rest`, called or not: nothing paid, the shard as it is,
+  whoever spends it has 0.19 KAS of the note's least; written with the shard owing less: refused;
+- the note of 30 KAS is paid 30 KAS; the transaction that would spend it for nothing is refused; on the shard
+  called it is not paid by `KpfTLeft.rest` (the model, and the script);
+- where a made-up note of 30 KAS is paid first (it takes the count: the premise's own theft), the real note is
+  of more than is owed, and anyone spends it for nothing. Its holder has nothing either way; it is no longer
+  an object that stands.
+
+Nothing of a counted note is lost by the new branch: a note is of more than is owed only where something that
+was never counted was paid before it.
+
+# Part B: F85 taken out
+
+`t1b_fixed_f85_nothing_of_the_old_form_is_left_in_the_five_scripts`: by their sources no script of the library
+writes a note of the old form or reads kind 6, and none of `KpfTStepEnd`, `KpfTStepLiq`, `KpfTStepRow` names
+171 bytes; the first two ask `mv.length == 138`.
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTStepRow` | 2,693 | 3,589 |
+| `KpfTStepLiq` | 2,487 | 2,783 |
+| `KpfTStepEnd` | 1,954 | 2,175 |
+| `KpfTStepPrice` | 1,687 | 1,698 |
+| `KpfTAcctEnd` | 505 | 682 |
+
+At the engine: the objects of round 53 (a take of kind 2 and a leaving of kind 4 made by hand on a covered
+account) have their ends answered by neither verdict now (`KpfTStepEnd`, `KpfTStepLiq`); `KpfTStepRow`, which is
+shown no moving part, answers the row as before (nothing writes such a statement). For an account no shard
+covers the five take what they took and refuse what they refused: the tests of rounds 34 and 35 (every kind of
+leg, options among them; takes and legs that leave; what is said of a leg that leaves), F57's and round 42's
+run on the scripts as they are and pass; `KpfTAcctEnd` in F74's test (an account of no leg ended by either
+party; one with a leg, with something of side B's, and a shard: refused).
+
+# Part C: section 15 at the engine
+
+### A hand-over
+
+`t1b_r56_a_hand_over_takes_two_signatures_and_a_lateness_and_changes_one_key`. An account of 50 KAS, two legs, a
+time of 7,300, handed for 3 KAS paid in the same transaction: the account with the taker's key where the
+user's was and nothing else changed, holding what it held. 1,766 bytes.
+
+Refused (18): without the user's signature; without the taker's; told an age a block below the lateness, or
+none; the account a block younger than told; written with a third key, with other coins, with no time, with a
+leg fewer, with the second key changed too, or as it was; holding a sompi less; written twice; under no id;
+another key said than is written; a shard in the account's place, its owner signing; the account marked; a
+statement on it in its place.
+
+Taken, and worth knowing:
+
+- *to the user's own key:* the same account in a new output. It is what an addition of nothing would be: once a
+  lateness.
+- *to the shard's owner's key:* an account of both keys the owner's.
+- *under a called shard:* the hand-over is not shown the shard and is taken whatever the shard is. Nothing is
+  wrong with it that I find: the call's step pays the key that now holds the account and writes the note in
+  its name (run). What changes hands is a claim.
+- *the least that is paid:* on an account of a note's least a payment to the leaver of under 0.034 KAS is
+  written by no builder (the output is too small for the block beside the account's). A price of nothing is.
+
+In its new hands the account keeps its time: a take of a time before it is not the model's, by the taker's key
+as by the leaver's; at its time the taker states and the leaver no more; the end of the taker's take of a time
+before it is answered wrong at the engine.
+
+### A join
+
+`t1b_r56_a_join_takes_two_accounts_equal_but_for_legs_coins_and_time_and_the_shard_as_it_is`. Three legs and
+three, 30 and 100 KAS, the times 7,300 and 6,900: one account of the six legs in a row, 130 KAS, the time
+7,300; the shard written again exactly as it is. 4,359 bytes. Every object carries the lateness.
+
+Refused (31): the second account unequal in its user's key, its second key, its terms, the lateness of its
+terms, the place of a lease, its dispute period, its bond rate, its shard; something of a second party's in
+it; a seventh leg; a leg of the first changed, of the second changed, the legs of the two the other way round;
+the one account written with a coin more, another count, the earlier time, no time, the legs in the other
+order, or as the first alone; holding a sompi less than the two; the shard a sompi less, or written holding
+more; a called shard in the shard's place, a shard of another id, an account, a statement; without the user's
+signature; told a block below the lateness; the first account, the second, or the shard a block younger than
+told.
+
+What the paper does not say, and is so: the join asks nothing of the SECOND key. Two accounts whose second key
+is not the shard's owner are joined under that shard (no leg enters such an account, but it is opened and
+joined): F101 uses it.
+
+### N3 and N4 on what is built
+
+`t1b_r56_a_join_before_a_call_sets_a_loss_off_against_a_gain_and_what_the_others_are_paid`, the accounts
+stepped and their notes applied at the engine. A shard that holds 100 KAS and owes others 200; one user's
+account that gains 100 KAS at the call's prices and another of the same user that loses 80.
+
+| | The shard then holds | It owes | The others' 200 KAS are paid |
+|---|---|---|---|
+| apart (a join under the called shard is refused) | 179.9 | 300 | 119.93 |
+| joined before the call | 99.9 | 220 | 90.82 |
+
+So N3 is closed for a called shard, and for a shard on which a call is stated (its object is the statement:
+the join finds no shard). What is left is the join made before anybody states the call: the user, or whoever
+bought the losing account, needs a lateness's warning and no more. It is what one account of both legs has,
+and the paper says the difference is meant; the number is 29 KAS of 120 here.
+
+N4 is as said on paper: the one account's note asks the net with no band.
+
+### A join spends the shard: what that does
+
+Asked: does whoever joins in a row keep a call, a note or a draw from landing; and what does a busy shard do
+to a join?
+
+- *A call and a note:* no. A join asks the shard's age; after any join there is a lateness in which a call and
+  a note, which ask none, land.
+- *A draw and an addition:* yes, at one block in a lateness: at the block the shard has stood long enough, the
+  owner's draw or addition and anybody's join are all transactions, and one of them lands. F101.
+- *A busy shard:* takes no join. A join is one a lateness a shard at the most, and none on a shard that is
+  spent more often than that by notes and entries.
+
+## What a block takes (item 6)
+
+`t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scripts`:
+
+| Transaction | Bytes | Compute mass | Storage mass (of 500,000) |
+|---|---|---|---|
+| a hand-over, an account of a note's least, one leg, nothing paid | 1,714 | 5,814 | 203,764 |
+| a hand-over, six legs, a note's least, 3 KAS paid | 1,766 | 6,226 | 207,097 |
+| a hand-over, six legs, 500 KAS | 1,766 | 6,226 | 7,257 |
+| a join of no legs and none, a note's least each | 3,689 | 7,359 | 103,557 |
+| a join of one leg and one | 3,913 | 7,583 | 103,557 |
+| a join of three and three (the largest), or five and one | 4,359 | 8,129 | 103,557 |
+| a join of three and three, 500 KAS each | 4,359 | 8,129 | 3,813 |
+
+All written by their builders and taken, but a hand-over of the smallest account with a sompi paid.
+
+## Findings
+
+### F101 (Medium). A shard that is spent in every lateness is neither added to nor drawn; a third party spends it
+
+F98's line asks the age of the output the addition spends. For an account that is its user's own matter:
+nobody else spends an account but a step that is due. A shard is spent by everybody: a note applied (anyone,
+any age), an entry, a join, a draw's end. Each makes it young.
+
+- **The owner's addition.** A shard that needs coins needs them when its users leave at a gain, which is when
+  notes are applied to it one after another. While one is applied in every lateness, the owner's addition is no
+  transaction. The call comes (it asks no age) and the owner had the coins.
+- **The owner's draw.** The same, and a draw already waited for every entry (F82) and every note not applied.
+- **A third party at will.** `t1b_finding_f101_...`: two accounts of 1 KAS opened under the shard's id by two
+  keys that are not its owner's (`KpfTOpenC` asks the account's own two keys; the second key need not be the
+  shard's owner) and joined by them alone: 937,800 sompi. The shard comes out as it was, in a new output; the
+  owner's addition of 10 KAS and its draw on it carry the lateness and are refused a block young. The third
+  party can do it once a lateness (the join asks the shard's age too), at the block the owner's addition
+  becomes a transaction.
+
+Closing it, as I would: keep the age for an account. For a shard, price the landing-again and do not forbid
+it:
+
+- an addition to a shard asks no age and is of a note's least or more: an owner that adds to keep others out
+  puts 0.2 KAS into its shard each time, which is what a shard due a call lacks;
+- a draw is held not by the age of the shard's output but by the shard's own time, written by a draw's wrong
+  end as it is by a draw applied and by an entry (round 54's proposal): only the owner's own failed draw then
+  makes its next one wait.
+
+And say in 15.2 that a join is one a lateness a shard; or let the join ask the age of the two accounts alone.
+That last gives back F98 by joins for whoever has many accounts made ahead, so I would not.
+
+### F100 (Medium). An account and a shard are still landed again at will, at no age
+
+`t1b_finding_f100_...`. Each on an object of no age, and taken:
+
+| Whose | What | A round costs |
+|---|---|---|
+| an account of 20 KAS (bond 0.2 KAS at 1 %) | its user's second key states a step that is not the rule's, disputes its end, answers it wrong: the account again | 0.129 KAS |
+| the same, left to lapse | the same, a dispute period later | 0.127 KAS |
+| an account of 3 KAS (bond 0.03 KAS) | the same; answered wrong by no transaction (F102); left to lapse | 0.042 KAS, and the account is held a whole dispute period |
+| a shard | its owner states an entry on an account of both its keys: the shard is spent and written at once | 0.012 KAS |
+| a shard | its owner applies a note it made ahead | nothing (the note's least comes back) |
+
+A step is anyone's and is held to no time; a statement that is ended writes none; the bond of a statement on
+an account is a rate of its coins with no floor. An entry asks no age of the shard. So what F98's age closed
+for an addition is open by these, at a cost of the same order as F88's round was.
+
+What each would take, and what it costs:
+
+- the floor of a statement's bond on an account too (as on a shard): a round then costs 0.1 KAS and three fees
+  whatever the account; a small account's honest take needs 0.2 KAS for a dispute period;
+- an entry asking the shard's age: one entry a lateness a shard. It prices the owner's own entries at the cost
+  of everybody's;
+- nothing for a note: a note applied is the shard's users' right.
+
+The honest answer is the one the paper gave for F88: between two of a party's own transactions somebody
+else's lands only if it gets there, and no script decides that. The age gives the others a head start where it
+is asked; where it cannot be asked, the bond is the price. I would say that in 14.7 as the rule, with this
+table, and give the account's statements the floor.
+
+### F102 (Low). A wrong answer on a small bond is written by no builder
+
+Answered wrong, half the claimer's bond goes to whoever answered, in an output. Where the bond is under about
+0.13 KAS that output is under what a block takes beside the others (0.067 KAS here), and `c_end` writes no
+transaction ("too small to be mined"). The script asks "at least", so a transaction that fills the output up is
+taken; nobody is paid to. The statement is then ended by a lapse alone, a dispute period later (written and
+taken: F100's third row).
+
+Round 50's F77 was the same for a right answer and got a least payment. Closing it the same way: where half
+the bond is under the least payment, no output of it (it stays in the copy, or is the transaction's), so that a
+wrong statement on a small account is ended at once.
+
+## What is open and left
+
+- F97, F99 (Low): left, said in the paper.
+- F95 (Medium): open by decision.
+
+## Sizes (item 7)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTPass` | 537 | new |
+| `KpfTJoinC` | 1,550 | new |
+| `KpfTAddC` | 528 | 516 |
+| `KpfTChange` | 1,571 | 1,543 |
+| `KpfTDrawNote` | 1,406 | 1,393 |
+| `KpfTLeft` | 2,212 | 2,197 |
+| the five of F85 | above | |
+
+## Not reached
+
+- The race itself (F100, F101): whose transaction lands at the block an age is reached is not the engine's.
+- A join whose second account is under a statement or marked: read (its object's hash is another), not run;
+  the same in the shard's place is run.
+- `aobj.rs` and the commands of section 15: not written yet, not looked at.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F101 | Medium | open, new: `t1b_finding_f101_...` |
+| F100 | Medium | open, new: `t1b_finding_f100_...` |
+| F102 | Low | open, new: in F100's test |
+| F98, F96, F88, F85 | | fixed, verified |
+| F95 | Medium | open by decision |
+| F97, F99 | Low | left, said in the paper |
+| N3 | | closed for a called shard; a join before the call is the paper's own |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 172 pass (166 before). `t1b_finding_f85/f88/f96/f98_...`
+  are `t1b_fixed_...`. Brought along: the tests whose shards now owe the note of the rest they show
+  (F87's, round 53's); F94's (a note of more than is owed is spent for nothing); round 53's objects of the old
+  kinds (answered by neither verdict); F78's readers (no `KpfTStepEnd`); the counts (63 scripts) and sizes.
+  New: `t1b_finding_f100_...`, `t1b_finding_f101_...`, four `t1b_r56_...` (a hand-over, a join, a join before a
+  call, what a block takes).
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 63 scripts, 73 entries, 61 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 48 pass (a library of 63 scripts).
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,290 passed, 0 failed (138 result lines).
+Nothing failed, mine or not. `thin_draw` 32 of 32, `clearing_cli` 1 of 1, `committee_cli` 13 of 13.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 172 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed (in the workspace run)
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
+```

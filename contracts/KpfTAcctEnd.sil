@@ -16,11 +16,10 @@ pragma silverscript ^0.1.0;
 // The scripts of a position are typed for 138 bytes and do not open these: a covered account is opened, changed and
 // ended by scripts that write the note of what they did.
 //
-// KpfTAcctEnd: a covered account that has no leg ends, by either party: A's margin to A's key, and B's margin as a
-// deposit to the account's shard (a covered account pays its side B nothing: the clearing party draws from its
-// shard).
+// KpfTAcctEnd: a covered account that has no leg ends, by either party: its coins to its user's key. (It has
+// nothing of a second party's: no note is written.)
 //   end(who, ageb, slotLen, terms, moving, side, s)    the side's key signs.
-//   A's payment at the account's own place; the deposit's note the one output under the account's id.
+//   The user's payment at the account's own place; no output under the account's id.
 contract KpfTAcctEnd(int init_version) {
     int version = init_version;
 
@@ -100,15 +99,7 @@ contract KpfTAcctEnd(int init_version) {
         }
         byte[32] id = OpInputCovenantId(j);
         require(OpCovInputCount(id) == 1);
-        if (bm > 0) {
-            byte[] empty = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
-            require(OpCovOutputCount(id) == 1);
-            int c = OpCovOutputIdx(id, 0);
-            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(3) + empty + i9(0) + i9(0) + mv.slice(33, 66) + i9(bm))) + rs.slice(STATE_AT + 32, slotLen))));
-            require(tx.outputs[c].value >= bm + NOTE_MIN);
-        } else {
-            require(OpCovOutputCount(id) == 0);
-        }
+        require(OpCovOutputCount(id) == 0);
         goesOn();
     }
 

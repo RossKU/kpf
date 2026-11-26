@@ -388,13 +388,17 @@ impl Shard {
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
     pub fn rest_paid(&self, r: &Rest) -> Result<(Shard, i64, Option<Rest>)> {
-        if r.sid != self.sid || r.amount <= 0 || self.called != 0 {
-            return Err(Error::Invalid("the note of the rest is to this shard, of something, and paid while it is not called (the call's own script pays it its share)".into()));
+        if r.sid != self.sid || r.amount <= 0 {
+            return Err(Error::Invalid("the note of the rest is to this shard, and of something".into()));
+        }
+        if r.amount > self.owed {
+            // (Never counted: spent, and nothing is paid, called or not.)
+            return Ok((*self, 0, None));
+        }
+        if self.called != 0 {
+            return Err(Error::Invalid("the shard is called: its own script pays every note of the rest its share".into()));
         }
         let pay = r.amount.min(self.held);
-        if pay > self.owed {
-            return Err(Error::Invalid("the shard owes less than the note asks: it was never counted".into()));
-        }
         if pay <= 0 {
             return Err(Error::Invalid("the shard holds nothing to pay it with".into()));
         }

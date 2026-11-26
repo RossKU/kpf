@@ -140,9 +140,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         // What was stated, as it was shown: the side, the amount and the leg left out, 8 bytes each; that leg's market
         // (its first 84 bytes) and side B's units in it, for the note of a leg that leaves a covered account; then the
         // trace.
-        // (An entry, kind 6, says the leg that enters whole and what its shard's id is the hash of, before its rows.)
         int at0 = 116;
-        if (kind == 6) { at0 = 167; }
         // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
         if (kind >= 7) { at0 = 48; }
         // (An entry of the new form, kind 10: the coins added, the row and the leg whole before its rows.)

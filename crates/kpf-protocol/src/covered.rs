@@ -387,6 +387,28 @@ impl Account {
 
 // ---------------------------------------------------------------- an entry (kind 10; docs 14.3)
 
+impl Account {
+    /// `KpfTPass`: this covered account in another user's hands: the key `to` where its user's was, and nothing
+    /// else of it changed (`docs/ARCHITECTURE-CLEARING.md` 15.1). Its shard's books are as they were.
+    pub fn passed(&self, to: [u8; 32]) -> Result<Account> {
+        self.c_check()?;
+        Ok(Account { a_key: to, ..self.clone() })
+    }
+
+    /// `KpfTJoinC`: this covered account and `other`, of one user under one shard that is not called, as one: the
+    /// legs of this then of the other (six at most), the coins of both, the later of the two times (15.2).
+    pub fn joined(&self, other: &Account, shard: &crate::reserve::Shard) -> Result<Account> {
+        self.c_check()?;
+        other.c_check()?;
+        let same = self.a_key == other.a_key && self.b_key == other.b_key && self.t == other.t && self.expiry == other.expiry && self.dispute_daa == other.dispute_daa && self.bond_bps == other.bond_bps && self.shard == other.shard;
+        if !same || self.shard != Some(shard.sid) || shard.called != 0 || self.legs.len() + other.legs.len() > C_LEGS_MAX {
+            return Err(Error::Invalid("two accounts are joined where they are one user's under one shard, the same but for their legs, coins and time; the shard is not called; and they have six legs at most between them".into()));
+        }
+        let coins = add(self.a_margin, other.a_margin).ok_or_else(|| Error::Invalid("the coins of the two are beyond what is counted".into()))?;
+        Ok(Account { legs: [self.legs.clone(), other.legs.clone()].concat(), a_margin: coins, a_min_counter: (self.legs.len() + other.legs.len()) as i64, b_min_counter: self.b_min_counter.max(other.b_min_counter), ..self.clone() })
+    }
+}
+
 /// What is less than this is not paid by an output of its own under a call (`KpfTCStep`, `KpfTCallEnter`): beside
 /// a note and the call a block takes no smaller payment. It is whoever steps's.
 pub const PAY_MIN: i64 = NOTE_MIN;

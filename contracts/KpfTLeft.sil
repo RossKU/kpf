@@ -214,21 +214,28 @@ contract KpfTLeft(int init_version) {
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
-        // (Not while the shard is called: the call's own script pays every note of the rest the same share.)
-        require(int(byte[8](mv.slice(130, 138))) == 0);
         int held = int(byte[8](mv.slice(67, 75)));
         int owed = int(byte[8](mv.slice(76, 84)));
         int pay = amount;
         if (pay > held) { pay = held; }
-        require(pay > 0);
-        // (What is paid is owed no more: a note that was never counted is paid out of nothing.)
-        require(pay <= owed);
-        owed = owed - pay;
         int left = amount - pay;
-        int m = tx.outputs.length - 1 - 4 * j;
-        require(m >= tx.inputs.length);
-        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
-        require(tx.outputs[m].value >= pay);
+        if (amount > owed) {
+            // A note of more than the shard owes was never counted (a statement that was not the rule's, and
+            // that nobody disputed, wrote it): it is spent and nothing is paid, called or not, so that it ends
+            // no draw for good.
+            pay = 0;
+            left = 0;
+        } else {
+            // (Not while the shard is called: the call's own script pays every note of the rest the same share.)
+            require(int(byte[8](mv.slice(130, 138))) == 0);
+            require(pay > 0);
+            // (What is paid is owed no more.)
+            owed = owed - pay;
+            int m = tx.outputs.length - 1 - 4 * j;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
+            require(tx.outputs[m].value >= pay);
+        }
         int c = OpCovOutputIdx(id, 0);
         require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value - pay);

@@ -147,9 +147,7 @@ contract KpfTStepRow(int init_version) {
         // What was stated, as it was shown: the side, the amount and the leg left out, 8 bytes each; that leg's market
         // (its first 84 bytes) and side B's units in it, for the note of a leg that leaves a covered account; then the
         // trace.
-        // (An entry, kind 6, says the leg that enters whole and what its shard's id is the hash of, before its rows.)
         int at0 = 116;
-        if (kind == 6) { at0 = 167; }
         // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
         if (kind >= 7) { at0 = 48; }
         // (An entry of the new form, kind 10: the coins added, the row and the leg whole before its rows.)
@@ -173,7 +171,7 @@ contract KpfTStepRow(int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 2);
-        require(kind <= 4 || kind == 6);
+        require(kind <= 4);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);
@@ -234,46 +232,11 @@ contract KpfTStepRow(int init_version) {
                     tag = OPTION_TAG;
                     int holder = SIDE_B;
                     if (oc % 2 == 1) { holder = SIDE_A; }
-                    if (kind != 6) {
-                        if (side != holder) { ok = 0; }
-                    }
+                    if (side != holder) { ok = 0; }
                 }
                 byte[] head = byte[](0x20) + byte[](blake2b(i9(tag) + lg.slice(0, 33))) + lg.slice(33, 84);
-                if (kind != 6) {
-                    if (head != said.slice(24, 108)) { ok = 0; }
-                    if (int(byte[8](said.slice(108, 116))) != units) { ok = 0; }
-                }
-                if (kind == 6) {
-                    // (An entry shows the leg whole: the row named is of that leg.)
-                    if (lg != said.slice(24, 135)) { ok = 0; }
-                    // The leg that enters (the row named is its, and the statement stays with it): it is a leg (its
-                    // pushes; a scale, and a size within what is computed at its market's limit; a direction, or an
-                    // option's kind with a strike within the limit), and its entry is the price of its row, so that
-                    // it gains nothing as it enters.
-                    if (lg.slice(0, 1) != byte[](0x20)) { ok = 0; }
-                    if (lg.slice(33, 34) != byte[](0x20)) { ok = 0; }
-                    if (lg.slice(66, 67) != byte[](0x08)) { ok = 0; }
-                    if (lg.slice(75, 76) != byte[](0x08)) { ok = 0; }
-                    if (lg.slice(84, 85) != byte[](0x08)) { ok = 0; }
-                    if (lg.slice(93, 94) != byte[](0x08)) { ok = 0; }
-                    if (lg.slice(102, 103) != byte[](0x08)) { ok = 0; }
-                    if (scale <= 0) { ok = 0; }
-                    if (scale > SCALE_MAX) { ok = 0; }
-                    if (size <= 0) { ok = 0; }
-                    if (size > MARGIN_MAX) { ok = 0; }
-                    if (int(byte[8](lg.slice(103, 111))) != a) { ok = 0; }
-                    if (oc == 0) {
-                        if (dir != DIR_LONG) {
-                            if (dir != 2) { ok = 0; }
-                        }
-                    } else {
-                        if (strike < 1) { ok = 0; }
-                        if (strike > int(byte[8](lg.slice(76, 84)))) { ok = 0; }
-                    }
-                    if (ok == 1) {
-                        if (size / scale > MARGIN_MAX / int(byte[8](lg.slice(76, 84))) - 1) { ok = 0; }
-                    }
-                }
+                if (head != said.slice(24, 108)) { ok = 0; }
+                if (int(byte[8](said.slice(108, 116))) != units) { ok = 0; }
             }
             if (ok == 1) {
                 int worth = quoteAt(size, scale, a);
@@ -318,9 +281,7 @@ contract KpfTStepRow(int init_version) {
                 // enters, and it stays.)
                 byte[32] h = byte[32](before.slice(80, 112));
                 int stays = 1;
-                if (i == skip) {
-                    if (kind != 6) { stays = 0; }
-                }
+                if (i == skip) { stays = 0; }
                 if (stays == 1) {
                     h = blake2b(before.slice(80, 112) + lg.slice(0, 103) + row.slice(0, 8));
                 }
