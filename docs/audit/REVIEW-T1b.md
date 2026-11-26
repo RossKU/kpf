@@ -7172,3 +7172,335 @@ CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2    # 1,268 pas
                                                                       #  research_solvency_accounts 5)
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 148 passed, 0 failed (after)
 ```
+
+# Round 49
+
+Scope: the second writing of section 14 of `docs/ARCHITECTURE-CLEARING.md`, on paper, as one design. Nothing of
+it is built; stage 3 with its fixes is committed (970caa7). One probe of what exists was run. No src, contract
+or `kpf-out` file touched; no commit.
+
+## Headline
+
+- Of round 48's Q1 to Q13: nine are closed by what is written (Q2, Q3, Q5, Q6, Q8, Q10, Q11's order, Q12, and
+  Q9 but for the opening); Q1 and Q7 are closed in their substance and each leaves one thing (R1, R7); Q4 is
+  closed for the shard's prices as intended and not as the generic scripts would do it (R3), and its residue is
+  a matter of the size of a bond (R4); Q13 is closed for kinds 7 to 9 and not for an entry (R9).
+- The second writing opens fourteen things. Four I would not go past: **R3** (a lapse of a price of the shard's
+  rows costs the user, by the script that lapses as it is), **R5** (a late landing costs the user its bond,
+  whoever landed it), **R6** (the count of legs is whatever the opening says: run), **R7** (the time an account
+  and a shard write is exactly the longest a statement lives, so nothing is free between two).
+- The bound as a number: with the terms of the tests (lateness 10 s, dispute period 5 s) it is 25 seconds and
+  holds with a wide margin. For a volatile coin it wants a dispute period of 45 to 90 seconds and a lateness of
+  10; at five minutes it fails on a bad day.
+
+## 1. Round 48's findings against the second writing
+
+| | Closed | Why, or what is left |
+|---|---|---|
+| Q1 | in substance | No finality by an answer; a last time to dispute; whoever answers names the next point. A watcher that can answer the standing dispute gets its point in. What is left is R1: the rounds between a claimer and its own key cost nothing as written, and a watcher cannot answer a price whose citation only the claimer holds |
+| Q2 | yes | The claimer keeps its half. (Giving the answerer the whole of the copy's half is what makes R1's rounds free) |
+| Q3 | yes | Side B refused at the opening and after; `KpfTAcctEnd`. But see R6 for what else the opening must refuse |
+| Q4 | in part | A price of the shard's rows ends the entry only where the gate fails at the committee's price, at the owner's cost: that takes the planted price of a row away. Left: R3 (the lapse), R2 and R8 (the dismissed dispute), R4 (what half a bond buys), R5 (the late landing), and the tool's rule for the prices of the user's part |
+| Q5 | yes | The table of points says who answers each |
+| Q6 | yes | The lateness is in the bound; undoing is paid; the table has the four rows |
+| Q7 | in substance | No step over a statement; the account's time. Left: R7 |
+| Q8 | yes | The caller shows its prices |
+| Q9 | but for the opening | Six legs, counted: R6 |
+| Q10 | yes | Claims are paid once no row has a unit, and at no other time |
+| Q11 | the order yes | The loss, then the fee, then the user. The claim of the fee is R11 |
+| Q12 | yes | Capped. What the cap lets a wrong call cost is under 14.6 below |
+| Q13 | for kinds 7 to 9 | By the landing against the call's time. Not for an entry: R9 |
+
+F76 is closed on paper by the note applied whole (my test of it will have no state between to read, and must
+then say "closed").
+
+## 2. What the second writing opens
+
+### 14.1 The life of a statement
+
+Held: the last time to dispute can be kept by scripts. The dispute refuses a statement whose own output landed
+after it; the answer, the lapse and a dismissal read when the dispute landed; "applied at once after the last
+time" is an age of the lesser of a dispute period and the time left from the statement's landing to that time,
+and one more. A statement nobody disputes is always applied by its period first (its landing is no earlier than
+its time). A dispute that lands late happens once at most: the statement it leaves has landed after the last
+time. A statement answered right late is applied at once, and nothing can come after it: right.
+
+**R1 (Medium). A round between a claimer and its own key costs nothing, and a point only the claimer can answer
+keeps everyone out.** Rule 2 gives the claimer half of the disputer's bond and the answerer the other half.
+Where the claimer answers its own key's dispute it has both: "pays for every round" is not so; a round costs
+two transactions and the oracle fee. A watcher gets in by answering the standing dispute right and naming its
+point. For a row or an end it can (the proof is the script's) and it is paid half a bond for it; it has to win
+one race, the claimer every one. For a price it needs the citation. In numbers: a shard of 500 KAS (bond 5)
+with a row r no committee answers. Its owner states a draw of 400 at a made-up price of r, and its other key
+disputes the price of row q, for which the owner has the committee's signed price in hand and has shown nobody.
+It answers q at the end of the period and names q again (a point may be named twice); after that the last time
+has passed. Cost: the fees. A watcher with the same citation answers q at once, has 2.5 KAS, names r, and the
+draw lapses at its claimer's cost.
+
+So two things: (a) a part of the disputer's bond stays in the copy whoever answers (a quarter to the claimer, a
+quarter to the answerer, half kept: a round then costs half a bond, as it did); (b) a requirement on the
+committee's service that nothing in a script can hold: a price it has signed for one is had by anyone at once.
+With (b) R1 is small; without it the claimer's to show is the claimer's to hide.
+
+**R14 (Low).** The state that stands again today writes `LATE_AGAIN` over the lateness. The last time to
+dispute is of the lateness, so the state must keep it (a flag beside it, not in its place), and
+`KpfTChangeLate` must still refuse a statement that stands again.
+
+Kinds 2 to 6 under the new life: nothing I find that breaks. A lapse of kinds 2 to 4 gives both bonds back and
+ends the statement, as today; a dispute of them is free only as it is today.
+
+### 14.2 A covered account
+
+The two places, as the scripts are today:
+
+| Script | The first ask (the count) | The second ask (the time) |
+|---|---|---|
+| `KpfTOpenC` | asks nothing of it: **R6** | asks nothing of it: **R6** |
+| `KpfTCEnd` | copies it (must count one less where a leg leaves alone) | copies it (must write the time for a take and a leaving, none for a step) |
+| `KpfTAddC`, `KpfTLeft`, `KpfTChange`, the enders | copy, or see a hash | the same |
+| `KpfTHand` | copies | **reads it** as the least margin of whoever takes the place: a time of 7,000,000 asks 0.07 KAS of margin. Harmless, and not meant |
+| `KpfTStepEnd`, `KpfTStepEnter` | read (the old form: refused on a covered account by 14.2) | read |
+| `KpfTAcctEnd` | copies nothing (it ends); should ask a count of nothing | |
+
+**R6 (High unless the opening is taught; one line each). The count is whatever the opening says.** Run:
+`t1b_r49_a_covered_account_is_opened_with_any_numbers_where_a_position_has_its_asks`: a covered account is
+opened at the engine with a count of 58 below nothing, with a count of six and no leg, and with a time far
+ahead. Both keys sign the opening, and for an account of the owner's own they are one party's. Opened at -58 it
+takes 64 legs, and Q9 is back for exactly the account Q9 was about: under a call a step takes six legs, so
+nobody steps it and "the rows empty without any user's leave" is not so. The opening must hold both places to
+nothing.
+
+**R7 (High). The time written is the longest a statement can live, so between two statements nothing is
+free.** "Its own time, the lateness and two dispute periods" is when a statement disputed to its end is
+applied. Its user states again in the transaction after.
+
+- A shard: its owner states a draw of a sompi, has its other key dispute it through its life (R1: for fees, or
+  for half a bond a round with R1's fix), and states the next the moment it is applied. The shard is under a
+  statement all the time: no call is stated on it and no note applied. A note that landed before a draw ends
+  that draw; where no user has left lately there is none. An owner that is under water buys time this way.
+- An account: one below its maintenance cannot take, but a leg that lost leaves alone where the coins pay it.
+  An account of the owner's own with five small losing legs and one large one leaves the small ones in turn,
+  each statement kept to its full life: five lives in which no step is stated, while the large leg runs.
+
+"Free for at least as long as it was held" needs the time to be the statement's time and twice its longest
+life. It costs a user that long between two statements of its own.
+
+Held: a statement that is ended writes no time and costs a bond, and whoever answers it wrong can state its
+step on the output its own answer makes, before the user can state again. A step followed at once by a user's
+statement: the step writes no time, so the user may; that statement then writes one. An entry is stated at or
+after the account's time and writes one; undone, the account has the time it had. The account of no leg: a
+take with no row and `KpfTAcctEnd`, as round 48 read them.
+
+### 14.3 The entry
+
+**R3 (High). A price of the shard's rows that nobody answers lapses by `KpfTPoint.lapse`, which knows one
+bond: the statement's, which is the user's.** The table says such a lapse is at the owner's cost. "Ended by
+the scripts that end a statement as they are" gives the other: the lapse pays the disputer its bond and half
+the statement's bond, restores the marked account with the owner's bond in it, and `KpfTEnterOff` pays "what
+the object held beyond the account's coins" to the owner. In numbers: a long of 1,000 KAS of worth on coins of
+55; bonds of 0.55 each. The leg is up 3 %. The owner's other key disputes the price of a row whose committee
+does not answer inside the period. As the scripts are: the user loses 0.55 (0.275 of it to the owner's key),
+the leg is undone and owed nothing, the owner has its bond back. This is Q4 with the committee slow. The lapse
+needs a branch for kind 10 and a point from 1,000,001 (the owner's bond: half to the disputer, half to the
+user; the user's bond back; the marked account holding neither), and `KpfTEnterOff` must not pay the owner
+what is the user's.
+
+**R5 (High). A late landing costs the user its bond, whoever landed it.** `KpfTChangeLate` gives the
+statement's bond to whoever ends it. The transaction that states an entry is signed by two; whoever signs last
+holds it. The owner signs last, lands it one block after the lateness, and ends it with its other key: 0.55
+KAS of the user's on every entry, the leg undone. And inside the lateness the last signer has the entry or not
+as the price went in those 10 seconds, for nothing. "Both tools land what they signed at once" holds nobody.
+What does: the user signs last (its tool's rule), or the transaction spends an output of the user's that the
+user spends elsewhere if it is not landed; and a late statement of kind 10 gives both bonds back, less a
+keeper's fee to whoever ends it.
+
+**R4 (Medium). Half a bond ends an entry, and a bond is 1 % of the account's coins.** After R3 and R5 the ways
+left to have an entry end when the leg went against one are: the user, by a price of its own part that the
+owner's tool did not catch; the owner, by a price of the shard's rows where the gate does fail at the
+committee's price, or that nobody answers. Each costs its maker half a bond, the other half coming back to its
+own disputing key: 0.275 KAS on a leg of 1,000 KAS of worth, 0.03 % of it. A price moves that in seconds; over
+a statement's life (25 seconds with the tests' terms) one standard move of a coin at 100 % a year is 0.09 %.
+So the option is in the money most of the time it is wanted. The bonds of an entry should be a rate on what
+the leg is worth, of what a price moves in a statement's life: 0.5 % of the worth (5 KAS here) prices it out
+at any dispute period the bound allows.
+
+**R2 (Medium). A dismissed dispute costs nobody and can be made again.** Beyond the tolerance with the gate
+holding: "dismissed, each bond back". The same point is then disputed again, to the last time. Each time
+somebody must answer with a citation (4.4 kB, the oracle fee, no pay), and if once nobody does, the point
+lapses: the entry ends at the owner's cost, half to the disputer. A third party plays that for nothing against
+any owner whose price of a row was a little beyond the tolerance; and an owner that stated one so on purpose
+has, with its other key, a dispute that keeps the statement to itself at no bond at all (R1 again).
+
+**R8 (Medium). The gate is computed again with one price in the place of one: a price wrong in two rows passes
+each dispute.** A gate that holds by 10 KAS at the prices said; two rows each said so that the committee's
+price takes 8 off the equity. Either dispute alone: the gate holds by 2, dismissed. Both together it fails by
+6, and nothing looks at both.
+
+One change closes R2 and R8: **a dismissed dispute corrects what is said.** The statement stands again with the
+committee's price in the place of the price said (its argument's hash is another; its outputs do not read the
+shard's prices). The next dispute of that row finds it within the tolerance and loses its bond; the next row's
+dispute computes the gate with the row already corrected.
+
+The residue of Q4 (the leg's own price, and the prices of the user's other legs): is "a tool signs only well
+within the tolerance of what it sees" enough for a first form. It is, on two conditions, and I would write
+both down. (a) The rule is two-sided: a tool refuses a price that is off in its own favour as well. An entry
+at 0.6 % below what the user sees, for a long, is the one an owner plants: a leg that gains is ended by a
+dispute of that price at the user's cost; one that loses settles. (b) "What it sees" has to be within about a
+fifth of a per cent of what the committee will sign for that time. For a liquid market it is. In a fast one,
+10 seconds of lateness is by itself that much, and the tool should refuse; or, better, R1's requirement gives
+it the committee's own price for the time before it signs. Who gains from which ending, walked through, is in
+the table below.
+
+| Ending | The leg went the user's way | The leg went the owner's way |
+|---|---|---|
+| a row or the end is wrong | the owner cannot make one (the tool computes them) | the user would need the owner's tool to sign a wrong row: it does not |
+| a price of the user's part beyond the tolerance | the owner disputes it if the user signed one (the leg's own price, planted in the user's favour): the user loses its bond and the gain | the user disputes a price of its own that the owner's tool missed: half a bond (R4) |
+| a price of the user's part that nobody answers | the owner disputes any of them while the committee is slow: the user loses its bond and the gain. The prices are the claimer's to show; here the owner signed them too | the user does the same: half a bond |
+| a price of the shard's rows, gate fails | the owner, where it stated a gate that does not hold: half a bond to the user (R4) | nobody gains |
+| a price of the shard's rows that nobody answers | the owner: R3 as the scripts are; half a bond as the table has it | the user disputes it: the owner's bond, half to the user: an option of the user's at the owner's cost |
+| a late landing | the last signer (R5) | the last signer |
+| a third party | R2's dispute for nothing; half a bond wherever a point is wrong or lapses | |
+
+The third row is what "the claimer's to show" becomes where two signed: while the committee does not answer,
+either signer ends any entry, and the cost falls by the kind of point, not by who gained. I see no rule of
+bonds that mends it; the correction left for later does (an entry is not ended for a price), and so does R4's
+size of bond, by price.
+
+### 14.4 with 14.6
+
+**R9 (Medium). Q13 is not closed for an entry.** 14.6 ends every statement of kind 10 on an account of a
+called shard by showing the call. An entry that had stood its period before the call's time and was not yet
+applied: the leg gained, the owner ends it by showing the call (it owes nothing); the leg lost, the owner
+applies it and the account is stepped. The rule the paper has for kinds 7 to 9 fits: an entry that landed a
+dispute period or more before the call's time is applied, not ended.
+
+**R10 (Medium). A call that was right only by what a pending leg showed is not undone when that leg is.** The
+row I asked for says the entry is ended by showing the call; the call stays, and "no other end" steps every
+account. An owner with an entry of its own pending the way the price then went has its shard called, with no
+user's leave. What it gains is the moment: every account is closed at a price of the last lateness that it
+picked, and every leg that leaves at a gain leaves the band behind (1 % of its worth: on users long 2,000 KAS
+of worth and up 3 %, 20.6 of their 60). Users are paid; they are closed. In this form a call cannot be decided
+on the books without the pending legs (they are not told apart there); the fallback of 14.4 can. I would
+accept it for a first form and say it in 14.7 beside the lateness.
+
+The bound with the lateness in it: right as written, with R7 (without it the account's part of the bound is
+five lives, not one).
+
+### 14.6 The call
+
+**R11 (Medium). The claim of a fee that is paid whole and first is a way out of a failing shard for whoever
+has many small accounts in it.** Every account with a leg holds a note's least (every test counts the coins
+less it, since F75). An account of the owner's own with coins of a note's least and a hair: the call's price
+takes the hair, the coins "hold no fee", the stepper (the owner's other key) has a claim of 0.1 KAS paid whole
+and first, and the user (the owner) has its 0.2 KAS back. A thousand such accounts take 100 KAS before any
+claim of a user's, from a shard that may hold 45. Take the fee out of the note's least instead: it is there in
+every account that has a leg, it is twice the fee, and no claim of a fee is needed.
+
+**R12 (Low). The cap of the bond, and a wrong call.** A wrong call whose end does not follow from its own
+prices is ended at once by anyone (the script proves it), who states the right call on the output it made. A
+wrong call with a false price stands until a watcher has the citation (it answers the caller's own dispute if
+there is one, R1, and names the price), a dispute period at most; it costs its caller 10 KAS at the cap. Who
+gains is an owner that would rather not be called: 10 KAS a period on a shard of any size, against 1 % of the
+shard before the cap. With R7 closed and a committee that answers anyone promptly that is a delay of seconds
+per 10 KAS; I would keep the cap.
+
+**R13 (Low).** A note of the rest that stands when a shard is called: `KpfTLeft.rest` pays none while it is
+called, and the section does not say that it is a claim. It should be one, at the same share.
+
+Held. A statement that landed before the call's time and is applied at its own prices into a called shard: its
+note is a claim like any other; nobody can land before a time that is already past, so it is no way to leave
+at a price of one's choosing after the call. What the caller does choose, by setting the call's time up to a
+lateness back, is which leavings of the last 10 seconds stand: the lateness again. Who can keep a row from
+emptying: an account under a statement that landed before the call's time, for that statement's life and no
+longer (what it states after is ended by the step); an account that is under an entry or marked (cleared by
+anyone, paid); a note not applied (anyone, paid its carrier); an account whose user adds a sompi each block
+(the oracle fee each time, and the step is built on the unconfirmed output). None of them for good. The one
+that is for good is R6. Claims at one share once no row has a unit: the share is the same for the first and
+the last, to what rounding leaves.
+
+## 3. The first form, with the cuts
+
+Can it be finished: yes; nothing in it needs something the scripts cannot do. Can it be used on testnet-10 by a
+clearing party and users who are not its friends: not as written. The least I would insist on before a coin of
+a stranger's is in it:
+
+1. R3 and R5: an entry's lapse and its late landing must not cost the user for what the owner did.
+2. R6: the opening holds the count and the time to nothing.
+3. R7: the time is twice the longest life, for an account and for a shard.
+4. Outside the scripts: a price the committee has signed is had by anyone at once (R1, and the tool's rule).
+5. Said to the user in plain words, because no script says it: the band (14.9); that a call closes every
+   account at a price of the last lateness; and that it should read a shard before it signs.
+
+R1's quarter, R2 and R8's correction, R4's bond, R9, R11 and R13 are each a line or a constant, and I would
+take them in the same writing.
+
+What I would cut more: **the dispute of the shard's four prices.** The gate stays computed when the entry is
+stated, at the prices said; nobody disputes them after. That takes out `KpfTEnterPrice`, the owner's bond in
+the statement's object and its three ways out, the special lapse, the points from 1,000,001, and with them R2,
+R3, R8 and half of R4. What it costs: the upper level at an entry is then the owner's word and the entering
+user's own check (its tool computes the gate at the prices it sees, which it needs the four markets for). A
+shard let below its upper level by a false gate cannot be drawn from (a draw's prices are its own, and
+disputed) and is called at its lower level (the caller's prices). Nobody is unpaid by it who would not be
+without it; what is lost is a watcher's power to undo an entry that should not have been let in, which
+protects the users already there from a call that comes sooner. I would take that trade for a first form.
+
+## 4. The order
+
+(a), (b), (c), (d) as written, with these in them:
+- in (a): the two times with R7's constant; the opening (R6); the lateness kept in a statement that stands
+  again (R14); the second note script (the committed one applies a leg at a time).
+- before (b): decide the cut above. If the shard's prices stay disputed, (b) has a branch in `KpfTPoint.lapse`
+  and in `KpfTChangeLate` for kind 10, which "as they are" does not say.
+- in (c): R9, R11, R13.
+
+## 5. The bound as a number
+
+The claim needs a price to move less than the maintenance less the tolerance (4.5 %) in a lateness, two dispute
+periods and a visit. Taking a visit as 5 seconds and the chain at 10 blocks a second:
+
+| Dispute period | Lateness | The interval | 4.5 % in standard moves, a coin at 100 % a year | at 300 % a year (a bad day) |
+|---|---|---|---|---|
+| 5 s (50 DAA: the tests) | 10 s (100 DAA: the terms) | 25 s | 50 | 17 |
+| 20 s | 10 s | 55 s | 34 | 11 |
+| 60 s | 10 s | 135 s | 22 | 7 |
+| 300 s | 10 s | 615 s | 10 | 3.4 |
+
+(One standard move in t seconds is the yearly rate over the root of 31.5 million, times the root of t: 0.018 %
+a second at 100 %.) Prices of such coins jump, so I would not rest on fewer than six to eight standard moves of
+a bad day: that is an interval of two to three minutes at most, a dispute period of 45 to 90 seconds with a
+lateness of 10. At five minutes a move of 4.5 % inside the interval is a three-and-a-half standard move on a
+bad day: with some 140 intervals in a day, about one day in ten of such days. So "minutes" for a committee to
+sign is at the edge: one minute holds, five do not, unless the maintenance is twice what it is (9.5 % in five
+minutes is seven standard moves of a bad day) or the fallback of 14.4 takes the entry out of the bound. Note
+that the fallback does not take an account's own statements out of it: an account under its user's take or
+leaving is stepped by nothing for that statement's life either way.
+
+## Not reached
+
+- Nothing of section 14 is built: all of the above is reading, but for the probe of the opening.
+- The third numbers model was not run with a tick of a lateness, two periods and a visit; the table above is
+  arithmetic on a rate, not a model.
+- The scripts of a note of two to six legs, `KpfTEnterS`, the step under a call: sizes not estimated.
+- The cut proposed in 3 is argued, not checked against the third model.
+
+## Findings ledger
+
+| | Severity | |
+|---|---|---|
+| R3, R5, R6, R7 | High, on paper (R6 run) | before a stranger's coin |
+| R1, R2, R4, R8, R9, R10, R11 | Medium, on paper | |
+| R12, R13, R14 | Low, on paper | |
+| Q1 to Q13 | | as the table in 1 |
+| F76 | Medium | open in what is committed; closed on paper by 14.2 |
+| F74, F68 | | open; 14.2 closes both |
+| F61, F66, F67, F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 149 tests pass (one new:
+  `t1b_r49_a_covered_account_is_opened_with_any_numbers_where_a_position_has_its_asks`).
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 149 passed, 0 failed
+```

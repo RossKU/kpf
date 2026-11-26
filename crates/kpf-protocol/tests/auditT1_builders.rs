@@ -11460,3 +11460,32 @@ fn t1b_r48_the_place_of_the_expiry_is_read_by_no_script_of_a_shard() {
         }
     }
 }
+
+// ================================================================================================================
+// Round 49. Section 14, second writing, on paper; one probe of what exists.
+
+/// Round 49, R6, on the script as it is. Section 14.2 counts a covered account's legs where a position has its
+/// first ask, and says the account's time where it has its second. `KpfTOpenC` asks nothing of either place: an
+/// account is opened (engine; both keys sign, which for an account of the owner's own are one party's) with a
+/// count of 58 below nothing and a time far ahead, and with a count of six and no leg. So the six legs of 14.2 are
+/// six only if the opening holds both places to nothing. Passes while the opening takes any numbers there.
+#[test]
+fn t1b_r49_a_covered_account_is_opened_with_any_numbers_where_a_position_has_its_asks() {
+    let w = ow();
+    let shard = w.shard();
+    let mut taken = 0;
+    for (count, time) in [(-58i64, 0i64), (6, 0), (0, 400_000_000_000), (0, 0)] {
+        let a = Account { t: w.terms(), legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 20 * KAS1, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: count, b_min_counter: time, shard: Some(shard.s.sid) };
+        let f = [fund(xk(&w.a), 41, 1_000)];
+        let opened = account_open_c(&w.lib, &w.anchors[1], &w.script("KpfTOpenC"), &a, shard_seed(&w.anchors[0]), w.markets[0].committee_id, w.payer(&w.a, &f)).is_ok_and(|b| taken30(&b, &w.keys));
+        println!("T1b R49: a covered account opened with {count} where the legs are counted and {time} where its time stands: {opened}");
+        if opened {
+            taken += 1;
+        }
+    }
+    if taken == 1 {
+        println!("R6 is closed: a covered account is opened with nothing in the two places and no other number");
+        return;
+    }
+    assert_eq!(taken, 4, "the opening takes some numbers there and not others");
+}
