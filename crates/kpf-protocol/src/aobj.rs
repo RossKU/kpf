@@ -2,10 +2,12 @@
 //! account, a shard, a note to a shard, and a statement on an account or a shard, disputed at a point or not. A
 //! statement is kept with what it was stated on and the bytes it stated: an answer shows both.
 //!
-//! The bytes: a kind (20 an account, 21 a shard, 22 a note, 23 a statement, 24 a statement disputed at a point), then
+//! The bytes: a kind (20 an account, 21 a shard, 22 a note that legs left, 23 a statement, 24 a statement disputed
+//! at a point, 25 a note of the rest), then
 //! - an account: its terms (90), the count of its legs (one byte), the legs (111 each), its moving part (138 or 171)
 //! - a shard: its terms (90), its four rows (408), its moving part (171)
-//! - a note: the shard's id, then kind, head (84), net, gross, the key (32), the amount (integers pushed, 9 bytes)
+//! - a note that legs left: the shard's id, the count of its legs (one byte), the legs (111 each), the user's key,
+//!   what is asked (pushed); a note of the rest: the shard's id, the key, the amount (pushed)
 //! - a statement: the length of what it is stated on (two bytes) and that, as above; window, lateness, kind, time,
 //!   bond, held (pushed); the claimer's key; the count of its outputs and their 41 bytes each; the length of what
 //!   it states (two bytes) and that
@@ -14,7 +16,8 @@
 use crate::committee::blake2b;
 use crate::cross::{XLeg, XTerms};
 use crate::error::{Error, Result};
-use crate::reserve::{Draw, Head, SNote, Shard, ShardRow, SHARD_CARRIER, SHARD_ROWS};
+use crate::covered::{CSaid, KIND_C_STEP, KIND_C_TAKE};
+use crate::reserve::{Draw, Head, Left, Rest, Shard, ShardRow, SHARD_CARRIER, SHARD_ROWS};
 use crate::state::int8;
 use crate::thin::{leg_bytes, ATake, Account, Outs, Pointed, Stated, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_TAKE, KIND_DRAW};
 
@@ -46,7 +49,10 @@ impl Host {
 pub enum AObj {
     Account(Account),
     Shard(Shard),
-    Note(SNote),
+    /// The note that legs left a covered account.
+    Left(Left),
+    /// What such a note asked and its shard did not hold.
+    Rest(Rest),
     Stated { on: Host, st: Stated, said: Vec<u8> },
     Pointed { on: Host, q: Pointed, said: Vec<u8> },
 }
@@ -62,23 +68,21 @@ pub fn outcome(on: &Host, st: &Stated, said: &[u8]) -> Vec<AObj> {
                 v.push(AObj::Shard(s.drawn(d.amount, st.t0)));
             }
         }
+        Host::Account(x) if x.shard.is_some() => {
+            // (A covered account's own kinds: what the end of the statement makes of it, and the note it writes.)
+            let Some(s) = CSaid::read(said) else { return v };
+            if let Some(Some(o)) = x.c_end(st.kind, &s, &st.claimer, st.held, st.t0) {
+                v.extend(o.after.map(AObj::Account));
+                v.extend(o.note.map(AObj::Left));
+            }
+        }
         Host::Account(x) => {
             let Some(tk) = ATake::read(said) else { return v };
             if st.kind == KIND_ACCOUNT_TAKE {
                 if let Some(next) = x.taken(tk.side, tk.amount, &tk.rows) {
                     v.push(AObj::Account(next));
                 }
-                if let Some(sid) = x.shard {
-                    v.push(AObj::Note(SNote::deposit(sid, x.b_key, tk.amount)));
-                }
             } else if let Some(stepped) = x.stepped(st.kind, tk.side, tk.skip, &tk.rows, &st.claimer) {
-                if let Some(sid) = x.shard {
-                    let (head, units) = tk.leave.unwrap_or((Head::EMPTY, 0));
-                    v.push(AObj::Note(SNote { sid, kind: crate::reserve::NOTE_RELEASE, head, net: units, gross: units.abs(), key: x.b_key, amount: 0 }));
-                    if stepped.owed > 0 {
-                        v.push(AObj::Note(SNote::owed(sid, x.a_key, x.b_key, stepped.owed)));
-                    }
-                }
                 v.push(AObj::Account(stepped.after));
             }
         }
@@ -158,12 +162,16 @@ fn moving_of(r: &mut Rd, len: usize) -> Result<([u8; 32], [u8; 32], [i64; 8], Op
     Ok((a, b, v, sid))
 }
 
+fn leg_of(r: &mut Rd) -> Result<XLeg> {
+    Ok(XLeg { market: r.p33()?, committee: r.p33()?, scale: r.int()?, price_max: r.int()?, size: r.int()?, dir: r.int()?, entry: r.int()? })
+}
+
 fn account_of(r: &mut Rd) -> Result<Account> {
     let t = terms_of(r)?;
     let n = r.take(1)?[0] as usize;
     let mut legs = Vec::with_capacity(n);
     for _ in 0..n {
-        legs.push(XLeg { market: r.p33()?, committee: r.p33()?, scale: r.int()?, price_max: r.int()?, size: r.int()?, dir: r.int()?, entry: r.int()? });
+        legs.push(leg_of(r)?);
     }
     let len = r.b.len() - r.at;
     let (a_key, b_key, v, shard) = moving_of(r, len)?;
@@ -211,7 +219,8 @@ fn stated_of(r: &mut Rd) -> Result<(Host, Stated, Vec<u8>)> {
     // What is stated is of the statement's kind and of what it is stated on.
     let of_kind = match (&on, kind) {
         (Host::Shard(_), KIND_DRAW) => Draw::read(&said).is_some(),
-        (Host::Account(_), KIND_ACCOUNT_TAKE..=KIND_ACCOUNT_LEAVE) => ATake::read(&said).is_some(),
+        (Host::Account(x), KIND_ACCOUNT_TAKE..=KIND_ACCOUNT_LEAVE) => x.shard.is_none() && ATake::read(&said).is_some(),
+        (Host::Account(x), KIND_C_TAKE..=KIND_C_STEP) => x.shard.is_some() && CSaid::read(&said).is_some(),
         _ => false,
     };
     if !of_kind {
@@ -226,7 +235,8 @@ impl AObj {
         match self {
             AObj::Account(a) => a.hash(),
             AObj::Shard(s) => s.hash(),
-            AObj::Note(n) => n.hash(),
+            AObj::Left(n) => n.hash(),
+            AObj::Rest(n) => n.hash(),
             AObj::Stated { st, .. } => st.hash(),
             AObj::Pointed { q, .. } => q.hash(),
         }
@@ -236,7 +246,8 @@ impl AObj {
         match self {
             AObj::Account(a) => if a.shard.is_some() { "covered account" } else { "account" },
             AObj::Shard(_) => "shard",
-            AObj::Note(_) => "shard note",
+            AObj::Left(_) => "note that legs left",
+            AObj::Rest(_) => "note of the rest",
             AObj::Stated { on: Host::Shard(_), .. } => "stated draw",
             AObj::Stated { .. } => "statement",
             AObj::Pointed { on: Host::Shard(_), .. } => "disputed draw",
@@ -249,7 +260,8 @@ impl AObj {
         match self {
             AObj::Account(a) => a.pot(),
             AObj::Shard(s) => s.held + SHARD_CARRIER,
-            AObj::Note(n) => n.value(),
+            AObj::Left(n) => n.value(),
+            AObj::Rest(n) => n.value(),
             AObj::Stated { st, .. } => st.held + st.bond,
             AObj::Pointed { q, .. } => q.st.held + 2 * q.st.bond,
         }
@@ -259,7 +271,8 @@ impl AObj {
         match self {
             AObj::Account(a) => [vec![20], a.terms(), vec![a.legs.len() as u8], a.legs.iter().flat_map(leg_bytes).collect(), a.moving()].concat(),
             AObj::Shard(s) => [vec![21], s.terms(), s.rows_bytes(), s.moving()].concat(),
-            AObj::Note(n) => [vec![22], n.sid.to_vec(), i9(n.kind), n.head.bytes(), i9(n.net), i9(n.gross), n.key.to_vec(), i9(n.amount)].concat(),
+            AObj::Left(n) => [vec![22], n.sid.to_vec(), vec![n.legs.len() as u8], n.legs.iter().flat_map(leg_bytes).collect(), n.key.to_vec(), i9(n.asked)].concat(),
+            AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
             AObj::Stated { on, st, said } => [vec![23], stated_bytes(on, st, said)].concat(),
             AObj::Pointed { on, q, said } => [vec![24], stated_bytes(on, &q.st, said), q.disputer.to_vec(), i9(q.point)].concat(),
         }
@@ -278,7 +291,16 @@ impl AObj {
                 AObj::Account(a)
             }
             21 => AObj::Shard(shard_of(&mut r)?),
-            22 => AObj::Note(SNote { sid: r.key()?, kind: r.int()?, head: head_of(&mut r)?, net: r.int()?, gross: r.int()?, key: r.key()?, amount: r.int()? }),
+            22 => {
+                let sid = r.key()?;
+                let n = r.take(1)?[0] as usize;
+                let mut legs = Vec::with_capacity(n);
+                for _ in 0..n {
+                    legs.push(leg_of(&mut r)?);
+                }
+                AObj::Left(Left { sid, legs, key: r.key()?, asked: r.int()? })
+            }
+            25 => AObj::Rest(Rest { sid: r.key()?, key: r.key()?, amount: r.int()? }),
             23 => {
                 let (on, st, said) = stated_of(&mut r)?;
                 AObj::Stated { on, st, said }

@@ -2767,3 +2767,50 @@ fn t1b_fixed_f50_a_member_signs_no_grid_time_once_a_quorum_of_one_stands() {
     assert!(out.contains("answer: not signed for DAA 33600") && files(&third) == 0, "the key's journal refuses another price for a time it signed: {out}");
     println!("T1b F50 fixed: members 0 and 1 give 33,600 a quorum; member 2 and then member 0 (run on to 34,900) sign no further time of the claim, and the 33,600 quorum ends it; from a second folder with another reading member 0 is refused 33,600 by its key's journal");
 }
+
+/// Round 53. The old form of a covered account, at the command line. A library the command creates has 57
+/// scripts and none of the seven that went; `acct-leg` and `acct-out` are no commands. On a covered account
+/// opened by the command: `--b-margin` at its opening and `acct-add --side b` are refused; `acct-take`,
+/// `acct-leave` and `acct-liq` state nothing (by either side); and the clearing party ends a user's account of no
+/// leg by its own key, the coins to the user.
+#[test]
+fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
+    let mut s = setup("r53-old-form");
+    let (me, exec, market, genesis, registry, anchor) = (s.me.clone(), s.exec.clone(), s.market.clone(), s.genesis.clone(), s.registry.clone(), s.anchor.clone());
+    let mut names: Vec<String> = std::fs::read_dir(&s.lib_dir).unwrap().filter_map(|e| e.unwrap().file_name().to_string_lossy().split("-script-").nth(1).map(|n| n.trim_end_matches(".json").to_string())).collect();
+    names.sort();
+    names.dedup();
+    let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
+    assert_eq!(names.len(), 57, "{names:?}");
+    assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
+    for cmd in ["acct-leg", "acct-out"] {
+        let (ok, out, err) = s.h.run(&[cmd, "--account", "nothing.json"]);
+        assert!(!ok && (err.contains("unknown") || err.contains(cmd)), "{cmd}: {out} {err}");
+    }
+    // A shard of 50 KAS and a covered account of 20 against it.
+    let (shard_s, open_c, add_c, change, end_s) = (s.script("KpfTShardOpen"), s.script("KpfTOpenC"), s.script("KpfTAddC"), s.script("KpfTChange"), s.script("KpfTAcctEnd"));
+    let d = s.h.build(&exec, &["shard-open", "--lib", &genesis, "--anchor", &anchor, "--script", &shard_s, "--registry", &registry, "--market1", &market, "--held", "50", "--dispute-daa", "50"]);
+    let shard = s.h.obj(&d, "shard", 33_100);
+    let seed = s.h.last.split("seed ").nth(1).and_then(|x| x.get(..64)).expect("the shard's seed").to_string();
+    let open = ["acct-open", "--shard", &shard, "--anchor", &anchor, "--script", &open_c, "--registry", &registry, "--seed", &seed, "--market1", &market, "--key", &exec, "--a", &me, "--b", &exec, "--a-margin", "20", "--dispute-daa", "50"];
+    let mut with_b = open.to_vec();
+    with_b.extend(["--b-margin", "2"]);
+    let err = s.h.refused(&me, &with_b);
+    assert!(err.contains("b-margin"), "{err}");
+    let d = s.h.build(&me, &open);
+    let account = s.h.obj(&d, "covered account", 33_110);
+    let err = s.h.refused(&exec, &["acct-add", "--account", &account, "--script", &add_c, "--side", "b", "--amount", "3"]);
+    assert!(err.contains("nothing of a second party's"), "{err}");
+    let mut refused = 2;
+    for (cmd, who, side) in [("acct-take", &me, "a"), ("acct-take", &exec, "b"), ("acct-leave", &me, "a"), ("acct-leave", &exec, "b"), ("acct-liq", &exec, "a"), ("acct-liq", &me, "b")] {
+        let mut args = vec![cmd, "--account", &account, "--script", &change, "--side", side, "--prices", "13", "--t0", "33150"];
+        args.extend(if cmd == "acct-take" { ["--amount", "1"] } else { ["--leg", "1"] });
+        let err = s.h.refused(who, &args);
+        assert!(err.contains("kinds of its own"), "{cmd} --side {side}: {err}");
+        refused += 1;
+    }
+    // The clearing party ends the user's account of no leg: the coins are the user's.
+    let d = s.h.build(&exec, &["acct-end", "--account", &account, "--script", &end_s, "--side", "b"]);
+    assert_eq!(paid(&d, &me), 20 * KAS, "the user's 20 KAS, whoever ended it");
+    println!("T1b R53 the command line: a library of 57 scripts and none of the seven; acct-leg and acct-out are no commands; {refused} commands of the old form refused on a covered account; the clearing party ends a user's account of no leg and the user is paid its 20 KAS");
+}

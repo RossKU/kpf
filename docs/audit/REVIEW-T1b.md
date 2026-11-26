@@ -8223,3 +8223,254 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests     
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed (in the workspace run)
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
 ```
+
+# Round 53
+
+Scope: the removal of the old form of a covered account (docs 14.8 "what goes", 14.10 "(d) What went"), at the
+engine. Seven scripts are out of the library (57 of 64); seven are changed (`KpfTChange`, `KpfTPoint`,
+`KpfTOpenC`, `KpfTAddC`, `KpfTAcctEnd`, `KpfTDrawNote`, `KpfTLeftVoid`). My four files pruned and brought
+along; the whole workspace run once. Working tree after e326686; no src, contract or `kpf-out` file touched; no
+commit. (`KpfTEnterS`, `KpfTEnterOff` and `KpfTShardOpen` differ from the commit in a comment each, no byte of
+script.)
+
+## Headline
+
+- **F74, F78 and F68 are closed by the removal, and F84 is fixed**; each has a test that says so, with the
+  script's line.
+- **F86 (Medium), new: F81 is open again for a note that asks below zero.** The three scripts that clear a note
+  add `-asked` to the shard and read nothing of what the note holds. A note that says more than it holds is
+  cleared only by whoever pays the difference into the shard; one that says more than is counted is cleared by
+  nothing, and ends every draw. For a leg of the books this was so in round 52 (I did not see it there); F84's
+  fix made it so for a leg in no row too.
+- **F85 (Low), new: what went is still written in five scripts that stay**, behind conditions nothing reaches.
+  Run at the engine on objects made by hand: `KpfTStepEnd`, `KpfTStepRow` and `KpfTStepLiq` still answer a
+  statement of an old kind on a covered account right, the old note that a leg left among its outputs.
+- The doors themselves hold: nothing states a kind of the old form on 171 bytes, kind 6 is stated and disputed
+  nowhere, no script takes an object of the old notes' hash, and no script of a covered account takes 138 bytes.
+- The whole workspace, once: 1,251 passed, 0 failed.
+
+## What the removal closes
+
+### F74: closed
+
+A covered account has nothing of a second party's, and nothing writes it any.
+`t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_writes_it_any`, on a shard and an
+account opened at the engine; 14 transactions refused:
+
+| Script, line | Refused | Taken |
+|---|---|---|
+| `KpfTOpenC` 110, `mv.slice(76, 84) ==` the bytes of nothing | an opening with 1 sompi, 1 KAS, 20 KAS of side B's (the builder writes it); the bytes `00..80` in that place | nothing of side B's |
+| `KpfTAddC` 86, `side == SIDE_A` | side B adding 1 sompi or 1 KAS, signed by its key alone or by every key; the user's own adding said of side 2, 0, 3, -1 | the user adds |
+| `KpfTAcctEnd` 96, `bm == 0` | shown an account with a sompi of side B's; with a leg; the shard itself as an account of its owner's | an account of no leg ended by its user, and by the clearing party (the 20 KAS to the user both ways) |
+| `KpfTEnterS` | an entry on an account made by hand with a sompi of side B's | |
+
+`KpfTCEnd` answers kinds 7 to 9 wrong on an account with anything of side B's, as before; no such account is
+made. The scripts that write a covered account (`KpfTCEnd`, `KpfTEnterS`, `KpfTCEnter`, `KpfTEnterOff`,
+`KpfTAddC`) copy those eight bytes.
+
+### F78: closed
+
+`KpfTHand` is not in the library. `t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins`: none of
+the seven is in the library of 57; an account of 2 KAS whose time is 300,000,400 is added to by its user and
+ended. The scripts that take 171 bytes and read the two places (121..129, 130..138), from their sources:
+`KpfTLeft`, `KpfTLeftAll`, `KpfTShardEnd`, `KpfTShardOpen` (a shard's basis and call); `KpfTCEnd`,
+`KpfTEnterOff`, `KpfTEnterS`, `KpfTOpenC` (an account's count and time, as such); and `KpfTStepEnd`, which reads
+them as asks in coins where it answers a take of kind 2. That last reading is behind `KpfTChange` 157 (a kind of
+2 to 4 is stated on 138 bytes), so it is not reached: see F85.
+
+### F68: closed
+
+A leg is in a shard's rows and in its basis by one transaction and out of both by one; `KpfTNoteApply`, which
+wrote a row and no basis, is gone. `t1b_fixed_f68_a_leg_is_in_the_rows_and_in_the_basis_by_one_transaction_and_out_of_both_by_one`,
+the whole way at the engine with round 47's leg (a short of 10 units at 10):
+
+- stated by `KpfTEnterS` (lines 197 to 216): the row and a basis of 100 KAS; the same transaction writing the
+  row and no basis, the basis and no row, or the basis the other way is refused; the shard's equity at the
+  leg's entry is the 50 KAS it holds;
+- the entry applied (the account: one leg, a count of one, a time of 6,900); the leg leaves at its entry by its
+  user's statement of time 6,900; the note (asking nothing) applied by `KpfTLeft`: no row, a basis of nothing,
+  an equity of 50 KAS. Round 47 had 150 KAS there for good. The note applied with the basis left at 100 KAS is
+  refused.
+
+### F84: fixed
+
+`KpfTLeftVoid` 153 to 156. `t1b_fixed_f84_what_a_spent_note_held_for_the_shard_is_the_shards`, round 52's case
+(a note that holds 12.2 KAS, of a leg the books lost): spent, the shard holds 12 KAS more in its state and in
+its value, as `Shard::voided` says; the spender has 0.19 KAS (a note's least less the fees). Refused (8): the
+shard a sompi less; the state without the coins, with the value and without; the coins in the state and not in
+the value; a sompi more in the state; and, for a note that asks 30 KAS, 1 sompi or nothing (which leaves the
+shard as it is), the shard written holding more. The random test of round 52 passes with it (486 legs named,
+none of a note that is applied spent).
+
+What the fix opens is F86.
+
+## Findings
+
+### F86 (Medium). A note that asks below zero is cleared at its clearer's cost, or by nothing
+
+`KpfTLeft` 154 and 155 (`held = held - asked; v = v - asked`), `KpfTLeftAll` 163 and 164, and now `KpfTLeftVoid`
+153 to 156: where a note asks below zero the shard that goes on holds `-asked` more, in state and in value. The
+note's own value is read nowhere. A right statement writes such a note holding exactly that (`KpfTCEnd`:
+`NOTE_MIN + pay`, `asked = -pay`). A statement nobody disputed (F81's premise, and the reason `KpfTLeftVoid`
+exists) writes whatever its outputs say: a note that holds a note's least and says anything.
+
+`t1b_finding_f86_a_note_that_says_it_holds_more_than_it_does_is_cleared_at_its_clearers_cost_or_by_nothing`:
+
+| The note says | Its leg | Cleared |
+|---|---|---|
+| -600 KAS, holds 0.2 | of the books | applied by `KpfTLeft`: whoever applies it pays 599.81 KAS into the shard |
+| -600 KAS, holds 0.2 | in no row | spent by `KpfTLeftVoid`: whoever spends it pays 599.81 KAS into the shard |
+| the largest number less five | of the books | by nothing (the sum does not fit; three ways of writing the shard refused) |
+| the largest number less five | in no row | by nothing, the same |
+
+Each of the four ends a draw while it stands (`KpfTDrawNote` takes a note that legs left "whatever it asks":
+run for the last two). So one object, written once, ends every draw of the shard: for good in the last two
+rows; in the first two until somebody puts what it says into the shard. The owner can (the coins stay its
+shard's), which makes the first two a cost in locked coins and the last two a lock.
+
+Where it stood before: for a leg of the books, since `KpfTLeft` took a note below zero (round 47); round 52's
+`KpfTLeftVoid` did not reach it (the leg is in the books) and I did not test it. For a leg in no row round 52
+spent it for nothing; F84's fix asks the coins of the spender.
+
+Closing it: the three scripts add what the note HOLDS above a note's least, capped at `-asked`
+(`more = min(-asked, value of the note's input - NOTE_MIN)`, not below zero). A right note is as now. A note
+that says more than it holds is applied or spent by anyone for nothing, and the shard gets what is there. Then
+no number in a note is a number somebody has to pay, and none fails to fit.
+
+### F85 (Low). What went is still written in five scripts that stay
+
+`t1b_finding_f85_what_went_is_still_written_in_five_scripts_behind_conditions_nothing_reaches` reads the
+sources; `t1b_r53_the_kinds_of_the_old_form_are_stated_on_no_covered_account_and_kind_6_is_disputed_nowhere`
+runs three of them.
+
+| Script (bytes) | What is left | What stands before it |
+|---|---|---|
+| `KpfTStepEnd` (2,175) | for 171 bytes: a take for side B by anyone, written as a deposit note of the old form (kind 3); the count of legs and the time read as asks | `KpfTChange` 157 |
+| `KpfTStepLiq` (2,783) | for 171 bytes: the old note that a leg left (kind 2) and of what is owed (kind 4) | `KpfTChange` 157 |
+| `KpfTStepRow` (3,589), `KpfTStepPrice` (1,698) | the branches of kind 6 | `KpfTPoint` 109 |
+| `KpfTAcctEnd` (682) | the deposit note (kind 3) under `bm > 0` | its own line 96 (the script grew by four bytes this round) |
+
+At the engine, on objects made by hand on a covered account (nothing writes them): a take of kind 2 is disputed
+by `KpfTPoint`, which reads no moving part; its end is answered right by `KpfTStepEnd` and its row by
+`KpfTStepRow`; a leaving of kind 4 whose outputs are the account and the OLD note that a leg left has its end
+answered right by `KpfTStepLiq`. So the old form is one condition from live in two places, and the old notes'
+hash is still a right output in the library. No hole: `KpfTChange` and `KpfTEnterS` are the scripts that write
+a statement, and neither writes these. Closing it: `mv.length == 138` in the three `KpfTStep*` that take a
+moving part, the kind-6 branches and the dead branch of `KpfTAcctEnd` out; smaller scripts, and "nothing writes
+a note of the old form" becomes a fact of the sources.
+
+In the model and the command, read and not run: `Stepped.owed` (`thin.rs`, "what the shard is asked") is still
+computed on an account no shard covers, and `acct-leave` prints "... KAS are owed by the shard" for one.
+
+## What the removal opened: looked for, not found
+
+`t1b_r53_the_kinds_of_the_old_form_...`, `t1b_r53_no_script_takes_a_note_of_the_old_form_and_none_of_a_covered_account_takes_138_bytes`,
+and the test of round 47 brought along:
+
+- `KpfTChange`: kinds 2, 3 and 4 written for the same account without its shard are taken on the 138 bytes and
+  refused on the 171; kind 6 is stated on neither; the model writes no take, leaving or step of the old form on
+  a covered account.
+- `KpfTPoint`: a statement of kind 6 made by hand, on a covered account and on one no shard covers, is not
+  disputed (kinds 7 and 2 are the controls).
+- `KpfTDrawNote`: ends a draw by a note that legs left and by a note of the rest; shown an object of the old
+  form's hash of kinds 1 to 4, 5, 8 and 0, with the owner's key and the user's (14 transactions): refused.
+  `KpfTLeft.rest` and `KpfTLeftVoid` shown the same objects (8): refused.
+- 138 bytes before the scripts typed for 171: `KpfTAddC`, `KpfTEnterS` and `KpfTCEnd` are shown the account
+  without its shard, its object and its 138 bytes: refused (each control, the 171 bytes pushed again, passes).
+  `KpfTCRow` and `KpfTLeft*` are shown no account's moving part.
+- The command line (`t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line`): a library the
+  command creates has 57 scripts and none of the seven; `acct-leg` and `acct-out` are no commands; `--b-margin`
+  at the opening and `acct-add --side b` are refused; `acct-take`, `acct-leave` and `acct-liq`, by either side,
+  state nothing on a covered account (6); the clearing party ends a user's account of no leg and the user is
+  paid its 20 KAS.
+
+One thing to know and no finding: `KpfTAcctEnd` is signed by either party alone, so the clearing party ends a
+user's account of no leg whenever it likes. The coins go to the user's key by the script.
+
+## The sizes of the seven (item d)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTChange` | 1,417 | 1,397 |
+| `KpfTPoint` | 2,588 | 2,582 |
+| `KpfTOpenC` | 672 | 676 |
+| `KpfTAddC` | 516 | 535 |
+| `KpfTAcctEnd` | 682 | 678 |
+| `KpfTDrawNote` | 1,159 | 1,306 |
+| `KpfTLeftVoid` | 1,719 | 1,612 |
+
+As the library holds them (`t1b_r53_the_sizes_of_the_seven_scripts_that_changed`) and as the manifest says;
+"was" is the manifest of the commit.
+
+## My files (item a)
+
+`auditT1_builders.rs`: 162 tests before, 143 now. 28 went, 9 are new.
+
+- Went, with the form they tested: F56 (`KpfTLegAdd`'s bound), F59, the three of round 34 on `KpfTHand`,
+  `KpfTLegMove` and the old notes, F60 and round 36's three (`KpfTLegOut`), round 37's (side B's margin), F61,
+  F62, F63, round 39's four on the entry of kind 6, F65, F66, F67, round 45's F68, round 46's two on the old
+  notes' shapes, and the tests of F74, F68, round 47's item f, F78 and F84 as findings.
+- Became tests that the thing is refused or closed: `t1b_fixed_f74_...`, `t1b_fixed_f78_...`,
+  `t1b_fixed_f68_...`, `t1b_fixed_f84_...`; round 47's test of the kinds (kinds 2 to 4 on 171 bytes: refused).
+- Brought along on an account no shard covers, which is what kinds 2 to 4 are of: F57 (its covered cases out),
+  F58 (the part on `leg_added` and `leg_moved` out), round 35's test of what is said of a leg that leaves (the
+  end of such an account is made of nothing that is said: the units of the least number are wrong at the row
+  alone now), round 42's lock (a take of nothing by side B is by its own key there).
+- Brought along otherwise: F64 (the account opened with nothing of side B's), round 45's "nothing writes the
+  basis" (the opening alone; the entry and the note are F68's test now), round 46's two tests of a draw (the
+  leg booked as an entry books it), round 48's 180 bytes (`KpfTHand` out).
+
+What became of the three that were open on purpose: F66 (side B enters with nothing) and F67 (a put under a
+shard) are of a form that is gone: a covered account has no side B's margin, and a shard's rows are of futures
+legs (`KpfTEnterS` asks long or short: read, not run this round). F61's door (a leg entered by two signatures
+at an entry of their choosing) is gone; an entry's price is a row of its trace, answered from the committee's
+price (round 51's random test). I did not run F61's scenario again on the new form.
+
+`auditT1_tests.rs`: the table at 57 scripts, 66 entries, 55 `release`; 55 pass. `auditT1_cli.rs`: one test
+new, 48 pass. `auditT1_solvency.rs`: unchanged, 11 pass (a model of its own; nothing of the old form's names).
+
+## Not reached
+
+- `KpfTStepLiq` on a step of kind 3, and `KpfTStepPrice`, on an object of an old kind made by hand: the take,
+  its row and the leaving of kind 4 are run.
+- An option leg before `KpfTEnterS`: read (the line asks long or short), not run.
+- F61 on the new form: above.
+- `aobj.rs` (what is kept of an object, 22 and 25) and the reading back of a statement of kinds 7 to 9: the
+  coordinator's tests; not attacked this round.
+- F83 (Low, the undo of an entry on a small account): still open at the builder, as asked left alone;
+  `t1b_finding_f83_...` passes as it did.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F86 | Medium | open, new: `t1b_finding_f86_...` |
+| F85 | Low | open, new: `t1b_finding_f85_...` |
+| F83 | Low | open (a builder's matter) |
+| F74, F78, F68 | | closed by the removal, verified |
+| F84 | | fixed, verified (what it opens: F86) |
+| F81 | | fixed in round 52 for a note that asks nothing or something; open again as F86 for one that asks below zero |
+| F66, F67 | | their form is gone |
+| F61 | | its door is gone; not run again on the new form |
+| F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 143 pass.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass.
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 48 pass.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,251 passed, 0 failed (138 result lines; it
+was 1,291 in 140 before the removal). Nothing failed, mine or not. `clearing_cli` 1 of 1, `committee_cli` 13 of
+13, `thin_draw` 22 of 22.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 143 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
+```

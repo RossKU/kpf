@@ -110,7 +110,7 @@ contract KpfTShardOpen(int init_version) {
         // The id: of this opening (the hash of the anchor's outpoint), of the one committee whose prices the
         // accounts under this shard are counted at, and of the terms and periods those accounts have: this shard's
         // own ten terms, lateness, dispute period and bond rate. A leg enters an account only if the leg's
-        // committee is that one and the account's terms and periods are these (KpfTStepEnter): who takes the shard
+        // committee is that one and the account's terms and periods are these (KpfTEnterS): who takes the shard
         // as its cover reads them in its id, and no account of looser terms is owed by it.
         require(mv.slice(139, 171) == byte[](blake2b(byte[](blake2b(byte[](OpOutpointTxId(j)) + byte[](OpOutpointIndex(j) as byte[8]))) + byte[](committee) + byte[](terms) + mv.slice(93, 120))));
         int held = int(byte[8](mv.slice(67, 75)));

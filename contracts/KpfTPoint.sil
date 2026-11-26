@@ -105,6 +105,8 @@ contract KpfTPoint(int init_version) {
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 2);
         require(kind <= 10);
+        // (Kind 6, a leg that entered by the old form, is no kind any more.)
+        require(kind != 6);
         require(point >= 0);
         int landed = OpTxInputDaaScore(j);
         require(landed >= t0);

@@ -82,13 +82,10 @@ contract KpfTAddC(int init_version) {
         byte[] mv = byte[](moving);
         require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(delta > 0);
+        // (Side A alone: a covered account has nothing of a second party's, and a shard has no second party.)
+        require(side == SIDE_A);
         int at = 67;
         byte[] k = mv.slice(1, 33);
-        if (side != SIDE_A) {
-            require(side == SIDE_B);
-            at = 76;
-            k = mv.slice(34, 66);
-        }
         signedBy(s, k);
         int m = int(byte[8](mv.slice(at, at + 8))) + delta;
         require(m <= MARGIN_MAX);

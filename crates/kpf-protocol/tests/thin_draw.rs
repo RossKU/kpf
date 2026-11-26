@@ -10,7 +10,7 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms, SIDE_A};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OSigned};
-use kpf_protocol::reserve::{Draw, Head, SNote, Shard, ShardRow, NOTE_JOIN, NOTE_MIN, SHARD_CARRIER};
+use kpf_protocol::reserve::{Draw, Head, Shard, ShardRow, NOTE_MIN, SHARD_CARRIER};
 use kpf_protocol::state::LONG;
 use kpf_protocol::thin::{Account, Out, Outs, Pointed, Stated, KIND_ACCOUNT_TAKE, KIND_DRAW};
 use kpf_protocol::thin_build::*;
@@ -302,88 +302,6 @@ fn a_price_that_understates_the_requirement_is_answered_by_the_committees() {
 }
 
 #[test]
-fn a_note_that_is_not_applied_ends_a_draw() {
-    let w = world();
-    let shard = w.shard();
-    let s = &shard.s;
-    let (st, d) = s.draw(KAS1, PRICES, T0, shard.value as i64).unwrap();
-    let live = w.stated(&shard, &st, &d.said());
-    // A leg entered an account of the owner's before the draw was stated, and its note is not applied: the shard's
-    // net is not what the draw counted.
-    let leg = XLeg { market: w.markets[0].id(), committee: w.markets[0].committee_id, scale: w.markets[0].p.scale, price_max: w.markets[0].p.price_max, size: 500 * w.markets[0].p.scale, dir: LONG, entry: P10 };
-    let join = SNote::leg(NOTE_JOIN, s.sid, &leg, xk(&w.c));
-    let note = OLive { s: join, value: NOTE_MIN as u64, id: shard.id, op: op(13), daa: 6_400 };
-    let f = [fund(xk(&w.w), 33)];
-    let b = draw_note(&w.lib, &live, &st, None, s, &note, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).unwrap();
-    let sg = signed("draw ended by a note", &b, &w.keys);
-    let n = sg.tx.outputs.len();
-    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
-    assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (NOTE_MIN as u64, &hash_spk(&w.lib, &join.hash())), "the note goes on as it is");
-    assert_eq!((sg.tx.outputs[n - 1].value, &sg.tx.outputs[n - 1].script_public_key), ((st.bond / 2) as u64, &p2pk_spk(&xk(&w.w))), "half of the owner's bond to who showed it");
-    // A draw disputed at a point is ended the same way, and the disputer has its bond back.
-    let q = w.pointed(&live, 1);
-    let b = draw_note(&w.lib, &q, &st, Some((xk(&w.w), 1)), s, &note, &w.script("KpfTDrawNote"), xk(&w.f), w.payer(&w.w, &f)).unwrap();
-    let sg = signed("disputed draw ended by a note", &b, &w.keys);
-    let n = sg.tx.outputs.len();
-    assert_eq!((sg.tx.outputs[n - 2].value, &sg.tx.outputs[n - 2].script_public_key), (st.bond as u64, &p2pk_spk(&xk(&w.w))));
-    // A note that landed at or after the statement does not end it (the builder refuses; and the script, the same
-    // transaction with the note's landing moved).
-    let young = OLive { daa: 6_510, ..note.clone() };
-    assert!(draw_note(&w.lib, &live, &st, None, s, &young, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).is_err());
-    let mut t = draw_note(&w.lib, &live, &st, None, s, &note, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).unwrap();
-    t.entries[2].block_daa_score = 6_510;
-    assert!(!accepted(&t, &w.keys), "a note as young as the statement ends it");
-    // A note of an account whose side B is not the owner is applied by no shard, and ends no draw: else anyone would
-    // hold every draw of a clearing party with a note of its own making.
-    let stranger = OLive { s: SNote::leg(NOTE_JOIN, s.sid, &leg, xk(&w.w)), ..note.clone() };
-    assert!(draw_note(&w.lib, &live, &st, None, s, &stranger, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).is_err());
-    let mut t = draw_note(&w.lib, &live, &st, None, s, &note, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).unwrap();
-    {
-        use kpf_protocol::oracle_build::OPlan;
-        use kpf_protocol::tx::Arg;
-        use silverscript_abi::ArtifactValue;
-        // (The note shown as the stranger's: its key in the script's arguments, and the note's own script.)
-        let OPlan::Contract { args, .. } = &mut t.plans[1] else { panic!("the script") };
-        args[20] = Arg::V(ArtifactValue::Bytes(xk(&w.w).to_vec()));
-        let stranger_script = kpf_protocol::thin_artifacts::kit().object(&w.lib, &stranger.s.hash());
-        t.entries[2].script_public_key = kpf_protocol::tx::p2sh_spk(&stranger_script);
-        if let OPlan::Contract { redeem, .. } = &mut t.plans[2] {
-            *redeem = stranger_script;
-        }
-        t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &stranger.s.hash());
-    }
-    assert!(!accepted(&t, &w.keys), "a stranger's note ends a draw");
-    // What a user is owed by an account of the owner's ends it; what an account of strangers owes does not; and a
-    // deposit does not (it only adds to what the shard holds, and anyone writes one at any time: it would be a way
-    // to take half of an owner's bond by landing one just before a draw).
-    let swap = |n: &SNote| {
-        use kpf_protocol::oracle_build::OPlan;
-        use kpf_protocol::tx::{iv, Arg};
-        use silverscript_abi::ArtifactValue;
-        let mut t = draw_note(&w.lib, &live, &st, None, s, &note, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).unwrap();
-        let OPlan::Contract { args, .. } = &mut t.plans[1] else { panic!("the script") };
-        let bytes = |b: Vec<u8>| Arg::V(ArtifactValue::Bytes(b));
-        (args[16], args[17], args[18], args[19], args[20], args[21]) = (iv(n.kind), bytes(n.head.bytes()), iv(n.net), iv(n.gross), bytes(n.key.to_vec()), iv(n.amount));
-        let script = kpf_protocol::thin_artifacts::kit().object(&w.lib, &n.hash());
-        t.entries[2].script_public_key = kpf_protocol::tx::p2sh_spk(&script);
-        if let OPlan::Contract { redeem, .. } = &mut t.plans[2] {
-            *redeem = script;
-        }
-        t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &n.hash());
-        t
-    };
-    assert!(accepted(&swap(&join), &w.keys), "the control: the swap of a note for itself");
-    let owed = SNote::owed(s.sid, xk(&w.w), xk(&w.c), 3 * KAS1);
-    let b = draw_note(&w.lib, &live, &st, None, s, &OLive { s: owed, ..note.clone() }, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).unwrap();
-    signed("draw ended by a note of what is owed", &b, &w.keys);
-    assert!(accepted(&swap(&owed), &w.keys));
-    for (what, n) in [("what strangers owe", SNote::owed(s.sid, xk(&w.w), xk(&w.f), 3 * KAS1)), ("a deposit", SNote::deposit(s.sid, xk(&w.c), 3 * KAS1)), ("a note to another shard", SNote { sid: [0x77; 32], ..join })] {
-        assert!(draw_note(&w.lib, &live, &st, None, s, &OLive { s: n, ..note.clone() }, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &f)).is_err(), "{what}");
-        assert!(!accepted(&swap(&n), &w.keys), "{what} ends a draw");
-    }
-}
-
-#[test]
 fn a_shard_takes_a_draw_and_no_other_statement_and_an_account_takes_no_draw() {
     let w = world();
     let shard = w.shard();
@@ -587,8 +505,9 @@ fn what_is_kept_of_a_shard_a_note_and_a_draw_reads_back_as_it_was_written() {
         AObj::Shard(*s),
         AObj::Account(account.clone()),
         AObj::Account(plain),
-        AObj::Note(SNote::leg(NOTE_JOIN, s.sid, &leg, xk(&w.c))),
-        AObj::Note(SNote::owed(s.sid, xk(&w.w), xk(&w.c), 3 * KAS1)),
+        AObj::Left(Left { sid: s.sid, legs: vec![leg, XLeg { dir: -LONG, ..leg }], key: xk(&w.w), asked: 3 * KAS1 }),
+        AObj::Left(Left { sid: s.sid, legs: vec![leg], key: xk(&w.w), asked: -3 * KAS1 }),
+        AObj::Rest(Rest { sid: s.sid, key: xk(&w.w), amount: 3 * KAS1 }),
         AObj::Stated { on: Host::Shard(*s), st, said: d.said() },
         AObj::Pointed { on: Host::Shard(*s), q: Pointed { st, disputer: xk(&w.w), point: 3 }, said: d.said() },
     ];
@@ -1635,6 +1554,21 @@ fn a_note_of_a_leg_that_is_not_in_the_books_is_spent_and_changes_nothing() {
         let sg = signed(&format!("{what}: spent"), &b, &w.keys);
         assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &shard.s.hash()), "{what}: nothing is paid and the books are as they were");
     }
+    // A note that holds what an account paid: the shard holds it from there (review 52, F84), and no less.
+    let paid = Left { sid: shard.s.sid, legs: vec![absent], key: xk(&w.w), asked: -3 * KAS1 };
+    let live = OLive { value: paid.value() as u64, ..left_note(&shard, &paid, 9) };
+    let after = shard.s.voided(&paid).unwrap();
+    assert_eq!((after.held, after.rows, after.basis), (shard.s.held + 3 * KAS1, shard.s.rows, shard.s.basis));
+    let b = left_void(&w.lib, &shard, &live, 0, &void, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a note that held what an account paid, spent", &b, &w.keys);
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value + 3 * KAS1 as u64, &hash_spk(&w.lib, &after.hash())), "the shard holds what the note held");
+    for (what, value, state) in [("the shard as it was, and the coins whoever spends it's", shard.value, shard.s), ("the state says more and the output holds no more", shard.value, after), ("a sompi less", shard.value + 3 * KAS1 as u64 - 1, after)] {
+        let mut bad = b.clone();
+        bad.tx.outputs[0].value = value;
+        bad.tx.outputs[0].script_public_key = hash_spk(&w.lib, &state.hash());
+        assert!(!accepted(&bad, &w.keys), "{what}");
+    }
+    assert!(shard.s.voided(&Left { legs: vec![leg], ..paid.clone() }).is_err());
     // A note of legs that are in the books is not spent so, whichever leg is named; it is applied.
     let real = Left { sid: shard.s.sid, legs: vec![leg], key: xk(&w.w), asked: 3 * KAS1 };
     assert_eq!(shard.s.gone_at(&real), None);

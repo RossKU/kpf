@@ -89,14 +89,8 @@ contract KpfTDrawNote(int init_version) {
                 require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(7) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
             }
         } else {
-            require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(kind) + byte[](head) + i9(net) + i9(gross) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
-            if (kind == 1 || kind == 2) {
-                require(byte[](key) == mv.slice(1, 33));
-            } else {
-                // (A deposit ends no draw: it only adds to what the shard holds, and anyone writes one at any time.)
-                require(kind == 4);
-                require(byte[](head).slice(0, 33) == mv.slice(0, 33));
-            }
+            // (No other note is written to a shard: the notes of the old form are gone.)
+            require(kind == 6);
         }
         require(OpTxInputDaaScore(n) < OpTxInputDaaScore(j));
         byte[32] id = OpInputCovenantId(j);

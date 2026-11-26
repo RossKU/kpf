@@ -21,16 +21,16 @@ use kpf_protocol::cross::XLeg;
 use kpf_protocol::error::{from_hex, hex32, to_hex};
 use kpf_protocol::network::{p2pk_address, Network};
 use kpf_protocol::oracle_build::{OBuilt, OLive};
-use kpf_protocol::reserve::{Draw, Shard, NOTE_DEPOSIT, NOTE_JOIN, NOTE_OWED, NOTE_RELEASE, SHARD_ROWS};
+use kpf_protocol::reserve::{Draw, Shard, SHARD_ROWS};
 use kpf_protocol::thin::{leg_bytes, ATake, Account, Pointed, Stated, TObj, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_LIQ, KIND_ACCOUNT_TAKE, KIND_DRAW};
 use kpf_protocol::thin_artifacts as pinned;
 use kpf_protocol::thin_build::{self as tb, Payer};
 use kpf_protocol::tx::KeySet;
 use serde_json::Value;
 
-use crate::args::{fmt_kas, kas, parse_amount, Args};
-use crate::ccmds::{cmarket_from, leg_of, terms_of};
-use crate::cmds::{connect, e, int_or, network, price, price_or, side, with_node_facts, R};
+use crate::args::{fmt_kas, kas, Args};
+use crate::ccmds::{cmarket_from, terms_of};
+use crate::cmds::{connect, e, int_or, network, price, price_or, with_node_facts, R};
 use crate::files::{read_json, write_json, ObjFile};
 use crate::ocmds::{finish_signed, funding, only, out_dir, rate};
 use crate::tcmds::{anchor_of, file_of, lib_of, script_of, side_of, word, write_made, Made, N};
@@ -158,23 +158,12 @@ fn leg_line(l: &XLeg) -> String {
     }
 }
 
-/// The direction's place of a leg from `--dir`: long or short; or an option as side A has it (call, put: A holds
-/// it; call-written, put-written: A wrote it), struck at `--strike`.
-fn dir_of(a: &Args) -> R<i64> {
-    use kpf_protocol::thin::{option_dir, CALL_HELD, CALL_WRITTEN, PUT_HELD, PUT_WRITTEN};
-    let kind = match a.need("dir")?.to_ascii_lowercase().as_str() {
-        "call" => CALL_HELD,
-        "call-written" => CALL_WRITTEN,
-        "put" => PUT_HELD,
-        "put-written" => PUT_WRITTEN,
-        d => {
-            if a.has("strike") {
-                return Err("--strike is an option's: --dir call, put, call-written or put-written".into());
-            }
-            return side(d).map_err(|_| format!("--dir is long or short, or an option as side A has it (call, put, call-written, put-written, with --strike), not `{d}`"));
-        }
-    };
-    Ok(option_dir(kind, price(a, "strike")?))
+/// The statements of kinds 2 to 4 are of an account no shard covers.
+fn uncovered(x: &Account) -> R<()> {
+    if x.shard.is_some() {
+        return Err("REFUSED: a covered account has kinds of its own (a take, a leaving and a step: docs/ARCHITECTURE-CLEARING.md 14.2), whose commands are not here yet".into());
+    }
+    Ok(())
 }
 
 fn show(o: &AObj, net: Network) {
@@ -182,16 +171,14 @@ fn show(o: &AObj, net: Network) {
     match o {
         AObj::Account(x) => show_account(x, net),
         AObj::Shard(s) => show_shard(s, net),
-        AObj::Note(n) => {
-            let what = match n.kind {
-                NOTE_JOIN => format!("a leg entered: side B has {} units more in market {} (size {})", n.net, &to_hex(&n.head.market)[..8], n.gross),
-                NOTE_RELEASE => format!("a leg left: side B has {} units less in market {} (size {})", n.net, &to_hex(&n.head.market)[..8], n.gross),
-                NOTE_DEPOSIT => format!("a deposit of {} KAS", fmt_kas(n.amount as i128)),
-                NOTE_OWED => format!("{} KAS owed to {} by an account of {}", fmt_kas(n.amount as i128), p2pk_address(&n.key, net), p2pk_address(&n.head.market, net)),
-                _ => "of no kind".to_string(),
-            };
-            println!("  to the shard {}: {what}", to_hex(&n.sid));
+        AObj::Left(n) => {
+            let what = if n.asked >= 0 { format!("the shard is asked {} KAS for {}", fmt_kas(n.asked as i128), p2pk_address(&n.key, net)) } else { format!("it holds {} KAS that the account paid", fmt_kas(-(n.asked as i128))) };
+            println!("  to the shard {}: {} leg(s) left; {what}", to_hex(&n.sid), n.legs.len());
+            for l in &n.legs {
+                println!("    {}", leg_line(l));
+            }
         }
+        AObj::Rest(n) => println!("  to the shard {}: {} KAS still owed to {}", to_hex(&n.sid), fmt_kas(n.amount as i128), p2pk_address(&n.key, net)),
         AObj::Stated { on, st, said } => show_stated(on, st, said, None, net),
         AObj::Pointed { on, q, said } => show_stated(on, &q.st, said, Some((q.disputer, q.point)), net),
     }
@@ -369,27 +356,39 @@ pub fn shard_note_cmd(a: &Args) -> R<()> {
     let mut node = connect(a)?;
     let (l, shard) = shard_of(a, &mut node, net)?;
     let nl = aload(a, "note", &mut node, net)?;
-    let AObj::Note(note) = nl.obj else { return Err(format!("--note is a {}, not a note to a shard", nl.obj.kind())) };
     if nl.lib != l.lib {
         return Err("--note is of another library than the shard".into());
     }
-    let s = script_of(a, &l.lib, "KpfTNoteApply", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, next, rest) = tb::note_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    let payer = Payer { funds: &fu, change_to: fk, rate: rate(a)? };
+    // (A note that legs left is applied whole, by the script for its number of legs; a note of the rest is paid.)
+    let (name, (b, next, rest)) = match nl.obj.clone() {
+        AObj::Left(note) => {
+            let name = tb::left_script(note.legs.len());
+            let s = script_of(a, &l.lib, name, &mut node, net)?;
+            (name, tb::left_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
+        }
+        AObj::Rest(note) => {
+            let s = script_of(a, &l.lib, "KpfTLeft", &mut node, net)?;
+            ("KpfTLeft", tb::rest_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
+        }
+        other => return Err(format!("--note is a {}, not a note to a shard", other.kind())),
+    };
     show(&AObj::Shard(next), net);
     let mut objs = vec![AObj::Shard(next)];
     if let Some(r) = rest {
-        println!("the shard paid what it held: {} KAS are still owed, and the note goes on with them", fmt_kas(r.amount as i128));
-        objs.push(AObj::Note(r));
+        println!("the shard paid what it held: {} KAS are still owed, and a note of the rest goes on with them", fmt_kas(r.amount as i128));
+        objs.push(AObj::Rest(r));
     }
-    adone(a, "shard-note", &b, &keys, net, &mut node, &l.lib, &objs, &["KpfTNoteApply"])
+    adone(a, "shard-note", &b, &keys, net, &mut node, &l.lib, &objs, &[name])
 }
 
 /// `acct-open`: a covered account between `--a` (the user) and `--b` (the clearing party, the owner of the shard
-/// `--shard`) in the shard's library, through an anchor of its registry, with the margins `--a-margin` and
-/// `--b-margin` and no leg. Its terms are the shard's. Both sign: both keys are given here (`--key` twice).
+/// `--shard`) in the shard's library, through an anchor of its registry, with the user's coins `--a-margin` and no
+/// leg (a covered account has nothing of a second party's: docs 14.2). Its terms are the shard's. Both sign: both
+/// keys are given here (`--key` twice).
 pub fn open_cmd(a: &Args) -> R<()> {
-    only(a, &["shard", "seed", "market1", "a", "b", "a-margin", "b-margin", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
+    only(a, &["shard", "seed", "market1", "a", "b", "a-margin", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, shard) = shard_of(a, &mut node, net)?;
@@ -397,7 +396,7 @@ pub fn open_cmd(a: &Args) -> R<()> {
     if b_key != shard.owner {
         return Err("REFUSED: --b is not the owner of --shard: the shard applies no note of such an account and pays nothing it owes".into());
     }
-    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: price_or(a, "b-margin", 0)?, expiry: int_or(a, "exit-daa", 864_000)?, dispute_daa: int_or(a, "dispute-daa", shard.dispute_daa)?, bond_bps: int_or(a, "bond-bps", shard.bond_bps)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
+    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: 0, expiry: int_or(a, "exit-daa", 864_000)?, dispute_daa: int_or(a, "dispute-daa", shard.dispute_daa)?, bond_bps: int_or(a, "bond-bps", shard.bond_bps)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
     // (An account has its shard's terms and periods: the dispute period and the bond rate are the shard's unless
     // given, and given otherwise the opening is refused. The shard's id is opened by its seed and its committee.)
     let seed = hex32(a.need("seed")?).map_err(e)?;
@@ -410,46 +409,32 @@ pub fn open_cmd(a: &Args) -> R<()> {
     adone(a, "acct-open", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(x)], &["KpfTOpenC"])
 }
 
-/// `acct-leg`: a leg is added to the covered account `--account`: A is `--dir` (long or short) `--size` units of
-/// `--market` from the price `--x`; or A holds or wrote an option on them (`--dir` call, put, call-written or
-/// put-written, struck at `--strike`, counted from `--x`). A adds `--a-add` KAS of margin and B `--b-add`. Both sign (`--key` twice). The
-/// note that the leg entered is written beside it: apply it to the shard (`shard-note`).
-pub fn leg_cmd(a: &Args) -> R<()> {
-    only(a, &["account", "market", "size", "dir", "strike", "x", "a-add", "b-add", "script"])?;
-    let net = network(a)?;
-    let mut node = connect(a)?;
-    let (l, x) = account_of(a, &mut node, net)?;
-    let m = cmarket_from(a.need("market")?)?.0;
-    let leg = leg_of(&m, parse_amount(a.need("size")?, m.p.scale)?, dir_of(a)?, price(a, "x")?);
-    let s = script_of(a, &l.lib, "KpfTLegAdd", &mut node, net)?;
-    let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, next, note) = tb::leg_add(&l.lib, &alive(&l, x, false)?, &s, leg, price_or(a, "a-add", 0)?, price_or(a, "b-add", 0)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
-    show(&AObj::Account(next.clone()), net);
-    adone(a, "acct-leg", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(next), AObj::Note(note)], &["KpfTLegAdd"])
-}
-
-/// `acct-add`: `--side` (a or b) adds `--amount` KAS to its margin in the covered account `--account`.
+/// `acct-add`: the user (`--side a`, the default) adds `--amount` KAS to its coins in the covered account
+/// `--account`.
 pub fn add_cmd(a: &Args) -> R<()> {
     only(a, &["account", "side", "amount", "script"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, x) = account_of(a, &mut node, net)?;
+    if a.get("side").is_some_and(|s| side_of(s) != Ok(kpf_protocol::cross::SIDE_A)) {
+        return Err("REFUSED: a covered account has nothing of a second party's: its user adds to it (--side a), and the clearing party adds to its shard (shard-fund)".into());
+    }
     let s = script_of(a, &l.lib, "KpfTAddC", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, next) = tb::account_add(&l.lib, &alive(&l, x, false)?, &s, side_of(a.need("side")?)?, price(a, "amount")?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    let (b, next) = tb::account_add(&l.lib, &alive(&l, x, false)?, &s, kpf_protocol::cross::SIDE_A, price(a, "amount")?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
     show(&AObj::Account(next.clone()), net);
     adone(a, "acct-add", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(next)], &["KpfTAddC"])
 }
 
 /// `acct-take`: the funder states that the entries of `--account` move to the prices `--prices` (one a leg) of the
 /// time `--t0`, so that what `--side` gained since is margin of its own, and that `--amount` KAS of it are taken out
-/// (default: the most the side takes, less `--keep`). The funder is the side's key; or anyone, for side B of a
-/// covered account, whose amount is then a deposit to the account's shard.
+/// (default: the most the side takes, less `--keep`). The funder is the side's key. Of an account no shard covers.
 pub fn take_cmd(a: &Args) -> R<()> {
     only(a, &["account", "side", "amount", "keep", "prices", "t0", "script"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, x) = account_of(a, &mut node, net)?;
+    uncovered(&x)?;
     let sd = side_of(a.need("side")?)?;
     let p = prices_of(a, x.legs.len(), "the account")?;
     let amount = if a.has("amount") { price(a, "amount")? } else { (x.take_max(sd, &p) - price_or(a, "keep", 0)?).max(0) };
@@ -461,49 +446,14 @@ pub fn take_cmd(a: &Args) -> R<()> {
     adone(a, "acct-take", &b, &keys, net, &mut node, &l.lib, &[o], &["KpfTChange"])
 }
 
-/// `acct-out`: the leg `--leg` (1, 2, ...) leaves the covered account `--account` at once, by its two parties'
-/// signatures (`--key` twice): the way out that waits for nobody. What the leg is worth is what the two agreed: the
-/// price `--x` it is settled at (its gain from its entry; for an option, what it is worth exercised there less what
-/// it was counted at), or the amount itself, `--pay` KAS to A or `--pay-b` KAS to B (the price of an option bought
-/// back). What A owes moves from its margin to B's; what B owes it pays A from the funder's coins, in the same
-/// transaction (B's margin in the account does not fall here: it leaves by the shard). A takes `--take` KAS out of
-/// its margin with it and B adds `--b-add`. The note that the leg left is written beside it: apply it to the shard (`shard-note`).
-/// No script reads a price here, and the clearing party signs or does not: a user it does not answer leaves by
-/// `acct-leave` after the dispute period.
-pub fn out_cmd(a: &Args) -> R<()> {
-    only(a, &["account", "leg", "x", "pay", "pay-b", "take", "b-add", "script"])?;
-    let net = network(a)?;
-    let mut node = connect(a)?;
-    let (l, x) = account_of(a, &mut node, net)?;
-    let i = int_or(a, "leg", 1)?;
-    let Some(leg) = usize::try_from(i - 1).ok().and_then(|k| x.legs.get(k)) else { return Err(format!("--leg {i}: the account has {} legs", x.legs.len())) };
-    let pay = match (a.get("x").is_some(), a.get("pay").is_some() || a.get("pay-b").is_some()) {
-        (true, false) => {
-            let p = price(a, "x")?;
-            if p <= 0 || p > leg.price_max {
-                return Err("--x is a price above zero and within the market's limit".into());
-            }
-            kpf_protocol::thin::leg_gain_at(leg, p)
-        }
-        (false, true) => price_or(a, "pay", 0)? - price_or(a, "pay-b", 0)?,
-        _ => return Err("give --x, the price the leg is settled at, or what the two agreed: --pay KAS (to A, from the funder's coins) or --pay-b KAS (from A's margin to B's)".into()),
-    };
-    println!("{} leaves at once: {} KAS {}", leg_line(leg), fmt_kas(pay.abs() as i128), if pay >= 0 { "are paid to A from the funder's coins" } else { "move from A's margin to B's" });
-    let s = script_of(a, &l.lib, "KpfTLegOut", &mut node, net)?;
-    let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, next, note) = tb::leg_out(&l.lib, &alive(&l, x, false)?, i as usize, (-pay).max(0), pay.max(0), price_or(a, "take", 0)?, price_or(a, "b-add", 0)?, &s, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
-    show(&AObj::Account(next.clone()), net);
-    adone(a, "acct-out", &b, &keys, net, &mut node, &l.lib, &[AObj::Account(next), AObj::Note(note)], &["KpfTLegOut"])
-}
-
 /// `acct-leave`: the owner of `--side` states that the leg `--leg` (1, 2, ...) leaves `--account` at the prices
-/// `--prices` of the time `--t0`: its gain or loss is settled between the margins, and on a covered account what
-/// the pot cannot pay side A is a note of what its shard owes.
+/// `--prices` of the time `--t0`: its gain or loss is settled between the margins. Of an account no shard covers.
 pub fn leave_cmd(a: &Args) -> R<()> {
     only(a, &["account", "side", "leg", "prices", "t0", "script"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, x) = account_of(a, &mut node, net)?;
+    uncovered(&x)?;
     let p = prices_of(a, x.legs.len(), "the account")?;
     let s = script_of(a, &l.lib, "KpfTChange", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
@@ -524,6 +474,7 @@ pub fn liq_cmd(a: &Args) -> R<()> {
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, x) = account_of(a, &mut node, net)?;
+    uncovered(&x)?;
     let p = prices_of(a, x.legs.len(), "the account")?;
     let s = script_of(a, &l.lib, "KpfTChange", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
@@ -533,8 +484,7 @@ pub fn liq_cmd(a: &Args) -> R<()> {
     adone(a, "acct-liq", &b, &keys, net, &mut node, &l.lib, &[o], &["KpfTChange"])
 }
 
-/// `acct-end`: `--side` ends the covered account `--account`, which has no leg: side A has its margin, and what the
-/// clearing side had is a deposit to the shard.
+/// `acct-end`: `--side` ends the covered account `--account`, which has no leg: its user has its coins.
 pub fn end_cmd(a: &Args) -> R<()> {
     only(a, &["account", "side", "script"])?;
     let net = network(a)?;
@@ -542,10 +492,9 @@ pub fn end_cmd(a: &Args) -> R<()> {
     let (l, x) = account_of(a, &mut node, net)?;
     let s = script_of(a, &l.lib, "KpfTAcctEnd", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let (b, deposit) = tb::acct_end(&l.lib, &alive(&l, x.clone(), false)?, &s, side_of(a.need("side")?)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
-    println!("ended: {} KAS to side A{}", fmt_kas(x.a_margin as i128), deposit.map(|d| format!(", and a deposit of {} KAS to the shard", fmt_kas(d.amount as i128))).unwrap_or_default());
-    let objs: Vec<AObj> = deposit.into_iter().map(AObj::Note).collect();
-    adone(a, "acct-end", &b, &keys, net, &mut node, &l.lib, &objs, &["KpfTAcctEnd"])
+    let b = tb::acct_end(&l.lib, &alive(&l, x.clone(), false)?, &s, side_of(a.need("side")?)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    println!("ended: {} KAS to its user", fmt_kas(x.a_margin as i128));
+    adone(a, "acct-end", &b, &keys, net, &mut node, &l.lib, &[], &["KpfTAcctEnd"])
 }
 
 /// `stated-settle`: anyone applies the statement `--stated` nobody disputed, once it is a dispute period old: its
@@ -563,7 +512,7 @@ pub fn settle_cmd(a: &Args) -> R<()> {
     let b = tb::stated_settle(&l.lib, &alive(&l, st, true)?, &s, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
     let objs = outcome(&on, &st, &said);
     println!("applied as stated: the bond of {} KAS returns to the claimer", fmt_kas(st.bond as i128));
-    if objs.iter().any(|o| matches!(o, AObj::Note(_))) {
+    if objs.iter().any(|o| matches!(o, AObj::Left(_))) {
         println!("it writes notes to the shard: apply each (`kpf shard-note --shard FILE --note FILE`)");
     }
     adone(a, "stated-settle", &b, &keys, net, &mut node, &l.lib, &objs, &["KpfTChangeSettle"])
@@ -713,10 +662,15 @@ pub fn draw_note_cmd(a: &Args) -> R<()> {
     let (l, on, st, _, pointed) = stated_of(a, &mut node, net)?;
     let Host::Shard(shard) = on else { return Err("--stated is not a draw: it is stated on an account".into()) };
     let nl = aload(a, "note", &mut node, net)?;
-    let AObj::Note(note) = nl.obj else { return Err(format!("--note is a {}, not a note to a shard", nl.obj.kind())) };
     let s = script_of(a, &l.lib, "KpfTDrawNote", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
-    let b = tb::draw_note(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    let payer = Payer { funds: &fu, change_to: fk, rate: rate(a)? };
+    let b = match nl.obj.clone() {
+        AObj::Left(note) => tb::draw_note_left(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, payer),
+        AObj::Rest(note) => tb::draw_note_rest(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, payer),
+        other => return Err(format!("--note is a {}, not a note to a shard", other.kind())),
+    }
+    .map_err(e)?;
     println!("ended: the shard again; of the claimer's bond, {} KAS to the funder", fmt_kas((st.bond / 2) as i128));
-    adone(a, "draw-note", &b, &keys, net, &mut node, &l.lib, &[AObj::Shard(shard), AObj::Note(note)], &["KpfTDrawNote"])
+    adone(a, "draw-note", &b, &keys, net, &mut node, &l.lib, &[AObj::Shard(shard), nl.obj.clone()], &["KpfTDrawNote"])
 }

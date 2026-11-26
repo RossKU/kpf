@@ -13,7 +13,7 @@ use serde::Deserialize;
 use silverscript_abi::SilAbiArtifact;
 
 const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
-const TEXTS: [(&str, &str); 67] = [
+const TEXTS: [(&str, &str); 60] = [
     ("KpfSlot", include_str!("../../../contracts/artifacts/KpfSlot.json")),
     ("KpfTAdd", include_str!("../../../contracts/artifacts/KpfTAdd.json")),
     ("KpfTBoth", include_str!("../../../contracts/artifacts/KpfTBoth.json")),
@@ -56,18 +56,11 @@ const TEXTS: [(&str, &str); 67] = [
     ("KpfTKind", include_str!("../../../contracts/artifacts/KpfTKind.json")),
     ("KpfTShardOpen", include_str!("../../../contracts/artifacts/KpfTShardOpen.json")),
     ("KpfTOpenC", include_str!("../../../contracts/artifacts/KpfTOpenC.json")),
-    ("KpfTLegAdd", include_str!("../../../contracts/artifacts/KpfTLegAdd.json")),
     ("KpfTAddC", include_str!("../../../contracts/artifacts/KpfTAddC.json")),
-    ("KpfTNoteApply", include_str!("../../../contracts/artifacts/KpfTNoteApply.json")),
     ("KpfTAcctEnd", include_str!("../../../contracts/artifacts/KpfTAcctEnd.json")),
     ("KpfTShardEnd", include_str!("../../../contracts/artifacts/KpfTShardEnd.json")),
     ("KpfTShardPrice", include_str!("../../../contracts/artifacts/KpfTShardPrice.json")),
     ("KpfTDrawNote", include_str!("../../../contracts/artifacts/KpfTDrawNote.json")),
-    ("KpfTHand", include_str!("../../../contracts/artifacts/KpfTHand.json")),
-    ("KpfTLegMove", include_str!("../../../contracts/artifacts/KpfTLegMove.json")),
-    ("KpfTLegOut", include_str!("../../../contracts/artifacts/KpfTLegOut.json")),
-    ("KpfTEnter", include_str!("../../../contracts/artifacts/KpfTEnter.json")),
-    ("KpfTStepEnter", include_str!("../../../contracts/artifacts/KpfTStepEnter.json")),
     ("KpfTLeft", include_str!("../../../contracts/artifacts/KpfTLeft.json")),
     ("KpfTLeftAll", include_str!("../../../contracts/artifacts/KpfTLeftAll.json")),
     ("KpfTCRow", include_str!("../../../contracts/artifacts/KpfTCRow.json")),
@@ -92,7 +85,7 @@ pub const NOTE: &str = "KpfNote";
 /// The scripts that take no oracle fees of their own use: they collect them.
 pub const COLLECTORS: [&str; 2] = ["KpfTSweep", "KpfTPay"];
 /// The scripts of a library, in the order its genesis writes them.
-pub const SCRIPTS: [&str; 64] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTLegOut", "KpfTEnter", "KpfTStepEnter", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay"];
+pub const SCRIPTS: [&str; 57] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay"];
 
 /// (name, the artifact's text) of the pinned artifacts.
 pub fn artifact_texts() -> &'static [(&'static str, &'static str)] {

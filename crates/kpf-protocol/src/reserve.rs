@@ -1,11 +1,11 @@
 //! The reserve (docs/ARCHITECTURE-CLEARING.md 6a): a clearing party's shard, the notes written to it by what happens
-//! in the accounts it covers, and what applying a note does. The model of `KpfTShardOpen`, `KpfTLegAdd`,
-//! `KpfTNoteApply` and `KpfTAcctEnd`, with the scripts' integer arithmetic.
+//! in the accounts it covers, and what applying a note does. The model of `KpfTShardOpen`, `KpfTLeft`,
+//! `KpfTLeftAll`, `KpfTLeftVoid` and `KpfTAcctEnd`, with the scripts' integer arithmetic.
 //!
 //! - A [`Shard`] has an account's form with a moving part of 171 bytes: its owner's key as A, no second key, what it
 //!   holds as A's margin, and its own id at the end. Its fixed part is the hash of its terms and of four market rows.
 //! - A covered account is an [`Account`] with `shard` set: the same 171 bytes, the id being the shard's.
-//! - A [`SNote`] is an object of its own: a leg entered or left (the units of side B in its market, and the size), a
+//! - A note to a shard is an object of its own ([`Left`], [`Rest`]; the old form's notes, of a leg entered or left, a
 //!   deposit, or what a user is still owed.
 
 use crate::committee::blake2b;
@@ -22,14 +22,6 @@ pub const NOTE_MIN: i64 = 20_000_000;
 /// What a shard's output holds beside what the shard holds for its users (`SHARD_CARRIER` of `KpfTShardOpen`): a
 /// shard that paid everything out is still an output a block takes.
 pub const SHARD_CARRIER: i64 = 100_000_000;
-/// A leg entered a covered account.
-pub const NOTE_JOIN: i64 = 1;
-/// A leg left one.
-pub const NOTE_RELEASE: i64 = 2;
-/// What the clearing side had: the shard holds it.
-pub const NOTE_DEPOSIT: i64 = 3;
-/// What an account's pot could not pay its user.
-pub const NOTE_OWED: i64 = 4;
 
 fn p33(h: &[u8; 32]) -> Vec<u8> {
     [&[0x20][..], h].concat()
@@ -158,189 +150,25 @@ impl Shard {
         self.rows.iter().position(|r| r.head == *head).or_else(|| self.rows.iter().position(|r| *r == ShardRow::EMPTY))
     }
 
-    /// `KpfTNoteApply`: the shard once the note is applied to its row `r` (a leg's note), what the note's key is
-    /// paid (what is owed), and the note that goes on (the rest of what is owed).
-    pub fn applied(&self, n: &SNote, r: usize) -> Result<(Shard, i64, Option<SNote>)> {
-        let no = |why: &str| Err(Error::Invalid(format!("the note is not applied: {why}")));
-        if n.sid != self.sid {
-            return no("it is to another shard");
-        }
-        let mut s = *self;
-        match n.kind {
-            NOTE_JOIN | NOTE_RELEASE => {
-                if n.key != self.owner {
-                    return no("it is of an account whose side B is not this shard's owner");
-                }
-                let Some(row) = s.rows.get_mut(r) else { return no("the shard has four rows") };
-                if row.head == Head::EMPTY {
-                    if row.net != 0 || row.gross != 0 || n.head == Head::EMPTY {
-                        return no("an empty row carries nothing, and a leg's market is one");
-                    }
-                    row.head = n.head;
-                } else if row.head != n.head {
-                    return no("the row is another market's");
-                }
-                let sign = if n.kind == NOTE_JOIN { 1 } else { -1 };
-                row.net += sign * n.net;
-                row.gross += sign * n.gross;
-                // A row that carries no unit again is no market's: it is empty, for the next market that comes.
-                if row.net == 0 && row.gross == 0 {
-                    row.head = Head::EMPTY;
-                }
-                Ok((s, 0, None))
-            }
-            NOTE_DEPOSIT if n.amount > 0 => {
-                s.held += n.amount;
-                Ok((s, 0, None))
-            }
-            NOTE_OWED if n.amount > 0 => {
-                if n.head.market != self.owner {
-                    return no("it is owed by an account whose side B is not this shard's owner");
-                }
-                let pay = n.amount.min(s.held);
-                if pay <= 0 {
-                    return no("the shard holds nothing to pay it with");
-                }
-                s.held -= pay;
-                Ok((s, pay, (pay < n.amount).then_some(SNote { amount: n.amount - pay, ..*n })))
-            }
-            _ => no("its kind is none, or its amount is not above zero"),
-        }
-    }
 }
 
-/// A note to a shard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SNote {
-    pub sid: [u8; 32],
-    pub kind: i64,
-    pub head: Head,
-    pub net: i64,
-    pub gross: i64,
-    pub key: [u8; 32],
-    pub amount: i64,
-}
-
-impl SNote {
-    pub fn hash(&self) -> [u8; 32] {
-        blake2b(&[i9(12), p33(&self.sid), i9(self.kind), self.head.bytes(), i9(self.net), i9(self.gross), p33(&self.key), i9(self.amount)].concat())
-    }
-
-    /// Side B's units in a leg's market: below zero where A is long. An option counts with its size whichever way
-    /// it stands (whoever holds it, the clearing party may come to owe by it as far as its underlying moves).
-    pub fn units(l: &XLeg) -> i64 {
-        if l.dir == LONG && crate::thin::option_of(l).is_none() { -l.size } else { l.size }
-    }
-
-    /// The note of a leg that entered (`kind` 1) or left (2) an account of side B `b_key`, covered by `sid`.
-    pub fn leg(kind: i64, sid: [u8; 32], l: &XLeg, b_key: [u8; 32]) -> SNote {
-        SNote { sid, kind, head: Head::of(l), net: SNote::units(l), gross: l.size, key: b_key, amount: 0 }
-    }
-
-    /// What the clearing side `b_key` had in an account, to its shard.
-    pub fn deposit(sid: [u8; 32], b_key: [u8; 32], amount: i64) -> SNote {
-        SNote { sid, kind: NOTE_DEPOSIT, head: Head::EMPTY, net: 0, gross: 0, key: b_key, amount }
-    }
-
-    /// What an account's pot could not pay the user `a_key`. It names who owes it, the account's side B, where a
-    /// leg's market would stand: a shard pays it only where that is its owner.
-    pub fn owed(sid: [u8; 32], a_key: [u8; 32], b_key: [u8; 32], amount: i64) -> SNote {
-        SNote { sid, kind: NOTE_OWED, head: Head { market: b_key, ..Head::EMPTY }, net: 0, gross: 0, key: a_key, amount }
-    }
-
-    /// The least the note's output holds: its minimum, and for a deposit the amount it carries.
-    pub fn value(&self) -> i64 {
-        NOTE_MIN + if self.kind == NOTE_DEPOSIT { self.amount } else { 0 }
+/// Side B's units in a leg's market: below zero where A is long. An option counts with its size whichever way it
+/// stands (whoever holds it, the other party may come to owe by it as far as its underlying moves).
+pub fn units_of(l: &XLeg) -> i64 {
+    if l.dir == LONG && crate::thin::option_of(l).is_none() {
+        -l.size
+    } else {
+        l.size
     }
 }
 
 impl Account {
-    /// `KpfTLegAdd`: the covered account once the leg is added, with what each party adds to its margin, and the
-    /// note that the leg entered. Refused for an account no shard covers, or a leg that is none.
-    pub fn leg_added(&self, l: XLeg, da: i64, db: i64) -> Result<(Account, SNote)> {
-        let Some(sid) = self.shard else { return Err(Error::Invalid("a leg is added by its note to a covered account: this one names no shard".into())) };
-        if !crate::thin::leg_size_ok(&l) || l.entry <= 0 || l.entry > l.price_max || !crate::thin::leg_kind_ok(&l) || da < 0 || db < 0 {
-            return Err(Error::Invalid("the leg has no size or one beyond what is computed at its market's limit, no scale, an entry out of its market's limit, neither a direction nor an option's kind and strike, or a margin is taken with it".into()));
+    /// `KpfTAcctEnd`: what a covered account of no leg pays its user where it is ended.
+    pub fn ended(&self) -> Result<i64> {
+        if self.shard.is_none() || !self.legs.is_empty() || self.b_margin != 0 {
+            return Err(Error::Invalid("an account is ended where a shard covers it, it has no leg (each leaves by its own statement first), and nothing of a second party's".into()));
         }
-        let mut next = self.clone();
-        next.legs.push(l);
-        if !crate::thin::legs_sum_ok(&next.legs) {
-            return Err(Error::Invalid("with this leg the account's legs are worth more at their markets' limits than a trace sums: nobody could state on it".into()));
-        }
-        next.a_margin += da;
-        next.b_margin += db;
-        Ok((next, SNote::leg(NOTE_JOIN, sid, &l, self.b_key)))
-    }
-
-    /// `KpfTHand`: the covered account once side A is handed over to `nkey`, which adds `da` to the margin. The
-    /// legs and their entries stay. Refused where the margin would be below what side B asked of whoever takes
-    /// A's place.
-    pub fn handed(&self, nkey: [u8; 32], da: i64) -> Result<Account> {
-        if self.shard.is_none() || self.b_key == [0; 32] {
-            return Err(Error::Invalid("a side is handed over in a covered account".into()));
-        }
-        if da < 0 || self.a_margin + da < self.b_min_counter {
-            return Err(Error::Invalid(format!("who enters holds at least what who leaves held, and at least what side B asked ({} sompi)", self.b_min_counter)));
-        }
-        Ok(Account { a_key: nkey, a_margin: self.a_margin + da, ..self.clone() })
-    }
-
-    /// `KpfTLegMove`: this account without its leg `i` (from 1) and `to` with that leg appended, its entry as it
-    /// was; the margins of the two move by `d` (this account's A and B, then the other's). Refused where the two
-    /// are not of one clearing party under one shard, a margin would fall below zero, or more than six legs stand
-    /// after the leg.
-    pub fn leg_moved(&self, i: usize, to: &Account, d: [i64; 4]) -> Result<(Account, Account)> {
-        if self.shard.is_none() || self.shard != to.shard || self.b_key != to.b_key || self.terms() != to.terms() || self.periods() != to.periods() {
-            return Err(Error::Invalid("a leg moves between two covered accounts of one clearing party under one shard, of the same terms and periods".into()));
-        }
-        if i == 0 || i > self.legs.len() || self.legs.len() - i > 6 {
-            return Err(Error::Invalid("the leg is one of the account's, with at most six after it".into()));
-        }
-        let mut from = self.clone();
-        let leg = from.legs.remove(i - 1);
-        from.a_margin += d[0];
-        from.b_margin += d[1];
-        let mut next = to.clone();
-        next.legs.push(leg);
-        if !crate::thin::legs_sum_ok(&next.legs) {
-            return Err(Error::Invalid("with this leg the other account's legs are worth more at their markets' limits than a trace sums: nobody could state on it".into()));
-        }
-        next.a_margin += d[2];
-        next.b_margin += d[3];
-        if from.a_margin < 0 || from.b_margin < 0 || next.a_margin < 0 || next.b_margin < 0 || d[1].checked_add(d[3]).is_none_or(|v| v < 0) {
-            return Err(Error::Invalid("a margin would fall below zero, or the clearing side's margin would leave its two accounts (it moves between them, and leaves by its shard alone)".into()));
-        }
-        Ok((from, next))
-    }
-
-    /// `KpfTLegOut`: this account without its leg `i` (from 1), by its two parties' signatures: `payb` moves from
-    /// A's margin to B's, A takes `take` out (below zero: adds), B adds `addb`. And the note that the leg left.
-    /// B's margin does not fall (what B owes A for the leg it pays from its own coins). Refused where the account
-    /// names no shard, A's margin would fall below zero, B's would fall, or more than six legs stand after the leg.
-    pub fn leg_out(&self, i: usize, payb: i64, take: i64, addb: i64) -> Result<(Account, SNote)> {
-        let Some(sid) = self.shard else { return Err(Error::Invalid("a leg leaves by its note from a covered account: this one names no shard".into())) };
-        if i == 0 || i > self.legs.len() || self.legs.len() - i > 6 {
-            return Err(Error::Invalid("the leg is one of the account's, with at most six after it".into()));
-        }
-        let mut next = self.clone();
-        let leg = next.legs.remove(i - 1);
-        let (am, bm) = (self.a_margin.checked_sub(payb).and_then(|v| v.checked_sub(take)), self.b_margin.checked_add(payb).and_then(|v| v.checked_add(addb)));
-        let (Some(am), Some(bm)) = (am, bm) else { return Err(Error::Invalid("the margins are beyond what is counted".into())) };
-        if addb < 0 || payb < 0 || am < 0 || bm < 0 || am > crate::cross::MARGIN_MAX || bm > crate::cross::MARGIN_MAX {
-            return Err(Error::Invalid("A's margin would fall below zero, or the clearing side's margin in the account would fall (what it has there leaves by its shard alone; what it owes for the leg it pays from its own coins)".into()));
-        }
-        next.a_margin = am;
-        next.b_margin = bm;
-        Ok((next, SNote::leg(NOTE_RELEASE, sid, &leg, self.b_key)))
-    }
-
-    /// `KpfTAcctEnd`: (to A's key, the deposit to the shard) of a covered account with no leg that ends.
-    pub fn ended(&self) -> Result<(i64, Option<SNote>)> {
-        let Some(sid) = self.shard else { return Err(Error::Invalid("the account names no shard".into())) };
-        if !self.legs.is_empty() {
-            return Err(Error::Invalid("the account has legs: each leaves by its own statement first".into()));
-        }
-        Ok((self.a_margin, (self.b_margin > 0).then(|| SNote::deposit(sid, self.b_key, self.b_margin))))
+        Ok(self.a_margin)
     }
 }
 
@@ -521,6 +349,16 @@ impl Shard {
 
     pub fn gone(&self, n: &Left) -> bool {
         self.gone_at(n).is_some()
+    }
+
+    /// `KpfTLeftVoid`: the shard after a note of a leg that is no leg of its books is spent: as it is, but that it
+    /// holds what the note held for it (asked below zero: what an account paid. Review 52, F84).
+    pub fn voided(&self, n: &Left) -> Result<Shard> {
+        if n.sid != self.sid || n.legs.is_empty() || n.legs.len() > 6 || n.asked == i64::MIN || !self.gone(n) {
+            return Err(Error::Invalid("a note is spent so where it is to this shard, of one to six legs, and one of them is no leg of the books".into()));
+        }
+        let held = self.held.checked_add((-n.asked).max(0)).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
+        Ok(Shard { held, ..*self })
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.

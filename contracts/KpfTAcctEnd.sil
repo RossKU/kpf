@@ -92,6 +92,8 @@ contract KpfTAcctEnd(int init_version) {
         }
         int am = int(byte[8](mv.slice(67, 75)));
         int bm = int(byte[8](mv.slice(76, 84)));
+        // (A covered account has nothing of a second party's: no deposit is written of it.)
+        require(bm == 0);
         if (am > 0) {
             require(tx.outputs[j].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(byte[32](mv.slice(1, 33))))));
             require(tx.outputs[j].value >= am);

@@ -37,7 +37,8 @@ pragma silverscript ^0.1.0;
 // KpfTLeftVoid: a note of legs one of which is no leg of the shard's books (no futures leg; no row of its market;
 // or its market's row has fewer units than the note's legs of it) is applied by nothing. The scripts of legs write
 // no such note, but a statement nobody disputed could, and it would end every draw for good (review 51, F81).
-// Anyone spends it here: the shard as it is; what the note held is whoever spends it's.
+// Anyone spends it here: the shard as it is, but that it holds what the note held for it (what an account paid);
+// the note's least is whoever spends it's.
 //   void(who, ageb, slotLen, terms, rows, moving, legs, k, key, asked, tag)    anyone; `k`: the leg that is not in the books.
 contract KpfTLeftVoid(int init_version) {
     int version = init_version;
@@ -142,14 +143,17 @@ contract KpfTLeftVoid(int init_version) {
         }
         if (found == 0) { gone = 1; }
         require(gone == 1);
-        // The note is spent; the shard as it is.
+        // The note is spent; the shard as it is, but that it holds what the note held for it (asked below zero:
+        // what an account paid. Review 52, F84).
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
         require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
-        require(tx.outputs[c].scriptPubKey == tx.inputs[j].scriptPubKey);
-        require(tx.outputs[c].value >= tx.inputs[j].value);
+        int more = 0;
+        if (asked < 0) { more = 0 - asked; }
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(byte[](terms) + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((int(byte[8](mv.slice(67, 75))) + more) as byte[8]) + mv.slice(75, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value + more);
         goesOn();
     }
 

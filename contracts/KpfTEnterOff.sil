@@ -89,8 +89,8 @@ contract KpfTEnterOff(int init_version) {
     // KpfTStepPrice, KpfTStepEnd). 3: a step of a liquidation of an account; 4: a leg that leaves an account by
     // its party's own statement (the same, and KpfTStepLiq). 5: a draw from a shard by its owner (KpfTShardEnd,
     // KpfTShardPrice, KpfTDrawNote).
-    // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 6, a
-    // leg that enters, is stated by KpfTEnter alone.
+    // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 10, a
+    // leg that enters a covered account, is stated by KpfTEnterS alone; kind 6 is no kind any more.
     int constant KINDS = 9;
 
     function iAt(byte[] b, int at) : int {

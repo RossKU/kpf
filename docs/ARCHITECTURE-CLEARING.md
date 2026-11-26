@@ -511,20 +511,23 @@ builder, verifies it, and writes the files of what it made.
 |---|---|---|
 | `shard-open`, `shard-fund` | the clearing party | opens a shard through an anchor; adds to what it holds |
 | `shard-draw` | the shard's owner | states a draw (default: all above the requirement at the prices given) |
-| `shard-note` | anyone | applies a note to its shard |
-| `acct-open`, `acct-leg` | the user and the clearing party | open a covered account; add a leg (and write its note) |
-| `acct-add` | a side | adds margin |
-| `acct-take` | a side (or anyone, for side B) | states a take |
-| `acct-out` | the user and the clearing party | a leg leaves at once, for what the two sign (and writes its note): section 11 |
-| `acct-leave` | a side | states that a leg leaves |
-| `acct-liq` | anyone | states a step of a liquidation |
-| `acct-end` | a side | ends an account with no leg |
+| `shard-note` | anyone | applies a note that legs left, whole, or pays a note of the rest |
+| `acct-open` | the user and the clearing party | open a covered account of the user's coins and no leg |
+| `acct-add` | the user | adds to its coins |
+| `acct-take`, `acct-leave`, `acct-liq` | a side; anyone | state a take, a leaving, a step, on an account no shard covers (a covered account is refused: its own kinds have no command yet) |
+| `acct-end` | a side | ends an account with no leg: its coins to its user |
 | `stated-settle` | anyone | applies a statement after its dispute period, and writes the files of its notes |
 | `stated-dispute` | anyone | disputes a point: the one named, or the first wrong at the prices given |
 | `stated-answer` | anyone | answers the point disputed or another that is wrong; a price with a price note's citation |
 | `stated-lapse` | anyone | ends a dispute nobody answered |
-| `draw-note` | anyone | ends a draw by a note that is not applied |
+| `draw-note` | anyone | ends a draw by a note (that legs left, or of the rest) that is not applied |
 | `acct-show` | anyone | prints an object; of a statement, the first point wrong at the prices given; of a shard, what can be drawn |
+
+(26 November 2026: the table is of what remains after the old form of a covered account went, 14.10 (d);
+`acct-leg` and `acct-out` are gone, and the story below is the old one, kept as what was run. What runs now: a
+shard of 50 KAS; a covered account of 20 KAS that takes nothing of a second party's; 3 KAS added by its user and
+none by the clearing party; a take of the old kind refused; the account ended for its 23 KAS; the shard drawn
+whole, applied, the amount and the bond back.)
 
 Ran offline as one story (`crates/kpf-cli/tests/clearing_cli.rs`): a shard of 50 KAS; a covered account of 20 and
 2; a long leg of 10 units at 10 and its note applied; at 13 the leg leaves by statement, is disputed at its end,
@@ -1543,8 +1546,8 @@ shard, a row of another market, a second row for a market, a leg that is none); 
 (answered wrong); a second leg entering on what the first gained; a draw ended by each of the four forms of an
 entry that is not settled, disputed or not; a draw's time written, and a draw before it answered wrong.
 
-Not yet: what a covered account refuses of the old form (14.2), which goes with the removal of that form, next,
-before the call; F74, F78 and F68 stand until then.
+What a covered account refuses of the old form (14.2) came with the removal of that form, before the call:
+(d) below.
 
 **The library is at what one transaction writes.** Its genesis writes every copy of every script in one
 transaction, and a block takes 500,000 grams of storage mass: an output of 10 KAS weighs 4,000, so 125 of them.
@@ -1575,3 +1578,48 @@ after every entry before it draws, whatever became of the entry; the time an ent
 holds an entry's time to no clock, so whatever signs for the owner checks it (a time far ahead would keep the
 shard from drawing till then).
 
+**(d) What went** (before (c), the call: nothing of the call rests on the old form, and every script that went
+is a script the call need not be held against). The library has 57 scripts (it had 64): `KpfTLegAdd`,
+`KpfTEnter`, `KpfTStepEnter`, `KpfTLegOut`, `KpfTLegMove`, `KpfTHand` and `KpfTNoteApply` are out, with their
+builders, their model and their tests. What a covered account was by them, it is no more:
+
+| Script | Now |
+|---|---|
+| `KpfTChange` | kinds 2 to 4 are stated on an account whose moving part is 138 bytes: no shard covers it |
+| `KpfTPoint` | kind 6 is no kind |
+| `KpfTOpenC` | the place of a second party's margin is the bytes of nothing |
+| `KpfTAddC` | side A alone adds |
+| `KpfTAcctEnd` | ends an account of no leg and nothing of a second party's; no deposit is written |
+| `KpfTDrawNote` | takes a note that legs left and a note of the rest, and no other |
+| `KpfTLeftVoid` | the shard holds what the note it spends held for it (review 52, F84) |
+
+In the model: the notes of a leg entered or left, of a deposit and of what is owed are gone (`SNote`), with the
+entry of kind 6; a take, a leaving or a step of kinds 2 to 4 on a covered account is no statement the model
+makes or takes for right. What is kept of an object (`aobj.rs`): 22 is a note that legs left (its legs whole),
+25 a note of the rest; a statement of kinds 7 to 9 on a covered account is kept and read back, and its outcome
+is the account and the note its end makes. The commands: `acct-leg` and `acct-out` are gone; `acct-open` takes
+no `--b-margin`; `acct-add` is the user's; `shard-note` applies a note whole by the script of its number of
+legs, or pays a note of the rest; `acct-take`, `acct-leave` and `acct-liq` refuse a covered account. **The
+commands of the new form (an entry, a take, a leaving, a step, the undoing of an entry) are not written**: they
+come after the call, with what an Executor does.
+
+Gone with it: an option under a shard (a row of a shard is of futures legs: `Shard::book_of`), and a leg that
+leaves at once by two signatures. Both are of an account no shard covers still.
+
+**Review 53** of (d), at the engine: F74, F78 and F68 are closed by the removal (fourteen transactions that would
+give a covered account something of a second party's are refused; no script that stays reads a covered account's
+count and time as coins; a leg is in the rows and in the basis by one transaction and out of both by one), and
+F84 is fixed. The removal opened nothing that was found: kinds 2 to 4 are taken on 138 bytes and refused on 171,
+kind 6 is stated and disputed nowhere, the scripts of a draw and of a note refuse every object of the old notes'
+form, and the scripts of a covered account refuse an account of 138 bytes. The whole workspace passes (1,251
+tests; it was 1,291 with the old form's). Sizes: `KpfTChange` 1,417 bytes, `KpfTPoint` 2,588, `KpfTOpenC` 672,
+`KpfTAddC` 516, `KpfTAcctEnd` 682, `KpfTDrawNote` 1,159, `KpfTLeftVoid` 1,719.
+
+| Finding | What it is | Now |
+|---|---|---|
+| F86 (medium) | a note that says it holds what an account paid is taken at its word: the three scripts that spend a note write the shard holding that much more and never read what the note holds. A right statement writes a note that holds it; a wrong one nobody disputed writes one that holds a note's least and says anything, and whoever clears it pays the difference into the shard, or (a number too large) nothing clears it, and it ends every draw. F81 again, for a note that asks below zero | open: the shard is to take what the note holds above its least, and no more than it says |
+| F85 (low) | what went is still written in five scripts that stay, behind conditions nothing reaches (`KpfTStepEnd`, `KpfTStepLiq`, `KpfTStepRow`, `KpfTStepPrice`, `KpfTAcctEnd`) | open: to be taken out, so that what is handed on is the form and nothing else |
+| F83 (low) | the undo of an entry on a small account fits no transaction | open, at the builder |
+
+Said, and no finding: `KpfTAcctEnd` takes either party's signature alone, so the clearing party ends a user's
+account of no leg at will; the coins go to the user.

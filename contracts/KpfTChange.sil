@@ -80,8 +80,8 @@ contract KpfTChange(int init_version) {
     // KpfTStepPrice, KpfTStepEnd). 3: a step of a liquidation of an account; 4: a leg that leaves an account by
     // its party's own statement (the same, and KpfTStepLiq). 5: a draw from a shard by its owner (KpfTShardEnd,
     // KpfTShardPrice, KpfTDrawNote).
-    // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 6, a
-    // leg that enters, is stated by KpfTEnter alone.
+    // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 10, a
+    // leg that enters a covered account, is stated by KpfTEnterS alone; kind 6 is no kind any more.
     int constant KINDS = 9;
 
     function iAt(byte[] b, int at) : int {
@@ -152,6 +152,10 @@ contract KpfTChange(int init_version) {
                 require(said.length >= at0);
                 require((said.length - at0) % 112 == 0);
                 require(shard == 0);
+                // (Kinds 2 to 4 are of an account no shard covers: a covered account has its own, 7 to 9.)
+                if (kind <= 4) {
+                    require(mv.length == 138);
+                }
                 // The market of the leg that leaves is written as a market is (two pushes of 32 bytes, two of 8):
                 // whoever watches reads every statement that is stated, and a tool that could not read one could
                 // not answer it.
