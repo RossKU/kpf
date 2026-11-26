@@ -3105,19 +3105,24 @@ account.
 whole (408 bytes) in every transaction that shows it. Instead the shard holds the root; a script that reads or
 changes a row is shown the row and its path (six hashes: 192 bytes).
 
-- **The key** of a row is written plain, not hashed: today's head (the market, the committee, the scale and the
-  price's limit: 84 bytes), then the day, what it is (futures; calls; puts) and the strike. Futures: a day and a
-  strike of nothing. Keys are compared as numbers of 8 bytes, the head's first, so that the rows of one
-  underlying are next to one another.
+- **The key** of a row is written plain, not hashed, 78 bytes: the underlying's market, the scale, the price's
+  limit, the day, what it is (futures; calls; puts) and the strike. No committee: a shard has one, in its id
+  (17.9). Futures: a day and a strike of nothing. Keys are compared as numbers of 8 bytes (the market's 32
+  bytes as four), so that the rows of one underlying are next to one another, its futures first.
 - **A leaf** holds its row (the key, the clearing side's net units, the gross, what its legs were entered at)
-  and **the key of the leaf after it**. A leaf and an inner node are hashed under different tags; an empty leaf
-  is one value. **A head leaf**, of a key below every key, is in every tree: a tree is never empty and every
-  row has a leaf before it.
+  and **the hash of the key of the leaf after it**: 147 bytes hashed. The key after is shown plain only where a
+  row is put in or taken out. A leaf and an inner node are hashed under different tags; an empty leaf is one
+  value. **A head leaf**, of the key of nothing (below every key: a scale of nothing is no row's), is in every
+  tree from its opening: a tree is never empty and every row has a leaf before it. A row's place among the
+  sixty-four is whichever is empty: the order is the keys', not the places'.
+- **The books' hash** takes the place of the hash of the four rows in a shard's state: the hash of the count of
+  rows that have a unit, of what a called shard has paid to claims (17.7), and of the root. No byte of the
+  shard's moving part changes, and a script that touches no row carries 32 bytes as today.
 - **A new row** is shown the leaf before it (two paths, the second checked against the root as the first
   rewrote it) and written between: so no key has two rows. A row of no unit is taken out by anyone, shown the
   leaf before it, by a script of its own (a note's applying stays one path). Rows of ended days leave the tree
   so.
-- **A count** of the rows that have a unit is kept in the shard's moving part. A call ends where it is nothing.
+- **The count** of the rows that have a unit is in the books' hash. A call ends where it is nothing.
 - The depth is a number of the shard's terms: six for the first form (sixty-four rows: an underlying of three
   days and ten strikes is sixty).
 - What a row is worth to the shard at a price is its net units by what a unit is worth there. What the legs
@@ -3128,6 +3133,20 @@ changes a row is shown the row and its path (six hashes: 192 bytes).
 
 Sums in the inner nodes (what all calls of a day are worth at a price by one path) were considered: not for the
 first form. The ordered list is what they would be built on.
+
+| What a script does | Shown | Bytes (today: the four rows, 408, always) |
+|---|---|---|
+| reads or changes a row that is there (an entry on a market the shard has; a note applied) | the leaf's 147, its place, six hashes (192) | about 350 |
+| puts a row in (an entry on a new key) | the leaf before and its path, the key after it plain (78), the empty place's path against the root as rewritten | about 630 |
+| takes a row of no unit out (anyone; a script of its own) | the row and its path, the leaf before and its path | about 700, a transaction of its own |
+| touches no row (a top-up, a draw's end, a claim paid) | the count, what was paid, the root | 50 |
+
+A shard of up to four futures markets so pays about 60 bytes less where a row changes and about 220 more where
+one is new. **Open, for the review on paper:** `KpfTShardPrice` reads a row's committee for its citation today:
+with none in the key it opens the shard's id by the seed (an argument more). A call's object holds four heads
+and four prices today (368 bytes): with a tree it holds the root of the call's trace, and `KpfTCStep` is shown
+a row of that trace by a path for each underlying of the account's legs (about 280 bytes an underlying, where
+it reads 8 bytes a leg today). Who pays for taking dead rows out, at sixty-four rows.
 
 ### 17.7 A draw and a call are traces; what a called shard has paid
 
