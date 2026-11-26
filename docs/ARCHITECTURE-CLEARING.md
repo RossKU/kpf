@@ -2929,6 +2929,25 @@ twice and none is had early; **sound enough to start the model**, with five rule
 | N74, N75 (medium) | what a script still needs said of the leaf and the trace; a row needs more than three sums | 17.6; the row's sums are found in the model |
 | N76 (high; of the form that is built) | 17.9 holds by reading, and a band under a call is not enough | **a leg says the time it entered** (17.9) |
 
+**The third round** read the model and added to it (`review_t2_*`, eight tests): faithful where it claims to
+be, and its claim stands against a stronger owner and stronger users (the owner pays its shard up after its own
+entries, so that runs reach the days; every price stated at the tolerance's edge; half the users know the next
+price and all take every tick; levels counted at exactly what can be lost): nobody unpaid on 1,000 paths a set,
+eight sets, ticks of 0.5 % to 4.5 %.
+
+| Finding | What it was | Decided |
+|---|---|---|
+| N78 (high) | the rule of a young leg, said of a leg, takes a hedge apart: a long and a short of 1,000 units entered together and called a tick later at 101: the short pays 1,000, the long asks nothing | **the young legs of an account are counted together** (17.9) |
+| N79 (medium) | the claim does not count what a young leg gives up at a call | it is nothing, and no second claim; said beside the claim (17.9) |
+| N80 (high near a strike) | "the stater takes the line that asks less", and a step's stater is anyone: by the lines that ask most, 15,152 of 25,383 accounts with a held option between the ends were due while holding half as much again as their least lines ask | **a step is due by one price that shows it** (17.4) |
+| N81 (medium; of the form that is built as well) | a book set off, one side of which leaves between two visits, is held by twice the rate on the gross: at its lower level to a move of 2.5 %, not 4.5 % | a number to set with the rates, later; the test is the one to set it against |
+| N83 (medium) | "the hedge by the clock is a user's play" was an artefact of short runs: with an owner that pays its shard up, without the day's rule users are unpaid on 131 paths of 1,000 at ticks of 4 % | the rule is needed against the owner too; the shard's requirement counts no credit near a day |
+| N84 (low) | without the rate on the gross of option rows nobody is unpaid to 4 %; it is the distance from a call | kept |
+| N65, confirmed | one leg of a pair leaving as the end is built today: users' accounts unpaid on 593 paths of 1,000 | under 17.4's rule: none |
+
+**The edge of the claim**, found: an account, the lower rate less the tolerance (4 % with these terms; the first
+failure in most sets at 5 % to 6 %); no earlier edge near a strike or near a day.
+
 ### 17.2 What an option leg says
 
 An option leg is a leg of its underlying's market, priced by that market's committee as a futures leg is. Beside
@@ -2990,21 +3009,22 @@ asked is what it can lose by a move of the rate, legs of one underlying counted 
   exercised at each end, against it; an option the user holds the same where its strike is outside L to U.
 - **A held option whose strike is between L and U is counted along one of its two lines, as the row says**: as
   worth nothing exercised wherever the price goes, or as exercised wherever it goes. Both lie below what it is
-  worth, so either is safe; the stater takes the one that asks less. (Counted at its worse end only, a put
+  worth, so either is safe; in a user's own statement (an entry, a take, a leaving, a split) its stater takes
+  the one that asks less. (Counted at its worse end only, a put
   bought against a long was given nothing, and what an account was asked jumped as the price crossed a strike:
   N69.)
 - **Within a time T of its day an option is counted in the two sums only where it adds to what is asked** (N68):
-  what it would lose at each end, never what it would gain. T is a term: twice the longest a statement lives and
-  the time between two visits; no option enters within T of its day either. A hedge so stops counting while
-  both legs still stand, and a step that takes the group takes it at its net. (With the owner's own account
-  the shard's own requirement jumps at the day and the shard is called: its users are paid. The play is a
-  user's against the clearing party, and the rule is the clearing party's: in the model, 955 paths of 1,000
-  without it.)
+  what it would lose at each end, never what it would gain. T is one number, of what the terms have: twice a lateness and a dispute period (14.4's
+  bound, a lateness for the time between two visits). It is 17.9's T, and no option enters within T of its day. A hedge so stops counting while
+  both legs still stand, and a step that takes the group takes it at its net. (In the model
+  without it: a user's such account leaves the shard unpaid on 955 paths of 1,000; an owner's own, where the
+  owner keeps its shard paid up, leaves users unpaid on 131 at ticks of 4 %. The shard's requirement counts no
+  credit near a day either.)
 - **A group** is consecutive legs of one underlying. A leg whose underlying differs from the row before's closes
   the group: R grows by the larger of nothing, what D-down lost and what D-up lost. Rows of one underlying say
   one price, or the row is wrong.
 - R takes the place of the rate on W: in the test of an entry (the coins and what all gained at least R and the
-  premiums), and in a step (due below R counted at the lower rate, and the premiums). A take and the leaving of
+  premiums), a step is the rule below. A take and the leaving of
   a leg that gained keep their second part as built: the coins at least R, the premiums and what each leg lost
   counted alone. Netting is of what is held, never of what leaves.
 - **The account that stays is tested as it stays** (N65). Today a leg that lost leaves where the coins pay it:
@@ -3013,6 +3033,11 @@ asked is what it can lose by a move of the rate, legs of one underlying counted 
   the level of an entry: the coins and what the legs that stay gained at least R of those and their premiums.
   **A step of some legs is right only where the account lacks less after it than before it**; else every leg
   leaves. Whether a step names a leg or a whole group is decided by that and by no rule of its own.
+- **A step is due by one price that shows it** (N80). Anyone states a step, and would choose for a held option
+  the line that asks most. So a step's statement names a price within the lower rate of the row's; the rows sum
+  what the legs gain from the row's price to it; and the step is due where the coins, what all gained and that
+  sum are below the premiums. Exact, one sum, and nothing to choose against the account. A call's test of a
+  shard is the same, over its rows.
 - The band stays of what the legs that leave are worth; a step's fee keeps its base of today (the worth of the
   legs named: what is asked is nothing for a hedged group).
 - An entry says the place its leg takes among the legs, so that a hedge stands next to what it hedges. Legs of
@@ -3020,8 +3045,7 @@ asked is what it can lose by a move of the rate, legs of one underlying counted 
 
 Why it never asks less than can be lost: what the legs of a group gain at a price is a line with corners at
 the strikes. Futures and written options bend it downward only, so their sum is least at one of the two ends. A
-held option bends it upward and the lowest point could lie between: so it is counted at its worse end in both
-sums, a line below it.
+held option bends it upward and the lowest point could lie between: so it is counted along a line below it.
 
 | Account (ten units, the price 100, the rate 5.5 %) | Asked today's way | Asked so | The most a move of the rate loses |
 |---|---|---|---|
@@ -3148,9 +3172,11 @@ change when a claim is paid and grows by every coin that reaches the shard.
    moved and before anybody steps an account), a day that falls between two visits, and whoever watches once a
    tick. On 15,000 paths (five sets of plays, ticks of 0.5 %, 2 % and 4 %) **no user is left unpaid and no
    account leaves the shard unpaid**. Without a leg's time (as the form that is built) users are unpaid on 443
-   paths of 1,000; without the day's rule the shard is unpaid by a user on 955. Not in it yet: a step of some
-   legs and a leaving of one (whole accounts leave), the tolerance of a stated price, the tree. Review of the
-   model; then the same in `covered.rs` and `reserve.rs` with the leg as it will stay.
+   paths of 1,000; without the day's rule the shard is unpaid by a user on 955. The review's third round added eight
+   tests to it (17.1). Still to show before it is carried into `covered.rs` and `reserve.rs`: a step by a price
+   that shows it; one leg of a group of options leaving (a long stepped away from a written call; a held leg
+   of a spread ending at its day); a held option through a step of every other leg (N71); the sums a row
+   needs; and N81's test as the bound that is stated.
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
    nothing; under a call a leg younger than T asks nothing (17.9, F116); the two bounds of a stated price
    rounded inward.
@@ -3184,8 +3210,14 @@ one way (up a tenth of a percent, the leg claims 1,030 KAS beyond its band). And
 that gained 1 % of its worth at a call it did not choose, which the owner has when the call ends.
 
 **Decided: a leg says the time it entered, and under a call a leg that entered less than T before the call's
-time asks nothing where it gained, and pays what it lost.** T is 14.4's bound (a lateness, two dispute periods,
-the time between two visits), a term of the shard. No band under a call, as today.
+time asks nothing where it gained, and pays what it lost.** T is 17.4's: twice a lateness and a dispute period, computed from the terms. No band under a call, as today.
+
+- **The young legs of an account are counted together** (N78): nothing where together they gained, paid where
+  together they lost, and what the older legs gained beside. Leg by leg a hedge entered together would pay for
+  the leg that lost and ask nothing for the one that gained.
+- **What a young leg gained is nothing, and no second claim** (N79). In the model, with users that know the
+  next price: 1,276, 3,681 and 35,343 a path at ticks of 0.5 %, 2 % and 4 %, against shards of five million.
+  An owner does not gain by bringing it about (it loses its shard).
 
 - The leg that took the shard below its level is younger than T at any call that whoever watches states in
   time: it asks nothing, and the honest claims are paid whole. Had the price fallen, it pays.

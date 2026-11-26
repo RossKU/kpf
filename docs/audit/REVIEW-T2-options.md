@@ -1058,3 +1058,277 @@ is worth exercised at its entry moved by the tolerance over one less the toleran
 
 To be found in the model, not decided before it: the sums a row needs (N75); the rate on the gross of an
 option row (N73); the fallback's time (N72); whether a held option goes on through a step of every leg (N71).
+
+# Third round
+
+27 November 2026. The model in numbers (`crates/kpf-protocol/tests/research_options.rs`, commit 74f5cc1) and the
+third writing of section 17. This round ran the model: the one command allowed
+(`cargo test -p kpf-protocol --test research_options`), seven times, never beside another. Nothing else was run.
+The model file was added to and nothing in it was changed: the author's eight tests pass as they were, beside
+eight of mine (sixteen, 14 seconds). Findings N78 to N85.
+
+## Verdict of the third round
+
+**The model is faithful to the paper where it claims to be, with five things said below, and its result stands
+against a stronger owner and stronger users** (an owner that pays its shard up after its own entries so that a
+run goes on to the days, states every price at the tolerance's edge and sets its book off; users that know the
+next price and take all a take gives; the levels and the steps counted at exactly what can be lost): nobody
+unpaid on 1,000 paths a set, eight sets, at ticks of 0.5 %, 2 %, 4 % and 4.5 %.
+
+What the model did not show and the added plays do:
+
+- **N78 (high).** "A leg younger than T asks nothing where it gained and pays what it lost", said of a leg: a
+  hedge that is young at a call pays the leg that lost whole and is asked nothing for the other. It must be of
+  an account's young legs together. This is in `call` as the author wrote it and would be in `KpfTCStep` at
+  step 2.
+- **N80 (high for a user near a strike).** "The stater takes the line that asks less": whoever states a step is
+  not the account's user. By the lines that ask most, 60 % of accounts with a held option between the ends are
+  due for a step while holding half as much again as they can lose.
+- **N83.** The owner's own plays end a run of `run` within two to four ticks, before any option's day. What
+  17.4 concludes from it (the hedge that ends by the clock "is a user's play") is not so: with an owner that
+  pays its shard up, users are unpaid on 131 of 1,000 paths at ticks of 4 % without the day's rule.
+- **N79, N81, N82.** What the claim does not count (a young leg's gain), and where its edge is: at the lower
+  rate less the tolerance for an account, and at twice the rate on the gross for a book one side of which
+  leaves between two visits, which is 2.5 % at a shard's lower level and not 4.5 %.
+
+**Step 2 can start now, beside the model's next round**, once N78 is decided: it is one line of what step 2
+writes.
+
+## 1. Is the model faithful?
+
+| | In the model | Against the paper |
+|---|---|---|
+| `asked_as`, the two lines, `near` | the two sums at the ends of a move of the rate (rounded up); a held option between the ends along the line a bit says; an option within T of its day counted only where it loses | faithful to 17.4. The reasoning holds with `near` as well (the lesser of a line and nothing still bends downward). 17.4's last paragraph still says "at its worse end in both sums": stale (N85) |
+| `Party::asked`, `due` | the least over every choice of lines, and the premiums whole | faithful for a user's own statements. For a step the paper lets the stater choose, and the model takes the least: **the model is right and the paper is not** (N80) |
+| `Shard::requirement` | every leg mirrored and pooled, every held option of the clearing side along its line of nothing; the same `near`; a rate on the gross of every unit, option or not | on the safe side of the paper, which counts rows of net units and lets the owner pick its lines at a draw: the model's owner draws less than the paper's may. Run again with the levels at exactly what can be lost (`exact`): the result stands |
+| the rate on the gross of option rows | 2.25 % and 1.25 % of units by the price | as 17.6 says. Whether it is the right number: N84 |
+| `leave` | every leg at one price; in a step the premiums of what is held and the larger of premium and loss of what was written; the band of the futures legs | faithful. Only whole accounts leave; no fee |
+| `days` | a day falls between two visits and is of the price before the move; what the leg gained less its premium is paid into the account | the same standing as 17.5's "it stays as a gain that is no coin": a take is then held to the take's rule. Fair as a model of N66 |
+| `take`, `draw` | all the rule gives | faithful. Only the owner's accounts take (in `run_x` users do too) |
+| `call` | leg by leg: young and gained, nothing; losers pay first; one share | faithful to 17.9 as written, which is the flaw (N78). The run ends at the first call: nothing after a call is in the model (F114, late coins, claims) |
+| `run` | the owner knows the next price; three plays and the fourth bit; it pays its shard up where a user enters, and never after an entry of its own | N83 |
+
+## 2. Where the adversary was too weak, and what was added
+
+`run_x` is `run` with switches, each off by default (the list is in the file above it):
+
+| Switch | What it adds | Result |
+|---|---|---|
+| `top_own` | the owner pays its shard up after its own entries, to the upper or the lower level | runs of 44 to 55 ticks at 0.5 % where `run` has 2 to 4; nobody unpaid |
+| `edge`, `edge_users` | every price a key states is at the tolerance's edge, rounded inward: entries of the owner's legs, takes, leavings, draws, a step by the account's own other key, the call | nobody unpaid to 4 %; N82 at 4.5 % |
+| `set_off` | the owner enters against its users' net, draws on the book set off, and is out before the tick against it (review 43's N3) | nobody unpaid |
+| `informed`, `users_take` | half the users know the next price; users take every tick | nobody unpaid; the owner loses to them, as it should |
+| `farm`, `junior` | the owner pays nothing in for a user that will gain; a young gain paid after the other claims | N79 |
+| `pair` | a user's long and short; a tick later the leg that lost leaves alone: as built, or under 17.4 | as built: users' accounts unpaid on 593, 463 and 126 of 1,000 paths at 0.5 %, 2 % and 4 %. Under 17.4: none (with N78) |
+| `young_net` | an account's young legs counted together | N78 |
+| `exact`, `witness` | the shard's levels and a step's test at exactly what a move of the rate loses | nobody unpaid: the claim does not rest on the lines' slack |
+| `gross_futures` | no rate on the gross of option rows | N84 |
+
+Of what the author listed as not in the model: a leaving of one leg changes the result (the `pair` rows above,
+which is N65 in the simulation and the rule holding); the tolerance moves the claim's edge by itself and no
+further (N82); an ended leg that stays, a split, a hand-over and a mark cannot change it by reasoning (each is
+held to a test of what stays, and none moves a coin out past a take's rule); the tree is not about amounts; the
+fallback is about a committee and has no numbers here. A step of some legs is not added: under "lacks less
+after" it leaves an account that is stepped again at the same visit until it is not due, which is what a step
+of every leg leaves.
+
+## Findings
+
+### N78 (High). The young rule, said of a leg, takes a hedge apart
+
+17.9: "a leg that entered less than T before the call's time asks nothing where it gained, and pays what it
+lost". `call` does that leg by leg, and so would a script.
+
+*Scenario (in the file: `review_t2_a_hedge_that_is_young_at_a_call_pays_the_leg_that_lost`).* A user enters a
+long and a short of 1,000 units at 100: asked nothing, as 17.4 says. A tick later the price is 101 and the
+shard is called. The short lost 1,000 KAS: it pays. The long gained 1,000: it asks nothing. The account owes
+1,000 and has nothing. Or: a long of 1,000 units and a put bought against it at the money, premium 2 a unit:
+asked the premium, 2,000. The price falls 4 %, a call. The long lost 4,000 and pays; the put gained 4,000 and
+asks nothing. The user who bought protection pays 4,000, of which it has 2,000.
+
+In the simulation (a user's pair, one leg leaving under 17.4's rule): users' accounts unpaid on 15 of 1,000
+paths at ticks of 0.5 %; with the young legs counted together, none at any tick to 4.5 %.
+
+*Recommendation.* **Under a call the legs of one account that are younger than T are counted together: where
+together they gained they ask nothing, where together they lost they pay.** They are not set against the
+account's older legs (else a young leg of any size, at the edge, forgives what an old leg lost). In
+`KpfTCStep` that is two sums where there is one. It does not give the attack of 17.9 anything: a young leg of
+any size still asks nothing, alone or beside another.
+
+### N79 (Medium). What the claim does not count: the gain of a leg that is young at a call
+
+"No user unpaid" is of what the rule gives, and the rule gives a young leg nothing. In the model that is not
+small, because its owner draws to the upper level at every tick and a call comes often (at ticks of 2 %, on
+50 to 70 % of paths within sixty ticks; at 4 %, on 99 %).
+
+| Ticks of | Young gains not paid, a path | The owner pays nothing in for a user that will gain | The same, a young gain paid after the other claims |
+|---|---|---|---|
+| 0.5 % | 1,276 | 5,790 | 1,646 |
+| 2 % | 3,681 | 20,371 | 7,880 |
+| 4 % | 35,343 | 36,385 | 16,184 |
+
+(Model's units: a user's leg is up to 4,000,000 of them. Half the users know the next price.)
+
+An owner can bring it about: it signs a user in and pays nothing in (no gate), the shard is called at the next
+visit, the leg is young. In the model it does not pay the owner to: what it took a path falls from 271,365 to
+below nothing, because the call ends its shard. It is the user's cost, not the owner's gain.
+
+*Recommendation.* Keep "nothing" in the first form (with N78), and have the main test print the number beside
+its claim. "Paid after the other claims, of what is left" gives users back more than half in the model and
+gives the attack of 17.9 nothing; it is the same second class of claim as 17.3's deterrent, and can come with
+it. With T at minutes and not at two ticks of 4 %, what is given up is a few minutes' move.
+
+### N80 (High for a user near a strike). A step's stater picks the line that asks most
+
+17.4: a held option between the ends "is counted along one of its two lines, as the row says ... either is
+safe; the stater takes the one that asks less". A take's stater does. A step's stater is anyone, and a step is
+right where the account has less than what the trace asks.
+
+*In numbers (`review_t2_a_step_stated_with_the_lines_that_ask_most`).* Of 25,383 random accounts with a held
+option between the ends, each holding half as much again as its least lines ask (so well above what a move of
+the lower rate can lose), 15,152 are due for a step by the lines that ask most. That is N69's cliff again, by
+whoever is paid to step.
+
+*Recommendation.* The two sums and the lines are for what must hold at every price of the move: a user's
+entry, take and leaving. **A step is due by one price that shows it**: the statement says a price within the
+lower rate of the row's; the rows sum what the legs gain from the row's price to that one (an option within T
+of its day only where it loses); the step is due where the coins, what all gained and that sum are below the
+premiums. One sum where there are two, exact, and nothing to choose against the account: any price whoever
+steps may name is a price the account could be at. The same for a call's test of a shard. In the model
+(`witness`, `exact`): nobody unpaid, on every set.
+
+### N81 (Medium; of the claim, and of the form that is built). A book one side of which leaves between two visits
+
+A shard whose book is set off is asked the rate on the gross and nothing else. One side leaves; until someone
+comes the other stands against what the shard held: twice the rate on the gross, at the level the shard stood
+at. Under a call no band is taken.
+
+*In numbers (`review_t2_a_book_that_one_side_leaves_is_held_by_twice_the_rate_on_the_gross`).* A long and a
+short of 1,000 units at 100; the short leaves; the long gains a tick; a call.
+
+| The shard stood at | It held | A tick of | The long is short |
+|---|---|---|---|
+| its upper level | 4,500 | 4.5 % | nothing |
+| its upper level | 4,500 | 4.6 % | 100 |
+| its lower level | 2,500 | 2.5 % | nothing |
+| its lower level | 2,500 | 3 % | 500 of 3,000 |
+| its lower level | 2,500 | 4 % | 1,500 of 4,000 |
+
+The main test passes at 4 % because its owner draws to the upper level at every tick and nobody leaves a large
+side; a book set off does not drift, so it stays there. With a user's large pair, one leg leaving, and every
+price at the edge: users unpaid on 2 of 1,000 paths at 4 %. Review 43 set the rate on the gross so that twice
+1.75 % and the band, 1 %, were the one bound of 4.5 %; at a call there is no band, and a shard may stand at
+1.25 %.
+
+*Recommendation.* Say the claim with its two bounds as they are: an account, and a book that is one way, to
+the lower rate less the tolerance; a book one side of which leaves, to twice the rate on the gross at the
+lower level less the tolerance. Which number the lower rate on the gross should be is tuning, for later; the
+test above is the one to tune against.
+
+### N82 (Low). The edge of the claim for an account: the lower rate less the tolerance
+
+An account first fails above the lower rate: in most sets the first failure is at ticks of 5 % to 6 %, and
+the author's own test shows the bound is tight (of 800,000 moves of exactly the
+lower rate, 210,259 leave an account exactly its premiums). With a call stated at the edge, an account that
+lost pays the tolerance more than the tick took: at ticks of 4.5 % one account in 1,000 paths did not pay (a
+user's hedge by the clock, every price at the edge); at 4 %, none in any set.
+
+So the edge is where the paper puts it, less the tolerance once more: 4 % with these terms, which is the
+model's largest tick. Section 12's wording ("less than the maintenance rate less the tolerance") is that
+4.5 %; with prices stated at the edge in a call or a step it is 4 %.
+
+Near a strike and near a day I found no earlier edge: users that know the next price and enter at the money,
+and hedges that end three ticks after they enter, are in the sets that pass.
+
+### N83 (Medium). `run`'s owner ends its own run, and what 17.4 concluded from it
+
+Each of the owner's plays enters an account of its own and pays nothing into the shard. The requirement jumps,
+the shard is called at the next visit, the leg is young, the run ends. With the first play on, a path is 2
+ticks; with the second and third, 3 to 4. No option's day is reached (the earliest is three ticks after an
+entry). Of the 15,000 paths of the main test, 6,000 test the first call and nothing else.
+
+17.4 says of the hedge that ends by the clock: "With the owner's own account the shard's own requirement jumps
+at the day and the shard is called: its users are paid. The play is a user's against the clearing party". In
+the model the shard is called at the entry, not at the day. With an owner that pays its shard up to its upper
+level after the entry (`review_t2_the_owners_own_hedge_by_the_clock_needs_the_days_rule`):
+
+| Ticks of | Without the day's rule: users unpaid | its own accounts unpaid | With it |
+|---|---|---|---|
+| 2 % | on 20 of 1,000 paths | 954 | none |
+| 4 % | on 131 of 1,000 | 726 | none |
+
+*Recommendation.* The rule is needed against the owner as well: rewrite 17.4's parenthesis. The shard's
+requirement near a day stays as the model has it (an option of the clearing side within T of its day gives no
+credit): that is what makes the call come before the day and not after it. And the main test should run with
+the owner paying its shard up (`run_x`'s first switch), so that its paths reach the days.
+
+### N84 (Low). The rate on the gross of option rows
+
+Asked in N73. With no rate on the gross of option rows (`gross_futures`): nobody unpaid at ticks to 4 % on four
+sets; at 4.5 %, users unpaid on 1 of 1,000 paths in the strongest set, where with the rate there is none. What
+it changes far more is how soon a shard is called: at ticks of 2 %, a path of 10 ticks where it was 36, and
+young gains not paid four times as much. So it is cover at the edge and distance from a call, and the number
+2.25 % of the underlying is more than the model needs. Keep it as it is in the first form; it is tuning.
+
+### N85 (Low). The third writing and the model: small things
+
+- 17.4's last paragraph ("so it is counted at its worse end in both sums") is the second writing's rule.
+- T is said twice and differently: 17.4, "twice the longest a statement lives and the time between two
+  visits"; 17.9, "a lateness, two dispute periods, the time between two visits". The model has one. Say
+  whether it is one term. If it can be computed from the lateness and the dispute period that the terms have,
+  step 2 needs no new term (the terms are 90 bytes in every script that shows them).
+- 17.4 and 17.8 say that N71 (a held option through a step of every leg) and the sums of a row are "found in
+  the model": neither is in this model. The second belongs to `covered.rs`.
+- The day's rule steps few accounts that the price did not: in a run of the plain set, 5,352 of 29,154 users'
+  accounts were stepped at ticks of 0.5 % with the rule and 5,096 of 28,686 without (seen in a run that is not
+  kept as a test).
+- The model's head still says "second writing"; 17.8 says eight tests.
+
+## 3. The claim itself
+
+`short == 0` and `unpaid == 0 && unpaid_own == 0` are the right two halves, and the second is stronger than
+section 12's (it includes every premium in a step). For options three things are beside it and should be said
+with it: what a young leg gives up (N79, a number the test can print); what an option was worth beyond its
+exercise at a call (N48; no number in a model without a price of options); and the two bounds (N81, N82). Its
+edge is where the paper says for an account, less the tolerance; for a book one side of which leaves it is
+lower than the paper says.
+
+## 4. The third writing against N65 to N77
+
+Taken as written: N65, N66, N67, N68, N70, N72, N73, N74, N76. N69 taken, with N80 and the stale paragraph.
+N71 and N75 are left to a model that does not have them yet. Nothing in 17.4 or 17.5 is shown unnecessary: the
+day's rule is needed against users and owner (N83); the account that stays is needed (the `pair` rows); a leg's
+time is needed (the author's 443 of 1,000). What is shown wrong: the young rule of a leg (N78), the stater's
+choice in a step (N80), and the parenthesis of 17.4 (N83).
+
+## 5. Before step 2, and whether it can start
+
+Step 2 is the leg as it will stay, futures only, with F116. It needs of the model only the young rule and T.
+
+- **Decide N78 first** (an account's young legs together): it is what `KpfTCStep` will sum. And that a young
+  gain is nothing, not a second claim (N79): that keeps the note as it is.
+- Say T once (N85), computed from the terms' own periods if it can be.
+- Where the leg's four numbers lie is "decided in the model", and this model has no bytes: decide it at step
+  2's start.
+
+**With those, step 2 can start now, beside the model's next round.** It touches futures only, and nothing
+found this round changes what a futures leg says.
+
+What the model should show before it is carried into `covered.rs` and `reserve.rs`: `call` with N78; the main
+test's claim run with `run_x`'s switches (the owner paying its shard up, users that take, prices at the edge);
+a step by a price that shows it (N80); one leg of a group of options leaving, as the `pair` does for futures
+(a long stepped away from a written call; a held leg of a spread ending at its day); N71; and N81's test as
+the stated bound.
+
+## Tests added (`research_options.rs`, below the author's)
+
+| Test | Shows |
+|---|---|
+| `review_t2_a_stronger_owner_and_stronger_users_leave_nobody_unpaid` | eight sets, 1,000 paths each at four ticks to 4.5 %: nobody unpaid |
+| `review_t2_one_leg_of_a_pair_leaves_as_the_end_is_built` | N65 in the simulation: 593, 463, 126 of 1,000 paths |
+| `review_t2_a_hedge_that_is_young_at_a_call_pays_the_leg_that_lost` | N78: the two accounts, and 15 of 1,000 paths |
+| `review_t2_what_the_young_give_up` | N79's table |
+| `review_t2_the_owners_own_hedge_by_the_clock_needs_the_days_rule` | N83's table |
+| `review_t2_the_edge_of_the_claim_and_the_gross_of_option_rows` | N82, N84 |
+| `review_t2_a_book_that_one_side_leaves_is_held_by_twice_the_rate_on_the_gross` | N81's table |
+| `review_t2_a_step_stated_with_the_lines_that_ask_most` | N80: 15,152 of 25,383 |
