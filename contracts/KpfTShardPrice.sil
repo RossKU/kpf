@@ -84,10 +84,13 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         if (verdict == 1) {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m - 1 >= tx.inputs.length);
-            half = bond / 4;
-            kept = bond - half - half;
-            if (half > 0) {
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
                 require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
                 require(tx.outputs[m - 1].value >= half);
             }

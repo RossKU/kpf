@@ -149,7 +149,8 @@ fn world() -> World {
     let table = OLive { s: EpochTable { members: table, total: 67 * KAS1, from: 6_000, until: 9_000, quorum_bps: rp.quorum_bps, spread_bps: rp.spread_bps }, value: KAS1 as u64, id: Some(rid), op: op(20), daa: 6_000 };
     // (Two copies of each of fifty scripts at 10 KAS: more than one coin of the funder's.)
     let funds = vec![fund(xk(&f), 200), fund(xk(&f), 202)];
-    let (g, lib) = lib_genesis(2, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    // (At 10 KAS a copy the library's genesis is above a block's storage mass since it has 63 scripts: 11.)
+    let (g, lib) = lib_genesis(2, 11 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = g.sign(&keys).expect("genesis");
     World { a, b, w, f, members, keys, rid, markets, table, lib, scripts: lib_scripts(&gs.tx, 6_000), chain: RefCell::new(vec![]) }
 }

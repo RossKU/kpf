@@ -16,7 +16,8 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 
 const KAS1: i64 = 100_000_000;
 const T0: i64 = 6_500;
-const FLOOR: i64 = 5 * KAS1;
+// (6 KAS: at 5 the genesis of a library of 63 scripts is above a block's storage mass.)
+const FLOOR: i64 = 6 * KAS1;
 const MARKET: [u8; 32] = [0xfe; 32];
 const PRICE: i64 = 1_000_000_000;
 

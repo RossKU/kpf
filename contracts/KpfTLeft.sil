@@ -35,7 +35,8 @@ pragma silverscript ^0.1.0;
 // While the shard is called nothing is paid by this script: a note that asks something waits (the call's own
 // scripts pay every note the same share).
 // KpfTLeft: a note of one leg, and a note of the rest.
-//   apply(who, ageb, slotLen, terms, rows, moving, leg, r, key, asked)    anyone; `r`: the leg's row.
+//   apply(who, ageb, slotLen, terms, rows, moving, leg, r, key, asked, tag)    anyone; `r`: the leg's row; `tag`: 6, or 8
+//                                                    for the note that a leg did not enter (KpfTEnterOff writes it).
 //   rest(who, ageb, slotLen, terms, rows, moving, key, amount)            anyone: a note of the rest is paid as far as the shard holds.
 contract KpfTLeft(int init_version) {
     int version = init_version;
@@ -86,7 +87,7 @@ contract KpfTLeft(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, byte[111] leg, int r, byte[32] key, int asked) {
+    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, byte[111] leg, int r, byte[32] key, int asked, int tag) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -103,8 +104,12 @@ contract KpfTLeft(int init_version) {
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         byte[] lg = byte[](leg);
-        // A note to it that one leg left.
-        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(LEFT) + p33(blake2b(z32 + lg)) + p33(key) + i9(asked)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        // A note to it that one leg left (6); or that a leg did not enter (8: its entry ended; it asks nothing).
+        require(tag == LEFT || tag == 8);
+        if (tag == 8) {
+            require(asked == 0);
+        }
+        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(tag) + p33(blake2b(z32 + lg)) + p33(key) + i9(asked)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         int held = int(byte[8](mv.slice(67, 75)));
         int basis = int(byte[8](mv.slice(121, 129)));
         int v = tx.inputs[j].value;

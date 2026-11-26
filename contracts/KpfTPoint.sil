@@ -104,11 +104,16 @@ contract KpfTPoint(int init_version) {
         byte[32] c0 = changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held);
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 2);
-        require(kind <= 9);
+        require(kind <= 10);
         require(point >= 0);
         int landed = OpTxInputDaaScore(j);
         require(landed >= t0);
         require(landed - t0 <= late);
+        // (A statement written at or after the last time to dispute it is disputed by nothing that could land in
+        // time: no dispute of it is made.)
+        int lateness = late;
+        if (late >= LATE_AGAIN) { lateness = late - LATE_AGAIN; }
+        require(landed < t0 + lateness + window);
         require(bond > 0);
         becomes(j, rs, slotLen, blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)), tx.inputs[j].value + bond);
         require(int(ageb) >= 0);
@@ -132,7 +137,9 @@ contract KpfTPoint(int init_version) {
         require(v >= bond + bond);
         becomes(j, rs, slotLen, position, v - bond - bond);
         int m = tx.outputs.length - 1 - 4 * j;
-        if (kind >= 5) {
+        // (An entry of the new form, kind 10, is two parties' trade: a price of it that nobody answers ends it at
+        // nobody's cost, both bonds back. With a committee that answers, whoever wants it to stand answers.)
+        if (kind >= 5 && kind != 10) {
             // A point of an entry, or of a draw, that nobody answered: the prices of a leg that enters, and of a
             // shard's rows where it draws, are the claimer's to show (a market nobody prices would else let a leg
             // in at any price, or count a row as equity at any price, for a bond that comes back: reviews 38 and
@@ -178,17 +185,24 @@ contract KpfTPoint(int init_version) {
         require(bond > 0);
         require(v >= bond + bond);
         becomes(j, rs, slotLen, changeHash(position, kind, t0, arg, outs, bond, claimer, window, again, held), v - bond);
-        int quarter = bond / 4;
+        // (As a right answer pays: a quarter each where a quarter is a payable amount; else half to the claimer.)
+        int part = bond / 2;
+        int kept = bond - part;
         int m = tx.outputs.length - 1 - 4 * j;
-        require(m - 1 >= tx.inputs.length);
-        if (quarter > 0) {
-            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
-            require(tx.outputs[m].value >= quarter);
+        require(m >= tx.inputs.length);
+        if (bond / 4 >= 5000000) {
+            require(m - 1 >= tx.inputs.length);
+            part = bond / 4;
+            kept = bond - part - part;
             require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
-            require(tx.outputs[m - 1].value >= quarter);
+            require(tx.outputs[m - 1].value >= part);
+        }
+        if (part > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
+            require(tx.outputs[m].value >= part);
         }
         int self = this.activeInputIndex;
-        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - quarter - quarter);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + kept);
         goesOn();
     }
 

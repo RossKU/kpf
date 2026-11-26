@@ -7763,3 +7763,463 @@ CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2    # 1,275 pas
                                                                       # auditT1_cli 47, auditT1_solvency 11;
                                                                       # thin_draw 18, thin_account 13, thin_enter 8
 ```
+
+# Round 51
+
+Scope: the fixes of round 50 (F77, F79, the dispute's one line) and part (b) of section 14 at the engine: an
+entry stated with the shard (`KpfTEnterS`, `KpfTCEnter`, kind 10 in `KpfTCRow`, `KpfTStepPrice`, `KpfTPoint`), the
+marked account and `KpfTEnterOff`, the note that a leg did not enter, a draw ended by an entry that is not
+settled (`KpfTDrawEntry`), and the shard's time (`KpfTShardEnd`). My files brought along; the whole workspace
+run once. Committed: 326c974; the fixes and (b) are in the working tree. No src, contract or `kpf-out` file
+touched; no commit. As asked, nothing here is about what a covered account still takes of the old form.
+
+## Headline
+
+- F77 and F79 are closed, each test saying so.
+- The whole workspace, once: 1,283 passed, 3 failed: one of mine (brought along after), two that are not mine
+  (the command line's shard and library: at the end).
+- (b) agrees with its model: the end and the rows of an entry on 200 random statements (accounts of no leg to
+  five entering one more, coins at the edge to the sompi): 0 partings.
+- **Four findings in (b).**
+  - **F80 (High)**: `KpfTEnterS` holds the leg to no committee. A leg of another committee's market enters a
+    shard whose id is of its own committee (the old entry held it: F63). The shard's row is then priced by
+    whoever that committee is, or by nobody: a call, whose prices are its caller's to show, never stands.
+  - **F82 (High)**: an entry shown to end a draw is written again, so it lands again: a standing entry shown
+    after its lateness is from then on a late statement (never applied, the user's bond to whoever ends it), and
+    a dispute made in time, shown after the last time to dispute, is dismissed at its disputer's cost.
+  - **F81 (Medium)**: what ends a draw has no age; one object that nothing clears (a marked account, or the note
+    after it, of a leg that is in no row) ends every draw of the shard for good.
+  - **F83 (Low, the builders)**: the undo of an entry on an account of less than half a KAS is three small
+    outputs no transaction holds; the builder writes none.
+
+## Findings
+
+### F80 (High). A leg of another committee enters a shard's books
+
+`KpfTEnterS` checks the leg's form and bounds and that its row is its market's. It is shown nothing of what the
+shard's id is the hash of, and compares the leg's committee with nothing. The row it writes carries the leg's
+own committee. The old entry held this: `KpfTStepEnter` computes the id from the seed, the LEG's committee, the
+terms and the periods (review 39, F63).
+
+`t1b_finding_f80_a_leg_of_another_committee_enters_the_books_of_a_shard`: a shard opened at the engine (its id
+is of the tests' committee, asserted) and an account opened under it; a leg of one unit of a market under the
+committee id 0x99.., which is nobody's. The entry is stated by the builder and taken by the engine; the shard's
+first row is of that committee. The same leg under the shard's committee is the control.
+
+Who gains is the owner, with an account of its own (both signatures are its own):
+
+- **A shard no one calls.** A leg of a sompi's worth under a committee that signs nothing. A call's prices are
+  its caller's to show (14.6): the owner disputes the price of that row, nobody answers, the call is ended at
+  its caller's cost. The lower level then holds nothing. (Its own draws lapse the same way if somebody disputes
+  that row; it takes the leg out before it draws.)
+- **A row at its own price.** A committee the owner is: the row's price in a draw is whatever that committee
+  signs; the equity counts it; the shard is drawn empty with every point answered right.
+
+Closing it: `KpfTEnterS` is shown the seed and holds
+`blake2b(seed + the leg's committee + terms + moving[93..120])` to the shard's id, as `KpfTStepEnter` does: one
+argument, one hash.
+
+### F82 (High). An entry shown to end a draw lands again, and is late
+
+`KpfTDrawEntry`: "what is shown is written again as it is". It is a new output with a new landing, and two
+things are read from a landing:
+
+- a statement is held to its time by its own landing (`landed - t0 <= late` in `KpfTChangeSettle` and in
+  `KpfTPoint.dispute`; `KpfTChangeLate` ends one that fails it, the bond to whoever ends it);
+- a dispute is held to the last time to dispute by its own landing (`KpfTPoint.lapse`, `dismiss`).
+
+`t1b_finding_f82_an_entry_shown_to_end_a_draw_lands_again_and_is_late`: an entry of time 6,500 (lateness 100,
+period 50), landed at 6,510: applied after its period and disputed, both taken. The owner states a draw; it is
+ended at 6,700 by showing the entry. The entry as it then stands (the same state, the same value) is neither
+applied nor disputed (the builders refuse; the same transactions with the landing said as 6,700 are refused by
+the engine): it landed 200 after its time. Nothing is left for it but `KpfTChangeLate`. And a dispute of the
+entry made at 6,520, shown at 6,700: it no longer lapses, and is dismissed (engine): its disputer loses its bond
+for a dispute it made in time.
+
+So whoever ends a draw this way, as 14.4 asks watchers to, ends the entry it showed, at the user's cost. And an
+owner does it on purpose: it states a draw of a sompi while a user's entry stands, its other key shows the entry
+after the entry's lateness, and then ends it as late. That costs the owner half its draw's bond (the other half
+comes back to the key that showed it): 2.5 KAS on a shard of 500. It has the user's bond (2 KAS in the test, at a bond of a tenth)
+and, what matters, the choice: an entry whose leg went the user's way inside its life is killed, one that went
+the owner's way is left.
+
+Closing it. The marked account and the note have no time, and showing them is harmless: those two forms can
+stay. For the statement that stands or is disputed I would not show it at all: **an entry writes the shard's
+time.** `KpfTEnterS` spends the shard anyway; let it write, where the draw's time stands, the later of what is
+there and the entry's time, its lateness and two dispute periods (the longest it can stand). A draw stated
+before that is wrong by `KpfTShardEnd`, which reads the place already. "The owner draws when no entry of its
+shard is pending" is then held by the script, nobody has to show anything, and forms 1 and 2 go. (If the
+statement must be shown: write it as one that stands again, so that it is not held to its time a second time;
+that mends the statement and not the dispute.)
+
+### F81 (Medium). An object that nothing clears ends every draw of a shard
+
+`KpfTDrawEntry` asks no order of landing, and writes what it is shown again. A marked account under the shard's
+id push, or a note of kind 8 to the shard, ends any draw at any time, half the draw's bond to whoever shows it.
+That is right while the object can be cleared: a marked account is undone by anyone, its note applied by anyone.
+Where the leg is in no row of the shard, `KpfTEnterOff` still undoes the account into the note, and `KpfTLeft`
+refuses the note for good.
+
+The scripts of an entry write no such object. A statement nobody disputed does: the settlement writes the
+object its first output says, whatever its state.
+`t1b_finding_f81_an_object_nothing_clears_ends_every_draw_of_a_shard`: a user states on its own account a take
+whose output is a marked account of a leg that never was. Its end is wrong; nobody disputes it within the
+period; it is applied (engine). A draw of the shard stated at 8,000 is ended by the object; the object is
+undone; its note is applied by nothing (the model refuses: the leg is in no row); a draw stated at 9,000 is
+ended by the note. Each time half the bond of the draw (2.5 KAS of the 5 on a shard of 500) goes to whoever
+shows it.
+
+It needs the owner to miss one period on one account. What it costs is every draw from then on, where a wrong
+statement that nobody disputes otherwise costs what that statement says. Round 46 asked the same of a note that
+legs left; this is two more shapes of it, and with F82's proposal the note is the only one left. Closing it: a
+note of a leg that is in no row must be cleared by something. The smallest thing: `KpfTLeft`, shown a note of
+kind 8 whose leg's market has no row, or whose row has fewer units than the leg, spends the note and leaves the
+shard as it is (a leg that is not in the books did not enter them).
+
+### F83 (Low, the builders). The undo of an entry on a small account is not written
+
+`KpfTEnterOff` writes the account that goes on, the note (a note's least) and the keeper's fee to whoever undid
+it. `t1b_finding_f83_...`: with coins of a note's least there is no fee and the undo is written; from a sompi
+above it to 0.3 KAS above it the three outputs are more storage mass than a block holds, and the builder writes
+nothing; from 0.5 KAS of coins it is written. The script asks "at least" of each, so a caller that fills them up
+is taken. An account that small has a leg of a few KAS at most; a marked account nobody undoes is what F81 is
+about.
+
+## What held
+
+### a. `KpfTEnterS`
+
+`t1b_r51_what_the_stating_of_an_entry_takes_and_refuses`, around a control (an account of no leg and 20 KAS, a
+long of 10 units, 5 KAS added: the statement holds 25 KAS and the bond, the shard is written with the leg, its
+coins and its time copied). Refused at the engine, 13: the statement and the shard the other way round under
+the id; the statement a sompi short; the shard a sompi short; the shard written without the leg; either
+signature alone; a time of 500,000,000,000; a row of no market that has units; a row whose gross would pass the
+bound; an account whose lateness is the mark; a shard under another id; an account of another shard's id; a
+seventh leg. Taken: an account whose two keys are one; a sixth leg; a second leg of a market that has its row.
+
+By reading:
+- A leg into an account without the books, or the books without an account: one transaction writes both under
+  the id, two inputs and two outputs counted. Twice into the books: only by two entries. Another shard's books:
+  the id and the id's push are held equal.
+- An account under a statement, or marked, is not the object the script opens (it hashes the 171 bytes it is
+  shown with the account's own root).
+- The row: a market has one row and one head. A leg of a market whose row has another committee, scale or limit
+  finds its row "not its head", and no empty row is given it while a row has that market's name.
+- Bounds: the row's gross and net are held; the number of what the legs were entered at is not held to a bound
+  of its own, and the engine's 63 bits refuse a sum beyond them. The bond is of the coins with what is added.
+- Who pays: both sign the whole transaction. What the statement's one output says is not looked at when it is
+  stated (the end holds it to the account with the leg, its time, and what the object held); both signed it.
+- The time: an entry is stated at or after the account's time by the time it SAYS. One that says a time that is
+  not yet is in the books from its landing, and is a late statement (landed before its time): the user's bond,
+  and a leg in the books until it is undone. The same as a late landing.
+- What a landed entry lets its user do before anybody looks: dispute a price of its own entry and have the
+  entry end for nothing if nobody answers within the period. The owner, who wants the entry to stand when the
+  leg went its way, has to answer every such dispute with a citation; where a quarter of the bond is under 0.05
+  KAS it is paid nothing for it (the half goes to the claimer, who is the user). That is the third writing's
+  residue with a number on it: on an account of 10 KAS it costs the user 0.05 KAS when it is answered.
+
+### b. The marked account and `KpfTEnterOff`
+
+`t1b_r51_an_entry_that_ended_is_undone_once_and_its_note_is_of_its_own_kind`: a price nobody answers: both bonds
+back, the marked account holding what the account held. Undone: the account without the leg, a leg fewer
+counted, 0.1 KAS less, which whoever undid it has; the note with a note's least. 12 other transactions refused:
+the account short or with another fee or count; the note below its least, under no id, of another leg or key,
+or a note that the leg left in its place; the fee short; another leg or another chain shown; a second undoing.
+
+`KpfTStepPrice` takes a moving part of 180 bytes for every kind: no hole that I find. It opens the position
+from what it is shown; a statement on a marked position is made by `KpfTEnterS` alone and is of kind 10. A line
+that ties 180 bytes to kind 10 would say so. Every ender writes the position's hash back and reads no length.
+
+### c. The end and the rows of an entry
+
+`t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts`: 100 ends (38 right, 59 wrong, 3
+neither) and 100 rows (44 right, 41 wrong, 15 neither); 0 partings. Coins at the maintenance with the leg to the
+sompi, a sompi less, half; gains and losses of the legs the account has; nothing added and something. Changed
+one at a time: the sums of the last row, its chain, a row less or none, another claimer, the output a sompi more
+or less or of another time, something of side B's, what is said to be added, the leg said; and for a row its
+numbers, its chains, the row before, the last row at a price that is not the leg's entry, a leg said that is
+not the last row's, a point beyond the trace.
+
+Two who are one and a false entry, in numbers. An account of 55 KAS of the owner's own, a leg of 1,000 KAS of
+worth at a false price. A watcher disputes the price. If it waits for the lapse: both bonds back; the two have
+paid two fees, and the leg was in the books from the statement to the undoing and the note, a dispute period
+and more; nothing stops the next one at once (an ended entry writes no time). If the watcher answers it wrong
+with the committee's price: 0.55 KAS, half to the watcher. What the shard's users lose is what the books hid
+meanwhile: 14.4's row, 155 KAS on a user long 1,000 units through five ticks of 2 %. So the pay of half a bond
+is what stands between a false entry and "for nothing", and it is paid only to a watcher that answers.
+
+### d. The note of kind 8
+
+In the same test: applied by `KpfTLeft` with its kind, the books as they were. Refused: applied with kind 6;
+with something asked (the argument; and an object of kind 8 that asks 5, made by hand); a note of kind 6 of the
+same leg and key is another object, applied with 6 and not with 8. `KpfTLeftAll` has no kind to say: it is of
+kind 6. `KpfTDrawNote` hashes the kind it is shown: a note of kind 8 said to be of kind 6 is another hash.
+
+### e. `KpfTDrawEntry`
+
+Beside F81 and F82. By reading: the draw is opened as `KpfTDrawNote` opens it, kind 5 in the hash; what is
+shown must be under the same id and carry the shard's id push; a statement is hashed as kind 10 with the marked
+account's own key as its claimer, so a statement of another kind, or of another shard's account, is another
+hash; a note is hashed as kind 8. The bonds and outputs are `KpfTDrawNote`'s. (Your test runs the four forms,
+the disputed draw, another shard and another kind.)
+
+An owner whose draws are ended by a user that keeps an entry pending: the user can keep one pending no longer
+than its life, the owner signed it, and the owner's tool states no draw meanwhile. What is left of it is F81
+(an object nobody can clear) and F83 (one nobody's builder clears).
+
+### f. The shard's time
+
+`t1b_r51_the_time_of_a_shard_a_draw_is_held_to_and_writes`: a draw of time 6,500 is right where the shard says
+nothing, 6,500 or a time below nothing, and wrong where it says 6,501, 9,000,000 or the largest number (model
+and engine); applied it writes 6,900; the same draw written with the shard's time left as it was is wrong. A
+draw that says a time after its landing is neither disputed nor applied. `KpfTShardEnd` is the one script whose
+source reads the place; `KpfTEnterS` and the note scripts copy it (asserted in their tests). The random draws of
+round 45 run with the shard's time about the draw's and at the ends: 360 draws, the model and the arithmetic
+written out part on none.
+
+The opening asks nothing of the place: a shard opened with a time far ahead is one its owner does not draw
+from. I would leave it: it binds nobody else, and a user may like it.
+
+### g. Round 50's fixes
+
+- F77: `t1b_fixed_f77_...`: with the bond at 1 %, a right answer is written and taken on accounts of 5, 10 and
+  16 KAS again (half to the claimer, nothing to whoever answered) and with a quarter each from 20 KAS.
+- F79: `t1b_fixed_f79_...`: no statement is stated on an object whose lateness is the mark, more, or below
+  nothing; one below the mark by one is. `KpfTEnterS` refuses the same (in a).
+- `KpfTPoint.dispute` refuses a statement that landed at or after the last time: the tests of round 50 pass
+  with it.
+- Nothing of (a) that (b) reopens, that I find. What (b) adds to (a)'s life of a statement is F82: a second way
+  for a statement to land again.
+
+The library's genesis: my worlds hit it (some forty tests). Two copies of the library are at 11 KAS a copy now, the fee
+world's single copy at 6. And my shards said 9,000,000 where the draw's time now stands: they say nothing now.
+
+## Not reached
+
+- `KpfTChangeLate` on the entry F82 leaves: the script's condition is read, and round 30's test runs it on a
+  late statement; I did not build it in this world.
+- `KpfTEnterS` on an account under a statement or marked, and with the id's push of another shard: read, not
+  run (the builder writes no such transaction).
+- `KpfTDrawEntry` with what is shown made up at the engine beyond F81's object: read.
+- The call, and what F80 does to it: on paper.
+- Sizes: only what the builders print.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F80 | High | open: `t1b_finding_f80_...` |
+| F82 | High | open: `t1b_finding_f82_...` |
+| F81 | Medium | open: `t1b_finding_f81_...` |
+| F83 | Low | open: `t1b_finding_f83_...` |
+| F77, F79 | | fixed, verified |
+| F78, F74, F68 | | open until the old form goes |
+| F61, F66, F67, F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 158 tests pass. Brought along: the draw's time in the draw
+  helpers and tests of rounds 45 to 50; the library's genesis; `t1b_fixed_f77_...`, `t1b_fixed_f79_...`; round
+  48's test of the expiry's place is now the test of the shard's time. New: `t1b_finding_f80_...` to `f83`, five
+  `t1b_r51_...`.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 63 scripts, 72 entries, 61 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 47 pass (its library is created at 6 KAS a copy: see below).
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,283 passed, 3 failed (140 result lines).
+
+| Failed | Whose | Why |
+|---|---|---|
+| `auditT1_cli`: `t1b_r19_a_library_with_a_fee_pool_at_the_command_line` | mine | `lib-create --value 5`: the genesis of 63 scripts at 5 KAS a copy is 520,000 grams of storage mass. Brought along after the run (6 KAS a copy); the suite then passes, 47 of 47 |
+| `clearing_cli`: `a_shard_a_covered_account_a_leg_that_leaves_and_a_draw` | not mine | "stated before the time the shard says (864000)": the command line opens a shard with 864,000 where a position has its expiry, which is now the time before which no draw is stated. The draw of the test, and of anyone who opens a shard with that command, waits until then |
+| `committee_cli`: `a_library_with_a_fee_pool_from_the_command_line` | not mine | the same genesis at 5 KAS a copy |
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 158 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed (after the run)
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
+```
+
+# Round 52
+
+Scope: the fixes of round 51 at the engine: the leg's committee held to the shard's id (F80, `KpfTEnterS`), the
+shard's time written by an entry and a draw ended by no statement (F82, `KpfTEnterS`, `KpfTDrawEntry`), and a
+note of a leg that is not in the books spent (F81, `KpfTLeftVoid`). My files brought along; the whole workspace
+run once. Committed: 326c974; the fixes are in the working tree. No src, contract or `kpf-out` file touched; no
+commit.
+
+## Headline
+
+- **F80, F82 and F81 are closed**, each test saying so.
+- `KpfTLeftVoid` agrees with its rule on 170 random books (486 legs named): a note is spent exactly where the leg
+  named is no leg of the books. **No note that `KpfTLeft` or `KpfTLeftAll` applies is spent, whichever leg is
+  named**: 76 such notes, 71 of them applied at the engine in the same test; 0 notes that are neither applied
+  nor spent.
+- **One finding, F84 (Low)**: what a spent note held is whoever spends it. A note that holds what an account
+  paid (it asks below zero) is of the books when a right statement writes it; where the books lost its units to
+  a wrong note first (F81's premise), its coins are the spender's and not the shard's.
+- The other side of F82, asked for: what the owner gives up is said below (a wait after every entry it signs;
+  one more transaction to end a draw by an entry that is not final). A user holds no draw off by itself.
+- The whole workspace, once: 1,291 passed, 0 failed. `clearing_cli` and `committee_cli`, which failed in
+  round 51, pass.
+
+## Fixed and verified
+
+### F80: closed
+
+`t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other`, on a shard and an account opened at the
+engine. Taken: a leg of the shard's committee (by the builder, and written by hand). Refused at the engine:
+
+- a leg of a market under the committee 0x99.. (the builder refuses it by `Shard::of_committee`; written past
+  the builder, the script does);
+- another seed shown (four of them: a made-up one, the committee's id, nothing, the shard's id), with the leg of
+  the right committee and with the other;
+- a leg of this committee into the shard of the other committee (the same seed, terms and periods; an account
+  and a shard of that id; the leg of that committee is the control and is taken);
+- that last transaction with this shard put in the place of the other (its object, its moving part and what it
+  is written as): an account of another shard's id brings nothing into this one. (Round 51 had this as "read,
+  not run".)
+
+The hash is of the account's terms and periods; the shard's are the same wherever both are opened by the
+scripts. My made-up shards of rounds 47 to 51 had a bond rate of 1 % under accounts of 10 %: those that go
+through an entry are now under an id of a seed, with the account's periods.
+
+### F82: closed
+
+`t1b_fixed_f82_an_entry_writes_the_shards_time_and_no_statement_is_shown_to_end_a_draw`:
+
+| The shard says | An entry of time 6,500 writes | |
+|---|---|---|
+| nothing, 6,000, 6,699, a time below nothing | 6,700 | taken |
+| 6,700, 6,701, 9,000, the largest number | what it said | taken |
+| any of these, written one less, one more, as it was (where that is earlier), or nothing | | refused (28) |
+
+Entries of time 0, 1 and 499,999,999,999 write their time and 200 (500,000,000,000 is refused: round 51). On
+the shard an entry left (6,700): a draw of time 6,510 or 6,699 has a wrong end at the engine, one of 6,700 or
+7,000 a right one, as `draw_end_judged` says; the builder states none before 6,700. The entry itself is applied
+after its period and disputed, as before. `KpfTDrawEntry`: a marked account ends a draw; the statement of the
+entry, the statement disputed, and the statement standing again, put where the marked account is, are refused
+as form 0 and as form 3; forms 1, 2, 4 and -1 are refused.
+
+**The other side.**
+
+- *What the owner gives up.* After an entry of time `t0` the shard's next draw is of a time no sooner than
+  `t0 + lateness + 2 periods`, whatever became of the entry. An entry nobody disputes is applied a period after
+  it lands: the owner waits a lateness and a period more than the books need. A shard that takes an entry in
+  every such span is never drawn: the owner stops signing entries for that long before each draw. It is the
+  owner's own signature each time, so this is a cost it chooses.
+- *A time the owner signs is kept.* The time is written when the entry is stated and stays when the entry is
+  ended, lapses or is undone. An entry of a time ahead of the chain (the script holds the time to no lock; the
+  builder sets one) is stated, and is ended as early by anyone; the shard's time it wrote stays. The owner's
+  signer has to look at `t0` now: before this round a time ahead cost it nothing. Not a finding (the owner signs
+  it), a rule for whatever signs for the owner.
+- *Can a user hold the owner's draws off?* Not by itself, that I find. An entry signed and not yet landed spends
+  the shard as it stands, and the stating of a draw spends the shard: the draw makes every such entry void. A
+  marked account is undone by anyone, its note applied or spent by anyone, the owner's own key among them.
+- *What ends a draw after the shard's time.* An entry that is not final then (a dispute of it nobody answered
+  or lapsed; an entry that landed late and nobody ended) ends no draw by itself any more. It takes two
+  transactions where round 51 had one: the lapse (or the end as late), which leaves the marked account, and the
+  end of the draw by it. Both are anyone's; the second pays half the draw's bond; the draw's period is the time
+  there is. `t1b_r52_after_the_shards_time_an_entry_that_is_not_final_ends_a_draw_in_two_transactions` runs the
+  lapse and the end. This rests on somebody doing it within a period, as every dispute does.
+
+### F81: closed
+
+`t1b_fixed_f81_a_note_of_a_leg_that_never_was_is_spent_and_ends_no_draw_after`: the whole way of round 51. A
+statement nobody disputed writes a marked account of a leg in no row; it ends a draw while it stands;
+`KpfTEnterOff` undoes it; the note is applied by nothing (`Shard::gone`), ends the next draw while it stands,
+and is spent by `KpfTLeftVoid`: the shard as it is to the sompi, and no other output under its id.
+
+`t1b_r52_a_note_is_spent_only_where_a_leg_of_it_is_no_leg_of_the_books_and_never_one_that_is_applied`: 170
+books of one to eight legs in up to four markets, some called; notes of one to six of their legs, as they are
+or with one thing changed (a size by one or times fifty or below nothing, an entry by one or of nothing, the
+direction turned or none, another market, another committee, a leg twice); asking, asking nothing, or holding
+what was paid; kind 6, and kind 8 on one leg. For each of the 486 legs named the engine spends the note exactly
+where the script's rule written out says so, and `Shard::gone_at` is the first such leg. 94 notes spent; 76
+notes that `Shard::left` applies (to the books called or not) not spent whichever leg is named, 71 of them
+applied at the engine; none in between.
+
+`t1b_r52_what_the_spending_of_a_note_takes_and_refuses`, on one note of a leg in no row. Refused (11): the shard
+a sompi less; written with a sompi more held, with other rows, or called; the note going on beside it (a second
+output under the id); kind 8 said of a note of kind 6; a leg named beyond the note or below the first; another
+key; something asked that the note does not say; the note of another shard. A note of legs of the books (one leg
+asking, one leg holding what was paid, two legs) is not spent and is applied. Of two legs one of which is not in
+the books: spent naming that one, not naming the other. The same leg three times against a row of twice its
+units: spent, whichever is named. An object of kind 8 that asks something (no script writes one, none applies
+it) is spent like any note of a leg in no row.
+
+## Findings
+
+### F84 (Low). What a spent note held is whoever spends it
+
+`KpfTLeftVoid` asks for the shard as it is, with at least its value, and for nothing else. A note holds a note's
+least (0.2 KAS), and a note that legs left which asks below zero holds what the account paid for them besides:
+coins that `KpfTLeft` adds to what the shard holds.
+
+A right statement writes such a note of legs that are in the books, and it is then not spent (the random test).
+It becomes a note of "no leg of the books" where the row lost the units first, to a note written by a wrong
+statement nobody disputed: F81's own premise, and round 46's.
+
+`t1b_finding_f84_a_note_that_holds_what_an_account_paid_is_spent_into_the_spenders_pocket`: a row of 10 units,
+the leg of an honest account. A note of 10 units of that market asking nothing is applied: the row is empty.
+The honest account leaves at a loss; its note holds 12.2 KAS. Anyone spends it: 0 to the shard, 0 to the user,
+12.19 KAS to the spender. A note of that leg asking 30 KAS is spent the same way; before this round it stood,
+and was applied once the row had units again.
+
+Low: it needs a wrong statement that nobody disputed, and whoever has that has more direct ways. But the script
+then pays the first to come what an honest account paid its shard. Closing it: where the note asks below zero,
+the shard goes on holding that much more (as `KpfTLeft` writes it), value and number; the spender keeps the
+note's least.
+
+## Not reached
+
+- `KpfTChangeLate` on an entry (what leaves the marked account where an entry landed late or early): the
+  settlement and the dispute of a late entry are refused here; the end as late is round 50's test on other
+  kinds. No builder writes it for an entry.
+- A draw and an entry signed and not landed, on a chain: said from the outputs they spend, not run.
+- The command line, sizes, and the call: not looked at this round.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F84 | Low | open: `t1b_finding_f84_...` |
+| F83 | Low | open (a builder's matter): `t1b_finding_f83_...` |
+| F80, F82, F81 | | fixed, verified |
+| F78, F74, F68 | | open until the old form goes |
+| F61, F66, F67, F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 162 tests pass. Brought along: the seed in the entry's
+  helpers, and the shards and accounts of round 51 under an id of a seed (`sid52`, `cov51`, `shard51`); the
+  time an entry writes in `enter_by_hand52`; the test of the shard's time names `KpfTEnterS` beside
+  `KpfTShardEnd`. `t1b_finding_f80/f81/f82_...` are `t1b_fixed_f80/f81/f82_...`. New:
+  `t1b_r52_after_the_shards_time_...`, `t1b_r52_a_note_is_spent_only_where_...`,
+  `t1b_r52_what_the_spending_of_a_note_takes_and_refuses`, `t1b_finding_f84_...`.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 64 scripts, 73 entries, 62 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 47 pass, unchanged this round.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+A note on the compiler: a struct written with `..` inside a closure that is passed as `&dyn Fn` made rustc
+1.94.0 stop with "broken MIR" in my test; the values are made outside the closure now. Nothing of the
+project's.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,291 passed, 0 failed (140 result lines).
+
+Nothing failed, mine or not. The two that failed in round 51 and are not mine pass: `clearing_cli` (1 of 1,
+`a_shard_a_covered_account_a_leg_that_leaves_and_a_draw`) and `committee_cli` (13 of 13). `thin_draw`: 23 pass.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 162 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 47 passed, 0 failed (in the workspace run)
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
+```

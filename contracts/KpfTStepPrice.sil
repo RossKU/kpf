@@ -98,10 +98,13 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         if (verdict == 1) {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m - 1 >= tx.inputs.length);
-            half = bond / 4;
-            kept = bond - half - half;
-            if (half > 0) {
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
                 require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
                 require(tx.outputs[m - 1].value >= half);
             }
@@ -127,7 +130,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
 
     entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] prev, byte[111] leg) {
         byte[] mv = moving;
-        require(mv.length == 138 || mv.length == 171);
+        // (171 bytes and a push: the marked account an entry of the new form is stated on.)
+        require(mv.length == 138 || mv.length == 171 || mv.length == 180);
         byte[32] position = blake2b(p33(blake2b(byte[](terms) + p33(root))) + mv);
         require(version == 1);
         require(int(ageb) >= 0);
@@ -141,6 +145,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         if (kind == 6) { at0 = 167; }
         // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
         if (kind >= 7) { at0 = 48; }
+        // (An entry of the new form, kind 10: the coins added, the row and the leg whole before its rows.)
+        if (kind == 10) { at0 = 127; }
         require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));
@@ -161,7 +167,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(rows.length == 112 * n);
         require(kind >= 2);
         require(kind <= 4 || kind >= 6);
-        require(kind <= 9);
+        require(kind <= 10);
         require(at >= 2);
         require(at % 2 == 0);
         int i = at / 2;

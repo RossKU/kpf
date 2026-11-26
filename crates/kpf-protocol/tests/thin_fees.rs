@@ -14,7 +14,8 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 const KAS1: i64 = 100_000_000;
 const T0: i64 = 6_500;
 /// What the genesis gives each copy and the fee pool, and so what each keeps.
-const FLOOR: i64 = 10 * KAS1;
+// (11 KAS: at 10 the genesis of a library of 63 scripts in two copies is above a block's storage mass.)
+const FLOOR: i64 = 11 * KAS1;
 
 fn kp(seed: u8) -> Keypair {
     Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[seed; 32]).expect("a secret key"))

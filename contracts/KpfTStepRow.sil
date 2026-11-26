@@ -109,10 +109,13 @@ contract KpfTStepRow(int init_version) {
         if (verdict == 1) {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m - 1 >= tx.inputs.length);
-            half = bond / 4;
-            kept = bond - half - half;
-            if (half > 0) {
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
                 require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
                 require(tx.outputs[m - 1].value >= half);
             }
@@ -149,6 +152,8 @@ contract KpfTStepRow(int init_version) {
         if (kind == 6) { at0 = 167; }
         // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
         if (kind >= 7) { at0 = 48; }
+        // (An entry of the new form, kind 10: the coins added, the row and the leg whole before its rows.)
+        if (kind == 10) { at0 = 127; }
         require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));

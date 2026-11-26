@@ -259,7 +259,7 @@ fn wrong_point(on: &Host, st: &Stated, said: &[u8], c: &[i64]) -> R<Option<i64>>
         Host::Shard(s) => {
             let d = Draw::read(said).ok_or("the statement's bytes are not a draw's")?;
             let c: [i64; SHARD_ROWS] = c.try_into().map_err(|_| "a shard has four rows: four prices (0 for a row with no market)".to_string())?;
-            Ok(s.draw_wrong_point(&d, &st.claimer, &st.outs, st.held, &c))
+            Ok(s.draw_wrong_point(&d, &st.claimer, &st.outs, st.held, st.t0, &c))
         }
         Host::Account(x) => {
             let tk = ATake::read(said).ok_or("the statement's bytes are not a take's or a step's")?;
@@ -311,7 +311,9 @@ pub fn show_cmd(a: &Args) -> R<()> {
 /// liquidation fee's rate the rate on the gross); a draw from it waits `--dispute-daa` and posts `--bond-bps` of
 /// what it holds.
 pub fn shard_open_cmd(a: &Args) -> R<()> {
-    only(a, &["market1", "held", "lib", "lib-unchecked", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked"])?;
+    // (No `--exit-daa`: where a position has its expiry a shard says the time before which no draw is stated,
+    // and it opens saying none.)
+    only(a, &["market1", "held", "lib", "lib-unchecked", "dispute-daa", "bond-bps", "anchor", "script", "registry", "registry-unchecked"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let lib = lib_of(a)?;
@@ -320,7 +322,7 @@ pub fn shard_open_cmd(a: &Args) -> R<()> {
     let anchor = anchor_of(a, &lib, &mut node, net)?;
     let s = script_of(a, &lib, "KpfTShardOpen", &mut node, net)?;
     // (A shard is of one committee: the market's, whose prices every account under it is counted at.)
-    let (b, shard) = tb::shard_open(&lib, &anchor, &s, terms_of(&m, None), m.committee_id, fk, price(a, "held")?, int_or(a, "exit-daa", 864_000)?, int_or(a, "dispute-daa", 600)?, int_or(a, "bond-bps", 1_000)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
+    let (b, shard) = tb::shard_open(&lib, &anchor, &s, terms_of(&m, None), m.committee_id, fk, price(a, "held")?, 0, int_or(a, "dispute-daa", 600)?, int_or(a, "bond-bps", 1_000)?, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
     show(&AObj::Shard(shard), net);
     println!("seed {} (an account under this shard is opened with it and the market's file: acct-open --seed --market1; the shard's id is the hash of it, of the committee, and of the terms and periods every account under it has)", to_hex(&tb::shard_seed(&anchor)));
     adone(a, "shard-open", &b, &keys, net, &mut node, &lib, &[AObj::Shard(shard)], &["KpfTShardOpen"])

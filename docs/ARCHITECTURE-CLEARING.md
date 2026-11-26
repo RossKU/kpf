@@ -1342,9 +1342,12 @@ user. **The owner signs first; the user signs last and lands it**: a statement t
 doing, and costs the user its bond as any late statement does (review 49, R5). What is said: the coins the user
 adds; the shard's row the leg takes; the leg, whole; and the account's trace with the leg as its last row.
 
-Computed there, not disputed after: the leg is a futures leg within its bounds; the row is its market's (or no
-market's, and no other row is its market's); the row and the number take the leg, within bounds; the account has
-fewer than six legs. No price of the shard's is said and no gate is computed (the head of this section).
+Computed there, not disputed after: the leg is a futures leg within its bounds, **of the shard's committee**
+(the shard's id is the hash of its opening, of its committee, and of the terms and periods of its accounts: the
+opening is shown; review 51, F80); the row is its market's (or no market's, and no other row is its market's);
+the row and the number take the leg, within bounds; the account has fewer than six legs. No price of the shard's
+is said and no gate is computed (the head of this section). **It writes the shard's time** (14.5): the later of
+what the shard says and the entry's time, its lateness and two dispute periods.
 
 Written: the shard, with the leg in its books; and the statement, on the account **marked**: the leg at the end
 of its chain, the coins added, one leg more counted, its moving part a push longer (180 bytes: every script that
@@ -1381,7 +1384,7 @@ landed late, or where a price of it is answered by nobody.
 
 | With such a leg | Held by |
 |---|---|
-| the owner draws on a requirement the leg sets off, or on what the leg lost, and has the entry ended | **a draw is ended by an entry that is not settled**: by showing, under the shard, a statement of kind 10 that stands or is disputed, a marked account, or a note that a leg did not enter (whenever it landed: no entry is stated while a draw holds the shard) |
+| the owner draws on a requirement the leg sets off, or on what the leg lost, and has the entry ended | **no draw is stated before an entry is settled or ended**: the entry wrote the shard's time. And **a draw is ended by an entry that ended and is not undone**: by showing, under the shard, a marked account or a note that a leg did not enter, whenever it landed. (A statement that stands is not shown: written again it would land again, late, and be ended at its user's cost: review 51, F82.) |
 | a call is hidden: the leg sets its users' gains off in the books for as long as it is there (in numbers: a user long 1,000 units, the price up 2 % a tick for five ticks; the leg kept five ticks: no call, the user short 155 KAS; kept one tick, or the price up 0.9 % a tick: nothing) | 14.1: the entry is settled or ended within its lateness and two dispute periods; it is then undone, and its note applied, by whoever watches (each is paid: the fee of 14.3, the note's carrier). **The bound of the claim is on what a price moves in a lateness, two dispute periods and the time between two visits** |
 | a call is stated on a loss the leg shows and that is not owed (a pending leg that gained), and stands when the leg is undone | not held: the call was right on the books. Its accounts are closed at the call's prices and paid (review 49, R10) |
 | its account is not stepped | the same bound |
@@ -1396,10 +1399,12 @@ row.
 
 Entries and notes spend and write the shard in one transaction. A draw holds it: so a draw writes, in the shard
 it leaves (where a position has its expiry, which no script reads today), **a time before which no draw is
-stated again** (its own time and twice the longest a statement lives: review 49, R7), and the end of a draw
+stated again** (an entry writes that place too: 14.3) (its own time and twice the longest a statement lives: review 49, R7), and the end of a draw
 stated before the time the shard says is wrong. Between two draws the shard is free for at least as long as it
 was held: notes are applied, a call is stated. A draw
-that is ended writes no time and costs its claimer a bond. A call holds the shard at a bond (14.6).
+that is ended writes no time and costs its claimer a bond: an owner whose other key disputes a price of its own
+draw that nobody answers, and lets it lapse, keeps its shard under draws at half a bond a dispute period (review
+50). A call holds the shard at a bond (14.6).
 
 ### 14.6 The call
 
@@ -1449,6 +1454,12 @@ Not paid for, and nobody's to enforce: that a user reads a shard and what is pen
 (nothing is computed of the shard at an entry). A statement's prices are of a time up to the lateness before
 it landed, which whoever states picks, and an entry is landed by its user: that is worth what a price moves in
 a lateness, and the terms keep it short.
+
+Rules of a tool, held by no script: whoever watches answers a price of an entry wrong with the committee's
+price where it has one, and does not wait for the lapse (a lapse costs nobody: two who are one try a false entry
+for nothing). The owner, who signs an entry first, spends in what it signs an output of its own, and spends it
+elsewhere where the entry has not landed: its signature is else a leg the user can put into the books at any
+time within the lateness.
 
 Said plainly to a user, before any coin of a stranger's: the band (14.9); that a call closes every account of
 its shard at prices of the last lateness, and that a call can be right on the books by a leg that then does not
@@ -1502,3 +1513,65 @@ dispute periods), counts a leg less where one leaves alone, takes a take of an a
 account of no leg where its only leg leaves alone. A note is applied whole: `KpfTLeft` (one leg; 2,069 bytes)
 and `KpfTLeftAll` (two to six; 3,767). Not yet: side B's margin refused, and the other refusals of 14.2 (with
 the entry, in (b)).
+
+**Review 50** of (a), at the engine: it does what is said above; the scripts take their model's verdict on 180
+ends, 180 rows and 240 notes; the whole workspace passes (1,275 tests). Found: F77 (medium), a right answer's two
+quarters fit in no transaction where the bond is under 0.2 KAS (two outputs of less than 0.05 KAS): **a quarter
+each only where a quarter is 0.05 KAS or more; else half to the claimer in one output, as before**. F79 (medium),
+a lateness of the mark or more made a statement applied at once with no dispute: **no statement is stated on an
+object with such a lateness**. F78 (low), `KpfTHand` reads the account's time as a least margin (with what a
+covered account refuses). And a dispute is not made of a statement written at or after the last time to dispute.
+
+**(b) 14.3, the first row of 14.4, and 14.5** (the last four tests of `tests/thin_draw.rs`).
+
+| Script | Bytes | What |
+|---|---|---|
+| `KpfTEnterS` | 2,130 | an entry is stated: the account and its shard are spent; the shard is written with the leg in its books, and the statement on the account marked |
+| `KpfTCEnter` | 1,664 | the end of an entry |
+| `KpfTCRow`, `KpfTStepPrice`, `KpfTPoint` | 2,239; 1,698; 2,582 | take kind 10 (the last row of an entry is of the leg said, at its entry; a marked account's moving part; a price of an entry that nobody answers costs nobody) |
+| `KpfTEnterOff` | 770 | an entry that ended is undone: the account without the leg, and the note that the leg did not enter |
+| `KpfTLeft` | 2,104 | takes that note (kind 8, asking nothing) |
+| `KpfTDrawEntry` | 1,370 | a draw is ended by an entry that is not settled: its statement, standing or disputed; a marked account; the note |
+| `KpfTShardEnd` | 3,162 | a draw is stated at or after the time its shard says, and writes the next |
+
+Sizes of the transactions: an entry stated, 4,590 bytes; applied, 2,514; undone, 2,168; its note applied, 4,002.
+
+Run: an entry into an account of no leg, stated, applied, and each kind of point answered right and wrong; a
+price nobody answers (the marked account, both bonds back); the entry undone and its note applied (the books as
+they were); what the stating refuses (a seventh leg, before the account's time, a count below nothing, a called
+shard, a row of another market, a second row for a market, a leg that is none); a user that does not stand
+(answered wrong); a second leg entering on what the first gained; a draw ended by each of the four forms of an
+entry that is not settled, disputed or not; a draw's time written, and a draw before it answered wrong.
+
+Not yet: what a covered account refuses of the old form (14.2), which goes with the removal of that form, next,
+before the call; F74, F78 and F68 stand until then.
+
+**The library is at what one transaction writes.** Its genesis writes every copy of every script in one
+transaction, and a block takes 500,000 grams of storage mass: an output of 10 KAS weighs 4,000, so 125 of them.
+With 63 scripts, two copies at 10 KAS (126 outputs) weigh 504,002 and are refused, and one copy at 5 KAS as
+well; the tests that made such libraries now give a copy 11 and 6 KAS. Twice as many coins a copy, or half as
+many copies, is the price of every script added; the old form's scripts going will take some off.
+
+**Review 51** of (b), at the engine: the end and the rows of an entry take their model's verdict on 200 random
+statements; thirteen things the stating refuses; F77 and F79 closed. Found, and done:
+
+| Finding | What it is | Now |
+|---|---|---|
+| F80 (high) | a leg of another committee entered a shard's books: a row nobody but its maker prices (a call disputed at that row for ever; a draw counted at a price its owner signs) | `KpfTEnterS` is shown the shard's opening and holds the hash of it, of the leg's committee, and of the account's terms and periods to the shard's id |
+| F82 (high) | an entry shown to end a draw was written again, landed again, and was late: whoever showed it ended it at its user's cost, and an owner did so on purpose for half a draw's bond | a statement is not shown. **An entry writes the shard's time**: no draw is stated before it is settled or ended. `KpfTDrawEntry` (1,138 bytes) takes a marked account or the note, which have no time |
+| F81 (medium) | a marked account or a note of a leg that is in no row (a statement nobody disputed can write one) was cleared by nothing and ended every draw | `KpfTLeftVoid` (1,612 bytes): a note of legs one of which is no leg of the books is spent by anyone, the shard as it is. (Written into the two scripts that apply a note it added 1.4 kB to the one of several legs.) |
+| F83 (low) | the undo of an entry on a small account fits no transaction (three small outputs) | open: a builder's matter; the script asks "at least" |
+
+`KpfTEnterS` is 2,282 bytes, an entry stated 4,775. The command that opens a shard says no time (it wrote 864,000
+where the draw's time now stands).
+
+**Review 52**, at the engine: F80, F82 and F81 are closed. `KpfTLeftVoid` on 170 random books spends a note
+exactly where a leg of it is no leg of the books, and **no note that is applied is spent** (76 such notes,
+whichever leg is named). The whole workspace passes (1,291 tests). Found: F84 (low), what a spent note held goes
+to whoever spends it (a note that holds what an account paid is of the books when a right statement writes it;
+it is spent only after a wrong note nobody disputed took its row's units): open, to be closed by the shard
+taking what such a note holds. Said of the shard's time: the owner waits a lateness and two dispute periods
+after every entry before it draws, whatever became of the entry; the time an entry writes stays; and the script
+holds an entry's time to no clock, so whatever signs for the owner checks it (a time far ahead would keep the
+shard from drawing till then).
+

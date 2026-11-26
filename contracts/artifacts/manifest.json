@@ -52,17 +52,24 @@
     },
     "KpfTCEnd": {
       "artifact": "KpfTCEnd.json",
-      "artifact_sha256": "42cf568a882b78ba7ac6208ce16b37a7b7f4a1969fa2300fe49bd6c53923a37a",
-      "script_len": 3145,
+      "artifact_sha256": "d45a2e1a1013f7e382afb61b37295c9aaabce974fb45df25108a0485bb32f19f",
+      "script_len": 3154,
       "source": "contracts/KpfTCEnd.sil",
-      "source_sha256": "d3ee7794a93f6570cfd036abcd4856d1826ec2744841ea7728ba5cd50491bcff"
+      "source_sha256": "eae79ed139ca601b1d95a844174b547b7fede2852bc410c9c593d0534e903759"
+    },
+    "KpfTCEnter": {
+      "artifact": "KpfTCEnter.json",
+      "artifact_sha256": "e3499ea6932efe1ea66add392087703ffbb6554f723e6e90391c3bfbb39707e2",
+      "script_len": 1664,
+      "source": "contracts/KpfTCEnter.sil",
+      "source_sha256": "64dacdc4075d04fe56e199ec1a0c52e71bb80a6cab478985d47d79163727fb83"
     },
     "KpfTCRow": {
       "artifact": "KpfTCRow.json",
-      "artifact_sha256": "fe8d1f3676e4f18bc7a092da1126e1ab30c8b0c7eb0916f85a676640cafc2ba6",
-      "script_len": 2148,
+      "artifact_sha256": "752ebd2e038a043991e523c566b19d23782958dbd29eee40874046535f229c7b",
+      "script_len": 2239,
       "source": "contracts/KpfTCRow.sil",
-      "source_sha256": "041ba7f9fed97d25a627149877e12f1900a6e53eee99674a14c392400d44b111"
+      "source_sha256": "83fcaffad8ab20801c20160cef2efbefff5eeeda22d16358aabb675baa7365a1"
     },
     "KpfTCancel": {
       "artifact": "KpfTCancel.json",
@@ -73,10 +80,10 @@
     },
     "KpfTChange": {
       "artifact": "KpfTChange.json",
-      "artifact_sha256": "2e154a5ccd207d034740abbd699c8e7bc0651b47e1e9e760164ddcf65d8f5a46",
-      "script_len": 1354,
+      "artifact_sha256": "0a0133e59d943a68abc287ef695c2eae5387f4e9a5415d6f3111ce15ae7bf4f0",
+      "script_len": 1397,
       "source": "contracts/KpfTChange.sil",
-      "source_sha256": "a91b2ca3cbf2f8886a1388fa3ee166475e97100a9bb57c9906931d37b7909cb3"
+      "source_sha256": "ed6e539e379502b5b610e6877fad20298c02a24cbdf9483bd9178019c5de03f8"
     },
     "KpfTChangeDispute": {
       "artifact": "KpfTChangeDispute.json",
@@ -127,6 +134,13 @@
       "source": "contracts/KpfTDispute.sil",
       "source_sha256": "cbb2d338d004d68d15b7cb8023d2f071723da3bbcc51e196636fd8cb0b6dadc4"
     },
+    "KpfTDrawEntry": {
+      "artifact": "KpfTDrawEntry.json",
+      "artifact_sha256": "524fda87e7bc2c9a021f7d108148934fa7d8c79519a966ddf6f0f824893f82ff",
+      "script_len": 1138,
+      "source": "contracts/KpfTDrawEntry.sil",
+      "source_sha256": "203e8c71446d7937ba25f304634a9aebfae3bec3a5bd18bae374c177acbd0cfa"
+    },
     "KpfTDrawNote": {
       "artifact": "KpfTDrawNote.json",
       "artifact_sha256": "5cbbe9aa368a3c3f0781ef8b637243709db349542794aa9d9a1e22a75a82cc46",
@@ -136,10 +150,24 @@
     },
     "KpfTEnter": {
       "artifact": "KpfTEnter.json",
-      "artifact_sha256": "84c3528582d07a80df3b7e01d2351086c2071153a77691fe70740ec2610739d8",
-      "script_len": 1326,
+      "artifact_sha256": "35b1c4a996d2f07226fce0b7d35d0ff6670f6709ac05fdfb78ac8dc3cf66bae8",
+      "script_len": 1368,
       "source": "contracts/KpfTEnter.sil",
-      "source_sha256": "10135eab47c48af9c6743eec26267c3edc7da3e66f6646605dbb133da02e31bc"
+      "source_sha256": "5dbba033ee36b95ecf87d0240270074100a916e3a63391990b0aafe717cfce78"
+    },
+    "KpfTEnterOff": {
+      "artifact": "KpfTEnterOff.json",
+      "artifact_sha256": "a0dd9bac44f96c2617bcab91a156db45730a36576c5540e58474cf5bed0bb9a8",
+      "script_len": 770,
+      "source": "contracts/KpfTEnterOff.sil",
+      "source_sha256": "c43a21c470398d78669596e9254f0d883c322c69f42ca680b87891490d739541"
+    },
+    "KpfTEnterS": {
+      "artifact": "KpfTEnterS.json",
+      "artifact_sha256": "0ac023122b8836cc043e8c4c68f5088b41d6159617e57c613075a701989efd66",
+      "script_len": 2282,
+      "source": "contracts/KpfTEnterS.sil",
+      "source_sha256": "b4a32fbed29386147606a19e4293ff61adbac1386f1227b1bb75dea67f76045e"
     },
     "KpfTExit": {
       "artifact": "KpfTExit.json",
@@ -206,10 +234,10 @@
     },
     "KpfTLeft": {
       "artifact": "KpfTLeft.json",
-      "artifact_sha256": "b062828150220fcc5eb3fa102fe6fba584f05b595c075c35683aa9a01890c9c3",
-      "script_len": 2069,
+      "artifact_sha256": "1b9a10aac618328a8b60ff1b67b536bce33bc566996c2a7fab7f290dbcc36933",
+      "script_len": 2104,
       "source": "contracts/KpfTLeft.sil",
-      "source_sha256": "259b90985a4ee882ce048ae6be6e1a61f592d06c254efcc31d28c4b6c9d20ba7"
+      "source_sha256": "fc47a8ee279e242f012cc92ca8c77cc9c7c9d87194a5f891eb89aca586bc13ce"
     },
     "KpfTLeftAll": {
       "artifact": "KpfTLeftAll.json",
@@ -217,6 +245,13 @@
       "script_len": 3767,
       "source": "contracts/KpfTLeftAll.sil",
       "source_sha256": "5df504509216cd3606a49113efda19f1374687e16394c5a2d7bde5714d22cd0f"
+    },
+    "KpfTLeftVoid": {
+      "artifact": "KpfTLeftVoid.json",
+      "artifact_sha256": "9061d26593c87d75bb0c62887d145ae999af4cb65a9b00618c9cdc07efdad2f5",
+      "script_len": 1612,
+      "source": "contracts/KpfTLeftVoid.sil",
+      "source_sha256": "e1eef3ecf89b4a755d3a22ea979f4922c14bfa84c7af19494eb2f5cc86bfb8f8"
     },
     "KpfTLegAdd": {
       "artifact": "KpfTLegAdd.json",
@@ -332,10 +367,10 @@
     },
     "KpfTPoint": {
       "artifact": "KpfTPoint.json",
-      "artifact_sha256": "ff723ab190f04f5d2983b361272f79b07a1991a4bfe7970b80d880dfbfd852df",
-      "script_len": 2499,
+      "artifact_sha256": "41fd9fb0d0f4c9c12f2d8bf575b6a83835e70467c419dc459355b973c054568b",
+      "script_len": 2582,
       "source": "contracts/KpfTPoint.sil",
-      "source_sha256": "3cf3d429d5845ef9f29d0c116a2ff61a1be345cb88f95b8ab12b19f54e749b6f"
+      "source_sha256": "ee9e36a690c6e8957c5cb65361e21170c51ac6e849a360ab70c7385086722057"
     },
     "KpfTProve": {
       "artifact": "KpfTProve.json",
@@ -360,10 +395,10 @@
     },
     "KpfTShardEnd": {
       "artifact": "KpfTShardEnd.json",
-      "artifact_sha256": "635383fcd4a1cc03b7ad890b62d8af98107f4825c502211b618f4b7bfc952726",
-      "script_len": 3064,
+      "artifact_sha256": "574d758dbb374ee95c17f29451ed9595ea563638f967d543f3f98753d803f7c6",
+      "script_len": 3162,
       "source": "contracts/KpfTShardEnd.sil",
-      "source_sha256": "4729c7978cbc27d557588440cb32dab0a887d4617fa13bbab16562c4527b3891"
+      "source_sha256": "f8c4951279cb0467334f8261b95a26a88a095f4686885a8b4e7b8c753fee818d"
     },
     "KpfTShardOpen": {
       "artifact": "KpfTShardOpen.json",
@@ -374,45 +409,45 @@
     },
     "KpfTShardPrice": {
       "artifact": "KpfTShardPrice.json",
-      "artifact_sha256": "de3b74d0042f98b530dba38b6242b2e707f2e080f48dccd7456cce756236ae8a",
-      "script_len": 1743,
+      "artifact_sha256": "fe907729ef08a379a0e973d0a4e1741bed5bfda8a337310aed4ccfbb38fa8549",
+      "script_len": 1752,
       "source": "contracts/KpfTShardPrice.sil",
-      "source_sha256": "b2eaff717ba49eae364d98fd6ad91942e1396aeb4bbb6636cd194007373d046b"
+      "source_sha256": "f03bc3d21b67b0cf9ae15e20379e06e76e0bf6d3bd078457b662e29d75633dfb"
     },
     "KpfTStepEnd": {
       "artifact": "KpfTStepEnd.json",
-      "artifact_sha256": "d01500bdf9e087e1a42aba43e51941e108287de6827ce829884010c80e88ba7c",
-      "script_len": 2166,
+      "artifact_sha256": "d072d2901bef912bd51db468004c81e0dcf6a76c391878b189ced1ab22c79ff9",
+      "script_len": 2175,
       "source": "contracts/KpfTStepEnd.sil",
-      "source_sha256": "9d31ce1e88e46a22e750da197f4301e6719ab6d89c372d2e91c4a80feb1eadc0"
+      "source_sha256": "52670eae532d6aa725872d5170b48b74e35d18523d048a790dc76b15cfb01c33"
     },
     "KpfTStepEnter": {
       "artifact": "KpfTStepEnter.json",
-      "artifact_sha256": "8329b7e8cef78493132719f97218be1b1e5e826a5d57e76a41497941433499e9",
-      "script_len": 2043,
+      "artifact_sha256": "e9aff35474a6b0c24e20b0eb73fcb43421a3801254da2f311d08476da564de98",
+      "script_len": 2052,
       "source": "contracts/KpfTStepEnter.sil",
-      "source_sha256": "610aebceee5162375ddbd4b9851bcf02a5f3f1d312248a6a7f2a30b6a905ffe4"
+      "source_sha256": "2707ba17057e918ff8ad7083c105d374f97e7c222532894311b10095ff0a4d77"
     },
     "KpfTStepLiq": {
       "artifact": "KpfTStepLiq.json",
-      "artifact_sha256": "bd659a03acd5f1d5f9a0190c31e023ac4279ca0c4182b0c971965d264389c261",
-      "script_len": 2774,
+      "artifact_sha256": "016c55de10c20205d763be3bf6869cdece2284a923edb037c07ddb7bcc688b81",
+      "script_len": 2783,
       "source": "contracts/KpfTStepLiq.sil",
-      "source_sha256": "97f1c2cf91c939dd585f3a0ea10417e55d5c351678b88718e0d778d8979c4fe7"
+      "source_sha256": "c6d1608e4761d434d09ac228369a859bd450e9cc7855f3a5f10bf465ed23ad22"
     },
     "KpfTStepPrice": {
       "artifact": "KpfTStepPrice.json",
-      "artifact_sha256": "5994fc63608bd93988376c295833801ba3b5264cc285ddaa2ba6c3943c1f06cf",
-      "script_len": 1668,
+      "artifact_sha256": "38bdb8a0b73783a49093207ce5dfcb2e8b7675d3d6e206f43e56ebb41c9b3e92",
+      "script_len": 1698,
       "source": "contracts/KpfTStepPrice.sil",
-      "source_sha256": "cfb2c812316469987361d35aac490b902d9eb21889937f1115d48f54d6aa35ac"
+      "source_sha256": "bf0ea105a8fbbbb69ae3623c44970f70f7c6dc8c6e7769d8c1417a1106334b66"
     },
     "KpfTStepRow": {
       "artifact": "KpfTStepRow.json",
-      "artifact_sha256": "955eefcf230d0127d03c82e78596f7482ee2102fd1af69ae7e0faec6c9cd4f3b",
-      "script_len": 3570,
+      "artifact_sha256": "23c7a9a13bc007277cdffae7f539f692e81b7663d372abe1ea75b4b2b6547925",
+      "script_len": 3589,
       "source": "contracts/KpfTStepRow.sil",
-      "source_sha256": "4350e8ff250435bca08c953f85362fcb7f8f45804b271c6d8665a191bded4381"
+      "source_sha256": "8275d24ccd2bc435a1320ffab1bac41975a2ea16b41d3aabd6e71e02071a78ad"
     },
     "KpfTSweep": {
       "artifact": "KpfTSweep.json",

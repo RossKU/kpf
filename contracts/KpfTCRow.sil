@@ -92,10 +92,13 @@ contract KpfTCRow(int init_version) {
         if (verdict == 1) {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m - 1 >= tx.inputs.length);
-            half = bond / 4;
-            kept = bond - half - half;
-            if (half > 0) {
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
                 require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
                 require(tx.outputs[m - 1].value >= half);
             }
@@ -124,9 +127,15 @@ contract KpfTCRow(int init_version) {
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
         byte[] rs = slotOf(j, slotLen);
-        require(said.length >= 48);
+        // (An entry, kind 10, says the coins added, the row and the leg whole before its rows; nothing leaves.)
+        int at0 = 48;
         int skip = int(byte[8](said.slice(8, 16)));
-        byte[] rows = said.slice(48, said.length);
+        if (kind == 10) {
+            at0 = 127;
+            skip = 0;
+        }
+        require(said.length >= at0);
+        byte[] rows = said.slice(at0, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
@@ -140,7 +149,7 @@ contract KpfTCRow(int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 7);
-        require(kind <= 9);
+        require(kind <= 10);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);
@@ -178,6 +187,13 @@ contract KpfTCRow(int init_version) {
                 // The leg that leaves alone is the one the statement names: its note is of that chain.
                 leaves = 1;
                 if (blake2b(z32 + lg) != byte[32](said.slice(16, 48))) { ok = 0; }
+            }
+            if (kind == 10) {
+                if (i == n) {
+                    // The last row of an entry is of the leg said, at its entry: it gains nothing as it enters.
+                    if (lg != said.slice(16, 127)) { ok = 0; }
+                    if (int(byte[8](lg.slice(103, 111))) != a) { ok = 0; }
+                }
             }
             if (ok == 1) {
                 int scale = int(byte[8](lg.slice(67, 75)));

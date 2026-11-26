@@ -18,6 +18,9 @@
 //!   twice the longest a statement lives, so that between two of them the account is free for a step.
 //! - A leaving is of one leg or of all. Of all, the shard is asked the account's net, once, beyond the band. A leg
 //!   that lost leaves alone where the coins pay what it lost.
+//! - A leg enters by a statement of the user and of the shard's owner (kind 10), stated in a transaction that
+//!   spends the shard: the books take the leg there. The statement stands on the account marked (a push more in
+//!   its moving part); ended, the mark is undone and a note takes the leg out of the books again.
 //! - What a leaving writes is one note to the shard ([`Left`]): the legs, the user's key, and what the shard is
 //!   asked; below zero where the account pays the shard, and the note then holds those coins.
 
@@ -379,5 +382,190 @@ impl Account {
 
     fn c_stated(&self, kind: i64, s: &CSaid, o: &COutcome, t0: i64, held: i64, claimer: [u8; 32]) -> Stated {
         Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind, t0, arg: s.arg(), outs: o.outs, bond: self.bond(), claimer, held }
+    }
+}
+
+// ---------------------------------------------------------------- an entry (kind 10; docs 14.3)
+
+/// A leg enters a covered account by a statement of its user and of its shard's owner, stated with the shard.
+pub const KIND_C_ENTER: i64 = 10;
+/// The mark of an account under an entry that is not settled: a push more at the end of its moving part (180
+/// bytes: no script that takes an account takes it).
+pub const MARK: [u8; 9] = [0x08, 1, 0, 0, 0, 0, 0, 0, 0];
+/// The note that a leg did not enter (a note that a leg left, asking nothing, of a kind of its own).
+pub const NOTE_UNENTERED: i64 = 8;
+
+/// What an entry says: the coins the user adds, the shard's row the leg takes, the leg whole, and the account's
+/// trace with the leg as its last row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CEnterSaid {
+    pub add: i64,
+    pub r: i64,
+    pub leg: XLeg,
+    pub rows: Vec<Row>,
+}
+
+impl CEnterSaid {
+    pub fn said(&self) -> Vec<u8> {
+        [sm8(self.add).to_vec(), sm8(self.r).to_vec(), leg_bytes(&self.leg), crate::thin::rows_bytes(&self.rows)].concat()
+    }
+
+    pub fn arg(&self) -> [u8; 32] {
+        blake2b(&self.said())
+    }
+
+    pub fn read(said: &[u8]) -> Option<CEnterSaid> {
+        if said.len() < 127 + ROW_LEN || (said.len() - 127) % ROW_LEN != 0 {
+            return None;
+        }
+        let int = |b: &[u8]| crate::state::int8(b);
+        let rows = CSaid::read(&[&[0u8; 48][..], &said[127..]].concat())?.rows;
+        Some(CEnterSaid { add: int(&said[..8]), r: int(&said[8..16]), leg: crate::thin::leg_read(&said[16..127])?, rows })
+    }
+}
+
+/// An account under an entry that is not settled: the account as the entry makes it (the leg at the end of its
+/// chain, the coins added, a leg more counted), with the mark.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Marked(pub Account);
+
+impl Marked {
+    pub fn moving(&self) -> Vec<u8> {
+        [self.0.moving(), MARK.to_vec()].concat()
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[p33(&self.0.fixed_hash()), self.moving()].concat())
+    }
+
+    /// The leg that has not entered, and the chain before it.
+    pub fn leg(&self) -> Option<(XLeg, [u8; 32])> {
+        let (l, before) = self.0.legs.split_last()?;
+        Some((*l, Left::chain(before)))
+    }
+
+    /// `KpfTEnterOff`: the account without the leg, unmarked, a leg fewer counted, the coins added staying, less
+    /// the terms' least fee of a keeper (as far as the coins go above a note's least); the fee; and the note that
+    /// the leg did not enter.
+    pub fn undone(&self) -> Option<(Account, i64, Unentered)> {
+        let a = &self.0;
+        let (l, _) = self.leg()?;
+        let fee = a.t.keeper_fee_min.min(sub(a.a_margin, NOTE_MIN)?).max(0);
+        let legs = a.legs[..a.legs.len() - 1].to_vec();
+        let after = Account { legs, a_margin: sub(a.a_margin, fee)?, a_min_counter: sub(a.a_min_counter, 1)?, ..a.clone() };
+        Some((after, fee, Unentered { sid: a.shard?, leg: l, key: a.a_key }))
+    }
+}
+
+/// The note that a leg did not enter: applied to its shard as a note that the leg left, asking nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unentered {
+    pub sid: [u8; 32],
+    pub leg: XLeg,
+    pub key: [u8; 32],
+}
+
+impl Unentered {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_UNENTERED), p33(&chain_of_one(&self.leg)), p33(&self.key), i9(0)].concat())
+    }
+
+    pub fn value(&self) -> i64 {
+        NOTE_MIN
+    }
+
+    /// What it does to the books: what a note that the leg left, asking nothing, does.
+    pub fn as_left(&self) -> Left {
+        Left { sid: self.sid, legs: vec![self.leg], key: self.key, asked: 0 }
+    }
+}
+
+fn i9(v: i64) -> Vec<u8> {
+    [&[0x08][..], &sm8(v)].concat()
+}
+
+/// `KpfTCRow` on a row of an entry: as a row of a covered account's statement in which nothing leaves; and the
+/// last row is of the leg said, at its entry.
+pub fn c_enter_row_judged(prev: &[u8; 32], l: &XLeg, before: &Row, row: &Row, i: i64, s: &CEnterSaid) -> Option<bool> {
+    let none = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+    let v = c_row_judged(prev, l, before, row, i, &none)?;
+    Some(v && (i != s.rows.len() as i64 || (*l == s.leg && l.entry == row.a)))
+}
+
+impl Account {
+    /// `KpfTEnterS`: what stating the entry of `leg` with `add` coins more makes of this account, at the time `t0`:
+    /// the marked account. `None` where the script refuses (a statement on it stands elsewhere: the object is then
+    /// not the account).
+    pub fn c_marked(&self, leg: &XLeg, more: i64, t0: i64) -> Option<Marked> {
+        let ok = self.shard.is_some()
+            && self.b_margin == 0
+            && (0..LOCK_TIME_THRESHOLD).contains(&t0)
+            && t0 >= self.b_min_counter
+            && (0..C_LEGS_MAX as i64).contains(&self.a_min_counter)
+            && more >= 0
+            && (leg.dir == LONG || leg.dir == SHORT)
+            && leg.scale > 0
+            && leg.scale <= 1_000_000_000
+            && leg.size > 0
+            && leg.size <= crate::cross::MARGIN_MAX
+            && leg.price_max > 0
+            && leg.entry > 0
+            && leg.entry <= leg.price_max
+            && leg.size / leg.scale <= crate::cross::MARGIN_MAX / leg.price_max - 1;
+        let coins = add(self.a_margin, more)?;
+        if !ok || coins > crate::cross::MARGIN_MAX {
+            return None;
+        }
+        let mut legs = self.legs.clone();
+        legs.push(*leg);
+        Some(Marked(Account { legs, a_margin: coins, a_min_counter: self.a_min_counter + 1, ..self.clone() }))
+    }
+
+    /// `KpfTCEnter`: whether the end of an entry's trace is right for the marked account holding `held`: the user
+    /// stands, of the net, with the leg; and the one output is the account with the leg, unmarked, with its time.
+    /// `None`: a sum does not fit.
+    pub fn c_enter_end(marked: &Marked, s: &CEnterSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<(Account, Outs)>> {
+        let a = &marked.0;
+        let Some(row) = s.rows.last() else { return Some(None) };
+        if row.g != a.legs_root() || row.wa < 0 || row.ea < 0 || a.b_margin != 0 || *claimer != a.a_key {
+            return Some(None);
+        }
+        let up = add(a.t.mmr_bps, a.t.g_bps)?;
+        let life = add(a.t.late_daa, ck(a.dispute_daa.checked_mul(2))?)?;
+        let next = add(t0, ck(life.checked_mul(2))?)?;
+        if add(sub(a.a_margin, NOTE_MIN)?, row.gain)? < rate_up(row.wa, up)? {
+            return Some(None);
+        }
+        let after = Account { b_min_counter: next, ..a.clone() };
+        let outs = Outs::of(&[Out { key: false, to: after.hash(), value: held }]);
+        Some(outs.map(|o| (after, o)))
+    }
+
+    /// The first point of a stated entry that is wrong at the committee's prices `c` (one a leg of the marked
+    /// account): 0 the end, 2i - 1 row i, 2i the price of row i.
+    pub fn c_enter_wrong_point(marked: &Marked, s: &CEnterSaid, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64]) -> Option<i64> {
+        if Account::c_enter_end(marked, s, claimer, held, t0).is_some_and(|o| !o.is_some_and(|(_, x)| x == *outs)) {
+            return Some(0);
+        }
+        marked.0.rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_enter_row_judged(&before.g, l, before, row, i as i64 + 1, s))
+    }
+
+    /// The statement of the entry of `leg` (its entry its price) into this covered account holding `held`, with
+    /// `add` coins more, taking the shard's row `r`, at the prices `a` of the legs it has (one each) and the time
+    /// `t0`: the statement, what it says, the marked account, and the account it becomes.
+    pub fn c_enter(&self, leg: XLeg, more: i64, r: i64, a: &[i64], t0: i64, held: i64) -> Result<(Stated, CEnterSaid, Marked, Account)> {
+        self.c_check()?;
+        let no = |why: &str| Error::Invalid(format!("no entry into this covered account: {why}"));
+        if a.len() != self.legs.len() || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
+            return Err(no("it is stated with one price a leg the account has, within its market's limit"));
+        }
+        let marked = self.c_marked(&leg, more, t0).ok_or_else(|| no("the account is at six legs or before its time, or the leg is no futures leg within its bounds, or the coins are beyond what is counted"))?;
+        let prices: Vec<i64> = a.iter().copied().chain([leg.entry]).collect();
+        let rows = marked.0.c_trace(&prices, 0).ok_or_else(|| no("a sum of its trace is beyond what is counted"))?;
+        let s = CEnterSaid { add: more, r, leg, rows };
+        let held = held.checked_add(more).ok_or_else(|| no("what it holds is beyond what is counted"))?;
+        let (after, outs) = Account::c_enter_end(&marked, &s, &self.a_key, held, t0).flatten().ok_or_else(|| no("the user does not stand at its maintenance with the leg, at these prices"))?;
+        let st = Stated { position: marked.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_C_ENTER, t0, arg: s.arg(), outs, bond: marked.0.bond(), claimer: self.a_key, held };
+        Ok((st, s, marked, after))
     }
 }

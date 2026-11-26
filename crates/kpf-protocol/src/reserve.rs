@@ -427,6 +427,39 @@ impl Shard {
         Ok(s)
     }
 
+    /// The shard's committee is the leg's, for a leg that enters: the shard's id is the hash of `seed`, of that
+    /// committee, and of the terms and periods of the accounts under it (`KpfTEnterS`; review 51, F80).
+    pub fn of_committee(&self, seed: &[u8; 32], l: &XLeg) -> bool {
+        self.sid == shard_sid(seed, &l.committee, &self.terms(), &self.moving()[93..120])
+    }
+
+    /// `KpfTEnterS`: the shard with the leg in its books, in the row `r`: the row is the leg's market's, or no
+    /// market's where no other row is that market's; the row and what the legs were entered at take the leg, within
+    /// bounds. Not while the shard is called.
+    pub fn entered(&self, l: &XLeg, r: usize, t0: i64) -> Result<Shard> {
+        let no = |why: &str| Err(Error::Invalid(format!("the shard does not take the leg: {why}")));
+        if self.called != 0 {
+            return no("it is called");
+        }
+        let (head, units, basis) = Shard::book_of(l)?;
+        let Some(row) = self.rows.get(r) else { return no("it has four rows") };
+        if row.head != head && (*row != ShardRow::EMPTY || self.rows.iter().any(|x| x.head.market == head.market)) {
+            return no("the row is another market's, or the leg's market has a row of its own");
+        }
+        let mut s = *self;
+        let max = crate::cross::MARGIN_MAX;
+        let net = s.rows[r].net.checked_add(units).filter(|n| (-max..=max).contains(n));
+        let gross = s.rows[r].gross.checked_add(l.size).filter(|g| *g <= max);
+        let (Some(net), Some(gross), Some(b)) = (net, gross, s.basis.checked_add(basis).filter(|b| *b != i64::MIN)) else { return no("its books are beyond what is counted") };
+        s.rows[r] = ShardRow { head, net, gross };
+        s.basis = b;
+        // (The shard's time: no draw before the entry is settled or ended. Review 51, F82.)
+        let until = self.dispute_daa.checked_mul(2).and_then(|w| w.checked_add(self.t.late_daa)).and_then(|x| x.checked_add(t0));
+        let Some(until) = until else { return no("its time is beyond what is counted") };
+        s.expiry = s.expiry.max(until);
+        Ok(s)
+    }
+
     /// `KpfTLeft.apply` (a note of one leg) and `KpfTLeftAll.apply` (of two to six): the shard once the note that
     /// legs left is applied, whole: each leg out of its row and out of what the legs were entered at; what is
     /// asked paid as far as the shard holds, and the note of the rest; or, below zero, what the note holds added
@@ -444,6 +477,9 @@ impl Shard {
             return no("the shard is called: what is asked waits, and is paid its share");
         }
         let beyond = || Error::Invalid("the books are beyond what is counted".into());
+        if self.gone(n) {
+            return no("a leg of it is in no row of the shard, or the row has fewer units than the note's legs of it: it is applied by nothing, and spent by `KpfTLeftVoid`");
+        }
         let mut s = *self;
         let mut at = vec![];
         for l in &n.legs {
@@ -469,6 +505,22 @@ impl Shard {
         let pay = n.asked.min(s.held);
         s.held -= pay;
         Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+    }
+
+    /// `KpfTLeftVoid`: the first leg of a note that is no leg of these books (no futures leg; no row of its
+    /// market; or its market's row has fewer units than the note's legs of it): such a note is applied by nothing,
+    /// and is spent, the shard as it is (review 51, F81). `None`: every leg is in the books.
+    pub fn gone_at(&self, n: &Left) -> Option<usize> {
+        n.legs.iter().position(|l| {
+            let Ok((head, _, _)) = Shard::book_of(l) else { return true };
+            let Some(row) = self.rows.iter().find(|row| row.head == head) else { return true };
+            let units: i64 = n.legs.iter().filter(|x| crate::thin::leg_bytes(x)[..84] == crate::thin::leg_bytes(l)[..84] && x.size > 0).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
+            row.gross < units
+        })
+    }
+
+    pub fn gone(&self, n: &Left) -> bool {
+        self.gone_at(n).is_some()
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
@@ -584,7 +636,7 @@ impl Shard {
     /// beyond 64 bits, and the script fails whatever verdict is shown). Where it cannot be computed nobody answers
     /// a dispute of the end, the dispute lapses and the draw ends with both bonds returned: such a shard is drawn
     /// from only while nobody disputes. Its rows are that large only by legs its owner signed for.
-    pub fn draw_end_judged(&self, d: &Draw, claimer: &[u8; 32]) -> Option<bool> {
+    pub fn draw_end_judged(&self, d: &Draw, claimer: &[u8; 32], t0: i64) -> Option<bool> {
         let mut ok = *claimer == self.owner && d.amount > 0;
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(&d.prices) {
@@ -611,21 +663,31 @@ impl Shard {
         if has == i64::MIN || equity == i64::MIN || has.checked_add(sn)? == i64::MIN {
             return None;
         }
-        Some(ok && has >= 0 && self.called == 0 && equity >= need)
+        // (Not before the time the shard says; and the time a draw writes is computed whatever was found.)
+        self.draw_time(t0)?;
+        Some(ok && has >= 0 && self.called == 0 && equity >= need && t0 >= self.expiry)
     }
 
-    /// The shard once `amount` is drawn.
-    pub fn drawn(&self, amount: i64) -> Shard {
-        Shard { held: self.held - amount, ..*self }
+    /// The time a draw stated at `t0` writes, before which no draw is stated again: its own time and twice the
+    /// longest a statement lives (the lateness and two dispute periods). It stands where a position has its
+    /// expiry (`docs` 14.5).
+    pub fn draw_time(&self, t0: i64) -> Option<i64> {
+        let life = self.t.late_daa.checked_add(self.dispute_daa.checked_mul(2)?)?;
+        t0.checked_add(life.checked_mul(2)?).filter(|x| *x != i64::MIN)
+    }
+
+    /// The shard once `amount` is drawn by a draw stated at `t0`.
+    pub fn drawn(&self, amount: i64, t0: i64) -> Shard {
+        Shard { held: self.held - amount, expiry: self.draw_time(t0).unwrap_or(self.expiry), ..*self }
     }
 
     /// `KpfTShardEnd`: whether the end of a draw stated by `claimer` is right for this shard, whose output held
     /// `held` when it was stated.
-    pub fn draw_end_right(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64) -> bool {
-        if self.draw_end_judged(d, claimer) != Some(true) {
+    pub fn draw_end_right(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64) -> bool {
+        if self.draw_end_judged(d, claimer, t0) != Some(true) {
             return false;
         }
-        Outs::of(&[Out { key: false, to: self.drawn(d.amount).hash(), value: held - d.amount }, Out { key: true, to: *claimer, value: d.amount }]).is_some_and(|o| o == *outs)
+        Outs::of(&[Out { key: false, to: self.drawn(d.amount, t0).hash(), value: held - d.amount }, Out { key: true, to: *claimer, value: d.amount }]).is_some_and(|o| o == *outs)
     }
 
     /// `KpfTShardPrice`: whether the price of the row `r` (1 to 4) of a draw is within the tolerance of the
@@ -642,8 +704,8 @@ impl Shard {
 
     /// The first point of a stated draw that is wrong at the committee's prices `c` (one a row): 0 the end, r the
     /// price of row r. `None`: the draw is the rule's.
-    pub fn draw_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
-        if !self.draw_end_right(d, claimer, outs, held) {
+    pub fn draw_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+        if !self.draw_end_right(d, claimer, outs, held, t0) {
             return Some(0);
         }
         (1..=SHARD_ROWS).find(|r| !self.draw_price_right(d, *r, c[*r - 1])).map(|r| r as i64)
@@ -664,9 +726,9 @@ impl Shard {
     /// `held`. Refused where the shard would hold less than its requirement at those prices.
     pub fn draw(&self, amount: i64, p: [i64; SHARD_ROWS], t0: i64, held: i64) -> Result<(Stated, Draw)> {
         let d = Draw { amount, prices: p };
-        let outs = Outs::of(&[Out { key: false, to: self.drawn(amount).hash(), value: held - amount }, Out { key: true, to: self.owner, value: amount }]).ok_or_else(|| Error::Invalid("the draw's outputs".into()))?;
-        if !self.draw_end_right(&d, &self.owner, &outs, held) {
-            return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero", self.held, self.requirement(&p))));
+        let outs = Outs::of(&[Out { key: false, to: self.drawn(amount, t0).hash(), value: held - amount }, Out { key: true, to: self.owner, value: amount }]).ok_or_else(|| Error::Invalid("the draw's outputs".into()))?;
+        if !self.draw_end_right(&d, &self.owner, &outs, held, t0) {
+            return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero, or it is stated before the time the shard says ({})", self.held, self.requirement(&p), self.expiry)));
         }
         Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_DRAW, t0, arg: d.arg(), outs, bond: self.bond(), claimer: self.owner, held }, d))
     }

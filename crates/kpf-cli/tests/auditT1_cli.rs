@@ -1200,13 +1200,14 @@ fn t1b_r19_a_library_with_a_fee_pool_at_the_command_line() {
     let (me, exec, market) = (s.me.clone(), s.exec.clone(), s.market.clone());
     let funder = s.h.key("funder2");
     let committee = "52".repeat(32);
-    let ld = s.h.build(&funder, &["lib-create", "--copies", "1", "--value", "5", "--committee", &committee]);
+    let ld = s.h.build(&funder, &["lib-create", "--copies", "1", "--value", "6", "--committee", &committee]);
     let genesis = tx_file(&ld);
     let good = s.h.ok(&["lib-check", "--lib", &genesis]);
-    assert!(good.contains("its genesis writes the family's scripts and nothing else") && good.contains(&format!("for the committee {committee} (a copy keeps 5 KAS)")), "{good}");
+    assert!(good.contains("its genesis writes the family's scripts and nothing else") && good.contains(&format!("for the committee {committee} (a copy keeps 6 KAS)")), "{good}");
     let base = read(&genesis);
     let text = serde_json::to_string(&base).unwrap();
-    let floor = "0065cd1d00000000";
+    // (Round 51: 6 KAS a copy; at 5 the genesis of a library of 63 scripts is above the storage mass of a block.)
+    let floor = "0046c32300000000";
     assert!(text.contains(&format!("{committee}{floor}")), "the payload names the committee and the floor: {}", &text[..text.len().min(300)]);
     let mut v = base.clone();
     let outs = outputs(&mut v).clone();
@@ -1215,7 +1216,7 @@ fn t1b_r19_a_library_with_a_fee_pool_at_the_command_line() {
     // (Round 31, F55 fix: a one-copy library writes a second KpfTCite, so the scripts, that extra copy, and the fee pool.)
     assert_eq!(bound.len(), kpf_protocol::thin_artifacts::SCRIPTS.len() + 2, "one copy of each of the scripts, a second KpfTCite, and the fee pool");
     let fee_pool = *bound.last().unwrap();
-    assert_eq!(outs[fee_pool]["value"].as_u64(), Some(5 * KAS), "the fee pool holds what a copy holds");
+    assert_eq!(outs[fee_pool]["value"].as_u64(), Some(6 * KAS), "the fee pool holds what a copy holds");
     let key_spk = outs[plain[0]]["scriptPublicKey"].clone();
     let mut cases: Vec<(&str, String)> = vec![
         ("a payload that names another committee", text.replace(&format!("{committee}{floor}"), &format!("{}{floor}", "53".repeat(32)))),
@@ -1230,7 +1231,7 @@ fn t1b_r19_a_library_with_a_fee_pool_at_the_command_line() {
     case("a second fee pool", &|o| { let c = o[fee_pool].clone(); o.push(c); });
     case("a key's output in the fee pool's place", &|o| o[fee_pool]["scriptPublicKey"] = key_spk.clone());
     case("a script of the family in the fee pool's place", &|o| o[fee_pool]["scriptPublicKey"] = o[bound[0]]["scriptPublicKey"].clone());
-    case("the fee pool of another value", &|o| o[fee_pool]["value"] = json!(5 * KAS + 1));
+    case("the fee pool of another value", &|o| o[fee_pool]["value"] = json!(6 * KAS + 1));
     let n = cases.len();
     for (i, (what, t)) in cases.iter().enumerate() {
         assert_ne!(*t, text, "{what}: the file is changed");
@@ -1249,18 +1250,18 @@ fn t1b_r19_a_library_with_a_fee_pool_at_the_command_line() {
     // What a dry run's transaction writes under the library's id: the copy it used, going on.
     let lib_id = outs[bound[0]]["covenant"]["covenantId"].clone();
     let copy_value = |dir: &str| -> Vec<u64> { outputs(&mut read(&tx_file(dir))).iter().filter(|o| o["covenant"]["covenantId"] == lib_id).map(|o| o["value"].as_u64().unwrap()).collect() };
-    assert_eq!(copy_value(&d), vec![5 * KAS + 200_000], "the opening left its oracle fees in the copy of KpfTOpen");
+    assert_eq!(copy_value(&d), vec![6 * KAS + 200_000], "the opening left its oracle fees in the copy of KpfTOpen");
     let add_s = s.h.obj(&ld, "script-KpfTAdd", 33_050);
     let d = s.h.build(&me, &["pos-add-margin", "--position", &position, "--script", &add_s, "--side", "a", "--amount", "5"]);
-    assert_eq!(copy_value(&d), vec![5 * KAS + 200_000], "the margin added left its oracle fees in the copy of KpfTAdd");
+    assert_eq!(copy_value(&d), vec![6 * KAS + 200_000], "the margin added left its oracle fees in the copy of KpfTAdd");
     // The copy as it then stands, used again: another 0.002 KAS (the copy's file with what it now holds).
     let position2 = s.h.obj(&d, "position", 33_200);
     let mut c = read(&add_s);
-    c["amount"] = json!(5 * KAS + 200_000);
+    c["amount"] = json!(6 * KAS + 200_000);
     let again = s.h.p("script-again.json");
     std::fs::write(&again, serde_json::to_string_pretty(&c).unwrap()).unwrap();
     let d = s.h.build(&me, &["pos-add-margin", "--position", &position2, "--script", &again, "--side", "a", "--amount", "5"]);
-    assert_eq!(copy_value(&d), vec![5 * KAS + 400_000]);
+    assert_eq!(copy_value(&d), vec![6 * KAS + 400_000]);
     // ---- an executor's round over a folder of that library, offline: the copies are the genesis' (nothing gathered).
     let folder = s.h.p("folder");
     std::fs::create_dir_all(&folder).unwrap();

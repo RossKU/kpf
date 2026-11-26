@@ -78,10 +78,13 @@ contract KpfTShardEnd(int init_version) {
         if (verdict == 1) {
             require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c].value >= v - bond);
-            require(m - 1 >= tx.inputs.length);
-            half = bond / 4;
-            kept = bond - half - half;
-            if (half > 0) {
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
                 require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
                 require(tx.outputs[m - 1].value >= half);
             }
@@ -176,8 +179,14 @@ contract KpfTShardEnd(int init_version) {
         if (has < 0) { ok = 0; }
         if (int(byte[8](mv.slice(130, 138))) != 0) { ok = 0; }
         if (has + sn - int(byte[8](mv.slice(121, 129))) < need) { ok = 0; }
+        // A shard is not held under draws (docs 14.5): where a position has its expiry a shard says a time before
+        // which no draw is stated again, and a draw writes its own time and twice the longest a statement lives
+        // (the lateness and two dispute periods). Between two draws the shard is free for at least as long as it
+        // was held: notes are applied, a call is stated.
+        if (t0 < int(byte[8](mv.slice(85, 93)))) { ok = 0; }
+        int next = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
         if (ok == 1) {
-            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[](has as byte[8]) + mv.slice(75, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
+            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[](has as byte[8]) + mv.slice(75, 85) + byte[](next as byte[8]) + mv.slice(93, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
             if (blake2b(due2) != outs) { ok = 0; }
         }
         require(ok == verdict);

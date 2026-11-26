@@ -651,7 +651,7 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let scale = m.p.scale;
     let ohead = Head { market: option_market(&m.id()), committee: m.committee_id, scale, price_max: m.p.price_max };
     // A shard that counts options on 20 units of market 1, and holds 50 KAS.
-    let s = Shard { t: w.terms(), rows: [ShardRow { head: ohead, net: 20 * scale, gross: 20 * scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0 };
+    let s = Shard { t: w.terms(), rows: [ShardRow { head: ohead, net: 20 * scale, gross: 20 * scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0 };
     let shard = OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 };
     let stated = |st: &Stated, said: &[u8]| -> OLive<Stated> {
         let f = [fund(xk(&w.b), 30)];
@@ -668,7 +668,7 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let max = s.draw_max(&low);
     assert!(max > s.draw_max(&honest));
     let (st, d) = s.draw(max, low, T0, held).unwrap();
-    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, held, &honest), Some(1));
+    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, held, T0, &honest), Some(1));
     let f = [fund(xk(&w.w), 32)];
     let cite1 = w.script("KpfTCite");
     let q = w.pointed(&stated(&st, &d.said()), 1);

@@ -59,7 +59,7 @@ pub fn outcome(on: &Host, st: &Stated, said: &[u8]) -> Vec<AObj> {
     match on {
         Host::Shard(s) => {
             if let Some(d) = Draw::read(said) {
-                v.push(AObj::Shard(s.drawn(d.amount)));
+                v.push(AObj::Shard(s.drawn(d.amount, st.t0)));
             }
         }
         Host::Account(x) => {

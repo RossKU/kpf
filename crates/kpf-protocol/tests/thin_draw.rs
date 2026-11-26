@@ -94,7 +94,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0 };
+        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0 };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -171,25 +171,25 @@ fn the_owner_draws_what_is_above_the_requirement_and_no_more() {
     let (b, st, d) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), max, PRICES, T0, w.payer(&w.c, &f)).unwrap();
     let sg = signed("draw stated", &b, &w.keys);
     assert_eq!((st.kind, st.claimer, st.bond), (KIND_DRAW, xk(&w.c), 10 * KAS1));
-    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, &PRICES), None);
+    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), None);
     // Applied after the dispute period: the shard holds the amount less, the amount and the bond to the owner.
     let live = nth(&sg, 0, st, 6_510);
     let f = [fund(xk(&w.w), 31)];
     let b = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &f)).unwrap();
     let r = signed("draw applied", &b, &w.keys);
     let n = r.tx.outputs.len();
-    assert_eq!((r.tx.outputs[0].value, &r.tx.outputs[0].script_public_key), (shard.value - max as u64, &hash_spk(&w.lib, &s.drawn(max).hash())));
+    assert_eq!((r.tx.outputs[0].value, &r.tx.outputs[0].script_public_key), (shard.value - max as u64, &hash_spk(&w.lib, &s.drawn(max, T0).hash())));
     assert_eq!((r.tx.outputs[n - 1].value, &r.tx.outputs[n - 1].script_public_key), (max as u64, &p2pk_spk(&xk(&w.c))));
     // A sompi more is not stated by the tool; stated all the same, its end is answered wrong.
     assert!(shard_draw(&w.lib, &shard, &w.script("KpfTChange"), max + 1, PRICES, T0, w.payer(&w.c, &f)).is_err());
     let lies: Vec<(&str, Stated, Draw)> = vec![
-        ("a sompi more", { let d = Draw { amount: max + 1, prices: PRICES }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(max + 1).hash(), value: shard.value as i64 - max - 1 }, Out { key: true, to: xk(&w.c), value: max + 1 }]).unwrap(), ..st } }, Draw { amount: max + 1, prices: PRICES }),
-        ("another key than the owner's", Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(max).hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.w), value: max }]).unwrap(), ..st }, d),
-        ("rows of its own making in the shard that goes on", Stated { outs: Outs::of(&[Out { key: false, to: Shard { rows: [ShardRow::EMPTY; 4], ..s.drawn(max) }.hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.c), value: max }]).unwrap(), ..st }, d),
-        ("a market with no price", { let d = Draw { amount: KAS1, prices: [P10, 0, 0, 0] }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap(), ..st } }, Draw { amount: KAS1, prices: [P10, 0, 0, 0] }),
+        ("a sompi more", { let d = Draw { amount: max + 1, prices: PRICES }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(max + 1, T0).hash(), value: shard.value as i64 - max - 1 }, Out { key: true, to: xk(&w.c), value: max + 1 }]).unwrap(), ..st } }, Draw { amount: max + 1, prices: PRICES }),
+        ("another key than the owner's", Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(max, T0).hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.w), value: max }]).unwrap(), ..st }, d),
+        ("rows of its own making in the shard that goes on", Stated { outs: Outs::of(&[Out { key: false, to: Shard { rows: [ShardRow::EMPTY; 4], ..s.drawn(max, T0) }.hash(), value: shard.value as i64 - max }, Out { key: true, to: xk(&w.c), value: max }]).unwrap(), ..st }, d),
+        ("a market with no price", { let d = Draw { amount: KAS1, prices: [P10, 0, 0, 0] }; Stated { arg: d.arg(), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap(), ..st } }, Draw { amount: KAS1, prices: [P10, 0, 0, 0] }),
     ];
     for (what, lie, d) in lies {
-        assert!(!s.draw_end_right(&d, &lie.claimer, &lie.outs, shard.value as i64), "{what}");
+        assert!(!s.draw_end_right(&d, &lie.claimer, &lie.outs, shard.value as i64, T0), "{what}");
         let q = w.pointed(&w.stated(&shard, &lie, &d.said()), 0);
         let (b, right) = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
         assert!(!right, "{what}");
@@ -221,7 +221,7 @@ fn a_draw_is_of_the_equity_above_the_upper_level_of_coins_and_not_while_called()
     let judged = |what: &str, on: &OLive<Shard>, amount: i64, prices: [i64; 4]| -> bool {
         let x = &on.s;
         let d = Draw { amount, prices };
-        let outs = Outs::of(&[Out { key: false, to: x.drawn(amount).hash(), value: on.value as i64 - amount }, Out { key: true, to: xk(&w.c), value: amount }]).unwrap();
+        let outs = Outs::of(&[Out { key: false, to: x.drawn(amount, T0).hash(), value: on.value as i64 - amount }, Out { key: true, to: xk(&w.c), value: amount }]).unwrap();
         let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: x.bond(), claimer: xk(&w.c), held: on.value as i64 };
         let q = w.pointed(&w.stated(on, &st, &d.said()), 0);
         let (b, right) = shard_end(&w.lib, &q, x, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
@@ -265,7 +265,7 @@ fn a_price_that_understates_the_requirement_is_answered_by_the_committees() {
     let max = s.draw_max(&low);
     assert!(max > s.draw_max(&PRICES));
     let (st, d) = s.draw(max, low, T0, shard.value as i64).unwrap();
-    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, &PRICES), Some(1), "the end follows from the prices stated: the price of row 1 is the point");
+    assert_eq!(s.draw_wrong_point(&d, &st.claimer, &st.outs, shard.value as i64, T0, &PRICES), Some(1), "the end follows from the prices stated: the price of row 1 is the point");
     let live = w.stated(&shard, &st, &d.said());
     let f = [fund(xk(&w.w), 32)];
     let cite1 = w.script("KpfTCite");
@@ -428,11 +428,11 @@ fn a_shard_too_large_to_compute_is_drawn_from_by_no_answer() {
     let s = &shard.s;
     let d = Draw { amount: KAS1, prices: PRICES };
     assert_eq!(s.requirement(&PRICES), None);
-    assert_eq!(s.draw_end_judged(&d, &xk(&w.c)), None, "the script cannot compute it");
+    assert_eq!(s.draw_end_judged(&d, &xk(&w.c), T0), None, "the script cannot compute it");
     assert_eq!(s.draw_max(&PRICES), 0);
     assert!(s.draw(KAS1, PRICES, T0, shard.value as i64).is_err(), "the tool states no draw on it");
     // Stated all the same and disputed at its end: no verdict is accepted, so the dispute lapses and the draw ends.
-    let outs = Outs::of(&[Out { key: false, to: s.drawn(KAS1).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap();
+    let outs = Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap();
     let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: s.bond(), claimer: xk(&w.c), held: shard.value as i64 };
     let q = w.pointed(&w.stated(&shard, &st, &d.said()), 0);
     let f = [fund(xk(&w.w), 34)];
@@ -445,8 +445,8 @@ fn a_shard_too_large_to_compute_is_drawn_from_by_no_answer() {
     let sg = signed("draw nobody can answer lapses", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
     // A draw that is wrong before any worth is computed (another key than the owner's) is answered wrong all the same.
-    let lie = Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.w), value: KAS1 }]).unwrap(), ..st };
-    assert_eq!(s.draw_end_judged(&d, &lie.claimer), Some(false));
+    let lie = Stated { claimer: xk(&w.w), outs: Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: shard.value as i64 - KAS1 }, Out { key: true, to: xk(&w.w), value: KAS1 }]).unwrap(), ..st };
+    assert_eq!(s.draw_end_judged(&d, &lie.claimer, T0), Some(false));
     let q = w.pointed(&w.stated(&shard, &lie, &d.said()), 0);
     let (b, right) = shard_end(&w.lib, &q, s, &d, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
@@ -524,11 +524,11 @@ fn the_draws_answers_agree_with_the_model_on_random_shards() {
         let claimer = if r.range(0, 14) == 0 { xk(&w.w) } else { xk(&w.c) };
         let held = shard.value as i64;
         let off = if r.range(0, 14) == 0 { 1 } else { 0 };
-        let outs = Outs::of(&[Out { key: false, to: s.drawn(amount).hash(), value: held - amount }, Out { key: true, to: claimer, value: amount - off }]).filter(|_| amount - off > 0 && amount < held).unwrap_or_else(|| Outs::of(&[Out { key: false, to: s.hash(), value: held - 1 }, Out { key: true, to: claimer, value: 1 }]).unwrap());
+        let outs = Outs::of(&[Out { key: false, to: s.drawn(amount, T0).hash(), value: held - amount }, Out { key: true, to: claimer, value: amount - off }]).filter(|_| amount - off > 0 && amount < held).unwrap_or_else(|| Outs::of(&[Out { key: false, to: s.hash(), value: held - 1 }, Out { key: true, to: claimer, value: 1 }]).unwrap());
         let d = Draw { amount, prices };
         let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: d.arg(), outs, bond: s.bond(), claimer, held };
-        let right = s.draw_end_right(&d, &claimer, &st.outs, held);
-        assert!(s.draw_end_judged(&d, &claimer).is_some(), "case {case}: within what a script computes");
+        let right = s.draw_end_right(&d, &claimer, &st.outs, held, T0);
+        assert!(s.draw_end_judged(&d, &claimer, T0).is_some(), "case {case}: within what a script computes");
         if right {
             assert!(amount <= max && amount > 0 && off == 0 && claimer == s.owner, "case {case}: right only within the most that is drawn");
             rights += 1;
@@ -1262,7 +1262,9 @@ fn a_statement_lives_no_longer_than_its_lateness_and_two_dispute_periods() {
     }
     // A dispute of the statement that stands again, landed after the last time: dismissed by anyone, a quarter of
     // its bond to the claimer and a quarter to who dismissed it; it does not lapse.
-    let again = nth(&sg, 0, st.again(), last as u64);
+    // (Of the statement written before the last time: one written at or after it is disputed by nothing.)
+    assert!(point_dispute(&w.lib, &nth(&sg, 0, st.again(), last as u64), &w.script("KpfTPoint"), xk(&w.c), 0, w.payer(&w.c, &[fund(xk(&w.c), 37)])).is_err());
+    let again = nth(&sg, 0, st.again(), last as u64 - 1);
     let (b, late) = point_dispute(&w.lib, &again, &w.script("KpfTPoint"), xk(&w.c), 0, w.payer(&w.c, &[fund(xk(&w.c), 37)])).unwrap();
     let dsg = b.sign(&w.keys).expect("disputed");
     assert!(kpf_protocol::verify::verify(&dsg.tx, &dsg.entries).is_ok(), "a dispute cannot be held to a time when it is made");
@@ -1277,4 +1279,372 @@ fn a_statement_lives_no_longer_than_its_lateness_and_two_dispute_periods() {
     assert!(point_dismiss(&w.lib, &inq, &w.script("KpfTPoint"), xk(&w.f), w.payer(&w.f, &f)).is_err());
     let b = point_lapse(&w.lib, &inq, &w.script("KpfTPoint"), w.payer(&w.f, &f)).unwrap();
     signed("a dispute that landed at the last time lapses", &b, &w.keys);
+}
+
+// ---------------------------------------------------------------- section 14.3: an entry stated with the shard
+
+use kpf_protocol::covered::{CEnterSaid, Marked, KIND_C_ENTER};
+
+/// What the id of the shard of these tests is the hash of beside its committee, its terms and its periods.
+const SEED: [u8; 32] = [0x5e; 32];
+
+/// A shard of 100 KAS with no leg, whose id is what an entry holds it to: the hash of a seed, of the committee of
+/// the markets, and of the terms and periods of the accounts under it.
+fn seeded(w: &World) -> OLive<Shard> {
+    let x = bare(w);
+    let sid = kpf_protocol::reserve::shard_sid(&SEED, &w.markets[0].committee_id, &x.s.terms(), &x.s.moving()[93..120]);
+    OLive { s: Shard { sid, ..x.s }, ..x }
+}
+
+/// An entry is stated in a transaction that spends the shard: its books have the leg from there. The statement
+/// stands on the account marked; applied, the account has the leg, counts it, and says its time. It is disputed a
+/// point at a time as a covered account's statements are.
+#[test]
+fn an_entry_is_stated_with_the_shard_and_the_books_have_the_leg_from_there() {
+    let w = world();
+    let shard = seeded(&w);
+    let acct = cov(&w, &shard, &[], 20 * KAS1);
+    let leg = fleg(&w, 0, 10, LONG, P10);
+    let f = [fund(xk(&w.w), 33)];
+    let enter = w.script("KpfTEnterS");
+    let life = acct.s.t.late_daa + 2 * acct.s.dispute_daa;
+    // An account of no leg and 20 KAS; a long of 10 units from 10 enters, with 5 KAS more.
+    let (b, st, said, marked, after, next) = c_enter_state(&w.lib, &acct, &shard, &enter, SEED, leg, 5 * KAS1, &[], T0, w.payer(&w.w, &f)).unwrap();
+    let sg = signed("an entry stated with the shard", &b, &w.keys);
+    assert_eq!((st.kind, st.claimer, st.position, st.held, st.bond), (KIND_C_ENTER, xk(&w.w), marked.hash(), 25 * KAS1, 25 * KAS1 / 10));
+    assert_eq!((marked.0.legs.clone(), marked.0.a_margin, marked.0.a_min_counter, marked.moving().len()), (vec![leg], 25 * KAS1, 1, 180));
+    // (And the shard says its time: no draw before this entry is settled or ended.)
+    assert_eq!((next, said.r), (Shard { expiry: T0 + life, ..shard.s.booked(&leg).unwrap() }, 0), "the books have the leg");
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), ((25 * KAS1 + st.bond) as u64, &hash_spk(&w.lib, &st.hash())));
+    assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (shard.value, &hash_spk(&w.lib, &next.hash())));
+    assert_eq!(Account::c_enter_wrong_point(&marked, &said, &st.claimer, &st.outs, st.held, T0, &[P10]), None);
+    // Applied after its dispute period: the account with the leg, unmarked, counted, with its time.
+    let live = nth(&sg, 0, st, 6_510);
+    let b = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &f)).unwrap();
+    let ap = signed("the entry applied", &b, &w.keys);
+    assert_eq!((after.legs.clone(), after.a_margin, after.a_min_counter, after.b_min_counter, after.moving().len()), (vec![leg], 25 * KAS1, 1, T0 + 2 * life, 171));
+    assert_eq!((ap.tx.outputs[0].value, &ap.tx.outputs[0].script_public_key), (25 * KAS1 as u64, &hash_spk(&w.lib, &after.hash())));
+    // The account it becomes takes a covered account's statements (after its time).
+    let entered = nth(&ap, 0, after.clone(), 6_600);
+    assert!(c_state(&w.lib, &entered, &w.script("KpfTChange"), KIND_C_LEAVE, 0, 1, &[P10], T0 + 2 * life, xk(&w.w), w.payer(&w.w, &f)).is_ok());
+    assert!(c_state(&w.lib, &entered, &w.script("KpfTChange"), KIND_C_LEAVE, 0, 1, &[P10], T0 + 2 * life - 1, xk(&w.w), w.payer(&w.w, &f)).is_err());
+
+    // Its points. The end and the row, right; the other verdict refused.
+    let ff = [fund(xk(&w.f), 36)];
+    let q = w.pointed(&live, 0);
+    let (b, right) = c_enter_end(&w.lib, &q, &marked, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("the end of an entry answered right", &b, &w.keys);
+    let (b, _) = c_enter_end(&w.lib, &q, &marked, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
+    assert!(!accepted(&b, &w.keys));
+    let q = w.pointed(&live, 1);
+    let (b, right) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("the row of the leg that enters answered right", &b, &w.keys);
+    let (b, _) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
+    assert!(!accepted(&b, &w.keys));
+    // A point beyond the trace is of nothing: right.
+    let q = w.pointed(&live, 7);
+    let (b, right) = c_enter_row(&w.lib, &q, &said, 7, &[0; 32], &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("a point of an entry that is of nothing", &b, &w.keys);
+    // The price of the leg, its own: within the tolerance of the committee price right, beyond it wrong.
+    let cite1 = w.script("KpfTCite");
+    let q = w.pointed(&live, 2);
+    let near = w.cited(0, P10 * 1_004 / 1_000);
+    let (b, right) = c_enter_price(&w.lib, &q, &marked, &said, &w.script("KpfTStepPrice"), (&cite1, &near), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("the price of an entry answered right", &b, &w.keys);
+    let far = w.cited(0, P10 * 102 / 100);
+    let (b, right) = c_enter_price(&w.lib, &q, &marked, &said, &w.script("KpfTStepPrice"), (&cite1, &far), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(!right);
+    let wrong = signed("the price of an entry answered wrong", &b, &w.keys);
+    assert_eq!((wrong.tx.outputs[0].value, &wrong.tx.outputs[0].script_public_key), (25 * KAS1 as u64, &hash_spk(&w.lib, &marked.hash())), "the marked account again");
+    // A price nobody answers ends the entry at the cost of nobody: the marked account again, both bonds back.
+    let b = point_lapse(&w.lib, &q, &w.script("KpfTPoint"), w.payer(&w.f, &ff)).unwrap();
+    let lapsed = signed("a price of an entry that nobody answered", &b, &w.keys);
+    assert_eq!((lapsed.tx.outputs[0].value, &lapsed.tx.outputs[0].script_public_key), (25 * KAS1 as u64, &hash_spk(&w.lib, &marked.hash())));
+    assert!(pays(&lapsed, &xk(&w.w), st.bond), "the bond of the claimer back, and of the disputer (the same key here)");
+
+    // An entry that ended is undone by anyone, for the fee of a keeper out of the coins of the account: the
+    // account without the leg, and the note that the leg did not enter; applied, the books are as they were.
+    let m_live: OLive<Marked> = nth(&lapsed, 0, marked.clone(), 6_700);
+    let (b, back, note) = enter_off(&w.lib, &m_live, &w.script("KpfTEnterOff"), xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+    let off = signed("an entry that ended, undone", &b, &w.keys);
+    let fee = acct.s.t.keeper_fee_min;
+    assert_eq!((back.legs.len(), back.a_min_counter, back.a_margin, back.b_min_counter, back.moving().len()), (0, 0, 25 * KAS1 - fee, 0, 171));
+    assert_eq!((off.tx.outputs[0].value, &off.tx.outputs[0].script_public_key), ((25 * KAS1 - fee) as u64, &hash_spk(&w.lib, &back.hash())));
+    assert_eq!((off.tx.outputs[2].value, &off.tx.outputs[2].script_public_key), (NOTE_MIN as u64, &hash_spk(&w.lib, &note.hash())));
+    assert!(fee == 0 || pays(&off, &xk(&w.f), fee));
+    let booked = nth(&sg, 2, next, 6_511);
+    let (b, books) = unentered_apply(&w.lib, &booked, &nth(&off, 2, note, 6_701), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    signed("the note that the leg did not enter, applied", &b, &w.keys);
+    assert_eq!((books.rows, books.basis, books.held, books.expiry), (shard.s.rows, shard.s.basis, shard.s.held, T0 + life));
+}
+
+/// What the stating of an entry refuses, and an entry of a user that does not stand; and a gain of a leg is margin
+/// for the leg that enters.
+#[test]
+fn an_entry_is_refused_or_answered_wrong_and_a_gain_is_margin_for_it() {
+    let w = world();
+    let shard = seeded(&w);
+    let leg = fleg(&w, 0, 10, LONG, P10);
+    let f = [fund(xk(&w.w), 33)];
+    let enter = w.script("KpfTEnterS");
+    let life = w.terms().late_daa + 100;
+    let other_committee = XLeg { committee: [0x99; 32], ..leg };
+    // A statement made by hand: the marked account, the trace, the account it becomes.
+    let by_hand = |acct: &OLive<Account>, m: Marked, prices: &[i64], shard: &OLive<Shard>, r: usize| {
+        let l = *m.0.legs.last().unwrap();
+        let rows = m.0.c_trace(prices, 0).unwrap();
+        let said = CEnterSaid { add: m.0.a_margin - acct.s.a_margin, r: r as i64, leg: l, rows };
+        let after = Account { b_min_counter: T0 + 2 * life, ..m.0.clone() };
+        let held = acct.value as i64 + said.add;
+        let st = Stated { position: m.hash(), window: 50, late: w.terms().late_daa, kind: KIND_C_ENTER, t0: T0, arg: said.arg(), outs: Outs::of(&[Out { key: false, to: after.hash(), value: held }]).unwrap(), bond: m.0.bond(), claimer: xk(&w.w), held };
+        let mut next = shard.s;
+        next.rows[r] = ShardRow { head: Head::of(&l), net: next.rows[r].net + if l.dir == LONG { -l.size } else { l.size }, gross: next.rows[r].gross + l.size };
+        next.basis += if l.dir == LONG { -(l.size / l.scale * l.entry) } else { l.size / l.scale * l.entry };
+        next.expiry = next.expiry.max(T0 + life);
+        let b = c_enter_state_as(&w.lib, acct, shard, &enter, SEED, &st, &said, &next, w.payer(&w.w, &f));
+        (b, st, said)
+    };
+    let mark = |a: &Account, l: XLeg| {
+        let mut legs = a.legs.clone();
+        legs.push(l);
+        Marked(Account { legs, a_min_counter: a.a_min_counter + 1, ..a.clone() })
+    };
+    // The control: by hand, an entry the script takes.
+    let acct = cov(&w, &shard, &[], 20 * KAS1);
+    let (b, _, _) = by_hand(&acct, mark(&acct.s, leg), &[P10], &shard, 0);
+    assert!(accepted(&b.unwrap(), &w.keys), "the control");
+    // Refused where it is stated: a seventh leg; before the time of the account; a count below nothing; a called
+    // shard; a row of another market, and a second row for a market that has one; a leg that is none.
+    let six: Vec<XLeg> = (0..6).map(|_| leg).collect();
+    let full = cov(&w, &shard, &six, 200 * KAS1);
+    assert!(full.s.c_marked(&leg, 0, T0).is_none());
+    let (b, _, _) = by_hand(&full, mark(&full.s, leg), &[P10; 7], &shard, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a seventh leg");
+    let early = OLive { s: Account { b_min_counter: T0 + 1, ..acct.s.clone() }, ..acct.clone() };
+    let (b, _, _) = by_hand(&early, mark(&early.s, leg), &[P10], &shard, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "before the time of the account");
+    let below = OLive { s: Account { a_min_counter: -3, ..acct.s.clone() }, ..acct.clone() };
+    let (b, _, _) = by_hand(&below, mark(&below.s, leg), &[P10], &shard, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a count below nothing");
+    let called = OLive { s: Shard { called: 6_400, ..shard.s }, ..shard.clone() };
+    let (b, _, _) = by_hand(&acct, mark(&acct.s, leg), &[P10], &called, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a called shard");
+    let other = OLive { s: shard.s.booked(&fleg(&w, 1, 3, SHORT, P10)).unwrap(), ..shard.clone() };
+    let (b, _, _) = by_hand(&acct, mark(&acct.s, leg), &[P10], &other, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a row of another market");
+    let has = OLive { s: shard.s.booked(&leg).unwrap(), ..shard.clone() };
+    let (b, _, _) = by_hand(&acct, mark(&acct.s, leg), &[P10], &has, 1);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a second row for a market that has one");
+    assert!(has.s.entered(&leg, 1, T0).is_err() && has.s.entered(&leg, 0, T0).is_ok() && other.s.entered(&leg, 0, T0).is_err() && other.s.entered(&leg, 1, T0).is_ok());
+    // A leg of another committee than the shard's: the shard's id is the hash of its committee (review 51, F80).
+    assert!(c_enter_state(&w.lib, &acct, &shard, &enter, SEED, other_committee, 0, &[], T0, w.payer(&w.w, &f)).is_err());
+    let (b, _, _) = by_hand(&acct, mark(&acct.s, other_committee), &[P10], &shard, 0);
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a leg of another committee");
+    // The shard written without its time, or with another: refused.
+    let m0 = mark(&acct.s, leg);
+    let (st0, said0, _, _) = acct.s.c_enter(leg, 0, 0, &[], T0, acct.value as i64).unwrap();
+    assert_eq!(st0.position, m0.hash());
+    for (what, time) in [("no time written", 0), ("a time before the entry is settled", T0 + life - 1), ("a later time than the entry asks", T0 + life + 1)] {
+        let next = Shard { expiry: time, ..shard.s.entered(&leg, 0, T0).unwrap() };
+        let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, &st0, &said0, &next, w.payer(&w.w, &f));
+        assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}");
+    }
+    // (A shard that says a later time keeps it.)
+    let later = OLive { s: Shard { expiry: T0 + 10 * life, ..shard.s }, ..shard.clone() };
+    assert_eq!(later.s.entered(&leg, 0, T0).unwrap().expiry, T0 + 10 * life);
+    let b = c_enter_state_as(&w.lib, &acct, &later, &enter, SEED, &st0, &said0, &later.s.entered(&leg, 0, T0).unwrap(), w.payer(&w.w, &f)).unwrap();
+    assert!(accepted(&b, &w.keys), "the time a shard says is kept where it is later");
+    for (what, bad) in [("no direction", XLeg { dir: 5, ..leg }), ("no size", XLeg { size: 0, ..leg }), ("an entry beyond the limit of its market", XLeg { entry: leg.price_max + 1, ..leg })] {
+        assert!(acct.s.c_marked(&bad, 0, T0).is_none(), "{what}");
+        let m = mark(&acct.s, bad);
+        let rows = vec![kpf_protocol::thin::Row { a: bad.entry, ..kpf_protocol::thin::Row::ZERO }];
+        let said = CEnterSaid { add: 0, r: 0, leg: bad, rows };
+        let st = Stated { position: m.hash(), window: 50, late: w.terms().late_daa, kind: KIND_C_ENTER, t0: T0, arg: said.arg(), outs: Outs::of(&[Out { key: false, to: m.0.hash(), value: acct.value as i64 }]).unwrap(), bond: m.0.bond(), claimer: xk(&w.w), held: acct.value as i64 };
+        let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, &st, &said, &shard.s, w.payer(&w.w, &f));
+        assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}");
+    }
+
+    // A user that does not stand with the leg (3 KAS for a leg worth 100): the model states no such entry; stated
+    // all the same, its end is answered wrong, and the marked account is left to be undone.
+    let poor = cov(&w, &shard, &[], 3 * KAS1);
+    assert!(poor.s.c_enter(leg, 0, 0, &[], T0, poor.value as i64).is_err());
+    let m = mark(&poor.s, leg);
+    let (b, st, said) = by_hand(&poor, m.clone(), &[P10], &shard, 0);
+    let sg = signed("an entry of a user that does not stand, stated", &b.unwrap(), &w.keys);
+    assert_eq!(Account::c_enter_wrong_point(&m, &said, &st.claimer, &st.outs, st.held, T0, &[P10]), Some(0));
+    let ff = [fund(xk(&w.f), 36)];
+    let q = w.pointed(&nth(&sg, 0, st, 6_510), 0);
+    let (b, right) = c_enter_end(&w.lib, &q, &m, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(!right);
+    let ended = signed("its end answered wrong", &b, &w.keys);
+    assert_eq!(&ended.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &m.hash()));
+    let (b, _) = c_enter_end(&w.lib, &q, &m, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), Some(true)).unwrap();
+    assert!(!accepted(&b, &w.keys));
+    // The last row of another leg than the one said: its row is answered wrong.
+    let acct2 = cov(&w, &shard, &[], 20 * KAS1);
+    let m2 = mark(&acct2.s, leg);
+    let (_, st2, said2) = by_hand(&acct2, m2.clone(), &[P10], &shard, 0);
+    let twin = XLeg { size: leg.size + 1, ..leg };
+    let lie = CEnterSaid { leg: twin, ..said2.clone() };
+    let lst = Stated { arg: lie.arg(), ..st2 };
+    assert_eq!(Account::c_enter_wrong_point(&m2, &lie, &lst.claimer, &lst.outs, lst.held, T0, &[P10]), Some(1));
+
+    // A gain of a leg is margin for the leg that enters: 6 KAS and a long of 10 units from 10. At 10 a second leg
+    // of 100 KAS of worth does not enter on those coins; at 12 (20 gained) it does.
+    let held = cov(&w, &shard, &[leg], 6 * KAS1);
+    let second = fleg(&w, 1, 10, SHORT, P10);
+    assert!(held.s.c_enter(second, 0, 1, &[P10], T0, held.value as i64).is_err());
+    let (st, said, m, _) = held.s.c_enter(second, 0, 1, &[P10 * 12 / 10], T0, held.value as i64).unwrap();
+    let booked = OLive { s: shard.s.booked(&leg).unwrap(), ..shard.clone() };
+    let b = c_enter_state_as(&w.lib, &held, &booked, &enter, SEED, &st, &said, &booked.s.entered(&second, 1, T0).unwrap(), w.payer(&w.w, &f)).unwrap();
+    let sg = signed("a second leg enters on what the first gained", &b, &w.keys);
+    let q = w.pointed(&nth(&sg, 0, st, 6_510), 0);
+    let (b, right) = c_enter_end(&w.lib, &q, &m, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("its end answered right", &b, &w.keys);
+}
+
+// ---------------------------------------------------------------- sections 14.4 and 14.5: a shard is not held under draws, and a draw waits for entries
+
+use kpf_protocol::thin_build::Pending;
+
+/// A draw writes, in the shard it leaves, a time before which no draw is stated again: its own time and twice the
+/// longest a statement lives. A draw stated before the time the shard says has a wrong end.
+#[test]
+fn a_draw_writes_a_time_before_which_no_draw_is_stated_again() {
+    let w = world();
+    let shard = w.shard();
+    let s = shard.s;
+    let life = s.t.late_daa + 2 * s.dispute_daa;
+    let f = [fund(xk(&w.c), 30)];
+    let (st, d) = s.draw(KAS1, PRICES, T0, shard.value as i64).unwrap();
+    let after = s.drawn(KAS1, T0);
+    assert_eq!((s.expiry, after.expiry, after.held), (0, T0 + 2 * life, s.held - KAS1));
+    let live = w.stated(&shard, &st, &d.said());
+    let b = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.c, &f)).unwrap();
+    let sg = signed("a draw applied: the shard says its time", &b, &w.keys);
+    assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &after.hash()));
+    // The next draw: not before that time.
+    let held = nth(&sg, 0, after, 6_600);
+    assert!(after.draw(KAS1, PRICES, T0 + 2 * life - 1, held.value as i64).is_err());
+    let (st2, d2) = after.draw(KAS1, PRICES, T0 + 2 * life, held.value as i64).unwrap();
+    assert_eq!(after.draw_wrong_point(&d2, &st2.claimer, &st2.outs, held.value as i64, T0 + 2 * life, &PRICES), None);
+    // Stated all the same before it (the same draw, said of the time T0 again): its end is answered wrong.
+    let again = Shard { expiry: 0, ..after };
+    let (st0, d0) = again.draw(KAS1, PRICES, T0, held.value as i64).unwrap();
+    let lie = Stated { position: after.hash(), ..st0 };
+    assert_eq!(after.draw_end_judged(&d0, &lie.claimer, T0), Some(false));
+    let q = w.pointed(&w.stated(&held, &lie, &d0.said()), 0);
+    let ff = [fund(xk(&w.f), 36)];
+    let (b, right) = shard_end(&w.lib, &q, &after, &d0, &w.script("KpfTShardEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(!right);
+    signed("a draw before the time the shard says, answered wrong", &b, &w.keys);
+    let (b, _) = shard_end(&w.lib, &q, &after, &d0, &w.script("KpfTShardEnd"), xk(&w.f), w.payer(&w.f, &ff), Some(true)).unwrap();
+    assert!(!accepted(&b, &w.keys));
+}
+
+/// An entry is in the books of the shard from its statement and may yet not enter. It writes the time of the
+/// shard: no draw is stated before the entry is settled or ended. An entry that ended and is not undone ends a
+/// draw where it is shown: the marked account it left, or the note that the leg did not enter.
+#[test]
+fn no_draw_is_stated_before_an_entry_is_settled_and_one_that_ended_ends_a_draw() {
+    let w = world();
+    let base = seeded(&w);
+    let acct = cov(&w, &base, &[], 20 * KAS1);
+    let leg = fleg(&w, 0, 10, LONG, P10);
+    let f = [fund(xk(&w.w), 33)];
+    let ff = [fund(xk(&w.f), 36)];
+    let life = acct.s.t.late_daa + 2 * acct.s.dispute_daa;
+    let (b, st, _said, marked, _, next) = c_enter_state(&w.lib, &acct, &base, &w.script("KpfTEnterS"), SEED, leg, 0, &[], T0, w.payer(&w.w, &f)).unwrap();
+    let sg = signed("an entry stated", &b, &w.keys);
+    let entry = nth(&sg, 0, st, 6_510);
+    let shard = nth(&sg, 2, next, 6_510);
+    // At 9 the leg lost 10 KAS, which the books read as gained: a draw on that is of what is owed only if the leg
+    // enters. Before the time the entry wrote, no draw is stated; at it, the entry is settled or ended.
+    let at9 = [P10 * 9 / 10, 0, 0, 0];
+    assert_eq!((next.equity(&at9), base.s.equity(&at9), next.expiry), (Some(110 * KAS1), Some(100 * KAS1), T0 + life));
+    assert!(next.draw(KAS1, at9, T0 + life - 1, shard.value as i64).is_err());
+    let t1 = T0 + life;
+    let (dst, d) = next.draw(next.draw_max(&at9), at9, t1, shard.value as i64).unwrap();
+    assert_eq!(d.amount, 100 * KAS1, "all it holds, on books that have the leg");
+    // The entry ended (its price was answered by nobody) and is not undone: the marked account ends the draw.
+    let q = w.pointed(&entry, 2);
+    let b = point_lapse(&w.lib, &q, &w.script("KpfTPoint"), w.payer(&w.f, &ff)).unwrap();
+    let lapsed = signed("the price of the entry lapses", &b, &w.keys);
+    let m_live: OLive<Marked> = nth(&lapsed, 0, marked.clone(), 6_700);
+    // (The draw, landed a block after its time.)
+    let draw = OLive { daa: t1 as u64 + 1, ..w.stated(&shard, &dst, &d.said()) };
+    let script = w.script("KpfTDrawEntry");
+    let ended = |what: &str, pending: Pending, value: u64, state: [u8; 32]| {
+        let b = draw_entry(&w.lib, &draw, &dst, None, &next, pending, &script, xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+        let s = signed(what, &b, &w.keys);
+        assert_eq!((s.tx.outputs[0].value, &s.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &next.hash())), "{what}: the shard again");
+        assert_eq!((s.tx.outputs[2].value, &s.tx.outputs[2].script_public_key), (value, &hash_spk(&w.lib, &state)), "{what}: what is shown goes on");
+        assert!(pays(&s, &xk(&w.f), dst.bond / 2), "{what}: half of the bond to who showed it");
+    };
+    ended("a draw ended by a marked account", Pending::Marked(&m_live), m_live.value, marked.hash());
+    // Undone: the note that the leg did not enter ends it, whenever it landed.
+    let (b, _, note) = enter_off(&w.lib, &m_live, &w.script("KpfTEnterOff"), xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+    let off = signed("the entry undone", &b, &w.keys);
+    let n_live = nth(&off, 2, note, 6_800);
+    ended("a draw ended by the note that a leg did not enter", Pending::Note(&n_live), NOTE_MIN as u64, note.hash());
+    // A disputed draw is ended the same, its disputer the bond back.
+    let dq = w.pointed(&draw, 1);
+    let b = draw_entry(&w.lib, &dq, &dst, Some((dq.s.disputer, 1)), &next, Pending::Marked(&m_live), &script, xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+    let s = signed("a disputed draw ended by a marked account", &b, &w.keys);
+    assert!(pays(&s, &dq.s.disputer, dst.bond) && pays(&s, &xk(&w.f), dst.bond / 2));
+    // Nothing of another shard ends it.
+    let elsewhere = Marked(Account { shard: Some([0x44; 32]), ..marked.0.clone() });
+    let e_live = OLive { s: elsewhere.clone(), ..m_live.clone() };
+    assert!(draw_entry(&w.lib, &draw, &dst, None, &next, Pending::Marked(&e_live), &script, xk(&w.f), w.payer(&w.f, &ff)).is_err());
+    // The note applied: the books are as they were, and the draw of what the shard is good for is the rule.
+    let (b, books) = unentered_apply(&w.lib, &shard, &n_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    signed("the note that the leg did not enter, applied", &b, &w.keys);
+    assert_eq!((books.rows, books.basis, books.equity(&at9)), (base.s.rows, base.s.basis, Some(100 * KAS1)));
+}
+
+/// A note of a leg that is not in the books is applied by nothing: the scripts of legs write none, but a statement
+/// nobody disputed could, and it would end every draw for good. Anyone spends it, the shard as it is; and no note
+/// of legs that are in the books is spent so.
+#[test]
+fn a_note_of_a_leg_that_is_not_in_the_books_is_spent_and_changes_nothing() {
+    let w = world();
+    let base = seeded(&w);
+    let ff = [fund(xk(&w.f), 36)];
+    let (leg, absent) = (fleg(&w, 0, 10, LONG, P10), fleg(&w, 1, 4, SHORT, P10));
+    let shard = OLive { s: base.s.booked(&leg).unwrap(), ..base.clone() };
+    let void = w.script("KpfTLeftVoid");
+    // The note that a leg did not enter, of a leg no row has.
+    let ghost = kpf_protocol::covered::Unentered { sid: shard.s.sid, leg: absent, key: xk(&w.w) };
+    let g_live = OLive { s: ghost, value: NOTE_MIN as u64, id: shard.id, op: op(61), daa: 6_200 };
+    assert!(unentered_apply(&w.lib, &shard, &g_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    let b = unentered_void(&w.lib, &shard, &g_live, &void, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a note of a leg that is in no row, spent", &b, &w.keys);
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &shard.s.hash())), "the shard as it is");
+    // A note that two legs left, one of them in no row; and one of more units than the row has.
+    for (what, legs) in [("one leg of two is in no row", vec![leg, absent]), ("more units than the row has", vec![leg, leg])] {
+        let n = Left { sid: shard.s.sid, legs, key: xk(&w.w), asked: 3 * KAS1 };
+        let live = left_note(&shard, &n, 7);
+        assert!(shard.s.left(&n).is_err(), "{what}");
+        let k = shard.s.gone_at(&n).expect(what);
+        let b = left_void(&w.lib, &shard, &live, k, &void, w.payer(&w.f, &ff)).unwrap();
+        let sg = signed(&format!("{what}: spent"), &b, &w.keys);
+        assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &shard.s.hash()), "{what}: nothing is paid and the books are as they were");
+    }
+    // A note of legs that are in the books is not spent so, whichever leg is named; it is applied.
+    let real = Left { sid: shard.s.sid, legs: vec![leg], key: xk(&w.w), asked: 3 * KAS1 };
+    assert_eq!(shard.s.gone_at(&real), None);
+    let b = left_void(&w.lib, &shard, &left_note(&shard, &real, 8), 0, &void, w.payer(&w.f, &ff)).unwrap();
+    assert!(!accepted(&b, &w.keys), "a note of a leg that is in the books is spent as if it were not");
+    let came = kpf_protocol::covered::Unentered { sid: shard.s.sid, leg, key: xk(&w.w) };
+    let c_live = OLive { s: came, value: NOTE_MIN as u64, id: shard.id, op: op(62), daa: 6_200 };
+    let b = unentered_void(&w.lib, &shard, &c_live, &void, w.payer(&w.f, &ff)).unwrap();
+    assert!(!accepted(&b, &w.keys), "the note of a leg that is in the books");
+    let (b, books) = unentered_apply(&w.lib, &shard, &c_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    signed("it is applied", &b, &w.keys);
+    assert_eq!((books.rows, books.basis), (base.s.rows, base.s.basis));
 }
