@@ -10501,7 +10501,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
     // (Round 55: KpfTChange has the floor of a draw's bond, 1,543; KpfTDrawNote is shown the legs, 1,393.)
     // (Round 56: the ages of an addition and of a draw; the deposit note out of KpfTAcctEnd; what a shard owes in KpfTDrawNote.)
-    assert_eq!(sizes, vec![("KpfTChange", 1595), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1595), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 1747)]);
 }
 
 // ================================================================================================================
@@ -12217,7 +12217,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1406), ("KpfTDrawEntry", 1181), ("KpfTChange", 1595), ("KpfTCStep", 3251), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1595), ("KpfTCStep", 3251), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -14094,7 +14094,9 @@ fn t1b_r60_the_note_of_a_mark_is_applied_whatever_the_books_hold_and_moves_no_eq
             of_13.push(name);
         }
     }
-    assert_eq!(of_13, vec!["KpfTCMark", "KpfTMarkNote"], "the scripts that write or open a note of kind 13");
+    // (Round 61: and `KpfTDrawNote`, which ends a draw by one. F108.)
+    of_13.sort();
+    assert_eq!(of_13, vec!["KpfTCMark", "KpfTDrawNote", "KpfTMarkNote"], "the scripts that write or open a note of kind 13");
     // Under a call.
     let fb = [fund(xk(&w.b), 56, 1_000)];
     let standing = nth(&s1, 0, st, 6_510);
@@ -14112,4 +14114,66 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
     assert_eq!(sizes, vec![("KpfTCMark", 2220), ("KpfTMarkNote", 1154), ("KpfTCRow", 2607), ("KpfTChange", 1595), ("KpfTCStep", 3251), ("KpfTStepPrice", 1699), ("KpfTPoint", 2588)]);
+}
+
+// ================================================================================================================
+// Round 61. What closes round 60's F108: a note of a mark that is not applied ends a draw.
+
+/// Round 60, F108 (Low), fixed in round 61 for a note that is there when the draw is stated. `KpfTDrawNote` takes a
+/// note of a mark (kind 13): it is shown the leg as it was and its new entry, computes what the leg gained
+/// between the two, and asks that the note asks exactly that.
+/// A shard of 100 KAS with a long of 10 units from 10 in its books; a note of that leg marked to 11.88 (asking
+/// 18.8 KAS) that landed at 6,050; a draw of 1 KAS stated at 6,600:
+///  - the draw is ended by the note: the shard again as it was, the note again;
+///  - the note landed at the draw's own block, or after it: refused (it ends no draw that was stated before it
+///    was there: so of a note that a leg left, by the same line);
+///  - a note that asks a sompi more or less, or says another new entry: the builder refuses, and the engine;
+///  - a note to another shard: refused;
+///  - a disputed draw is ended the same way;
+///  - a note of a leg that is in no account (the shard would apply it: round 60) ends a draw too.
+#[test]
+fn t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
+    let w = ow();
+    let long = w.fut(0, 10, LONG, P10);
+    let shard = shard_with47(&w, &[long], 100 * KAS1, 0);
+    let note = MarkNote { sid: SID47, leg: long, entry: P10 * 1_188 / 1_000, key: xk(&w.a), asked: 10 * (P10 * 188 / 1_000) };
+    assert!(shard.s.marked(&note).is_ok());
+    let (fb, ff) = ([fund(xk(&w.b), 56, 1_000)], [fund(xk(&w.f), 72, 1_000)]);
+    let (db, st, _) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, [P10, 0, 0, 0], T0, w.payer(&w.b, &fb)).unwrap();
+    let draw = nth(&signed("a draw stated", &db, &w.keys), 0, st, 6_600);
+    let script = w.script("KpfTDrawNote");
+    let made = |n: MarkNote| note_made46(&shard, n, 97, 6_050);
+    let nb = draw_note_mark(&w.lib, &draw, &st, None, &shard.s, &made(note), &script, xk(&w.w), w.payer(&w.f, &ff)).expect("F108 is open: no draw is ended by a note of a mark");
+    let ns = signed("a draw ended by a note of a mark", &nb, &w.keys);
+    let (s_at, n_at) = (out_at47(&ns, &hash_spk(&w.lib, &shard.s.hash())), out_at47(&ns, &hash_spk(&w.lib, &note.hash())));
+    assert_eq!((ns.tx.outputs[s_at].value, ns.tx.outputs[n_at].value >= NOTE_MIN as u64), (shard.value, true), "the shard again as it was, and the note again");
+    let mut refused = 0;
+    // The note's landing against the draw's.
+    let n_in = second_at55(&nb);
+    for daa in [6_600u64, 6_601, 9_000] {
+        assert!(!taken30(&landed58(&nb, n_in, daa), &w.keys), "a note that landed at {daa} ends a draw stated at 6,600");
+        refused += 1;
+    }
+    assert!(taken30(&landed58(&nb, n_in, 6_599), &w.keys), "a note that landed a block before the draw was stated");
+    // Notes that ask otherwise, and of another shard.
+    for off in [MarkNote { asked: note.asked + 1, ..note }, MarkNote { asked: note.asked - 1, ..note }, MarkNote { entry: note.entry + 1, ..note }, MarkNote { sid: [0x44; 32], ..note }] {
+        assert!(draw_note_mark(&w.lib, &draw, &st, None, &shard.s, &made(off), &script, xk(&w.w), w.payer(&w.f, &ff)).is_err(), "the builder ends a draw by a note the shard applies not");
+        let b = draw_note_mark_as(&w.lib, &draw, &st, None, &shard.s, &made(off), &script, xk(&w.w), w.payer(&w.f, &ff));
+        assert!(refused51(b, &w.keys), "F108: a draw is ended by a note of a mark that asks otherwise, or of another shard");
+        refused += 1;
+    }
+    // A disputed draw; and a note of a leg in no account.
+    let q = w.pointed(&draw, 0);
+    let qb = draw_note_mark(&w.lib, &q, &st, Some((q.s.disputer, 0)), &shard.s, &made(note), &script, xk(&w.w), w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&qb, &w.keys), "a disputed draw is ended by a note of a mark");
+    let ghost = MarkNote { sid: SID47, leg: XLeg { size: 1_000 * long.scale, entry: 1, ..w.fut(3, 1, LONG, P10) }, entry: 500, key: xk(&w.w), asked: 499_000 };
+    let gb = draw_note_mark(&w.lib, &draw, &st, None, &shard.s, &made(ghost), &script, xk(&w.w), w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&gb, &w.keys));
+    println!("T1b R61 F108 is closed for a note that is there: a draw stated at 6,600 is ended by a note of a mark that landed before it ({} bytes), standing and disputed; {refused} transactions refused (the note landed at the draw's block or after; a sompi more or less asked; another new entry; another shard); a note of a leg in no account ends a draw as it would be applied", ns.mass.size);
+}
+
+/// Round 61: `KpfTDrawNote`, in bytes, and what it was.
+#[test]
+fn t1b_r61_the_size_of_the_script_that_changed() {
+    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_700, 66), "(it was 1,406)");
 }

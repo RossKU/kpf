@@ -185,10 +185,10 @@
     },
     "KpfTDrawNote": {
       "artifact": "KpfTDrawNote.json",
-      "artifact_sha256": "d1675f27952937cf7b8e1c99d9b5d036bf1391653582f709379fac9a76d5a2a5",
-      "script_len": 1406,
+      "artifact_sha256": "a52bf4bf23f18929cfbd5fd49acc485e02447571752673f3676b72047e8363cd",
+      "script_len": 1700,
       "source": "contracts/KpfTDrawNote.sil",
-      "source_sha256": "b90cd9b31892079905b1480b81658d15596ecdcb5bbb4ad3f76e569d2880d36c"
+      "source_sha256": "102f515e1a0e00f59d49e96edbb7c89ca2e6b77bb55ae99fcf41bb93df349afa"
     },
     "KpfTEnterOff": {
       "artifact": "KpfTEnterOff.json",

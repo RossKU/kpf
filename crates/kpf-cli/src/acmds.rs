@@ -672,6 +672,7 @@ pub fn draw_note_cmd(a: &Args) -> R<()> {
     let b = match nl.obj.clone() {
         AObj::Left(note) => tb::draw_note_left(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, payer),
         AObj::Rest(note) => tb::draw_note_rest(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, payer),
+        AObj::Mark(note) => tb::draw_note_mark(&l.lib, &alive(&l, (), true)?, &st, pointed, &shard, &alive(&nl, note, true)?, &s, fk, payer),
         other => return Err(format!("--note is a {}, not a note to a shard", other.kind())),
     }
     .map_err(e)?;

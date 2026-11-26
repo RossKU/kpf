@@ -10982,3 +10982,301 @@ One cargo command after the other, two jobs.
 No test failed in either, so there is no name to give. The default is round 59's 607, your one more in
 `thin_draw` (34 to 35) and four more of mine (181 to 185). Of mine in both: `auditT1_builders` 185,
 `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48.
+
+# Round 61
+
+Scope: (A) at the engine, what closes round 60's F108 (`KpfTDrawNote` takes a note of a mark); (B) on paper
+only, section 16.12: spot tokens as margin under a shard (nothing of it is built). My file brought along; the
+default workspace run once (nothing of mine is behind the feature). Working tree after 11febf1; no src,
+contract, `Cargo.toml` or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **F108 is closed for a note that is there when the draw is stated**, and I was wrong in round 60 about the
+  rest: I wrote that a leaving's note "in the same place would have ended the draw". It would not.
+  `KpfTDrawNote` asks that the note landed before the statement, for every kind (run: a mark's note that landed
+  at the draw's block, or after, ends none). A draw stated while a mark or a leaving waits its dispute period
+  stands in front of both. 16.11 says it right.
+- **16.12 is buildable in this form, and four things in it are open doors as written** (N23 to N26, each High
+  on paper): the ticket is held to no id; nothing says the deposit writes ONE output under the vault's id; no
+  script holds the token to the market that prices it; and under a call an account with tokens and too few
+  coins keeps its tokens. Each has a small rule that closes it. Nine more (N27 to N35) are smaller.
+- The default workspace: 615 passed, 0 failed in 60 targets (3 min 20 s).
+
+# Part A: F108
+
+`t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw` (7 refused). A shard of 100 KAS with a long
+of 10 units from 10; a note of that leg marked to 11.88 (asking 18.8 KAS) that landed at 6,050; a draw of 1 KAS
+stated at 6,600.
+
+- The draw is ended by the note (3,515 bytes): the shard again as it was, the note again. A disputed draw the
+  same.
+- **The note's landing**: at 6,599 taken; at 6,600 (the draw's own block), 6,601, 9,000: refused.
+- A note that asks a sompi more, a sompi less, or says another new entry; a note to another shard: the builder
+  refuses each, and the transaction written past it is refused.
+- A note of a leg that is in no account (the shard would apply it: round 60) ends a draw as it would be
+  applied. Consistent, and said in 16.10's row.
+- `KpfTDrawNote` is 1,700 bytes (it was 1,406); 66 scripts.
+
+**16.10's two "said" rows** say what I meant. **16.3's paragraph on the band** agrees with the numbers of round
+60 ("at one price, and at any later price at or above it ... exactly"; "up to the band more"; "never more than
+the leg gained from its first entry at the last price stated").
+
+**Does the order (a draw stated while a mark or a leaving waits) want anything?** Not now, I think. What would
+close it is a draw ended by showing a statement that stands on an account of the shard, and that gives every
+user a way to end every draw for a bond that comes back (it is why no statement of an entry ends one, round
+51). What holds today: a draw leaves the equity at the upper level; the note that comes after is paid what is
+held and the rest is owed; what is owed ends every later draw. It belongs in what a user reads of a shard.
+
+# Part B: 16.12 on paper
+
+Read for it: `vendor/kob/contracts/kcc20/KCC20Ref.sil` whole; `KobAsk.sil` (the template check, the stray scan,
+the fill's outputs and the pinning of a token output); `KpfSlot.sil`; and what I know of the library's scripts
+from the rounds before. Not read again: `KobBid.sil`, `matcher.md`, 14.6 beyond its figure for an output's
+weight.
+
+Three facts of the reference token that everything below rests on:
+1. A token input is authorized by its own owner alone, the first under the token's id by `transfer`, the others
+   by `transfer_delegator`. Where the owner is a covenant id (scheme 4) the whole test is that SOME input of
+   the transaction is under that id. The token's script says nothing of where the tokens then go: the first
+   token input's `next_states` are whoever builds the transaction's.
+2. So custody under V is exactly this: in every transaction that has an input under V, a script of ours pins
+   the token outputs. And an output under V that is not the vault is a key to the tokens.
+3. The borrow path asks no owner. It is closed only by the scheme "disabled" in the custody's own state.
+
+## Findings on paper
+
+### N23 (High). The ticket is held to no id
+
+16.12 (c), (e): "a ticket is a note under the registry's id"; `KpfTVaultPay` takes "the vault, a copy of the
+script, the ticket, the vault's tokens". The vault's state as (a) lists it has the token and the amount, and
+nothing of the id its account lives under; and no script of the library asks an object's id to be any one id
+(each takes it from the input). A genesis output may carry any script.
+
+Scenario: a vault of 1,000 tokens whose leg anybody reads from the chain. An attacker makes a genesis output
+whose script is the slot with the state blake2b(i9(12) + i9(14) + push(the chain of that leg) + push(its own
+key)), under an id of its own, and pays itself the vault with it.
+
+Rule: the vault says the id its account lives under (the deposit reads it of the account's input), and
+`KpfTVaultPay` holds the ticket's input to that id. Under that id a ticket's hash is written by the ends of 14
+and 15 alone (and by a statement nobody disputed, as anything).
+
+### N24 (High). One output under V, and only one
+
+(d): the script "reads the covenant id of that output for V, and holds that no input is under V". A genesis may
+give several outputs one id. A depositor that writes the vault AND a second output under V (a script of its
+own) has, by fact 2, a key to the custody: it spends that output later, moves the tokens where it likes, and
+the account still counts them. It then takes its coins out against tokens that are gone.
+
+Rule: `KpfTAddSpot` asks that the outputs under V are one, the vault; `KpfTVaultPay` that there is none.
+
+### N25 (High). Nothing but the owner's eye holds the token to the market that prices it (N-d)
+
+The leg names the market of the price and V. The token's id and its program's hash are in the vault's state,
+taken at the deposit from whatever token input is shown. So a depositor shows a token of the reference program
+under an id of its own (it issued a billion of them to itself), or a program of its own that moves tokens
+without their owner; the leg says the market of a token worth something; the account counts it at that
+market's price.
+
+The owner's signature is what stands against it today, and the owner's mistake is every user's loss (the shard
+is short by what the account took out). **Recommendation for N-d: both.** (1) The market's name commits to the
+token: its id and its program's hash (the committee's list of such markets is then the list of tokens taken,
+and `KpfTAddSpot` holds the leg's market to the token input it is shown). (2) The owner still signs a deposit:
+not for which token, but for whether its shard carries this much of it at this discount; that is the owner's
+risk and nobody else's to accept. A list of markets and discounts in the shard's terms would do without the
+signature; not for a first form.
+
+### N26 (High). Under a call, tokens walk (N-b)
+
+(f): the call's step "passes token legs by, and the account goes on with its token legs and what coins it has
+left". The step pays what the legs lost out of the coins, as far as they go. An account of 0 coins and tokens
+counted at 900 KAS, short 10,000 units that lost 800 KAS at the call's price: the step takes nothing, the
+other claims are 800 KAS the poorer, and the user takes its tokens out by kind 14 (it has no futures leg left,
+so it passes any test). Tokens that counted as margin for that loss cover none of it.
+
+**Recommendation: the rule of the coins.** (1) A call's step refuses an account that holds a token leg and
+whose coins do not pay what its futures legs lost at the call's prices. (2) Kind 15 stands under a call (it is
+not ended by a step, unlike 7 to 9, 12 and 13) and is the rule's there where the coins do not pay: its end is
+shown the call. The claimer pays coins in; then the step takes them. (3) An account whose coins pay is stepped
+as today and keeps its tokens. A ticket to the shard for what is owed (the other way in N-b) makes the shard a
+holder of tokens it cannot share out in coins: not that. And it must be built before a token can enter an
+account: (i)'s step 5 belongs before step 4.
+
+### N27 (Medium). The vault must be opened by no script but its own
+
+`KpfSlot` asks that the input naming it is under the library's id and names it at a place; it asks nothing of
+what that input's script then does with it. Every script opens the objects it names by a hash of their state
+in a form of its own. The vault's state as (a) has it is a list; it needs a tag that no other object's state
+begins with (accounts begin with a push of 32 bytes; statements, points and notes with a number: 10, 12, ...;
+a ticket as written begins i9(12) + i9(14), where a note begins i9(12) + a push: apart, but only by that
+byte). And my static test of the places (every place of `who` is an input the script opens) is then the proof
+of custody: it should be run on the two new scripts, and say so.
+
+### N28 (Medium). A token leg named by the wrong kind, and its direction
+
+- A row of a token leg must be answered wrong where kind 8 (one leg), 9, 12 or 13 names it, and under "every
+  leg" (said); and a row of a futures leg wrong where 14 or 15 names it. (c) says "the leg named is a futures
+  leg" for 12 and 13 only. A token leg that leaves by kind 8 is a note to the shard that `KpfTLeft` reads as
+  units of a market, and a vault with no leg: the tokens are then in nobody's reach.
+- Direction 3 is taken: it is a held call in this form's legs (4, 5, 6 the other options; 16.4 would bring them
+  under a shard). A token leg wants a number outside 1 to 6.
+
+### N29 (Medium). What kind 15 sells, when, and for how much (N-e)
+
+- **When.** As written 15 is the rule's wherever 9 is (below the maintenance). Then a claimer chooses between a
+  step of a futures leg (the liquidation fee's rate of that leg's worth) and the sale of a WHOLE token leg (the
+  same rate of the tokens' worth, and the tolerance, since it states the price low: about twice the rate). An
+  account of 1,000 KAS of tokens and a futures leg worth 100 KAS, a hair under its maintenance: the tokens are
+  sold, for 10 KAS to the claimer, where a step paying 0.5 KAS would have set it right. Recommendation: the
+  rule of the coins again. Futures legs are stepped first, counted with TK as (c) says; 15 is the rule's only
+  where the account's coins do not pay what a step asks of it. It is also what makes "coins alone pay a loss"
+  whole.
+- **For how much.** The claimer pays at the price of its statement and has the tokens a dispute period later;
+  a token that is falling finds no claimer at the fee's rate, the futures legs cannot be stepped whole while
+  the tokens stay, and the shard has the loss. The buffer that exists is the discount. Recommendation: the
+  claimer says what it pays, at least what the leg counts (its worth less the discount) and at most its worth
+  less the fee's rate: never worse for the account than the leg counted, and a sale that somebody takes.
+  Tuning the two ends waits.
+- **A statement of 15 that nobody applies**: anybody applies it (the bond holds the payment), so it is ended by
+  being applied; one that is wrong costs half of a bond that is the whole payment, which is a great deal for an
+  honest slip: say it, or let the payment come in at the applying beside a bond of the usual size.
+
+### N30 (Low). "Coins alone pay a loss" strands a user that holds only tokens
+
+A user above its maintenance, with tokens and no coins, cannot close a futures leg that lost: the leaving is
+not the rule's, and kind 14 is not either (the tokens are its margin). It adds coins first (an addition is at
+will). Right as a rule; it wants a line, and the tool should say it before the user takes its last coins out.
+
+### N31 (Low). The sompi (N-g)
+
+It is not needed. Under "every leg" no leg stays, so TK is nothing there whatever is added; what holds "not
+every leg while a token leg is held" is that the token leg's own row is wrong under "every leg" (N28). Drop
+the sompi: TK is the worth less the discount, and an account's token legs are known by their rows.
+
+### N32 (Low). Six sums, and whose rows grow (N-a, and the first step of (i))
+
+I see no way with five either: each sum is read by an end for what it is, and the token's worth is none of
+them. But the row of 112 bytes is not the covered account's alone: the model's `Row` and `KpfTStepPrice` are
+shared with the accounts no shard covers (`KpfTStepRow`, `KpfTStepEnd`, `KpfTStepLiq`), and `KpfTChange` and
+`KpfTEnterS` count a statement's rows by 112. Step 1 must say: every row grows (the older form's three scripts
+change too), or `KpfTStepPrice` is told the row's length by the kind.
+
+### N33 (Low). One transaction for a purchase and a futures sale (N-c)
+
+A fill and a deposit can share a transaction: the places do not collide. `KobAsk.settle` wants the maker's
+payment at the output of its own input's index, its own continuation wherever its id's output is, the
+custody's remainder at an index it is told, and it does not pin the buyer's token output. Ours want the
+script's copy at the output of the copy's input's index, objects wherever their ids' outputs are, and payments
+counted from the end (`KpfTAddSpot` pays nobody). The ask's input and our copy's take two different indexes.
+The token's first input is the ask's custody; its outputs are the remainder and the vault's custody: two of
+three. The deposit takes the program from that input (as `KobBid` pins with no token of its own).
+The futures sale in the same transaction is an entry that also binds a vault: about the deposit's code again
+in `KpfTEnterS` (I would guess 1 kB) and TK in the entry's end, and a transaction of the fill, the account,
+the shard and that script: 11 kB or so. **Recommendation: not first.** The deposit with the fill, then the
+entry on the output of it: an entry reads no landing of its account, so it is sent with the first and lands in
+the next block. What is not atomic is "tokens bought, entry not stated", which costs the user nothing but
+doing it again. Say in 16.1 that the row holds in two transactions until an entry binds a vault.
+
+### N34 (Low). Sizes and weights (item 8)
+
+From the parts, about right: a deposit is the account's input, a copy of a script of 2 to 2.5 kB with its
+arguments, and a token input of 3 kB: 6 to 7 kB; a vault's payment is three small inputs, a copy of 1.5 kB and
+a token input: 5 to 5.5 kB. The weight is the question: by 14.6's figure an output weighs 4 x 10^12 over its
+sompi, 40,000 at 1 KAS, before what the inputs take off. A deposit writes a vault, a custody and the user's
+token change beside the account and the copy: three outputs of 1 KAS would be over what one transaction may
+weigh. Give the vault and the custody a carrier of 5 KAS or more each, as a shard has, and have whoever pays
+the ticket take them; measure in step 4. Not computed here.
+
+### N35 (Low). A leg written twice by a statement nobody disputed
+
+"A leg is never written twice" holds for every script that writes a chain from legs it is shown (the opening,
+an entry and its undoing, a join, a hand-over, the deposit). A split and the ends write chains the statement
+SAYS, held by the rows where they are disputed (round 59). A split nobody disputed can leave a token leg in
+both accounts: both count it, the first ticket takes the vault, and the other account's margin is gone for
+good. As every statement; but a watcher of a split or a leaving on an account with a token leg answers the
+row of every leg, and the paper should say it.
+
+## What was asked, in its order
+
+1. **Custody.** With N23, N24, N25 and N27: the tokens leave V only in `KpfTVaultPay`. A second token input
+   under V is a stray and leaves with the ticket's payer (it must not count toward what the ticket's key is
+   owed: pin the amount to the vault's). The first token input need not be the custody if the output is pinned
+   by its rebuilt script AND by the token's id (`OpOutputCovenantId`, as `KobAsk` does at its last line).
+   The borrow path: pin the scheme "disabled" and the guard in the custody's state at the deposit. The vault's
+   state against the custody: the deposit pins amount, owner V, scheme 4, borrow off, and the token input's own
+   extension commitment. The program's hash: against the market's name (N25).
+2. **The bearer rule.** N28, N35. A vault with no leg: by a wrong leaving (N28), and by an account that ends:
+   an account with a token leg must not end, and a call's step must write it on (N26). `KpfTJoinC` reads no
+   leg and counts six. `KpfTCStep` reads legs and today takes no account that has a leg outside the call's
+   rows: it must pass a token leg by.
+3. **The sums.** The tests of (c) are right with TK as coins, with the rule of the coins for 15 (N29) and the
+   line for N30. Is an account stepped later than it should be? TK is counted at a price within the tolerance
+   and the sale is at another: the floor of the discount (the fee's rate and twice the tolerance) holds that.
+   What it does not hold is the token's move while a sale waits its period: that is N29's second point.
+4. **Kinds 14 and 15.** A ticket for a leg that did not leave: only by a statement nobody disputed. Two tickets
+   for one leg: no (one statement at a time on an account; a ticket is written when one is applied; a vault's
+   id is new at every deposit). The rest: N29.
+5. **Under a call:** N26.
+6. **One transaction:** N33.
+7. **The owner's signature:** N25. What the owner checks before it signs: the token's id and program against
+   the market (until a script does), borrow off, the amount, the discount against its floor and its own
+   wish, that the account is of its shard, and how much of this token its shard already carries. What a user
+   checks of a shard that takes tokens: which tokens its accounts hold and at what discounts. The shard's
+   books show none of it (a token leg is in no row), so it is read from the accounts.
+8. **Sizes:** N34.
+9. **The order of building.** Before step 1: decide N23 to N26 (they shape the vault's state, kind 15's test
+   and the call's step); and run the reference token in our engine once (its `State[]`, its `blake3`, its
+   reading of another input's state: does our toolchain compile it as the order book's does). Step 1 is safe
+   as a first commit with N32 decided; it breaks every test that pins a size of the scripts that read rows
+   (eight of mine do: the tests of sizes of rounds 53 to 61) and any that writes a row by hand at 112 (mine
+   write none: they take rows from the model). Then 2, 3, **5, and 4 last**: no token enters an account before
+   a call knows what to do with it.
+10. **Whether to build it in this form.** Yes. No smaller form I can find drops a hard part: tokens that count
+    as margin must be sold where the account fails, so custody, a sale and the call's rule are all needed, with
+    "the owner alone sells" as with "anyone". What a first form can leave out: more than one token leg an
+    account (a limit in `KpfTAddSpot`, no other design), and the entry that binds a vault (N33).
+
+## The paper's own questions
+
+| Question | Recommendation |
+|---|---|
+| N-a | six sums; say whose rows grow (N32) |
+| N-b | the rule of the coins: 15 stands under a call where coins do not pay; the step refuses such an account until then (N26) |
+| N-c | the fill and the deposit in one transaction, the entry sent with it and landing next; an entry that binds a vault later (N33) |
+| N-d | the market's name commits to the token, AND the owner signs for the amount and the discount (N25) |
+| N-e | anybody applies it; the claimer pays between what the leg counts and its worth less the fee's rate; 15 only where coins do not pay (N29) |
+| N-f | a ticket is paid by anybody, who takes the carriers; a vault's tokens are pinned at the deposit by script and by the token's id, with one output under V (N24); the program by the market's name (N25); borrowing off in the custody's state |
+| N-g | drop the sompi (N31) |
+
+## Not reached
+
+- Part B is reasoning on the paper and on three sources; nothing was modelled or run. `KobBid.sil`,
+  `matcher.md` and section 10 were not read again; the weights of N34 are from one figure.
+- Whether a genesis may in fact give two outputs one id (N24 rests on it; the deposit's check costs a line
+  either way).
+- The legacy run (nothing of mine behind the feature changed).
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F108 | Low | fixed for a note that is there when the draw is stated, verified; a draw stated first stands, of any note (my round 60 said otherwise of a leaving's: wrong) |
+| F107 | Low | said in 16.3, as the numbers are |
+| N23, N24, N25, N26 | High, on paper | to decide before 16.12 is built |
+| N27, N28, N29 | Medium, on paper | to decide |
+| N30 to N35 | Low, on paper | to decide |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 187 tests (was 185). Brought along: `KpfTDrawNote` at 1,700
+  bytes in two tests of sizes; `KpfTDrawNote` among the scripts that open a note of kind 13. New:
+  `t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw`,
+  `t1b_r61_the_size_of_the_script_that_changed`.
+- The three other files of mine: unchanged (11, 55, 48).
+
+## The workspace, once
+
+`cargo test --workspace --no-fail-fast --jobs 2`: 60 targets, 615 passed, 0 failed, 200 s (126 s of it tests).
+It is round 60's 612, your one more in `thin_draw` (35 to 36) and two more of mine. Of mine: `auditT1_builders`
+187, `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48.

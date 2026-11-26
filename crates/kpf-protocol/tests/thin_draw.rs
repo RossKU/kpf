@@ -2691,3 +2691,38 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
 fn next_basis(s: &Shard, n: &MarkNote) -> i64 {
     s.marked(&MarkNote { asked: 10 * n.entry - 100 * KAS1, ..*n }).unwrap().0.basis
 }
+
+/// Review 60, F108. A note that a leg was marked, not applied, ends a draw as a note that legs left does: the
+/// shard holds coins that are asked of it. One the shard would not apply ends none.
+#[test]
+fn a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
+    let w = world();
+    let base = bare(&w);
+    // A user is short 10 units from 10: at 9 it marked the leg to 9.5 and is owed 5 KAS, which the shard holds.
+    let leg = fleg(&w, 0, 10, SHORT, P10);
+    let s = base.s.booked(&leg).unwrap();
+    let shard = OLive { s, ..base.clone() };
+    let at9 = [P10 * 9 / 10, 0, 0, 0];
+    let (st, d) = s.draw(s.draw_max(&at9), at9, T0, shard.value as i64).unwrap();
+    let live = w.stated(&shard, &st, &d.said());
+    let f = [fund(xk(&w.w), 37)];
+    let script = w.script("KpfTDrawNote");
+    let n = MarkNote { sid: s.sid, leg, entry: P10 * 95 / 100, key: xk(&w.w), asked: 5 * KAS1 };
+    assert!(s.marked(&n).is_ok());
+    let note = OLive { s: n, value: NOTE_MIN as u64, id: shard.id, op: op(72), daa: 6_400 };
+    let b = draw_note_mark(&w.lib, &live, &st, None, &s, &note, &script, xk(&w.w), w.payer(&w.w, &f)).unwrap();
+    let sg = signed("a draw ended by a note that a leg was marked", &b, &w.keys);
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
+    assert_eq!(sg.tx.outputs[2].script_public_key, hash_spk(&w.lib, &n.hash()), "the note goes on as it is");
+    // One that landed after the statement ends nothing.
+    assert!(draw_note_mark(&w.lib, &live, &st, None, &s, &OLive { daa: 6_520, ..note.clone() }, &script, xk(&w.w), w.payer(&w.w, &f)).is_err());
+    // One the shard would not apply ends none: it asks a sompi more or less than the leg gained, or is of a leg
+    // that lost between its entries, or is to another shard.
+    for lie in [MarkNote { asked: 5 * KAS1 + 1, ..n }, MarkNote { asked: 5 * KAS1 - 1, ..n }, MarkNote { entry: P10 * 105 / 100, ..n }, MarkNote { sid: [0x44; 32], ..n }] {
+        let other = OLive { s: lie, ..note.clone() };
+        assert!(draw_note_mark(&w.lib, &live, &st, None, &s, &other, &script, xk(&w.w), w.payer(&w.w, &f)).is_err());
+        let b = draw_note_mark_as(&w.lib, &live, &st, None, &s, &other, &script, xk(&w.w), w.payer(&w.w, &f)).unwrap();
+        assert!(!accepted(&b, &w.keys), "a note the shard would not apply ends a draw: {lie:?}");
+    }
+}
+

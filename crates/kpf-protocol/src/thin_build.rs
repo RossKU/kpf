@@ -3192,6 +3192,23 @@ pub fn draw_note_left<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: O
     draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_LEFT, legs, n.key, n.asked), script, rkey, p)
 }
 
+/// As `draw_note`, by a note that a leg was marked, where it is one the shard would apply (review 60, F108).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_note_mark<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::MarkNote>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    if shard.marked(&note.s).is_err() {
+        return invalid("the note is to another shard, or asks other than its leg gained between its two entries: the shard applies no such note, and it ends no draw");
+    }
+    draw_note_mark_as(lib, obj, st, pointed, shard, note, script, rkey, p)
+}
+
+/// As `draw_note_mark`, whatever the note says (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_note_mark_as<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::MarkNote>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+    let n = &note.s;
+    let shown = [crate::thin::leg_bytes(&n.leg), sm8(n.entry).to_vec()].concat();
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_MARK, shown, n.key, n.asked), script, rkey, p)
+}
+
 /// As `draw_note`, by a note of the rest.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_note_rest<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<crate::reserve::Rest>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {

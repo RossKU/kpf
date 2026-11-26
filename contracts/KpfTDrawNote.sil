@@ -105,8 +105,29 @@ contract KpfTDrawNote(int init_version) {
                 require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(7) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
             }
         } else {
-            // (No other note is written to a shard: the notes of the old form are gone.)
-            require(kind == 6);
+            // A note that a leg of a covered account was marked (kind 13: the leg as it was and its new entry, 119
+            // bytes, stand where the legs do), where it is one the shard applies: it asks what the leg gained
+            // between its two entries (KpfTMarkNote). Until it is applied the shard holds coins that are asked of
+            // it (review 60, F108). (No other note is written to a shard.)
+            require(kind == 13);
+            require(legs.length == 119);
+            require(amount > 0);
+            byte[] mz = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+            byte[] mlg = legs.slice(0, 111);
+            int msc = int(byte[8](mlg.slice(67, 75)));
+            int msz = int(byte[8](mlg.slice(85, 93)));
+            int mdir = int(byte[8](mlg.slice(94, 102)));
+            int me = int(byte[8](mlg.slice(103, 111)));
+            int mne = int(byte[8](legs.slice(111, 119)));
+            require(mdir == 1 || mdir == 2);
+            require(msc > 0);
+            require(msz > 0);
+            require(me > 0);
+            require(mne > 0);
+            int mdlt = (msz / msc) * mne + (msz % msc) * (mne / msc) + ((msz % msc) * (mne % msc)) / msc - ((msz / msc) * me + (msz % msc) * (me / msc) + ((msz % msc) * (me % msc)) / msc);
+            if (mdir != 1) { mdlt = 0 - mdlt; }
+            require(amount == mdlt);
+            require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(13) + p33(blake2b(mz + mlg)) + byte[](0x08) + legs.slice(111, 119) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         }
         require(OpTxInputDaaScore(n) < OpTxInputDaaScore(j));
         byte[32] id = OpInputCovenantId(j);
