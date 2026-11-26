@@ -1897,7 +1897,9 @@ pub fn state_raw<T>(lib: &[u8; 32], obj: &OLive<T>, fixed: &[u8; 32], moving: &[
     let args = vec![bv(vec![0; 24]), bv(sm8(age).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
     let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, age as u64)?;
     d.lock(st.t0 as u64);
-    d.out(obj.value + st.bond as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
+    // (Tokens sold in a step, kind 15: the claimer puts in what it pays the account, as it states.)
+    let prepaid = if st.kind == crate::covered::KIND_C_TOK_SOLD && said.len() >= 8 { crate::state::int8(&said[..8]).max(0) as u64 } else { 0 };
+    d.out(obj.value + st.bond as u64 + prepaid, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);
     d.finish()
@@ -1993,7 +1995,7 @@ pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p:
 /// the price of row i), with a bond as large as the claimer's.
 pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
     let c = &obj.s;
-    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_MARK).contains(&c.kind) || point < 0 {
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_TOK_SOLD).contains(&c.kind) || point < 0 {
         return invalid("the statement is not one on an account that landed in time, or the point is below zero");
     }
     if (obj.daa as i64) >= c.last_dispute() {
@@ -2194,6 +2196,8 @@ pub fn step_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, tk: &
     let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
     args.extend(point_args(q, tk, at, rkey, right));
     args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
+    // (The seed of the shard's id: read where the leg is a token leg, whose committee is its shard's.)
+    args.push(bv(vec![0u8; 32]));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
     let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;
@@ -2438,6 +2442,13 @@ pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at
 /// leg's market at the statement's time, in a citation.
 #[allow(clippy::too_many_arguments)]
 pub fn c_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate::covered::CSaid, script: &LibScript, cite: (&LibScript, &Cited), rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    c_price_seeded(lib, obj, account, s, script, cite, [0; 32], rkey, p, force)
+}
+
+/// As `c_price`, with the seed of the shard's id: the price of a token leg's row is the shard's committee's, and
+/// the script opens the shard's id (the hash of the seed, the committee, the terms and the periods) for it.
+#[allow(clippy::too_many_arguments)]
+pub fn c_price_seeded(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate::covered::CSaid, script: &LibScript, cite: (&LibScript, &Cited), price_seed: [u8; 32], rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
     c_open(obj, s)?;
     let q = &obj.s;
     let c = &q.st;
@@ -2447,7 +2458,9 @@ pub fn c_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crat
         return invalid("the point is not a price's, or the account is not the one the statement is on");
     }
     let (l, n) = (&account.legs[i - 1], &cite.1.note);
-    if n.committee != l.committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
+    // (A token leg names its vault where a futures leg has its committee: its committee is its shard's.)
+    let committee = if l.dir == crate::covered::DIR_SPOT { account.shard == Some(crate::reserve::shard_sid(&price_seed, &n.committee, &account.terms(), &account.moving()[93..120])) } else { n.committee == l.committee };
+    if !committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
         return invalid("the citation is not of the leg's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
     }
     let prev = account.legs[..i - 1].iter().fold([0u8; 32], |g, x| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(x)].concat()));
@@ -2458,6 +2471,8 @@ pub fn c_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crat
     let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
     args.extend(point_args_said(q, s.said(), at, rkey, right));
     args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
+    // (The seed of the shard's id: read where the leg is a token leg, whose committee is its shard's.)
+    args.push(bv(price_seed.to_vec()));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
     let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;
@@ -2483,18 +2498,20 @@ pub fn c_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate:
         return invalid("a point other than the one disputed is answered only where it is wrong");
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    // (The end of a split and of a mark each have a script of their own, which is told no kind.)
-    let own = match c.kind {
-        crate::covered::KIND_C_SPLIT => Some("KpfTCSplit"),
-        crate::covered::KIND_C_MARK => Some("KpfTCMark"),
-        _ => None,
+    // (The end of a split and of a mark each have a script of their own, which is told no kind; the end of a token
+    // leg's leaving and of its sale have one between them, which is.)
+    let (name, told) = match c.kind {
+        crate::covered::KIND_C_SPLIT => ("KpfTCSplit", false),
+        crate::covered::KIND_C_MARK => ("KpfTCMark", false),
+        crate::covered::KIND_C_TOK_OUT | crate::covered::KIND_C_TOK_SOLD => ("KpfTCTok", true),
+        _ => ("KpfTCEnd", true),
     };
     let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving())];
-    if own.is_none() {
+    if told {
         args.push(iv(c.kind));
     }
     args.extend(point_args_said(q, s.said(), 0, rkey, right));
-    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, own.unwrap_or("KpfTCEnd"), "answer", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, name, "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
 }
@@ -2621,6 +2638,8 @@ pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::cover
     let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(marked.moving()), iv(c.kind)];
     args.extend(point_args_said(q, s.said(), at, rkey, right));
     args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
+    // (The seed of the shard's id: read where the leg is a token leg, whose committee is its shard's.)
+    args.push(bv(vec![0u8; 32]));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
     let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;

@@ -2471,3 +2471,75 @@ On paper, section 16.12:
 
 Whether to build it: yes, in this form (no smaller form drops a hard part: custody, a sale and the call's rule
 are needed whoever sells).
+
+### 16.14 Built: 16.12, steps 1 to 3 (27 November 2026; at the engine, my tests; nothing of the vault yet)
+
+No token enters an account yet: the deposit and the vault are step 5, after the call's rule (step 4). What is
+built is the account's side, on accounts made by hand in the tests. (Step 0, the reference token in our engine:
+the order book in `vendor/kob` runs it on the same engine and the same compiler; it is wired into our tests with
+the vault.)
+
+**Step 1, the row.** A row of a covered account is 120 bytes: the price, six sums, two chains (the sixth sum at
+48, the chains at 56 and 88). `KpfTCRow`, `KpfTCEnd`, `KpfTCSplit`, `KpfTCMark`, `KpfTCEnter`, `KpfTEnterS` and
+`KpfTChange` read that length; `KpfTStepPrice` reads 120 for kinds 7 and above and 112 below; the three scripts
+of accounts no shard covers are as they were. With the sixth sum held to what the row before had, every test of
+the workspace but those that say a script's size passed.
+
+**Step 2, the token leg.** `KpfTCRow`: a leg of direction 7 that stays adds nothing to the first five sums and,
+to the sixth, its worth at the row's price less its discount (rounded down) and a sompi; a discount beyond the
+whole is wrong; named by a statement of kinds 8, 9, 12 or 13, or entering by kind 10, its row is wrong. The ends
+take TK as coins: a take (and no more than the coins: with TK in the sum that had followed from the test, and is
+now said), a futures leg that gained leaving, the standing of a step, a split's account that stays (and no more
+than its coins), a mark, an entry. "Every leg" is not while TK is something.
+
+**Step 3, tokens leave or are sold.** `KpfTCTok`; the library has 67 scripts. Kinds 14 and 15 are stated by
+`KpfTChange`, disputed by `KpfTPoint`, their rows answered by `KpfTCRow` (the leg named is a token leg, one; its
+worth whole is the fifth sum; it counts in the sixth only where it is sold), a 14 stated at or after a call's time
+is ended by a step. The end is 16.12's table. Two things are as built and not as 16.12 said them:
+
+- *What the claimer of a 15 pays is in the statement from the start:* `KpfTChange` asks the statement's output
+  to hold the account's coins, the bond and what is said where a take has its amount. A statement's settlement
+  gives its claimer its whole bond back, so a bond cannot hold the payment; this way anybody applies a 15 for a
+  note's least. A 15 that ends (answered wrong, or out of its time) leaves what it put in on the account.
+- *The price of a token leg's row:* `KpfTStepPrice` has one argument more, the seed of the shard's id. For a leg
+  of direction 7 it holds the account's shard to the hash of the seed, the committee the citation is of, the
+  account's terms and periods, and the citation's market to the leg's.
+
+Run (`tests/thin_draw.rs`, 38 pass): a long of 1,000 units and 100 tokens that count 800 KAS: the user takes its
+coins out, to the sompi the test binds at; no more than the coins; without the tokens, nothing. The token leg's
+row right, and wrong where it counts nothing, its worth whole, among the legs' worth, or where a futures leg adds
+to the sixth sum; a leaving that names it. A step not due with the tokens and due without; "every leg" refused
+while tokens are held. A split and a mark carried by the tokens. Tokens leave (stated 3,267 bytes, applied 2,644,
+its end answered in 4,367) where the account stands without them and not a sompi under; the ticket is the
+user's. The token row's price answered right and wrong by the committee's citation with the seed (8,298 bytes),
+and not with another seed. Tokens sold in a step: the claimer pays their worth less the fee's rate, the statement
+holds it, the account's coins grow by it, the ticket is the claimer's; a sompi less paid, no step due, or coins
+that pay a step on the futures leg: wrong; and that step is then stated.
+
+Not built: the call's step and a 15 under a call (step 4); the deposit and the vault's payment (step 5); the
+commands. Until step 5 no account on a chain can hold a token leg.
+
+### 16.15 Review 62
+
+At the engine, steps 1 to 3. On 36 random accounts with none to three token legs (discounts of nothing, of more
+than the whole, below nothing) and a statement of each of kinds 7, 8, 9, 12, 13, 14 and 15, 122 rows were
+disputed and the engine took the model's verdict and no other. On 129 statements the rule allows, 68 on accounts
+that hold a token leg, the right end is taken and the wrong is not; a take at its edge with what the tokens count
+allows the most and not a sompi more, and never more than the coins less a note's least. A token leg leaves and
+its ticket is the user's; a second ticket of that leg is not written. Of 30 random accounts below the lower level
+none was one on which neither a step nor a sale is the rule's. The sompi a token leg counts (N31) holds what it
+is there for: "every leg" is never the rule's while a token leg is held, at a discount of the whole too (by the
+model). The default workspace: 621 tests, 191 seconds; with the features 1,315, 990 seconds; none failed.
+`KpfTCTok` is 2,713 bytes, `KpfTCEnd` 3,342 (it was 3,154), `KpfTCRow` 2,574, `KpfTStepPrice` 1,825.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| F109 (medium) | the end of kinds 14 and 15 writes a ticket for a futures leg, and the model states it: the end is right, only the leg's row is wrong. A user sheds a futures leg that lost, with no note to the shard, unless that one row is disputed | the end is shown the leg the statement names, holds it to the chain said, and asks that it is a token leg; the model writes no such statement (16.16) |
+| F110 (medium) | a sale that is not applied gives what its claimer put in to the account: a claimer a block late or a price's step off loses the whole payment, and a falling token finds no claimer | nothing is put in at the stating: the claimer pays as it applies. A sale nobody applies in its life is ended by anyone for half its bond (16.16) |
+| said | `KpfTCStep` asks every leg to be long or short: an account that holds a token leg is stepped under no call. No script writes a token leg into an account yet | step 4, before step 5 |
+| said | an account whose coins are a note's least (a take emptied it onto its tokens) has statements whose answers are too heavy for a block (F102's kind) | with the storage mass of step 5 |
+
+Not reached by the review: the price of a token row at the engine (a wrong seed, another committee, another
+market); an entry on an account that holds a token leg; the edges of a split, a mark and a step with what the
+tokens count; a sale disputed at a row or a price; directions 15 and 23.
+

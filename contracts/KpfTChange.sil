@@ -109,7 +109,8 @@ contract KpfTChange(int init_version) {
         require(kind >= 1);
         // (11 a call; 12 a covered account made two: docs 16.2.)
         // (13: a leg of a covered account marked at a price: docs 16.3.)
-        require(kind <= KINDS || kind == 11 || kind == 12 || kind == 13);
+        // (14, 15: tokens leave a covered account, or are sold in a step: docs 16.12.)
+        require(kind <= KINDS || kind == 11 || kind == 12 || kind == 13 || kind == 14 || kind == 15);
         // A kind is stated on the object it is of: kinds 2 and 3 on an account, shown by its terms and the root of its
         // legs (a kind nobody could answer there would lock the object for nothing). Kind 1 on an account is ended
         // by KpfTKind.
@@ -146,7 +147,7 @@ contract KpfTChange(int init_version) {
         if (kind == 5) {
             if (bond < DRAW_BOND_MIN) { bond = DRAW_BOND_MIN; }
         }
-        if (kind == 11 || (kind >= 7 && kind <= 9) || kind == 12 || kind == 13) {
+        if (kind == 11 || (kind >= 7 && kind <= 9) || kind == 12 || kind == 13 || kind == 14 || kind == 15) {
             if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
         }
         require(bond > 0);
@@ -171,13 +172,16 @@ contract KpfTChange(int init_version) {
             } else {
                 // (A covered account's own kinds say two numbers and a chain before their rows.)
                 int at0 = 116;
+                // (A row is 112 bytes; of a covered account 120: it has a sixth sum. docs 16.12.)
+                int rl = 112;
                 if (kind >= 6) {
                     require(kind >= 7);
                     require(mv.length == 171);
                     at0 = 48;
+                    rl = 120;
                 }
                 require(said.length >= at0);
-                require((said.length - at0) % 112 == 0);
+                require((said.length - at0) % rl == 0);
                 require(shard == 0);
                 // (Kinds 2 to 4 are of an account no shard covers: a covered account has its own, 7 to 9.)
                 if (kind <= 4) {
@@ -203,7 +207,14 @@ contract KpfTChange(int init_version) {
         for (i, 1, outs.length / 41, 3) {
             require(outs.slice(41 * i, 41 * i + 1) == byte[](0x01) || outs.slice(41 * i, 41 * i + 1) == byte[](0x02));
         }
-        becomes(j, rs, slotLen, changeHash(position, kind, t0, blake2b(said), blake2b(outs), bond, claimer, iAt(mv, DISPUTE_AT), iAt(mv, LATE_AT), tx.inputs[j].value), tx.inputs[j].value + bond);
+        // (Tokens sold in a step, kind 15: the claimer puts in, as it states, what it pays the account (what it
+        // says where a take has its amount), so that anybody applies the statement. docs 16.12.)
+        int prepaid = 0;
+        if (kind == 15) {
+            prepaid = int(byte[8](said.slice(0, 8)));
+            require(prepaid > 0);
+        }
+        becomes(j, rs, slotLen, changeHash(position, kind, t0, blake2b(said), blake2b(outs), bond, claimer, iAt(mv, DISPUTE_AT), iAt(mv, LATE_AT), tx.inputs[j].value), tx.inputs[j].value + bond + prepaid);
         require(int(ageb) >= 0);
         goesOn();
     }

@@ -11,7 +11,7 @@ pragma silverscript ^0.1.0;
 // shard that the leg did not enter, which takes it out of the books at its entry). Until an entry is settled a
 // draw of its shard is ended by showing it (KpfTDrawEntry).
 // What is said of an entry: the coins the user adds and the shard's row the leg takes, 8 bytes each; the leg, 111
-// bytes; then the account's trace, a row of 112 bytes a leg, the leg that enters last.
+// bytes; then the account's trace, a row of 120 bytes a leg, the leg that enters last.
 //
 // KpfTEnterS: the entry is stated. The owner of the shard, who is the account's second key, signs first; the
 // user signs last and lands it (a statement that lands late is its user's). Computed here: the account is under no
@@ -158,7 +158,7 @@ contract KpfTEnterS(int init_version) {
         require(count < LEGS_MAX);
         // What is said: the coins added, the row, the leg, and a trace of at least the leg's row.
         require(said.length >= 239);
-        require((said.length - 127) % 112 == 0);
+        require((said.length - 127) % 120 == 0);
         int add = iAt(said, 0);
         int r = iAt(said, 8);
         require(add >= 0);

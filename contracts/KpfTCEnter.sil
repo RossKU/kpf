@@ -11,7 +11,7 @@ pragma silverscript ^0.1.0;
 // shard that the leg did not enter, which takes it out of the books at its entry). Until an entry is settled a
 // draw of its shard is ended by showing it (KpfTDrawEntry).
 // What is said of an entry: the coins the user adds and the shard's row the leg takes, 8 bytes each; the leg, 111
-// bytes; then the account's trace, a row of 112 bytes a leg, the leg that enters last.
+// bytes; then the account's trace, a row of 120 bytes a leg, the leg that enters last.
 //
 // KpfTCEnter: the answer of the point 0 of an entry. The end is right when the last row's chain is the marked
 // account's (the legs with the one that enters), the account is marked and has nothing of a second party's, the
@@ -129,24 +129,27 @@ contract KpfTCEnter(int init_version) {
         byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
-        int n = rows.length / 112;
-        require(rows.length == 112 * n);
+        int n = rows.length / 120;
+        require(rows.length == 120 * n);
         require(at == 0);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         int ok = 1;
         if (n < 1) { ok = 0; }
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        byte[] row = z32 + z32 + z32 + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        byte[] row = z32 + z32 + z32 + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         if (n >= 1) {
-            row = rows.slice(112 * (n - 1), 112 * n);
+            row = rows.slice(120 * (n - 1), 120 * n);
         }
         int gain = int(byte[8](row.slice(8, 16)));
         int w = int(byte[8](row.slice(16, 24)));
         int ls = int(byte[8](row.slice(32, 40)));
-        if (byte[32](row.slice(48, 80)) != root) { ok = 0; }
+        if (byte[32](row.slice(56, 88)) != root) { ok = 0; }
         if (w < 0) { ok = 0; }
         if (ls < 0) { ok = 0; }
+        // (What the token legs that stay count, as coins: docs 16.12.)
+        int tk = int(byte[8](row.slice(48, 56)));
+        if (tk < 0) { ok = 0; }
         // The marked account: the mark, and nothing of a second party's.
         if (mv.slice(171, 180) != i9(1)) { ok = 0; }
         if (int(byte[8](mv.slice(76, 84))) != 0) { ok = 0; }
@@ -155,7 +158,7 @@ contract KpfTCEnter(int init_version) {
         int next = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
         if (ok == 1) {
             // The user stands, of the net: its coins less a note's least, and what all its legs gained or lost.
-            if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain < (w / BPS) * up + ((w % BPS) * up + BPS - 1) / BPS) { ok = 0; }
+            if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain + tk < (w / BPS) * up + ((w % BPS) * up + BPS - 1) / BPS) { ok = 0; }
         }
         if (ok == 1) {
             byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 130) + byte[](next as byte[8]) + mv.slice(138, 171))) + byte[](held as byte[8]);

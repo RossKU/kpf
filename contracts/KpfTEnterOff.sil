@@ -11,7 +11,7 @@ pragma silverscript ^0.1.0;
 // shard that the leg did not enter, which takes it out of the books at its entry). Until an entry is settled a
 // draw of its shard is ended by showing it (KpfTDrawEntry).
 // What is said of an entry: the coins the user adds and the shard's row the leg takes, 8 bytes each; the leg, 111
-// bytes; then the account's trace, a row of 112 bytes a leg, the leg that enters last.
+// bytes; then the account's trace, a row of 120 bytes a leg, the leg that enters last.
 //
 // KpfTEnterOff: an entry that ended (answered wrong, lapsed, late) left the marked account. Anyone undoes it, for
 // the terms' least fee of a keeper out of the account's coins (as far as they go above a note's least): the

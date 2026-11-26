@@ -11280,3 +11280,236 @@ row of every leg, and the paper should say it.
 `cargo test --workspace --no-fail-fast --jobs 2`: 60 targets, 615 passed, 0 failed, 200 s (126 s of it tests).
 It is round 60's 612, your one more in `thin_draw` (35 to 36) and two more of mine. Of mine: `auditT1_builders`
 187, `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48.
+
+# Round 62
+
+Scope, at the engine: steps 1 to 3 of spot as margin (16.12 to 16.14): a covered account's row of 120 bytes
+with a sixth sum; the token leg (direction 7) in the rows and in the ends; kinds 14 and 15 and their end
+`KpfTCTok`; the price of a token row in `KpfTStepPrice`. My three files brought along; the workspace run twice.
+Working tree after 4c67dda; no src, contract, `Cargo.toml` or `kpf-out` file touched; no commit. This round was
+shorter of breath than its list: what was not reached is said at the end, plainly.
+
+## Headline
+
+- **The rows are the model's**: 36 random accounts with none to three token legs, a statement of each of the
+  seven kinds, every leg's row disputed: 122 rows (94 right, 28 wrong), the engine takes the model's verdict
+  and not the other in each. A token leg named by kinds 8, 9, 12, 13 is a wrong row; a futures leg named by 14
+  or 15 is a wrong row; a discount outside 0 to 10,000 is a wrong row.
+- **The ends take what the model's rule allows**: 129 statements of kinds 7, 8 (one leg and every leg), 9, 12,
+  13 and 14 that `c_state` states, on accounts of which 68 hold a token leg: right is taken and wrong is not;
+  33 of them by another key are answered as the model says. A take at its edge with the tokens' sum (40
+  accounts) and a sale at the least it pays (3) are the model's to the sompi.
+- **F109 (Medium): the end of kinds 14 and 15 does not know what kind of leg it writes a ticket for, and the
+  model states one for a futures leg.** `Account::c_state` states "tokens leave" naming a FUTURES leg; at the
+  engine its end is answered right and not wrong; only the leg's row is wrong. Applied, the futures leg is out
+  of the account with no note to the shard: a leg that lost is shed for a bond.
+- **F110 (Medium): a sale that does not apply gives what the claimer paid in to the account.** Answered wrong,
+  or ended as out of its time, a kind 15 leaves its payment (50 KAS in the run) in the account's output; the
+  claimer has lost it and its bond.
+- **N31 withdrawn: the sompi holds what you say.** A token leg at a discount of 100 % counts one sompi, and
+  "every leg" is never the rule's while one is held (the model, 81 refusals, never allowed). Without the sompi
+  that leg would count nothing and the end would not see it.
+- **`KpfTCStep` today refuses an account that holds a token leg outright** (`require` of long or short on every
+  leg). No script writes a token leg into an account yet, so nothing reaches it; step 4 must change that line
+  before step 5 lets a token in.
+- The workspace: by default 621 passed, 0 failed in 60 targets (3 min 11 s); with the three features 1,315 passed, 0
+  failed in 138 targets (16 min 30 s).
+
+## Step 1: the row of 120 bytes (item 2)
+
+By the sources (a count of the lengths in every script that reads a row, and reading the lines):
+
+- `KpfTCRow`, `KpfTCEnd`, `KpfTCSplit`, `KpfTCMark`, `KpfTCEnter`, `KpfTCTok`: 120 only. `KpfTEnterS`: 120 for
+  what is stated (its one 112 is the place of the bond rate in the moving part). `KpfTChange` and
+  `KpfTStepPrice`: a row's length 112, and 120 for a covered account's kinds.
+- `KpfTCStep`, `KpfTJoinC`, `KpfTPass`, `KpfTAddC`, `KpfTEnterOff`, `KpfTPoint`, `KpfTCallEnter`: read no row.
+- **A statement of rows of the other length**: `KpfTChange` asks that what is said beyond its head is a whole
+  number of rows of the form's length. Rows of 112 on a covered account, or of 120 on an account no shard
+  covers, are a whole number only at 15 or 14 rows: an account has six legs at most. By the line; not run.
+- `KpfTStepPrice` on kinds 2 to 4 and 6: my tests of those from the rounds before pass unchanged.
+- The model: every trace of my random tests is written and read through `Row::c_bytes`, stated by `KpfTChange`
+  and answered by the scripts: a place that was still at 112 would have failed one of 122 rows or 129 ends.
+
+Not looked at: `aobj` and the command line's printing of a statement (the CLI's tests pass).
+
+## Step 2: the token leg (items 3, 4, 7)
+
+`t1b_r62_the_rows_of_an_account_with_token_legs_are_the_models` and
+`t1b_r62_the_ends_with_token_legs_take_what_the_models_rule_allows`.
+
+- **Rows.** One to six legs, none to three of them token legs anywhere; discounts of 1, 30 %, 99.99 %, 100 %,
+  and, written past the model's check, 0, 100.01 % and below nothing; amounts of whole units and fractions;
+  a statement of each kind naming a futures leg, a token leg, every leg or none; the model's own trace, or a
+  take's where it writes none. 39 of the 122 rows are token legs'; 10 are of a leg named by a kind that does
+  not take it, each wrong.
+- **Ends**, by kind: a take 17, a leg leaving 40, every leg leaving 6, a step of a leg 2, a split 33, a mark
+  21, tokens leaving 10. (No step of every leg and no sale came up among those sent to the engine in this
+  test; a sale is run in the next.)
+- **A take with the tokens' sum**: the most the rule allows is the coins, less a note's least, with the
+  tokens' sum, less the requirement and what the legs lost; and never more than the coins less a note's least,
+  however much the tokens count. The model allows that and not a sompi more, on 40 accounts.
+- **"Every leg" while a token leg is held** (kinds 8 and 9, and a step that names one leg and turns to every
+  leg by its sums): never the rule's by the model, with a token leg that counts one sompi (discount 100 %),
+  on an account of 1 KAS and of 30 KAS, where the same account without the token leg is ended. So the sompi
+  and "all and the tokens' sum is something" hold it. I said drop the sompi (N31): that was wrong for the
+  step that turns to every leg, which has no row that names every leg.
+  What I did not do is write that end by hand and have the engine refuse it: the engine agrees with the model
+  on every statement the model allows, and the refusal is the model's.
+- **Scripts that do not know a token leg** (by their lines):
+  - `KpfTCStep`: `require(dir == long || dir == short)` on every leg it is shown. An account that holds a
+    token leg is stepped under a call by nobody: not wrongly, not at all. Today no script writes a token leg
+    (an entry's last row of direction 7 is wrong; the opening has no leg), so no such account exists.
+  - `KpfTLeft`, `KpfTLeftAll`: the same `require`: a note that says a token leg is applied never.
+    `KpfTLeftVoid`: a leg that is neither long nor short is "gone": such a note is spent for nothing by
+    anybody. A note of a token leg is written only by a leaving or a step that names one, whose row is wrong.
+  - `KpfTEnterS`: `require(dir == 1 || dir == 2)` on the leg that enters: no token leg enters by an entry.
+  - `KpfTJoinC`, `KpfTPass`: read no leg; a chain is a chain.
+  - Directions 15 or 23, or a 7 with other numbers in its places: a row of a direction that is not 1, 2 or 7
+    is wrong (the 28 wrong rows have none: not run); the leg's numbers are in the hash of its chain.
+
+## Step 3: kinds 14 and 15 (item 5)
+
+`t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes`.
+
+- **Tokens leave (14)**: 60 KAS, a long of 10 units and a token leg of 5 units at 30 %: stated by the user
+  (3,267 bytes), applied (2,643): the account without the token leg, its coins, the time 6,900; the ticket
+  (the chain of the leg alone, the user's key) holding a note's least. A second ticket of that leg: the
+  account has it no more.
+- **Tokens sold (15)**: the same with 1 KAS and the token at a discount of 90 %, the long having lost 15 KAS:
+  stated by a third key for 50 KAS (the leg's worth). The statement holds what the account held, the bond and
+  the 50 KAS; applied by anybody: the account's coins are 51 KAS, the ticket is the claimer's, its bond is
+  back. The user itself may be the claimer (the model): it pays itself in and has its own ticket, which is an
+  addition and a leaving in one; harmless.
+- **The least a sale pays** (the leg's worth less the liquidation fee's rate): the rule's at it, not a sompi
+  under (the model, three accounts).
+- **Accounts on which nothing is the rule's**: of 30 random accounts (a futures leg or two, a token leg or
+  two, coins from 1 to 11 KAS) that are below the lower level by the sums of a take's trace, none: on each a
+  step of a leg, or a sale, is the rule's. (An account of no coins at all is none the model knows: a take
+  leaves a note's least.)
+- **The ticket.** Its hash begins with two numbers (12, 14); every other note's with a number and a push (the
+  shard's id): apart by that byte. Two tickets for one leg on one account: not by 14 then 15 (the leg is gone
+  after the first). A ticket for a leg that stays: the end writes the account with the chain the last row says
+  it has without the leg, so only by a wrong row.
+
+## Findings
+
+### F109 (Medium). A ticket is written for a futures leg; the end says right
+
+An account of 60 KAS, long 10 units and short 3 of another market. `c_state(14, the long)` returns a statement
+(the model states it as the rule's). At the engine: its end is answered RIGHT and not wrong; the row of the
+leg named is answered wrong and not right (`c_row_judged_of` says wrong too). The outcome has no note to the
+shard, and the account keeps one leg.
+
+So what stands between a user and shedding a futures leg that lost (its loss unpaid, the leg in the shard's
+books for good, a ticket that no vault pays in its hand) is that somebody disputes that one row within a
+dispute period. That is a statement's way, as the chain of a split is (round 59). Two things make it worse
+here: the library's own `c_state` writes this statement for whoever asks, so a tool built on it states it; and
+unlike a split it moves the user's loss off the account.
+
+Direction: `KpfTCTok` is shown the leg named (111 bytes), holds it to the chain the statement says for it, and
+asks direction 7; and `c_trace_tok` writes no trace for a leg that is not a token leg. The same way round for
+the ends of 8, 9, 12 and 13 naming a token leg, if a line can be afforded there.
+
+### F110 (Medium). A sale that is not applied gives its payment to the account
+
+`KpfTChange` puts what a claimer of 15 pays into the statement's output beside the bond. Where the statement
+is applied that is right. Where it is not:
+
+| The sale of 50 KAS | The claimer has lost | The account's output holds, beyond before | Whoever ended it has |
+|---|---|---|---|
+| answered wrong at its end (the ticket written to another key) | 50 KAS, its bond and fees | 50 KAS | 0.089 KAS |
+| of a time ahead, ended as out of its time | 50 KAS, its bond and fees | 50 KAS | 0.094 KAS |
+
+The account again "as it was" holds 50 KAS it did not hold: its user's, by a take or at its end. Nobody gains
+by stating a sale against a user (it is a gift to the user), which is the good half. The other half: a claimer
+whose sale is a block late, or wrong at any point by a tick, has lost the whole payment, not half a bond. With
+that at stake a falling token finds no claimer, and that is the case a sale is for (round 61, N29).
+
+Direction: where a statement of kind 15 ends without being applied (`KpfTChangeLate`; the wrong answers of
+`KpfTCTok`, `KpfTCRow`, `KpfTStepPrice`; a lapse), what was paid in goes back to the claimer, and the bond
+alone is what a wrong statement costs. Or the payment comes in when the statement is applied, from whoever
+applies it, who then has the ticket.
+
+## What steps 4 and 5 ask of steps 1 to 3
+
+- **Step 4 (the call).** `KpfTCStep`'s `require` on a leg's direction: it must pass a token leg by and write
+  the account on with it. `KpfTCStep` ends a 14 today and not a 15: with the rule of the coins (16.13) a 15
+  stands under a call, and `KpfTCTok`'s test of a sale must read the call. The tests of a step in `KpfTCEnd`
+  count the tokens' sum: under a call the step's own arithmetic must not.
+- **Step 5 (the vault).** The leg's second place is V and its first the market: F109's direction (the end
+  shown the leg) is also where `KpfTVaultPay` and the end agree on what a ticket names. `KpfTStepPrice` opens
+  the shard's id by a seed for a token row: the deposit must hold the leg's market to the token (N25) by the
+  same opening. A ticket is under the account's id: the vault says that id (N23).
+- F110's direction changes `KpfTChange`'s 15 (where the payment sits) or the ends: better before step 5 than
+  after.
+
+## Sizes (item 8)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTCTok` | 2,713 | new |
+| `KpfTCRow` | 2,574 | 2,607 |
+| `KpfTCEnd` | 3,342 | 3,154 |
+| `KpfTCSplit` | 2,388 | 2,251 |
+| `KpfTCMark` | 2,298 | 2,220 |
+| `KpfTCEnter` | 1,721 | 1,664 |
+| `KpfTStepPrice` | 1,825 | 1,699 |
+| `KpfTChange` | 1,653 | 1,595 |
+| `KpfTCStep` | 3,257 | 3,251 |
+| `KpfTEnterS`, `KpfTPoint` | 2,323, 2,588 | the same |
+
+`t1b_r62_the_sizes_of_the_scripts_that_changed`; 67 scripts. A statement of 14 or 15 is 3,267 bytes, its
+applying 2,643.
+
+## Not reached
+
+- **Item 6, the price of a token row**: nothing run (the seed, another committee, a citation of another
+  market, the marked account, an account no shard covers). By the line: the shard's id is the hash of the seed,
+  the committee, the terms and the periods together, so it opens for one committee.
+- An entry on an account that holds a token leg (`KpfTCEnter` with the tokens' sum); a step of every leg and a
+  sale among the random ends at the engine; the edges of a split, a mark and a step with the tokens' sum (a
+  take's is run); the rows of 14 and 15 with two token legs beyond what the random rows hold.
+- A kind 15 disputed at a row and at a price (run: at its end, and out of its time); the ends written by hand
+  for "every leg" with a token leg.
+- A statement of rows of the wrong length, at the engine; `aobj` and the command line.
+- Small accounts: an account of 0.2 KAS of coins is one whose statement's right answer the builder does not
+  write (an output of a quarter of the least bond beside it is over a block's weight). My random accounts hold
+  2 KAS or more for it. Known in kind since round 56 (F102); it now meets every account a take has emptied
+  onto its tokens.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F109 | Medium | open, new: the end of 14 and 15 writes a ticket for a futures leg; the model states it |
+| F110 | Medium | open, new: a sale that is not applied gives its payment to the account |
+| N31 | paper | withdrawn: the sompi holds "every leg" off an account with a token leg |
+| N23 to N30, N32 to N35 | paper | as 16.13 decided; steps 4 and 5 not built |
+| F107, F108 | Low | said; fixed for a note that is there |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 191 tests (was 187). Brought along: 67 scripts and the sizes
+  in ten tests; `KpfTCTok` among the readers of `t1b_fixed_f78_...`. New: `tok62`, `legs62`, `trace62`, and
+  `t1b_r62_the_rows_of_an_account_with_token_legs_are_the_models`,
+  `t1b_r62_the_ends_with_token_legs_take_what_the_models_rule_allows`,
+  `t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes`,
+  `t1b_r62_the_sizes_of_the_scripts_that_changed`.
+- `crates/kpf-tests/tests/auditT1_tests.rs` (55): 67 scripts with `KpfTCTok`; 77 entries and 65 `release`.
+- `crates/kpf-cli/tests/auditT1_cli.rs` (48): a library of 67 scripts.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11): unchanged.
+
+## The workspace, twice
+
+One cargo command after the other, two jobs.
+
+| Run | Command | Targets | Passed | Failed | Wall time | Of it, tests |
+|---|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 621 | 0 | 191 s | 142 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,315 | 0 | 990 s | 731 s |
+
+No test failed in either, so there is no name to give: the twelve that failed before are brought along, and
+the legacy targets compile and pass with the row as it now is. The default is round 61's 615, your two more in
+`thin_draw` (36 to 38) and four more of mine (187 to 191). Of mine in both: `auditT1_builders` 191,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48.

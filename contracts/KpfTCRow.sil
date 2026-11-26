@@ -5,7 +5,7 @@ pragma silverscript ^0.1.0;
 // (KpfTChange): the user takes coins out (7), legs leave by the user's statement (8), a step of the user's
 // liquidation (9). What is stated: the amount (a take's; a step's fee) and the leg that leaves (0 none, -1 every
 // leg), 8 bytes each; the chain of the leg that leaves alone (blake2b(32 zero bytes + the leg): what its note names
-// it by); then a trace, a row of 112 bytes a leg:
+// it by); then a trace, a row of 120 bytes a leg (the price, six sums, two chains):
 //   a_i    the price stated for leg i
 //   G_i    what the legs 1..i gained or lost at the prices stated            (the user's standing is of this net)
 //   W_i    what they are worth
@@ -146,12 +146,13 @@ contract KpfTCRow(int init_version) {
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         // The point answered is the one disputed; or any other, where the answer is that it is wrong.
         require(at == point || verdict == 0);
-        int n = rows.length / 112;
-        require(rows.length == 112 * n);
+        int n = rows.length / 120;
+        require(rows.length == 120 * n);
         require(kind >= 7);
         // (12, a split: its rows are a leaving's of one leg.)
         // (13, a mark: the leg named stays, at the entry the statement says.)
-        require(kind <= 10 || kind == 12 || kind == 13);
+        // (14, 15: a token leg leaves, or is sold: it is the leg named.)
+        require(kind <= 10 || kind == 12 || kind == 13 || kind == 14 || kind == 15);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);
@@ -160,28 +161,30 @@ contract KpfTCRow(int init_version) {
         if (i <= n) {
             require(at % 2 == 1);
             byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-            byte[] row = rows.slice(112 * (i - 1), 112 * i);
-            byte[] before = z32 + z32 + z32 + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+            byte[] row = rows.slice(120 * (i - 1), 120 * i);
+            byte[] before = z32 + z32 + z32 + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
             if (i > 1) {
-                before = rows.slice(112 * (i - 2), 112 * (i - 1));
+                before = rows.slice(120 * (i - 2), 120 * (i - 1));
             }
             // The row's chain is opened: a chain before it and a leg that hash to it. Where that chain is not the
             // row before's, the row is wrong. (A chain of 32 zero bytes is the seed of every chain and of no leg:
             // a row that carries it is wrong, with no leg shown.)
             byte[] lg = byte[](leg);
-            if (row.slice(48, 80) == z32) {
+            if (row.slice(56, 88) == z32) {
                 ok = 0;
             } else {
-                require(blake2b(byte[](prev) + lg) == byte[32](row.slice(48, 80)));
+                require(blake2b(byte[](prev) + lg) == byte[32](row.slice(56, 88)));
             }
-            if (byte[](prev) != before.slice(48, 80)) { ok = 0; }
+            if (byte[](prev) != before.slice(56, 88)) { ok = 0; }
             int a = int(byte[8](row.slice(0, 8)));
             if (a <= 0) { ok = 0; }
             if (a > int(byte[8](lg.slice(76, 84)))) { ok = 0; }
-            // A futures leg: a covered account has no other.
+            // A futures leg, or a token leg (direction 7: docs 16.12): a covered account has no other.
             int dir = int(byte[8](lg.slice(94, 102)));
             if (dir != DIR_LONG) {
-                if (dir != 2) { ok = 0; }
+                if (dir != 2) {
+                    if (dir != 7) { ok = 0; }
+                }
             }
             int leaves = 0;
             if (skip == 0 - 1) { leaves = 1; }
@@ -197,6 +200,23 @@ contract KpfTCRow(int init_version) {
                     if (int(byte[8](lg.slice(103, 111))) != a) { ok = 0; }
                 }
             }
+            if (dir == 7) {
+                // A token leg is named by no statement of these kinds (its tokens leave by kinds of their own), and
+                // enters by no entry.
+                if (leaves == 1) {
+                    if (kind != 14 && kind != 15) { ok = 0; }
+                }
+                if (kind == 10) {
+                    if (i == n) { ok = 0; }
+                }
+            }
+            if (kind == 14 || kind == 15) {
+                // (Tokens leave, or are sold: one leg is named, and it is a token leg.)
+                if (skip == 0 - 1) { ok = 0; }
+                if (leaves == 1) {
+                    if (dir != 7) { ok = 0; }
+                }
+            }
             if (ok == 1) {
                 int scale = int(byte[8](lg.slice(67, 75)));
                 int size = int(byte[8](lg.slice(85, 93)));
@@ -208,8 +228,32 @@ contract KpfTCRow(int init_version) {
                 int gl = 0;
                 // (What the row's first sum takes: what the leg gained or lost; of a mark, see below.)
                 int dg = d;
-                byte[32] h = byte[32](before.slice(80, 112));
-                if (leaves == 1) {
+                // (What the second and the sixth sums take: the leg's worth; what a token leg counts.)
+                int dw = worth;
+                int tkd = 0;
+                byte[32] h = byte[32](before.slice(88, 120));
+                if (dir == 7) {
+                    // A token leg that stays: nothing for the legs' worth or for what they gained; what it counts,
+                    // as coins, is its worth at the price stated less its discount (in basis points, where a
+                    // futures leg has its entry), rounded down, and a sompi.
+                    int disc = int(byte[8](lg.slice(103, 111)));
+                    dg = 0;
+                    dw = 0;
+                    h = blake2b(before.slice(88, 120) + lg);
+                    if (disc < 0 || disc > 10000) {
+                        ok = 0;
+                    } else {
+                        tkd = (worth / 10000) * (10000 - disc) + ((worth % 10000) * (10000 - disc)) / 10000 + 1;
+                    }
+                    if (leaves == 1) {
+                        // (The token leg named, kinds 14 and 15: it leaves the chain; its worth whole is the fifth
+                        // sum; and it counts in the sixth only where it is sold, 15: a step is due by the account
+                        // as it stands before the sale.)
+                        h = byte[32](before.slice(88, 120));
+                        gl = worth;
+                        if (kind == 14) { tkd = 0; }
+                    }
+                } else if (leaves == 1) {
                     gl = d;
                     if (kind == 13) {
                         // A mark: the leg stays, entered from now at the price the statement says where a take
@@ -228,21 +272,23 @@ contract KpfTCRow(int init_version) {
                                 gl = 0 - gl;
                                 dg = 0 - dg;
                             }
-                            h = blake2b(before.slice(80, 112) + lg.slice(0, 103) + byte[](ne as byte[8]));
+                            h = blake2b(before.slice(88, 120) + lg.slice(0, 103) + byte[](ne as byte[8]));
                         }
                     }
                 } else {
                     ws = worth;
                     if (d < 0) { ls = 0 - d; }
-                    h = blake2b(before.slice(80, 112) + lg);
+                    h = blake2b(before.slice(88, 120) + lg);
                     if (kind == 13) { dg = 0; }
                 }
                 if (int(byte[8](row.slice(8, 16))) != int(byte[8](before.slice(8, 16))) + dg) { ok = 0; }
-                if (int(byte[8](row.slice(16, 24))) != int(byte[8](before.slice(16, 24))) + worth) { ok = 0; }
+                if (int(byte[8](row.slice(16, 24))) != int(byte[8](before.slice(16, 24))) + dw) { ok = 0; }
                 if (int(byte[8](row.slice(24, 32))) != int(byte[8](before.slice(24, 32))) + ws) { ok = 0; }
                 if (int(byte[8](row.slice(32, 40))) != int(byte[8](before.slice(32, 40))) + ls) { ok = 0; }
                 if (int(byte[8](row.slice(40, 48))) != int(byte[8](before.slice(40, 48))) + gl) { ok = 0; }
-                if (h != byte[32](row.slice(80, 112))) { ok = 0; }
+                // (The sixth sum: what the token legs that stay count. docs 16.12.)
+                if (int(byte[8](row.slice(48, 56))) != int(byte[8](before.slice(48, 56))) + tkd) { ok = 0; }
+                if (h != byte[32](row.slice(88, 120))) { ok = 0; }
             }
         }
         require(ok == verdict);

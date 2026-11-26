@@ -784,7 +784,7 @@ fn a_row_of_the_claimers_making_before_the_accounts_own_rows_is_answered_wrong()
     let (st, _) = x.take(SIDE_A, KAS1, &a, T0, held).unwrap();
     // The trace begins with a row that is of no leg: 30 KAS of gain, and the seed of every chain (32 zero bytes) as
     // its chain. The account's own three rows stand on it, each following from the one before.
-    let mut rows = vec![Row { a: P10, gain: 30 * KAS1, wa: 0, wb: 0, ea: 0, eb: 0, g: [0; 32], h: [0; 32] }];
+    let mut rows = vec![Row { a: P10, gain: 30 * KAS1, wa: 0, wb: 0, ea: 0, eb: 0, tk: 0, g: [0; 32], h: [0; 32] }];
     for (i, l) in x.legs.iter().enumerate() {
         let next = row_after(&rows[i], l, a[i], false);
         rows.push(next);
@@ -820,7 +820,7 @@ fn a_row_of_the_claimers_making_before_the_accounts_own_rows_is_answered_wrong()
     signed("a row of no leg answered wrong under a dispute of the end", &b, &w.keys);
     // A trace of fewer rows than the account has legs: its first row carries a chain that is opened by the account's
     // own chain before that leg, which is not the nothing before a first row: wrong.
-    let short = ATake { side: SIDE_A, amount: 0, rows: vec![Row { a: a[2], gain: 0, wa: 0, wb: 0, ea: 0, eb: 0, g: x.legs_root(), h: [0x55; 32] }], skip: 0, leave: None };
+    let short = ATake { side: SIDE_A, amount: 0, rows: vec![Row { a: a[2], gain: 0, wa: 0, wb: 0, ea: 0, eb: 0, tk: 0, g: x.legs_root(), h: [0x55; 32] }], skip: 0, leave: None };
     let lie = Stated { arg: short.arg(), ..st };
     assert_eq!(x.wrong_point(&short, &lie.claimer, &lie.outs, held, &a), Some(0), "its end is wrong by its outputs");
     let before3 = chain_before(x, 2);

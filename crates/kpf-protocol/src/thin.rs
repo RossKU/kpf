@@ -1110,16 +1110,32 @@ pub struct Row {
     pub wb: i64,
     pub ea: i64,
     pub eb: i64,
+    /// Of a covered account's row: what the token legs that stay count (docs 16.12). Nothing in a row of an
+    /// account no shard covers, whose bytes do not have it.
+    pub tk: i64,
     pub g: [u8; 32],
     pub h: [u8; 32],
 }
 
 /// The length of a row of a trace.
 pub const ROW_LEN: usize = 112;
+/// The length of a row of a covered account's trace: it has a sixth sum.
+pub const C_ROW_LEN: usize = 120;
 
 impl Row {
     /// What stands before the first row.
-    pub const ZERO: Row = Row { a: 0, gain: 0, wa: 0, wb: 0, ea: 0, eb: 0, g: [0; 32], h: [0; 32] };
+    pub const ZERO: Row = Row { a: 0, gain: 0, wa: 0, wb: 0, ea: 0, eb: 0, tk: 0, g: [0; 32], h: [0; 32] };
+
+    /// The 120 bytes of a covered account's row.
+    pub fn c_bytes(&self) -> Vec<u8> {
+        [&sm8(self.a)[..], &sm8(self.gain), &sm8(self.wa), &sm8(self.wb), &sm8(self.ea), &sm8(self.eb), &sm8(self.tk), &self.g, &self.h].concat()
+    }
+
+    /// A covered account's row read back from its 120 bytes.
+    pub fn c_read(r: &[u8]) -> Option<Row> {
+        let int = |b: &[u8]| crate::state::int8(b);
+        (r.len() == C_ROW_LEN).then(|| Row { a: int(&r[..8]), gain: int(&r[8..16]), wa: int(&r[16..24]), wb: int(&r[24..32]), ea: int(&r[32..40]), eb: int(&r[40..48]), tk: int(&r[48..56]), g: r[56..88].try_into().expect("32 bytes"), h: r[88..120].try_into().expect("32 bytes") })
+    }
 
     pub fn bytes(&self) -> Vec<u8> {
         [&sm8(self.a)[..], &sm8(self.gain), &sm8(self.wa), &sm8(self.wb), &sm8(self.ea), &sm8(self.eb), &self.g, &self.h].concat()
@@ -1141,6 +1157,11 @@ fn rate_up(w: i64, rate: i64) -> i64 {
 
 pub fn rows_bytes(rows: &[Row]) -> Vec<u8> {
     rows.iter().flat_map(|r| r.bytes()).collect()
+}
+
+/// The rows of a covered account's trace, 120 bytes each.
+pub fn c_rows_bytes(rows: &[Row]) -> Vec<u8> {
+    rows.iter().flat_map(|r| r.c_bytes()).collect()
 }
 
 /// The 111 bytes of a leg, as a position's fixed part has them.
@@ -1229,7 +1250,7 @@ fn leg_adds(l: &crate::cross::XLeg, a: i64) -> [i64; 5] {
 pub fn row_after(before: &Row, l: &crate::cross::XLeg, a: i64, left_out: bool) -> Row {
     let [d, ua, ub, xa, xb] = leg_adds(l, a);
     let h = if left_out { before.h } else { blake2b(&[&before.h[..], &leg_bytes(&crate::cross::XLeg { entry: a, ..*l })].concat()) };
-    Row { a, gain: before.gain + d, wa: before.wa + ua, wb: before.wb + ub, ea: before.ea + xa, eb: before.eb + xb, g: blake2b(&[&before.g[..], &leg_bytes(l)].concat()), h }
+    Row { a, gain: before.gain + d, wa: before.wa + ua, wb: before.wb + ub, ea: before.ea + xa, eb: before.eb + xb, tk: 0, g: blake2b(&[&before.g[..], &leg_bytes(l)].concat()), h }
 }
 
 /// `KpfTStepRow`: a row is opened by a chain `prev` and a leg that hash to the row's chain (`None` where they do
@@ -1337,7 +1358,7 @@ impl ATake {
         }
         let head = crate::reserve::Head { market: h[1..33].try_into().expect("32 bytes"), committee: h[34..66].try_into().expect("32 bytes"), scale: int(&h[67..75]), price_max: int(&h[76..84]) };
         let units = int(&said[108..116]);
-        let rows = said[116..].chunks(ROW_LEN).map(|r| Row { a: int(&r[..8]), gain: int(&r[8..16]), wa: int(&r[16..24]), wb: int(&r[24..32]), ea: int(&r[32..40]), eb: int(&r[40..48]), g: r[48..80].try_into().expect("32 bytes"), h: r[80..112].try_into().expect("32 bytes") }).collect();
+        let rows = said[116..].chunks(ROW_LEN).map(|r| Row { a: int(&r[..8]), gain: int(&r[8..16]), wa: int(&r[16..24]), wb: int(&r[24..32]), ea: int(&r[32..40]), eb: int(&r[40..48]), tk: 0, g: r[48..80].try_into().expect("32 bytes"), h: r[80..112].try_into().expect("32 bytes") }).collect();
         let leave = if head == crate::reserve::Head::EMPTY && units == 0 { None } else { Some((head, units)) };
         Some(ATake { side: int(&said[..8]), amount: int(&said[8..16]), skip: int(&said[16..24]), rows, leave })
     }

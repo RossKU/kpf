@@ -128,7 +128,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] prev, byte[111] leg) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] prev, byte[111] leg, byte[32] seed) {
         byte[] mv = moving;
         // (171 bytes and a push: the marked account an entry of the new form is stated on.)
         require(mv.length == 138 || mv.length == 171 || mv.length == 180);
@@ -161,26 +161,32 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         // The point answered is the one disputed; or any other, where the answer is that it is wrong (a statement
         // with a wrong point is not kept by a dispute of a point nobody can answer).
         require(at == point || verdict == 0);
-        int n = rows.length / 112;
-        require(rows.length == 112 * n);
+        int rl = 112;
+        int ga = 48;
+        if (kind >= 7) {
+            rl = 120;
+            ga = 56;
+        }
+        int n = rows.length / rl;
+        require(rows.length == rl * n);
         require(kind >= 2);
         require(kind <= 4 || kind >= 6);
-        require(kind <= 10 || kind == 12 || kind == 13);
+        require(kind <= 10 || kind == 12 || kind == 13 || kind == 14 || kind == 15);
         require(at >= 2);
         require(at % 2 == 0);
         int i = at / 2;
         // Row i and the chain before it (row 0 is nothing: zero sums, zero chains).
         require(i >= 1);
         require(i <= n);
-        byte[] row = rows.slice(112 * (i - 1), 112 * i);
+        byte[] row = rows.slice(rl * (i - 1), rl * i);
         byte[] before = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         if (i > 1) {
-            before = rows.slice(112 * (i - 2), 112 * (i - 1));
+            before = rows.slice(rl * (i - 2), rl * (i - 1));
         }
         // The row's chain is opened: a chain before it and a leg that hash to it (where that chain is not the row
         // before's, the row is wrong whatever its price).
         byte[] lg = byte[](leg);
-        require(blake2b(byte[](prev) + lg) == byte[32](row.slice(48, 80)));
+        require(blake2b(byte[](prev) + lg) == byte[32](row.slice(ga, ga + 32)));
         int a = int(byte[8](row.slice(0, 8)));
         int g = int(byte[8](byte[](terms).slice(G_AT, G_AT + 8)));
         // The committee's price: input u is a copy of KpfTCite spent by `cite` for the leg's committee and market and
@@ -195,7 +201,15 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(tx.inputs[u].scriptPubKey == byte[](CITE_SPK));
         require(OpInputCovenantId(u) == OpInputCovenantId(this.activeInputIndex));
         require(OpTxInputScriptSigSubstr(u, 0, 1) == byte[](0x20));
-        require(OpTxInputScriptSigSubstr(u, 33, 99) == lg.slice(33, 66) + lg.slice(0, 33));
+        if (int(byte[8](lg.slice(94, 102))) == 7) {
+            // (A token leg: its committee is its shard's, whose id is the hash of a seed, the committee, the terms
+            // and the periods; the citation is of that committee and of the leg's market.)
+            require(mv.length >= 171);
+            require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + OpTxInputScriptSigSubstr(u, 34, 66) + byte[](terms) + mv.slice(93, 120))));
+            require(OpTxInputScriptSigSubstr(u, 66, 99) == lg.slice(0, 33));
+        } else {
+            require(OpTxInputScriptSigSubstr(u, 33, 99) == lg.slice(33, 66) + lg.slice(0, 33));
+        }
         require(OpTxInputScriptSigSubstr(u, 99, 108) == i9(t0));
         require(OpTxInputScriptSigSubstr(u, 108, 109) == byte[](0x08));
         int c = int(byte[8](OpTxInputScriptSigSubstr(u, 109, 117)));
@@ -210,7 +224,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         int hi = (c * (BPS + g) + BPS - 1) / BPS;
         if (hi > pm) { hi = pm; }
         int ok = 1;
-        if (byte[](prev) != before.slice(48, 80)) { ok = 0; }
+        if (byte[](prev) != before.slice(ga, ga + 32)) { ok = 0; }
         if (a <= 0) { ok = 0; }
         if (a < c * (BPS - g) / BPS) { ok = 0; }
         if (a > hi) { ok = 0; }
