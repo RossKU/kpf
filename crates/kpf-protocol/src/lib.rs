@@ -63,6 +63,7 @@ pub use legacy::sim;
 pub use legacy::state;
 pub mod aobj;
 pub mod cite;
+pub mod covered;
 pub mod error;
 pub mod network;
 pub mod reserve;

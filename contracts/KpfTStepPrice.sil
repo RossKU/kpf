@@ -130,6 +130,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         // (An entry, kind 6, says the leg that enters whole and what its shard's id is the hash of, before its rows.)
         int at0 = 116;
         if (kind == 6) { at0 = 167; }
+        // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
+        if (kind >= 7) { at0 = 48; }
         require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));
@@ -145,7 +147,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 2);
-        require(kind <= 4 || kind == 6);
+        require(kind <= 4 || kind >= 6);
+        require(kind <= 9);
         require(at >= 2);
         require(at % 2 == 0);
         int i = at / 2;

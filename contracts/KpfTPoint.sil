@@ -103,7 +103,7 @@ contract KpfTPoint(int init_version) {
         byte[32] c0 = changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held);
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 2);
-        require(kind <= 6);
+        require(kind <= 9);
         require(point >= 0);
         int landed = OpTxInputDaaScore(j);
         require(landed >= t0);
@@ -127,7 +127,7 @@ contract KpfTPoint(int init_version) {
         require(v >= bond + bond);
         becomes(j, rs, slotLen, position, v - bond - bond);
         int m = tx.outputs.length - 1 - 4 * j;
-        if (kind == 6 || kind == 5) {
+        if (kind >= 5) {
             // A point of an entry, or of a draw, that nobody answered: the prices of a leg that enters, and of a
             // shard's rows where it draws, are the claimer's to show (a market nobody prices would else let a leg
             // in at any price, or count a row as equity at any price, for a bond that comes back: reviews 38 and

@@ -1963,7 +1963,7 @@ pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p:
 /// the price of row i), with a bond as large as the claimer's.
 pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
     let c = &obj.s;
-    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::thin::KIND_ENTER).contains(&c.kind) || point < 0 {
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_STEP).contains(&c.kind) || point < 0 {
         return invalid("the statement is not one on an account that landed in time, or the point is below zero");
     }
     let next = Pointed { st: *c, disputer, point };
@@ -1986,8 +1986,9 @@ pub fn point_lapse(lib: &[u8; 32], obj: &OLive<Pointed>, script: &LibScript, p: 
     args.extend([bv(q.disputer.to_vec()), iv(q.point)]);
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTPoint", "lapse", args, c.window as u64)?;
     d.out(obj.value - 2 * c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "account", None);
-    if c.kind == crate::thin::KIND_ENTER || c.kind == crate::thin::KIND_DRAW {
-        // (A point of an entry or of a draw that nobody answered: the claimer's bond is lost, half to the disputer.)
+    if c.kind >= crate::thin::KIND_DRAW {
+        // (A point of a draw, of an entry or of a statement on a covered account that nobody answered: the prices
+        // are the claimer's to show. Its bond is lost, half to the disputer.)
         let half = c.bond / 2;
         keep_with(&mut d, script, lid, c.bond - half)?;
         d.fund(p.funds, &p.change_to);
@@ -2430,30 +2431,152 @@ pub fn leg_out_as(lib: &[u8; 32], account: &OLive<Account>, i: usize, payb: i64,
     Ok((d.finish()?, next, note))
 }
 
-// ---------------------------------------------------------------- the notes of a shard held to its requirement
+// ---------------------------------------------------------------- a covered account's own statements
 
-/// `KpfTLeft.apply`: the note that legs left a covered account is applied to its shard. Input 0 is the shard, input
-/// 2 the note; output 0 the shard without the legs, output 2 the note of the rest where the shard did not hold what
-/// was asked; what it paid is the last output, to the user's key.
-pub fn left_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
-    let (s, n) = (&shard.s, &note.s);
-    let (next, at, paid, rest) = s.left(n)?;
-    left_apply_as(lib, shard, note, &at, next, paid, rest, script, p)
+/// `KpfTChange.state` on a covered account (`crate::covered`): a take of `amount` (kind 7), a leaving of the leg
+/// `skip` or of every leg (8, `skip` -1), or a step of its user's liquidation that names the leg `skip` (9, by
+/// `claimer`), at the prices `a`, one a leg.
+#[allow(clippy::too_many_arguments)]
+pub fn c_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, kind: i64, amount: i64, skip: i64, a: &[i64], t0: i64, claimer: [u8; 32], p: Payer) -> Result<(OBuilt, Stated, crate::covered::CSaid, crate::covered::COutcome)> {
+    let (st, s, o) = account.s.c_state(kind, amount, skip, a, t0, account.value as i64, claimer)?;
+    Ok((account_state(lib, account, script, &st, &s.said(), p)?, st, s, o))
 }
 
-/// As `left_apply`, with the rows named and the outputs said (for whoever tests what the script refuses).
+fn c_open(obj: &OLive<Pointed>, s: &crate::covered::CSaid) -> Result<()> {
+    let c = &obj.s.st;
+    if c.arg != s.arg() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&c.kind) {
+        return invalid("the statement is not the one given, or is none of a covered account's own");
+    }
+    Ok(())
+}
+
+/// `KpfTCRow.answer`: the point `at` (2i - 1: the one disputed, or any other that is answered wrong) of a statement
+/// on a covered account, the row's chain opened by `prev` and the leg. Returns the verdict (the model's,
+/// `c_row_judged`; with `force` the one given, for whoever tests that the script refuses it).
 #[allow(clippy::too_many_arguments)]
-pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
-    let (s, n) = (&shard.s, &note.s);
+pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at: i64, prev: &[u8; 32], leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    c_open(obj, s)?;
+    let n = s.rows.len();
+    if at < 1 || (at % 2 == 0 && at <= 2 * n as i64) {
+        return invalid("the point is not a row's, nor beyond the trace");
+    }
+    let i = ((at + 1) / 2) as usize;
+    let q = &obj.s;
+    let right = if i > n {
+        force.unwrap_or(true)
+    } else {
+        let before = if i == 1 { crate::thin::Row::ZERO } else { s.rows[i - 2] };
+        match (force, crate::covered::c_row_judged(prev, leg, &before, &s.rows[i - 1], i as i64, s)) {
+            (Some(v), _) => v,
+            (None, Some(v)) => v,
+            (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),
+        }
+    };
+    if force.is_none() && at != q.point && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { q.st.claimer } else { rkey };
+    let c = &q.st;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.kind)];
+    args.extend(point_args_said(q, s.said(), at, rkey, right));
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg))]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCRow", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTStepPrice.answer` on a statement of a covered account: the point 2i, with the committee's price for the
+/// leg's market at the statement's time, in a citation.
+#[allow(clippy::too_many_arguments)]
+pub fn c_price(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate::covered::CSaid, script: &LibScript, cite: (&LibScript, &Cited), rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    c_open(obj, s)?;
+    let q = &obj.s;
+    let c = &q.st;
+    let at = q.point;
+    let i = (at / 2) as usize;
+    if at < 2 || at % 2 != 0 || account.hash() != c.position || i > account.legs.len() || i > s.rows.len() {
+        return invalid("the point is not a price's, or the account is not the one the statement is on");
+    }
+    let (l, n) = (&account.legs[i - 1], &cite.1.note);
+    if n.committee != l.committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
+        return invalid("the citation is not of the leg's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
+    }
+    let prev = account.legs[..i - 1].iter().fold([0u8; 32], |g, x| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(x)].concat()));
+    let before_g = if i >= 2 { s.rows[i - 2].g } else { [0; 32] };
+    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right(l, &s.rows[i - 1], n.price, account.t.g_bps));
+    let rkey = if right { c.claimer } else { rkey };
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let legs: Vec<u8> = n.legs.iter().flat_map(crate::thin::leg_bytes).collect();
-    let rows: Vec<u8> = at.iter().flat_map(|r| sm8(*r as i64)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(legs), bv(rows), bv(n.key.to_vec()), iv(n.asked)];
+    let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
+    args.extend(point_args_said(q, s.said(), at, rkey, right));
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
+    let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;
+    Ok((d.finish()?, right))
+}
+
+/// `KpfTCEnd.answer`: the point 0 of a statement on a covered account: whether the last row is the account's and
+/// the statement keeps its kind's rule.
+#[allow(clippy::too_many_arguments)]
+pub fn c_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate::covered::CSaid, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    c_open(obj, s)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if account.hash() != c.position {
+        return invalid("the account is not the one the statement is on");
+    }
+    let right = match (force, account.c_end_judged(c.kind, s, &c.claimer, &c.outs, c.held)) {
+        (Some(v), _) => v,
+        (None, Some(v)) => v,
+        (None, None) => return invalid("a sum of the end does not fit: it is answered by neither verdict"),
+    };
+    if force.is_none() && q.point != 0 && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let rkey = if right { c.claimer } else { rkey };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
+    args.extend(point_args_said(q, s.said(), 0, rkey, right));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCEnd", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
+// ---------------------------------------------------------------- the notes of a shard held to its requirement
+
+/// `KpfTLeft.apply`: the last leg of a note that legs left a covered account is applied to its shard. Input 0 is
+/// the shard, input 2 the note; output 0 the shard without the leg; output 2 the note as it goes on where it has a
+/// leg more, or the note of the rest where it had none and the shard did not hold what was asked; what it paid is
+/// the last output, to the user's key.
+#[allow(clippy::type_complexity)]
+pub fn left_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>, Option<crate::reserve::Left>)> {
+    let (next, r, paid, rest, more) = shard.s.left(&note.s)?;
+    left_apply_as(lib, shard, note, r, next, paid, rest, more, script, p)
+}
+
+/// As `left_apply`, with the row named and the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, r: usize, next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, more: Option<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>, Option<crate::reserve::Left>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let Some((leg, before)) = n.legs.split_last() else { return invalid("the note has no leg") };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()),
+        bv(crate::reserve::Left::chain(before).to_vec()), bv(crate::thin::leg_bytes(leg)), iv(r as i64), bv(n.key.to_vec()), iv(n.asked),
+    ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeft", "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
-    d.out((shard.value as i64 - paid) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    // (With its last leg, below zero, what is asked is what the account paid: the note holds it, and the shard takes it.)
+    let taken = if before.is_empty() { n.asked.checked_neg().unwrap_or(0).max(0) } else { 0 };
+    let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
     keep(&mut d, script, lid)?;
+    if let Some(m) = &more {
+        d.out(note.value, hash_spk(lib, &m.hash()), Some((0, id)), "note", None);
+    }
     if let Some(left) = &rest {
         d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
     }
@@ -2461,7 +2584,7 @@ pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note:
     if paid > 0 {
         d.last(paid, &n.key, "what the user is paid", &p.change_to);
     }
-    Ok((d.finish()?, next, rest))
+    Ok((d.finish()?, next, rest, more))
 }
 
 /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.

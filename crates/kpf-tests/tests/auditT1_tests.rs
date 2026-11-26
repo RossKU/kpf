@@ -629,7 +629,7 @@ const RELEASE: [&str; 6] = [
     "require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));",
     "require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));",
 ];
-const SCRIPTS: [&str; 56] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTLegOut", "KpfTEnter", "KpfTStepEnter", "KpfTLeft", "KpfTSweep", "KpfTPay"];
+const SCRIPTS: [&str; 58] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTLegAdd", "KpfTAddC", "KpfTNoteApply", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardPrice", "KpfTDrawNote", "KpfTHand", "KpfTLegMove", "KpfTLegOut", "KpfTEnter", "KpfTStepEnter", "KpfTLeft", "KpfTCRow", "KpfTCEnd", "KpfTSweep", "KpfTPay"];
 /// Round 30. The two services of the library are spent not to move an object named by `who` but to write or cite a
 /// price note: their first argument is not the 24 bytes of the places, and their "going on" is their own (a note
 /// writer writes two outputs under the id, a citation ties the counts). The who-based lints (A3's entry shape, R19's
@@ -820,7 +820,7 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     pinned.sort();
     assert_eq!(sorted, pinned, "every script of the library");
     assert_eq!(COLLECTORS, kpf_protocol::thin_artifacts::COLLECTORS);
-    assert_eq!((entries, releases), (64, 54));
+    assert_eq!((entries, releases), (66, 56));
 }
 
 /// Round 19, the places over the sources. `release` (and `KpfSlot.go`, `KpfFeePool.go`) asks only to be named at a

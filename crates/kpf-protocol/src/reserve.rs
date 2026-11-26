@@ -350,7 +350,9 @@ pub const NOTE_LEFT: i64 = 6;
 pub const NOTE_REST: i64 = 7;
 
 /// The note that legs left a covered account: the legs (one, or all the account had), the user's key, and what
-/// the shard is asked for them. Applied, each leg is taken out of the shard's books.
+/// the shard is asked for them; below zero where the account paid the shard (the legs lost), and the note then
+/// holds those coins. It is applied a leg at a time, the last of its chain first: each is taken out of the shard's
+/// books, and with the last what is asked is settled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Left {
     pub sid: [u8; 32],
@@ -366,11 +368,17 @@ impl Left {
     }
 
     pub fn hash(&self) -> [u8; 32] {
-        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_LEFT), p33(&Left::chain(&self.legs)), p33(&self.key), i9(self.asked)].concat())
+        self.hash_of(&Left::chain(&self.legs))
     }
 
+    /// The note's hash with the chain of its legs given.
+    pub fn hash_of(&self, chain: &[u8; 32]) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_LEFT), p33(chain), p33(&self.key), i9(self.asked)].concat())
+    }
+
+    /// What the note holds: a note's least, and what the account paid for the legs (what is asked, below zero).
     pub fn value(&self) -> i64 {
-        NOTE_MIN
+        NOTE_MIN + (-self.asked).max(0)
     }
 }
 
@@ -419,40 +427,63 @@ impl Shard {
         Ok(s)
     }
 
-    /// `KpfTLeft.apply`: the shard once the note that legs left is applied: each leg out of its row and out of
-    /// what the legs were entered at; what is asked paid as far as the shard holds, and the note of the rest. Also
-    /// the row of each leg. Refused where a leg is in no row, or where the shard is called and something is asked.
-    pub fn left(&self, n: &Left) -> Result<(Shard, Vec<usize>, i64, Option<Rest>)> {
+    /// `KpfTLeft.apply`: the shard once the last leg of the note's chain is taken out of its row and out of what
+    /// the legs were entered at; the leg's row; and, where the chain has a leg more, the note that goes on. With
+    /// the note's last leg what it asks is settled: paid as far as the shard holds (what was paid, and the note of
+    /// the rest), or, below zero, added to what the shard holds. Refused where the leg is in no row, or where the
+    /// shard is called and something is asked with the last leg.
+    pub fn left(&self, n: &Left) -> Result<(Shard, usize, i64, Option<Rest>, Option<Left>)> {
         let no = |why: &str| Err(Error::Invalid(format!("the note that legs left is not applied: {why}")));
         if n.sid != self.sid {
             return no("it is to another shard");
         }
-        if n.legs.is_empty() || n.legs.len() > 6 || n.asked < 0 {
-            return no("it is of one to six legs, and asks nothing below zero");
+        let Some(l) = n.legs.last() else { return no("it has no leg") };
+        if n.asked == i64::MIN {
+            return no("what it asks is beyond what is counted");
         }
-        if self.called != 0 && n.asked != 0 {
+        let last = n.legs.len() == 1;
+        if last && self.called != 0 && n.asked > 0 {
             return no("the shard is called: what is asked waits, and is paid its share");
         }
         let mut s = *self;
-        let mut at = vec![];
-        for l in &n.legs {
-            let (head, units, basis) = Shard::book_of(l)?;
-            let Some(r) = s.rows.iter().position(|row| row.head == head) else { return no("a leg is in no row of the shard") };
-            let row = &mut s.rows[r];
-            if row.gross < l.size {
-                return no("a row has fewer units than the leg");
-            }
-            row.net -= units;
-            row.gross -= l.size;
-            if row.net == 0 && row.gross == 0 {
-                row.head = Head::EMPTY;
-            }
-            s.basis -= basis;
-            at.push(r);
+        let (head, units, basis) = Shard::book_of(l)?;
+        let Some(r) = s.rows.iter().position(|row| row.head == head) else { return no("the leg is in no row of the shard") };
+        let row = &mut s.rows[r];
+        if row.gross < l.size {
+            return no("its row has fewer units than the leg");
+        }
+        let beyond = || Error::Invalid("the books are beyond what is counted".into());
+        row.net = row.net.checked_sub(units).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
+        row.gross -= l.size;
+        if row.net == 0 && row.gross == 0 {
+            row.head = Head::EMPTY;
+        }
+        s.basis = s.basis.checked_sub(basis).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
+        if !last {
+            return Ok((s, r, 0, None, Some(Left { legs: n.legs[..n.legs.len() - 1].to_vec(), ..n.clone() })));
+        }
+        if n.asked < 0 {
+            // (What the account paid for the legs, which the note holds.)
+            s.held = s.held.checked_sub(n.asked).ok_or_else(beyond)?;
+            return Ok((s, r, 0, None, None));
         }
         let pay = n.asked.min(s.held);
         s.held -= pay;
-        Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+        Ok((s, r, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay }), None))
+    }
+
+    /// The shard once every leg of the note is taken out and what it asks is settled (`left`, to the note's end):
+    /// what was paid, and the note of the rest.
+    pub fn left_whole(&self, n: &Left) -> Result<(Shard, i64, Option<Rest>)> {
+        let (mut s, mut note) = (*self, n.clone());
+        loop {
+            let (next, _, paid, rest, more) = s.left(&note)?;
+            s = next;
+            match more {
+                Some(m) => note = m,
+                None => return Ok((s, paid, rest)),
+            }
+        }
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.

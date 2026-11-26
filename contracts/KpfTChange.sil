@@ -80,7 +80,9 @@ contract KpfTChange(int init_version) {
     // KpfTStepPrice, KpfTStepEnd). 3: a step of a liquidation of an account; 4: a leg that leaves an account by
     // its party's own statement (the same, and KpfTStepLiq). 5: a draw from a shard by its owner (KpfTShardEnd,
     // KpfTShardPrice, KpfTDrawNote).
-    int constant KINDS = 5;
+    // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 6, a
+    // leg that enters, is stated by KpfTEnter alone.
+    int constant KINDS = 9;
 
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));
@@ -136,16 +138,25 @@ contract KpfTChange(int init_version) {
                 require(said.length == 40);
                 require(shard == 1);
             } else {
-                require(said.length >= 116);
-                require((said.length - 116) % 112 == 0);
+                // (A covered account's own kinds say two numbers and a chain before their rows.)
+                int at0 = 116;
+                if (kind >= 6) {
+                    require(kind >= 7);
+                    require(mv.length == 171);
+                    at0 = 48;
+                }
+                require(said.length >= at0);
+                require((said.length - at0) % 112 == 0);
                 require(shard == 0);
                 // The market of the leg that leaves is written as a market is (two pushes of 32 bytes, two of 8):
                 // whoever watches reads every statement that is stated, and a tool that could not read one could
                 // not answer it.
-                require(said.slice(24, 25) == byte[](0x20));
-                require(said.slice(57, 58) == byte[](0x20));
-                require(said.slice(90, 91) == byte[](0x08));
-                require(said.slice(99, 100) == byte[](0x08));
+                if (kind <= 4) {
+                    require(said.slice(24, 25) == byte[](0x20));
+                    require(said.slice(57, 58) == byte[](0x20));
+                    require(said.slice(90, 91) == byte[](0x08));
+                    require(said.slice(99, 100) == byte[](0x08));
+                }
             }
         }
         require(outs.length >= 41);
