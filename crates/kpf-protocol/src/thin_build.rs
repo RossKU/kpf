@@ -1993,7 +1993,7 @@ pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p:
 /// the price of row i), with a bond as large as the claimer's.
 pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
     let c = &obj.s;
-    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_SPLIT).contains(&c.kind) || point < 0 {
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_MARK).contains(&c.kind) || point < 0 {
         return invalid("the statement is not one on an account that landed in time, or the point is below zero");
     }
     if (obj.daa as i64) >= c.last_dispute() {
@@ -2415,7 +2415,7 @@ pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at
         force.unwrap_or(true)
     } else {
         let before = if i == 1 { crate::thin::Row::ZERO } else { s.rows[i - 2] };
-        match (force, crate::covered::c_row_judged(prev, leg, &before, &s.rows[i - 1], i as i64, s)) {
+        match (force, crate::covered::c_row_judged_of(obj.s.st.kind, prev, leg, &before, &s.rows[i - 1], i as i64, s)) {
             (Some(v), _) => v,
             (None, Some(v)) => v,
             (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),
@@ -2483,14 +2483,18 @@ pub fn c_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate:
         return invalid("a point other than the one disputed is answered only where it is wrong");
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    // (The end of a split has a script of its own, which is told no kind.)
-    let split = c.kind == crate::covered::KIND_C_SPLIT;
+    // (The end of a split and of a mark each have a script of their own, which is told no kind.)
+    let own = match c.kind {
+        crate::covered::KIND_C_SPLIT => Some("KpfTCSplit"),
+        crate::covered::KIND_C_MARK => Some("KpfTCMark"),
+        _ => None,
+    };
     let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving())];
-    if !split {
+    if own.is_none() {
         args.push(iv(c.kind));
     }
     args.extend(point_args_said(q, s.said(), 0, rkey, right));
-    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, if split { "KpfTCSplit" } else { "KpfTCEnd" }, "answer", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, own.unwrap_or("KpfTCEnd"), "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
 }
@@ -2760,6 +2764,39 @@ fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     // output holds above a note's least, and no more than the note says.)
     let taken = crate::reserve::held_for(n.asked, note.value as i64);
     let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
+    Ok((d.finish()?, next, rest))
+}
+
+/// `KpfTMarkNote.apply`: the note that a leg was marked is applied to its shard. Input 0 is the shard, input 2 the
+/// note; output 0 the shard, what its legs were entered at moved by what it paid or owes; output 2 the note of the
+/// rest where the shard did not hold what was asked; what it paid is the last output, to the user's key.
+pub fn mark_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::MarkNote>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (next, paid, rest) = shard.s.marked(&note.s)?;
+    mark_apply_as(lib, shard, note, next, paid, rest, script, p)
+}
+
+/// As `mark_apply`, with the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments)]
+pub fn mark_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::MarkNote>, next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (s, n) = (&shard.s, &note.s);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(crate::committee::blake2b(&s.rows_bytes()).to_vec()), bv(s.moving()),
+        bv(crate::thin::leg_bytes(&n.leg)), iv(n.entry), bv(n.key.to_vec()), iv(n.asked),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTMarkNote", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    let value = (shard.value as i64).checked_sub(paid).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
     d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
     keep(&mut d, script, lid)?;
     if let Some(left) = &rest {

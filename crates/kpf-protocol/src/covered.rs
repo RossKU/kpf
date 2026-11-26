@@ -40,9 +40,13 @@ pub const KIND_C_STEP: i64 = 9;
 /// One covered account made two: a leg leaves it for an account of its own (`docs/ARCHITECTURE-CLEARING.md` 16.2).
 pub const KIND_C_SPLIT: i64 = 12;
 
-/// Whether a kind is one of a covered account's own that `KpfTChange` states (7 to 9, and 12).
+/// A gain taken out of a leg that stays: the leg is from now entered at a price the user says, and what it gained
+/// up to there is asked of the shard (`docs/ARCHITECTURE-CLEARING.md` 16.3).
+pub const KIND_C_MARK: i64 = 13;
+
+/// Whether a kind is one of a covered account's own that `KpfTChange` states (7 to 9, 12 and 13).
 pub fn c_kind(kind: i64) -> bool {
-    (KIND_C_TAKE..=KIND_C_STEP).contains(&kind) || kind == KIND_C_SPLIT
+    (KIND_C_TAKE..=KIND_C_STEP).contains(&kind) || kind == KIND_C_SPLIT || kind == KIND_C_MARK
 }
 /// In the place of the leg that leaves: every leg.
 pub const ALL: i64 = -1;
@@ -93,6 +97,20 @@ pub fn c_row_after(before: &Row, l: &XLeg, a: i64, leaves: bool) -> Option<Row> 
     })
 }
 
+/// The row of the leg that a mark names (kind 13): it stays, entered from now at `ne`. Of a mark the sums are:
+/// `gain`, what the marked leg has unrealized beyond `ne` at the price stated (no other leg adds to it); `wa`,
+/// what all are worth; `wb`, what the others are worth; `ea`, what the others have lost, each counted alone; `eb`,
+/// what the marked leg gained up to `ne`.
+pub fn c_row_marked(before: &Row, l: &XLeg, a: i64, ne: i64) -> Option<Row> {
+    let w = worth(l.size, l.scale, a)?;
+    let wne = worth(l.size, l.scale, ne)?;
+    let (r, kept) = (sub(wne, worth(l.size, l.scale, l.entry)?)?, sub(w, wne)?);
+    let (r, kept) = if l.dir == LONG { (r, kept) } else { (sub(0, r)?, sub(0, kept)?) };
+    let g = blake2b(&[&before.g[..], &leg_bytes(l)].concat());
+    let at = XLeg { entry: ne, ..*l };
+    Some(Row { a, gain: add(before.gain, kept)?, wa: add(before.wa, w)?, wb: before.wb, ea: before.ea, eb: add(before.eb, r)?, g, h: blake2b(&[&before.h[..], &leg_bytes(&at)].concat()) })
+}
+
 /// The chain of one leg that leaves alone (what its note names it by).
 pub fn chain_of_one(l: &XLeg) -> [u8; 32] {
     Left::chain(&[*l])
@@ -133,6 +151,12 @@ impl CSaid {
 /// where the leg leaves alone and is not the one the statement names by its chain; and else right exactly when it
 /// follows from the row before and the leg.
 pub fn c_row_judged(prev: &[u8; 32], l: &XLeg, before: &Row, row: &Row, i: i64, s: &CSaid) -> Option<bool> {
+    c_row_judged_of(KIND_C_LEAVE, prev, l, before, row, i, s)
+}
+
+/// As `c_row_judged`, of a statement of `kind`: of a mark (13) the leg named stays, at the entry the statement
+/// says where a take has its amount (`c_row_marked`), and the other legs add nothing to the first sum.
+pub fn c_row_judged_of(kind: i64, prev: &[u8; 32], l: &XLeg, before: &Row, row: &Row, i: i64, s: &CSaid) -> Option<bool> {
     if row.g == [0; 32] {
         return Some(false);
     }
@@ -151,9 +175,24 @@ pub fn c_row_judged(prev: &[u8; 32], l: &XLeg, before: &Row, row: &Row, i: i64, 
     let w = worth(l.size, l.scale, row.a)?;
     let d = sub(w, worth(l.size, l.scale, l.entry)?)?;
     let d = if l.dir == LONG { d } else { sub(0, d)? };
-    let (ws, ls, gl, h) = if leaves { (0, 0, d, before.h) } else { (w, if d < 0 { sub(0, d)? } else { 0 }, 0, blake2b(&[&before.h[..], &leg_bytes(l)].concat())) };
-    let sums = [add(before.gain, d)?, add(before.wa, w)?, add(before.wb, ws)?, add(before.ea, ls)?, add(before.eb, gl)?];
-    Some(sums == [row.gain, row.wa, row.wb, row.ea, row.eb] && h == row.h)
+    let mark = kind == KIND_C_MARK;
+    let (mut fine, mut dg) = (true, d);
+    let (ws, ls, mut gl, mut h) = if leaves { (0, 0, d, before.h) } else { (w, if d < 0 { sub(0, d)? } else { 0 }, 0, blake2b(&[&before.h[..], &leg_bytes(l)].concat())) };
+    if mark && leaves {
+        let ne = s.amount;
+        if ne <= 0 || ne > l.price_max {
+            fine = false;
+        } else {
+            let wne = worth(l.size, l.scale, ne)?;
+            let (r, kept) = (sub(wne, worth(l.size, l.scale, l.entry)?)?, sub(w, wne)?);
+            (gl, dg) = if l.dir == LONG { (r, kept) } else { (sub(0, r)?, sub(0, kept)?) };
+            h = blake2b(&[&before.h[..], &leg_bytes(&XLeg { entry: ne, ..*l })].concat());
+        }
+    } else if mark {
+        dg = 0;
+    }
+    let sums = [add(before.gain, dg)?, add(before.wa, w)?, add(before.wb, ws)?, add(before.ea, ls)?, add(before.eb, gl)?];
+    Some(fine && sums == [row.gain, row.wa, row.wb, row.ea, row.eb] && h == row.h)
 }
 
 /// What a statement on a covered account makes of it.
@@ -169,6 +208,8 @@ pub struct COutcome {
     pub note: Option<Left>,
     /// The account of the leg that left for an account of its own (a split).
     pub split: Option<Account>,
+    /// The note to the shard that a leg was marked.
+    pub mark: Option<crate::reserve::MarkNote>,
     pub outs: Outs,
 }
 
@@ -181,6 +222,38 @@ impl Account {
             rows.push(c_row_after(rows.last().unwrap_or(&Row::ZERO), l, *p, skip == ALL || skip == i as i64 + 1)?);
         }
         Some(rows)
+    }
+
+    /// The trace of a mark of the leg `skip` (from 1) at the prices `a`, the leg from now entered at `ne`.
+    pub fn c_trace_marked(&self, a: &[i64], skip: i64, ne: i64) -> Option<Vec<Row>> {
+        let mut rows: Vec<Row> = vec![];
+        for (i, (l, p)) in self.legs.iter().zip(a).enumerate() {
+            let before = rows.last().copied().unwrap_or(Row::ZERO);
+            rows.push(if skip == ALL || skip == i as i64 + 1 { c_row_marked(&before, l, *p, ne)? } else { Row { gain: before.gain, ..c_row_after(&before, l, *p, false)? } });
+        }
+        Some(rows)
+    }
+
+    /// The entry nearest the price `a` that a mark of the leg `l` says: what the leg keeps unrealized there is
+    /// the tolerance twice of its worth at `a`, at the least. `None` where there is none within the leg's limits
+    /// (or the leg is too small for a price's step to count).
+    pub fn mark_entry(&self, l: &XLeg, a: i64) -> Option<i64> {
+        let g2 = add(self.t.g_bps, self.t.g_bps)?;
+        let w = worth(l.size, l.scale, a)?;
+        let band = rate_up(w, g2)?;
+        let step = rate_up(a, g2)?;
+        let mut ne = if l.dir == LONG { sub(a, step)? } else { add(a, step)? };
+        for _ in 0..64 {
+            if ne <= 0 || ne > l.price_max {
+                return None;
+            }
+            let wne = worth(l.size, l.scale, ne)?;
+            if (if l.dir == LONG { sub(w, wne)? } else { sub(wne, w)? }) >= band {
+                return Some(ne);
+            }
+            ne = if l.dir == LONG { ne - 1 } else { ne + 1 };
+        }
+        None
     }
 
     /// The hash of this account with other coins of its user's and another chain of legs.
@@ -213,6 +286,9 @@ impl Account {
         if kind == KIND_C_SPLIT {
             return self.c_split_end(s, claimer, held, t0);
         }
+        if kind == KIND_C_MARK {
+            return self.c_mark_end(s, claimer, held, t0);
+        }
         let Some(sid) = self.shard else { return Some(None) };
         let n = s.rows.len() as i64;
         // (An account of no leg takes a take, stated with no row.)
@@ -239,7 +315,7 @@ impl Account {
         if kind != KIND_C_STEP && t0 < quiet {
             return Some(None);
         }
-        let out = |v: Vec<(Out, bool)>, after: Option<Account>, paid: i64, fee: i64, note: Option<Left>| Outs::with_notes(&v).map(|outs| COutcome { after, paid, fee, note, split: None, outs });
+        let out = |v: Vec<(Out, bool)>, after: Option<Account>, paid: i64, fee: i64, note: Option<Left>| Outs::with_notes(&v).map(|outs| COutcome { after, paid, fee, note, split: None, mark: None, outs });
         if kind == KIND_C_TAKE {
             if s.skip != 0 || *claimer != self.a_key || s.amount <= 0 {
                 return Some(None);
@@ -382,7 +458,43 @@ impl Account {
             (Out { key: false, to: self.c_next(left, &row.h, sub(count, 1)?, when), value: sub(held, s.amount)? }, false),
             (Out { key: false, to: self.c_next(s.amount, &s.lc, 1, when), value: s.amount }, true),
         ];
-        Some(Outs::with_notes(&v).map(|outs| COutcome { after: Some(stays), paid: 0, fee: 0, note: None, split: Some(new), outs }))
+        Some(Outs::with_notes(&v).map(|outs| COutcome { after: Some(stays), paid: 0, fee: 0, note: None, split: Some(new), mark: None, outs }))
+    }
+
+    /// `KpfTCMark`: what the end of a mark makes of this account holding `held`: leg `s.skip` is from now entered
+    /// at `s.amount`, and what it gained up to there is asked of the shard. The user's, at or after the account's
+    /// time, which it writes; what the leg has unrealized beyond its new entry is the tolerance twice of its worth
+    /// at the least (the band a leaving takes: taken once over the mark and the leaving); and the account stands
+    /// as after a take. `None`, `Some(None)`: as `c_end`.
+    pub fn c_mark_end(&self, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<COutcome>> {
+        let Some(sid) = self.shard else { return Some(None) };
+        let n = s.rows.len() as i64;
+        let zero = Row::ZERO;
+        let row = s.rows.last().unwrap_or(&zero);
+        let (kept, w, ws, ls, gl) = (row.gain, row.wa, row.wb, row.ea, row.eb);
+        let mut ok = n >= 1 && row.g == self.legs_root() && w >= 0 && ws >= 0 && ws <= w && ls >= 0 && self.b_margin == 0;
+        let coins = self.a_margin;
+        let g = self.t.g_bps;
+        let up = add(self.t.mmr_bps, g)?;
+        let quiet = self.b_min_counter;
+        let when = add(t0, ck(add(self.t.late_daa, ck(self.dispute_daa.checked_mul(2))?)?.checked_mul(2))?)?;
+        ok = ok && *claimer == self.a_key && t0 >= quiet && s.amount > 0 && s.skip >= 1 && s.skip <= n && gl > 0;
+        if !ok {
+            return Some(None);
+        }
+        let thin = kept < rate_up(sub(w, ws)?, add(g, g)?)?;
+        if sub(coins, NOTE_MIN)? < add(rate_up(w, up)?, ls)? || thin {
+            return Some(None);
+        }
+        let k = s.skip as usize - 1;
+        let Some(leg) = self.legs.get(k).copied() else { return Some(None) };
+        let mut legs = self.legs.clone();
+        legs[k].entry = s.amount;
+        let after = Account { legs, b_min_counter: when, ..self.clone() };
+        let note = crate::reserve::MarkNote { sid, leg, entry: s.amount, key: self.a_key, asked: gl };
+        // (The account and the note are named by the chains the statement says: its rows hold those to the legs.)
+        let v = vec![(Out { key: false, to: self.c_next(coins, &row.h, self.a_min_counter, when), value: held }, false), (Out { key: false, to: note.hash_of(&s.lc), value: NOTE_MIN }, true)];
+        Some(Outs::with_notes(&v).map(|outs| COutcome { after: Some(after), paid: 0, fee: 0, note: None, split: None, mark: Some(note), outs }))
     }
 
     /// `KpfTCEnd`'s verdict on the end of a statement with the outputs `outs` (`None`: neither).
@@ -396,7 +508,7 @@ impl Account {
         if self.c_end_judged(kind, s, claimer, outs, held, t0) == Some(false) {
             return Some(0);
         }
-        self.rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_row_judged(&before.g, l, before, row, i as i64 + 1, s))
+        self.rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_row_judged_of(kind, &before.g, l, before, row, i as i64 + 1, s))
     }
 
     /// The statement of `kind` on this covered account holding `held`, at the prices `a` (one a leg) and the time
@@ -409,7 +521,14 @@ impl Account {
         if a.len() != self.legs.len() || !(0..LOCK_TIME_THRESHOLD).contains(&t0) || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
             return Err(no("it is stated with one price a leg, within its market's limit, and a time"));
         }
-        let rows = self.c_trace(a, skip).ok_or_else(|| no("a sum of its trace is beyond what is counted"))?;
+        // (A mark says the leg's new entry where a take has its amount; with none given, the nearest the rule allows.)
+        let amount = if kind == KIND_C_MARK && amount == 0 {
+            let leg = usize::try_from(skip - 1).ok().and_then(|k| self.legs.get(k)).ok_or_else(|| no("a mark names one leg"))?;
+            self.mark_entry(leg, a[skip as usize - 1]).ok_or_else(|| no("the leg has no entry to be marked at within its limits"))?
+        } else {
+            amount
+        };
+        let rows = if kind == KIND_C_MARK { self.c_trace_marked(a, skip, amount) } else { self.c_trace(a, skip) }.ok_or_else(|| no("a sum of its trace is beyond what is counted"))?;
         let lc = if skip >= 1 { self.legs.get(skip as usize - 1).map(chain_of_one).unwrap_or([0; 32]) } else { [0; 32] };
         let mut s = CSaid { amount, skip, lc, rows };
         // (A step states its fee: the rule's.)

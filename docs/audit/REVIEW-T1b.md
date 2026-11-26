@@ -10717,3 +10717,268 @@ No test failed in either, so there is no name to give. The default is round 58's
 `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 34, `committee_cli` 13,
 `clearing_cli` 1. After the two runs I changed three lines of words in one test of mine (a comment and what it
 prints) and ran `auditT1_builders` again alone: 181 passed.
+
+# Round 60
+
+Scope, at the engine: section 16.3 as built (a gain taken out of a leg that stays: kind 13, `KpfTCMark`,
+`KpfTMarkNote`, the row of a mark in `KpfTCRow`), and the two decisions of round 59 that were taken back (N12:
+the band; N15: who marks). My files brought along; the workspace run twice. Working tree after 5bf9030; no src,
+contract, `Cargo.toml` or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **The scripts are the model's.** On 80 random accounts the engine takes the model's verdict on the end of a
+  mark and no other; the row of the leg marked is answered as `c_row_judged_of` says; 13 ways of writing the
+  two outputs otherwise have a wrong end. The note is applied whatever the books hold, moves what the shard
+  holds, owes and says its legs were entered at by one sum, and asks nothing but what its leg gained between
+  its two entries. I found no way through the scripts.
+- **Taking N12 back was right, and the claim it is replaced by is half right.** "A mark and the leaving at one
+  stated price ask what the leaving alone asks": exactly, to the sompi, on 200 random legs. But "a mark gives
+  nothing the leaving would not" holds only where the price does not come back. **F107 (Low): a mark, a fall of
+  the band, the leaving: no band is taken at all.** The marker has the whole band (1 % of the leg's worth) more
+  than the leaving alone at the last price; half of it after a fall of half the band. The shard still pays no
+  more than the leg gained at the price stated.
+- **F108 (Low): a draw stands in front of a mark's note.** The note of a mark ends no draw (16.3: "the equity is
+  the same"). A draw takes coins, and coins are what the note asks: an owner that states a draw while a mark
+  waits its dispute period is paid first, and the user has a note of the rest. A note that a leg left, in the
+  same place, ends the draw.
+- **Taking N15 back is right for the form as it is.** There is a form that is fair to both and that also closes
+  F107: the leg keeps its entry and remembers what was advanced. It costs a number in every leg; a decision,
+  below.
+- The workspace: by default 612 passed, 0 failed in 60 targets (4 min 11 s); with the three features 1,306 passed, 0
+  failed in 138 targets (17 min 15 s).
+
+## The end and the rows against the model (item 2)
+
+`t1b_r60_the_end_and_the_row_of_a_mark_are_the_models_on_random_accounts`. 80 accounts of one to six legs of
+four markets, long and short, of whole units and of fractions of a unit (with a few sompi-units odd), entered
+around 10; prices around 10, the leg named gaining in three cases of four; the new entry the nearest the rule
+allows (`mark_entry`), a tick inside, a tick outside, the leg's own entry, a tick beyond it, the price itself;
+coins at what the test of a take asks, a sompi under, a sompi over, 3 KAS over; the claimer the user or another
+key; the account's time at the statement's or a block after. Each statement written by hand, stated by
+`KpfTChange` as kind 13, disputed at its end and answered both ways: **the engine takes the model's verdict and
+not the other in every case** (26 right, 54 wrong, 39 at an edge), and for the user's own statement in time the
+model is the rule written out (the new entry above nothing; something gained up to it; what is kept at the
+least the tolerance twice of the leg's worth, rounded up; the coins at the test of a take). The row of the leg
+marked, disputed, in 20 cases as it is and in 20 with the new entry said a tick off: answered as the model
+says, right and wrong. On a right case, 13 statements with the outputs written otherwise have a wrong end: the
+account or the note a sompi more or less; the note asking a sompi more or less, saying another new entry, of
+another key, of the leg at its new entry; the account as it was, with a coin less, with no time; no note.
+
+## What a user has by marks, against the leaving alone (items 3, 4, 6)
+
+`t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone` (the model's `c_state`, which states what the rule
+allows and no more; 200 random legs, long and short, whole and fractions).
+
+- **At one stated price**: the mark to the nearest entry and then the leaving ask, together, what the leaving
+  alone asks: equal to the sompi, every leg. The worth is the same function in both and the band is taken
+  once, on the same worth: nothing is rounded twice.
+- **Three marks in a row at rising prices, then the leaving at the top**: the leaving alone, to the sompi.
+- **Twice at one price**: no second mark. **A leg that lost**: no mark. **By another key**: none.
+- **A mark, the price comes back, the leaving** (the first leg of the run; the band at the last price is about
+  0.35 KAS):
+
+  | The price came back by | nothing | half the band | the band | twice the band | 10 % |
+  |---|---|---|---|---|---|
+  | The marker has more than the leaving alone | 0 | 0.174 KAS | 0.348 KAS | 0.351 KAS | 0.379 KAS |
+  | The band at that price | 0.344 | 0.346 | 0.348 | 0.351 | 0.379 |
+
+  Over all 200 legs: never less than the leaving alone, never more than the band, and never more than the leg
+  gained from its first entry at the last price stated (asserted). This is F107.
+- **A take after a mark** is the take before it (the most the rule allows, to the sompi); **a split** after it
+  the split before it. A mark moves no coin and no worth, and the tests count no gain.
+- **Near its maintenance**: an account a sompi under the test of a take marks nothing; one exactly at it marks,
+  and is then no step's at the price stated or at the tolerance against it on both legs (it is far against it).
+- **Under a call** (the model's step at the call's price; long 10 units from 10, marked at 12 to 11.88, the
+  note asking 18.8 KAS):
+
+  | Called at | Not marked: asks | Marked before: the step asks, and the note |
+  |---|---|---|
+  | 12 | 20 KAS | 1.2 KAS and 18.8 KAS |
+  | 13 | 30 KAS | 11.2 KAS and 18.8 KAS |
+  | 11 | 10 KAS | pays 8.8 KAS, and 18.8 KAS |
+
+  The same in total each time (a call's step takes no band). What differs is when: a note that was paid before
+  the call was paid whole, and the claim at the call's share is the smaller for it; a note not yet paid is a
+  claim at that share while what the step asks of the account (8.8 KAS at 11) is paid whole. That is a leaving
+  before a call, for a leg that stays; nothing new.
+
+## The note (item 5)
+
+`t1b_r60_the_note_of_a_mark_is_applied_whatever_the_books_hold_and_moves_no_equity`. A long of 10 units from 10
+with 60 KAS, marked at 12: the new entry 11.88, the note asking 18.8 KAS. Stated in 3,080 bytes, applied in
+2,643: the account with the leg at its new entry, its coins, the time 6,900, the time for what is done at will
+as it was; and the note, holding a note's least, which whoever applies the statement puts in (0.2 KAS beside
+its fee; it comes back to whoever applies the note).
+
+| The shard | Paid | Owed after | Bytes |
+|---|---|---|---|
+| holds 100 KAS, has the leg | 18.8 KAS | nothing | 2,785 |
+| holds 5 KAS | 5 KAS | 13.8 KAS, a note of the rest | 2,820 |
+| holds nothing | nothing | 18.8 KAS, a note of the rest | 2,768 |
+| called | nothing | 18.8 KAS, a note of the rest | 2,768 |
+| has the leg in no row any more (N13) | 18.8 KAS | nothing | 2,785 |
+
+In all five: the rows as they were; what the legs were entered at less by what is asked; and what the shard
+holds, less what it owes, less what its legs were entered at, as before.
+
+- **A note that asks otherwise** (a sompi more, a sompi less, another new entry, another first entry): refused,
+  four of four. The script holds what is asked to the leg and its two entries.
+- **Is there a note the script takes that moves the equity?** No: every note it takes moves the three numbers by
+  one sum. **A note of a leg that is in no account** (a statement nobody disputed wrote it): TAKEN. Run: 1,000
+  units "from 1 to 500": 499,000 sompi paid; and a million units "from 1 to 1,000": everything the shard holds
+  is paid to the note's key and the rest is owed, the three numbers together as before. So the worst of a
+  mark's statement that nobody disputes is everything its shard holds, as it is of a leaving's (whose note asks
+  what it says and is held to nothing but units in a row). The difference is in the books: after a wrong
+  leaving's note the equity has fallen and the shard is called; after a wrong mark's note the equity stands
+  (what the legs were entered at has moved by as much, against legs that do not exist), so no call is due and
+  the honest claims wait behind what is owed. A watcher of a mark answers, as of a split, the row of the leg
+  named: the end takes the chain and the sums as said.
+- **A worth beyond what is counted**: the model refuses; the script's products stop it (63 bits).
+- **The orders** (the model): the note of a mark and the note that the same leg left later, in both orders, on
+  a shard that holds 100 KAS and on one that holds 5: the same rows (empty), the same number (nothing), the
+  same coins less debts, the same sum paid and owed. Two marks' notes of one leg in both orders: the same shard.
+- **No other script spends it**: by the sources, `KpfTCMark` and `KpfTMarkNote` alone write or open a note of
+  kind 13; `KpfTLeft`, `KpfTLeftAll`, `KpfTLeftVoid`, `KpfTDrawNote` and `KpfTCallPay` open other kinds, and a
+  kind is in a note's hash.
+- **Under a call**: a mark stated at the call's time is ended by the call's step (its bond back); one stated
+  before it is not (the builder) and is applied as any; its note applied to the called shard is owed whole
+  (the table).
+
+## Findings
+
+### F107 (Low). A mark, a fall of the band, the leaving: no band is taken
+
+16.3: "A mark is an advance on the leaving, and gives nothing the leaving would not." At one price, and at any
+later price that is higher, yes (run). Where the price comes back, the leg leaves from its NEW entry at a loss,
+and "a loss whole, a gain less the band" takes no band from a loss. Long 10 units from 10; the price 12: marked
+to 11.88, 18.8 KAS paid. The price 11.5: the leaving pays 3.8 KAS back. The user has 15 KAS, all the leg gained
+at 11.5; the leaving alone at 11.5 asks 13.85 KAS. Over 200 legs the marker has exactly the band more wherever
+the price came back by the band or more, and a part of it for less.
+
+What it is and is not: the shard never pays more than the leg gained from its first entry at the last price
+stated (asserted on every case), so it is the band that is not earned, not coins that were not gained. But the
+band is there for a price stated the tolerance off at each end; a marked leg that leaves at a loss has, at its
+leaving, the slack of any leg that lost and no band to set against it. And a user that marks at every rise
+pays the band only where it leaves within the band of its last mark: the owner's band is what is left of it.
+What bounds the ratchet today is the account's time: a mark keeps its user from every statement for 400 blocks.
+
+Direction: with F107 open the paper should say "an advance where the price holds; the band where it comes
+back". To close it see the form below.
+
+### F108 (Low). A draw stands in front of a mark's note
+
+16.3: "a note of a mark that is not applied ends no draw either: until it is applied the books say the old
+entry and have not paid, and the equity is the same." The equity is; the coins are not. A stated draw is the
+shard under a statement: no note is applied to it until the draw is applied or ended, and `KpfTDrawNote` ends a
+draw by a note that legs left or a note of the rest, not by a mark's (run by the sources: it opens no note of
+kind 13). A mark is public for a dispute period before its note exists.
+
+Scenario: a book that is set off, the shard holding 30 KAS against a requirement of 5; the winner's mark will
+ask 18.8 KAS. The owner states a draw of 25 KAS while the mark waits. The note cannot end the draw; the draw is
+applied; the note is paid 5 KAS and the user has a note of the rest of 13.8 KAS, paid as the losers leave. Had
+the winner left instead, its note would have ended the draw and been paid.
+
+Direction: `KpfTDrawNote` takes a note of a mark as it takes a note that legs left (the leg shown, the kind 13
+in the hash).
+
+## The decisions taken back (item 7)
+
+- **N12 (the band).** Taking it back is right: with no band a mark at a price stated the tolerance high is paid
+  for nothing. The band left in the leg holds what is paid to what was gained at the committee's price less the
+  tolerance. What it does not hold is F107.
+- **N15 (who marks).** For the form as built, right: an entry written by another is a leaving and an entry, and
+  costs the user the band where the price comes back. The form I think was missed: **the leg keeps its entry
+  and remembers a sum advanced** (taken by its user where it gained; paid in by anyone's statement where it
+  lost). Everything that pays a leg out (a leaving, a step, a call's step) then computes from the first entry
+  as today and sets the sum advanced against it; the tests count the leg as today less the advance. A mark of a
+  gain is then an advance and nothing else (F107 gone: the leaving alone at the last price, always), and a mark
+  of a loss is fair to both (the price comes back, and the user is owed what it paid in, with no band). It
+  costs eight bytes in every leg and a line in every script that reads one: a change of the leg, not of a
+  script. Not now, I think; but it is the answer to "is there a form fair to both".
+- **A set-off book whose winners all mark.** With N each way and a move of x %, the marks ask (x - 1) % of N
+  (the band stays in the legs) and nothing comes in. A shard that holds only what a set-off book is asked is
+  out of coins after a move of a few per cent while its equity has not moved; from there every winner has a
+  note of the rest, every draw is ended by what is owed, no call is due, and the winners are paid as the losers
+  leave or are stepped. The upper level cannot ask coins against the winners: the books have one number for
+  what all legs were entered at and do not know the winners' part of it. So it is what a set-off book is; it
+  needs nothing now but F108 (the owner should not be able to take the coins first) and a line in what a user
+  reads of a shard: what it holds against what its legs have gained.
+
+## Time and griefing (item 8)
+
+- A mark writes the account's time as a take does: the statement's time and 400 blocks. Until then its user
+  states nothing (no take, no leaving, no split, no second mark); a hand-over, an addition and a join are not
+  held by it (the time for what is done at will is not written: run), and a step is anybody's as before.
+- Nobody else uses kind 13 against a user: a mark by another key has a wrong end (the random test), and costs
+  what any statement that is not the rule's costs (half a bond of 0.2 KAS at the least); a mark of a time ahead
+  or long past costs half its bond (round 59). It writes nothing of the account's unless nobody answers it.
+
+## Notes on the paper
+
+- The test of the end takes a note's least off the coins ("less a note's least"), but the account gives none:
+  whoever applies the statement puts the note's least in. Harmless; say whose it is.
+- 16.3 "gives nothing the leaving would not" (F107) and "ends no draw" (F108).
+- 16.2 and 16.3 alike: a watcher answers the row of the leg named; the end says nothing of the chain.
+
+## Sizes (item 9)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTCMark` | 2,220 | new |
+| `KpfTMarkNote` | 1,154 | new |
+| `KpfTCRow` | 2,607 | 2,245 |
+| `KpfTChange` | 1,595 | 1,583 |
+| `KpfTCStep` | 3,251 | 3,245 |
+| `KpfTStepPrice` | 1,699 | 1,693 |
+| `KpfTPoint` | 2,588 | 2,588 |
+
+`t1b_r60_the_sizes_of_the_scripts_that_changed`; 66 scripts. A mark is stated in 3,080 bytes and applied in
+2,643; its note is applied in 2,768 to 2,820.
+
+## Not reached
+
+- F108 at the engine (a draw stated, the mark's note shown to `KpfTDrawNote`): it rests on the sources (no
+  script but the two opens a note of kind 13) and on a stated draw being the shard under a statement.
+- The command line (there is no command that applies the note yet); `aobj`'s `Mark`.
+- A mark's prices disputed (`KpfTStepPrice` takes kind 13 as a leaving's; not run), and the rows of the legs that
+  are not marked (the row of the leg marked is run).
+- A mempool; the form "an advance remembered" is reasoning, no model.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F107 | Low | open, new: a mark, a fall of the band, the leaving: no band taken |
+| F108 | Low | open, new: a draw stands in front of a mark's note |
+| N12, N15 | paper | taken back; right for the form as built (above) |
+| N13, N14 | paper | built as decided, verified (no row read; the worth at each entry) |
+| F103, the join's wait | Medium | left by 15.10 |
+| F95 | Medium | open by decision |
+| F102, F106, F97, F99 | Low | left, said in the paper |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 185 tests (was 181). Brought along: 66 scripts and the sizes
+  in eight tests; kind 13 among the notes `t1b_fixed_f85_...` knows, and `KpfTStepPrice` a byte over what it
+  was; the two new scripts among the readers of `t1b_fixed_f78_...`. New: `mark_by_hand60`, `end_taken60`, and
+  `t1b_r60_the_end_and_the_row_of_a_mark_are_the_models_on_random_accounts`,
+  `t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone`,
+  `t1b_r60_the_note_of_a_mark_is_applied_whatever_the_books_hold_and_moves_no_equity`,
+  `t1b_r60_the_sizes_of_the_scripts_that_changed`.
+- `crates/kpf-tests/tests/auditT1_tests.rs` (55): 66 scripts with the two; 76 entries and 64 `release`.
+- `crates/kpf-cli/tests/auditT1_cli.rs` (48): a library of 66 scripts.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11): unchanged.
+
+## The workspace, twice (item 9)
+
+One cargo command after the other, two jobs.
+
+| Run | Command | Targets | Passed | Failed | Wall time | Of it, tests |
+|---|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 612 | 0 | 251 s | 127 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,306 | 0 | 1,035 s | 772 s |
+
+No test failed in either, so there is no name to give. The default is round 59's 607, your one more in
+`thin_draw` (34 to 35) and four more of mine (181 to 185). Of mine in both: `auditT1_builders` 185,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48.

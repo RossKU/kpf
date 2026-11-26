@@ -10191,7 +10191,7 @@ fn t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_wr
 fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64, "(57, the four of the call, the two of section 15, and the split of 16.2)");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66, "(57, the four of the call, the two of section 15, the split of 16.2, and the two of a mark, 16.3)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10216,7 +10216,7 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     // alone, where it answers a take of kind 2.)
     // (Round 54: KpfTCallEnd and KpfTCallPay read a shard's call and basis; KpfTCStep an account's count of legs.)
     // (Round 56, F85 taken out: KpfTStepEnd takes 138 bytes alone, and is no reader of a covered account's places.)
-    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCSplit", "KpfTCStep", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
+    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCMark", "KpfTCSplit", "KpfTCStep", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTMarkNote", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
 }
 
 /// Rounds 45 and 47, F68 (High), closed by the removal: a leg is in a shard's rows and in its basis by one
@@ -10501,7 +10501,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
     // (Round 55: KpfTChange has the floor of a draw's bond, 1,543; KpfTDrawNote is shown the legs, 1,393.)
     // (Round 56: the ages of an addition and of a draw; the deposit note out of KpfTAcctEnd; what a shard owes in KpfTDrawNote.)
-    assert_eq!(sizes, vec![("KpfTChange", 1583), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1595), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
 }
 
 // ================================================================================================================
@@ -11578,7 +11578,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R54 sizes of the scripts: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let mut rows = vec![];
     let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
@@ -11616,7 +11616,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3245), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1583), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3251), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1595), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12216,8 +12216,8 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1406), ("KpfTDrawEntry", 1181), ("KpfTChange", 1583), ("KpfTCStep", 3245), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1406), ("KpfTDrawEntry", 1181), ("KpfTChange", 1595), ("KpfTCStep", 3251), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -12332,7 +12332,8 @@ fn t1b_fixed_f85_nothing_of_the_old_form_is_left_in_the_five_scripts() {
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         for part in code.split("i9(NOTE_TAG) + mv.slice(138, 171) + i9(").skip(1) {
             let tag = part.split(')').next().unwrap().to_string();
-            if !["6", "7", "8", "LEFT", "REST", "UNENTERED", "tag", "11", "CALL"].contains(&tag.as_str()) {
+            // (Round 60: 13, the note that a leg was marked.)
+            if !["6", "7", "8", "LEFT", "REST", "UNENTERED", "tag", "11", "CALL", "13"].contains(&tag.as_str()) {
                 notes.push((name.to_string(), tag));
             }
         }
@@ -12351,7 +12352,8 @@ fn t1b_fixed_f85_nothing_of_the_old_form_is_left_in_the_five_scripts() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTStepEnd", 2175), ("KpfTStepLiq", 2783), ("KpfTAcctEnd", 682), ("KpfTStepRow", 3589), ("KpfTStepPrice", 1698)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R56 F85 is closed: no note of the old form and no kind 6 in any source; (the script, bytes, bytes before) {sizes:?}");
-    assert!(sizes.iter().all(|(_, now, was)| now < was));
+    // (Round 60: KpfTStepPrice has two kinds more since, 12 and 13, and is a byte over what it was.)
+    assert!(sizes.iter().all(|(n, now, was)| now < was || *n == "KpfTStepPrice"));
 }
 
 /// Round 56, section 15.1 at the engine: `KpfTPass`. An account of 50 KAS, long 10 units and short 4, with a time
@@ -12637,7 +12639,7 @@ fn t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scr
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTPass", "KpfTJoinC", "KpfTAddC", "KpfTChange", "KpfTDrawNote", "KpfTLeft", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTAcctEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R56 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let fa = [fund(xk(&w.a), 44, 1_000)];
     let legs: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
@@ -13007,9 +13009,9 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1583, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1595, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13301,7 +13303,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 618), ("KpfTPass", 602), ("KpfTJoinC", 1625), ("KpfTEnterS", 2323), ("KpfTOpenC", 684)]);
 }
 
@@ -13741,6 +13743,373 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1583), ("KpfTCRow", 2245), ("KpfTStepPrice", 1693), ("KpfTCStep", 3245), ("KpfTPoint", 2588), ("KpfTCSplit", 2251)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1595), ("KpfTCRow", 2607), ("KpfTStepPrice", 1699), ("KpfTCStep", 3251), ("KpfTPoint", 2588), ("KpfTCSplit", 2251)]);
+}
+
+// ================================================================================================================
+// Round 60. Section 16.3 as built: a gain taken out of a leg that stays (kind 13, `KpfTCMark`, `KpfTMarkNote`).
+
+use kpf_protocol::covered::{c_row_judged_of, KIND_C_MARK};
+use kpf_protocol::reserve::MarkNote;
+
+/// A mark of leg `k` of `x` (holding `held`) to the entry `s.amount`, written by hand whatever the rule says: the
+/// account with the leg at its new entry, and the note asking `asked`.
+fn mark_by_hand60(x: &Account, s: &CSaid, k: usize, asked: i64, held: i64, claimer: [u8; 32], t0: i64) -> Option<(Stated, Account, MarkNote)> {
+    let leg = *x.legs.get(k)?;
+    let when = t0 + 2 * (x.t.late_daa + 2 * x.dispute_daa);
+    let mut legs = x.legs.clone();
+    legs[k].entry = s.amount;
+    let after = Account { legs, b_min_counter: when, ..x.clone() };
+    let note = MarkNote { sid: x.shard?, leg, entry: s.amount, key: x.a_key, asked };
+    let outs = Outs::with_notes(&[(Out { key: false, to: after.hash(), value: held }, false), (Out { key: false, to: note.hash(), value: NOTE_MIN }, true)])?;
+    Some((Stated { t0, ..stated57(x, KIND_C_MARK, s, outs, held, claimer) }, after, note))
+}
+
+/// What the engine takes of the answer of the end of a statement, by the script `name`: (right, wrong).
+fn end_taken60(w: &OW, acct: &OLive<Account>, st: &Stated, s: &CSaid, name: &str) -> (bool, bool) {
+    let q = w.pointed(&OLive { daa: (st.t0 + 10) as u64, ..w.stated(acct, st, &s.said()) }, 0);
+    let take = |v: bool| {
+        let f = [fund(xk(&w.w), 33, 1_000)];
+        c_end(&w.lib, &q, &acct.s, s, &w.script(name), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    (take(true), take(false))
+}
+
+/// Round 60, item 2: `KpfTCMark` and the row of a mark in `KpfTCRow` against the model on random accounts. One to
+/// six legs of four markets, long and short, of whole units and of fractions of a unit, entered around 10; prices
+/// around 10; the leg named anywhere; the new entry the nearest the rule allows (`mark_entry`), a tick inside and
+/// a tick outside it, the leg's own entry, a tick on the wrong side of it, the price itself; coins at what the
+/// test of a take asks, a sompi under, a sompi over, more; the claimer the user or another key; the account's time
+/// at the statement's or a block after. Each statement is written by hand (the account with the leg at the new
+/// entry, the note asking what the trace says the leg gained up to it), stated (`KpfTChange`, kind 13), disputed
+/// at its end and answered both ways: the engine takes the model's verdict and not the other. The row of the leg
+/// marked, disputed, is answered as `c_row_judged_of` says, with the rows as they are and with the new entry said
+/// a tick off. On a right case: the same statement with the account or the note written otherwise has a wrong end.
+#[test]
+fn t1b_r60_the_end_and_the_row_of_a_mark_are_the_models_on_random_accounts() {
+    let w = ow();
+    let mut r = Rng(0x5160_0001);
+    let up = w.terms().mmr_bps + w.terms().g_bps;
+    let rate_up = |v: i64, rate: i64| (v / 10_000) * rate + ((v % 10_000) * rate + 9_999) / 10_000;
+    let (mut right, mut wrong, mut at_edge, mut rows_right, mut rows_wrong) = (0, 0, 0, 0, 0);
+    let mut kept = None;
+    for case in 0..80 {
+        let n = r.range(1, 7) as usize;
+        let legs: Vec<XLeg> = (0..n).map(|_| {
+            let i = r.range(0, 4) as usize;
+            let size = if r.range(0, 2) == 0 { r.range(1, 30) * w.markets[i].p.scale } else { r.range(1, 3_000) * w.markets[i].p.scale / 1_000 + r.range(0, 7) };
+            XLeg { size, entry: P10 * r.range(80, 111) / 100 + r.range(0, 3), ..w.fut(i, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) }
+        }).collect();
+        let k = r.range(0, n as i64) as usize;
+        let leg = legs[k];
+        // (A price that the leg named gained at, three cases in four.)
+        let prices: Vec<i64> = (0..n).map(|i| {
+            let far = if i == k && r.range(0, 4) != 0 { if leg.dir == LONG { r.range(104, 125) } else { r.range(70, 97) } } else { r.range(90, 111) };
+            P10 * far / 100
+        }).collect();
+        let probe = cov47(&w, &legs, 0, 0).s;
+        let nearest = probe.mark_entry(&leg, prices[k]);
+        let tick = if leg.dir == LONG { 1 } else { -1 };
+        let ne = match (nearest, r.range(0, 8)) {
+            (Some(m), 0..=2) => m,
+            (Some(m), 3) => m - tick,
+            (Some(m), 4) => m + tick,
+            (_, 5) => leg.entry,
+            (_, 6) => leg.entry + tick,
+            _ => prices[k],
+        };
+        let Some(rows) = probe.c_trace_marked(&prices, k as i64 + 1, ne) else { continue };
+        let last = rows.last().unwrap().clone();
+        let need = NOTE_MIN + rate_up(last.wa, up) + last.ea;
+        let coins = need + [0i64, 0, 0, -1, 1, 3 * KAS1][r.range(0, 6) as usize];
+        let mut acct = cov47(&w, &legs, coins, 0);
+        if r.range(0, 10) == 0 {
+            acct.s.b_min_counter = T0 + r.range(0, 2);
+        }
+        let x = &acct.s;
+        let s = CSaid { amount: ne, skip: k as i64 + 1, lc: kpf_protocol::covered::chain_of_one(&leg), rows: rows.clone() };
+        let claimer = if r.range(0, 12) == 0 { xk(&w.w) } else { xk(&w.a) };
+        let Some((st, _, _)) = mark_by_hand60(x, &s, k, last.eb, coins, claimer, T0) else { continue };
+        let model = x.c_end_judged(KIND_C_MARK, &s, &st.claimer, &st.outs, coins, T0);
+        assert_eq!(end_taken60(&w, &acct, &st, &s, "KpfTCMark"), verdicts(model), "case {case}: {n} legs, leg {k} ({:?}), new entry {ne} (the nearest {nearest:?}), coins {coins} against {need}", leg);
+        if claimer == x.a_key && T0 >= x.b_min_counter {
+            let band = rate_up(last.wa - last.wb, 2 * w.terms().g_bps);
+            assert_eq!(model, Some(ne > 0 && last.eb > 0 && last.gain >= band && coins >= need), "case {case}: the model against the rule written out");
+            at_edge += (nearest == Some(ne) || coins == need) as usize;
+        }
+        // The row of the leg marked: as it is, and with the new entry said a tick off.
+        if case % 4 == 0 {
+            let prev = Account { legs: legs[..k].to_vec(), ..probe.clone() }.legs_root();
+            let before = if k == 0 { kpf_protocol::thin::Row::ZERO } else { rows[k - 1].clone() };
+            for bent in [s.clone(), CSaid { amount: ne + 1, ..s.clone() }] {
+                let Some((bst, _, _)) = mark_by_hand60(x, &bent, k, last.eb, coins, xk(&w.a), T0) else { continue };
+                let judged = c_row_judged_of(KIND_C_MARK, &prev, &leg, &before, &rows[k], k as i64 + 1, &bent);
+                let q = w.pointed(&OLive { daa: 6_510, ..w.stated(&acct, &bst, &bent.said()) }, 2 * k as i64 + 1);
+                assert_eq!(c_row_taken47(&w, &q, &bent, 2 * k as i64 + 1, &prev, &leg), verdicts(judged), "case {case}: the row of the leg marked, new entry said {}", bent.amount);
+                if judged == Some(true) { rows_right += 1 } else { rows_wrong += 1 }
+            }
+        }
+        if model == Some(true) {
+            right += 1;
+            kept = kept.or(Some((acct.clone(), s.clone(), k, last.eb)));
+        } else {
+            wrong += 1;
+        }
+    }
+    assert!(right >= 12 && wrong >= 25 && at_edge >= 10 && rows_right >= 8 && rows_wrong >= 8, "{right} {wrong} {at_edge} {rows_right} {rows_wrong}");
+    // The two outputs written otherwise.
+    let (acct, s, k, gl) = kept.unwrap();
+    let x = &acct.s;
+    let coins = x.a_margin;
+    let (st, after, note) = mark_by_hand60(x, &s, k, gl, coins, x.a_key, T0).unwrap();
+    assert_eq!(end_taken60(&w, &acct, &st, &s, "KpfTCMark"), (true, false), "(control)");
+    let (o0, o1) = (Out { key: false, to: after.hash(), value: coins }, Out { key: false, to: note.hash(), value: NOTE_MIN });
+    let mut mutated = 0;
+    for (what, v) in [
+        ("the account holding a sompi less", vec![(Out { value: coins - 1, ..o0 }, false), (o1, true)]),
+        ("the account holding a sompi more", vec![(Out { value: coins + 1, ..o0 }, false), (o1, true)]),
+        ("the note holding a sompi less", vec![(o0, false), (Out { value: NOTE_MIN - 1, ..o1 }, true)]),
+        ("the note holding a sompi more", vec![(o0, false), (Out { value: NOTE_MIN + 1, ..o1 }, true)]),
+        ("the note asking a sompi more", vec![(o0, false), (Out { to: MarkNote { asked: gl + 1, ..note }.hash(), ..o1 }, true)]),
+        ("the note asking a sompi less", vec![(o0, false), (Out { to: MarkNote { asked: gl - 1, ..note }.hash(), ..o1 }, true)]),
+        ("the note saying another new entry", vec![(o0, false), (Out { to: MarkNote { entry: note.entry + 1, ..note }.hash(), ..o1 }, true)]),
+        ("the note of another key", vec![(o0, false), (Out { to: MarkNote { key: xk(&w.w), ..note }.hash(), ..o1 }, true)]),
+        ("the note of the leg at its new entry", vec![(o0, false), (Out { to: MarkNote { leg: after.legs[k], ..note }.hash(), ..o1 }, true)]),
+        ("the account as it was", vec![(Out { to: Account { b_min_counter: after.b_min_counter, ..x.clone() }.hash(), ..o0 }, false), (o1, true)]),
+        ("the account with a coin less", vec![(Out { to: Account { a_margin: coins - 1, ..after.clone() }.hash(), ..o0 }, false), (o1, true)]),
+        ("the account with no time", vec![(Out { to: Account { b_min_counter: x.b_min_counter, ..after.clone() }.hash(), ..o0 }, false), (o1, true)]),
+        ("no note", vec![(o0, false)]),
+    ] {
+        let Some(outs) = Outs::with_notes(&v) else { continue };
+        let wrong_st = Stated { outs, ..st };
+        assert_eq!(x.c_end_judged(KIND_C_MARK, &s, &wrong_st.claimer, &wrong_st.outs, coins, T0), Some(false), "the model: {what}");
+        assert_eq!(end_taken60(&w, &acct, &wrong_st, &s, "KpfTCMark"), (false, true), "a mark with {what}");
+        mutated += 1;
+    }
+    println!("T1b R60 the end of a mark: 80 random cases less those with no trace: {right} right and {wrong} wrong by the model, {at_edge} at an edge; the engine takes the model's verdict and not the other in each; the row of the leg marked is answered as the model says ({rows_right} right, {rows_wrong} wrong); {mutated} statements with the outputs written otherwise have a wrong end");
+}
+
+/// Round 60, items 3, 4 and 6, by the model (`Account::c_state`, which states what the rule allows and no more):
+/// what a user is paid in total over marks and what follows them, against the leaving alone.
+///  - **At one stated price** a mark to the nearest entry and then the leaving ask, together, exactly what the
+///    leaving alone asks: on every random leg (long and short, whole units and fractions), to the sompi.
+///  - **A mark, the price falls, the leaving**: the two together against the leaving alone at the last price, for
+///    falls of nothing, half the band, the band, twice the band and 10 %: how much more the marker has, and the
+///    band at the last price.
+///  - **Three marks in a row at rising prices**, then the leaving at the top: what the leaving alone asks.
+///  - **Twice at one price**: no second mark. **A leg that lost**: no mark. **By another key**: no mark.
+///  - **A take after a mark** is the take before it (the most that is the rule's, to the sompi), and so is a split.
+///  - **Near its maintenance**: an account a sompi under the test of a take marks nothing; one at it marks, and
+///    is then no step's at the tolerance against it.
+///  - **Under a call** (the model's step at the call's price): what the user is asked and has back with the leg
+///    marked before the call, the note of the mark counted as a claim, against the leg not marked.
+#[test]
+fn t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone() {
+    let w = ow();
+    let mut r = Rng(0x5160_0002);
+    let g2 = 2 * w.terms().g_bps;
+    let rate_up = |v: i64, rate: i64| (v / 10_000) * rate + ((v % 10_000) * rate + 9_999) / 10_000;
+    let worth = |l: &XLeg, p: i64| (l.size / l.scale) * p + (l.size % l.scale) * (p / l.scale) + ((l.size % l.scale) * (p % l.scale)) / l.scale;
+    // What a leaving of the one leg asks (below nothing: what the account pays), at `price` and the time `t0`.
+    let leaving = |x: &Account, price: i64, t0: i64| -> i64 {
+        let (_, _, o) = x.c_state(KIND_C_LEAVE, 0, ALL, &[price], t0, x.a_margin, x.a_key).expect("a leaving");
+        o.note.map(|n| n.asked).unwrap_or(0)
+    };
+    let mark = |x: &Account, price: i64, t0: i64| -> Option<(i64, Account)> {
+        let (_, _, o) = x.c_state(KIND_C_MARK, 0, 1, &[price], t0, x.a_margin, x.a_key).ok()?;
+        Some((o.mark?.asked, o.after?))
+    };
+    let (mut same, mut worst, mut falls) = (0, (0i64, 0i64), vec![]);
+    for case in 0..200 {
+        let i = r.range(0, 4) as usize;
+        let size = if case % 2 == 0 { r.range(1, 30) * w.markets[i].p.scale } else { r.range(1, 3_000) * w.markets[i].p.scale / 1_000 + r.range(0, 7) };
+        let leg = XLeg { size, entry: P10 * r.range(80, 111) / 100 + r.range(0, 3), ..w.fut(i, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) };
+        let x = cov47(&w, &[leg], 200 * KAS1, 0).s;
+        let gained = |pct: i64| if leg.dir == LONG { leg.entry * (100 + pct) / 100 } else { leg.entry * (100 - pct) / 100 };
+        let a1 = gained(r.range(4, 25));
+        let Some((g1, marked)) = mark(&x, a1, T0) else { panic!("case {case}: a leg that gained 4 % or more is marked") };
+        // At one price.
+        assert_eq!(g1 + leaving(&marked, a1, marked.b_min_counter), leaving(&x, a1, T0), "case {case}: a mark and the leaving at one price, against the leaving alone");
+        same += 1;
+        // Twice at one price.
+        assert!(mark(&marked, a1, marked.b_min_counter).is_none(), "case {case}: a second mark at the same price");
+        // The price comes back by a part of the band, and the leg leaves.
+        let band_price = a1 * g2 / 10_000;
+        for (j, back) in [0i64, band_price / 2, band_price, 2 * band_price, a1 / 10].iter().enumerate() {
+            let a2 = if leg.dir == LONG { a1 - back } else { a1 + back };
+            let more = g1 + leaving(&marked, a2, marked.b_min_counter) - leaving(&x, a2, T0);
+            let band = rate_up(worth(&leg, a2), g2);
+            let truly = if leg.dir == LONG { worth(&leg, a2) - worth(&leg, leg.entry) } else { worth(&leg, leg.entry) - worth(&leg, a2) };
+            assert!(more >= 0 && more <= band && g1 + leaving(&marked, a2, marked.b_min_counter) <= truly.max(g1), "case {case}: {more} more than the leaving alone, the band {band}");
+            if case == 0 {
+                falls.push((j, more, band));
+            }
+            if more * worst.1.max(1) > worst.0 * band.max(1) {
+                worst = (more, band);
+            }
+        }
+        // Three marks at rising prices, then the leaving at the top.
+        let (mut acct, mut total, mut price) = (x.clone(), 0, a1);
+        for _ in 0..3 {
+            if let Some((gk, next)) = mark(&acct, price, acct.b_min_counter.max(T0)) {
+                (acct, total) = (next, total + gk);
+            }
+            price = if leg.dir == LONG { price * 103 / 100 } else { price * 97 / 100 };
+        }
+        assert_eq!(total + leaving(&acct, price, acct.b_min_counter), leaving(&x, price, T0), "case {case}: three marks and the leaving at the top");
+        // A leg that lost, and another key.
+        assert!(mark(&x, gained(-3), T0).is_none() && x.c_state(KIND_C_MARK, 0, 1, &[a1], T0, x.a_margin, xk(&w.w)).is_err(), "case {case}");
+    }
+    // A take and a split after a mark; near the maintenance.
+    let (long, short) = (w.fut(0, 10, LONG, P10), w.fut(1, 10, SHORT, P10));
+    let p12 = P10 * 12 / 10;
+    let up = w.terms().mmr_bps + w.terms().g_bps;
+    let need = NOTE_MIN + rate_up(worth(&long, p12) + worth(&short, P10), up);
+    let x = cov47(&w, &[long, short], need + 30 * KAS1, 0).s;
+    let (_, _, o) = x.c_state(KIND_C_MARK, 0, 1, &[p12, P10], T0, x.a_margin, x.a_key).unwrap();
+    let (after, note) = (o.after.unwrap(), o.mark.unwrap());
+    let take = |y: &Account, amount: i64| y.c_state(KIND_C_TAKE, amount, 0, &[p12, P10], y.b_min_counter.max(T0), y.a_margin, y.a_key).is_ok();
+    assert!(take(&x, 30 * KAS1) && !take(&x, 30 * KAS1 + 1) && take(&after, 30 * KAS1) && !take(&after, 30 * KAS1 + 1), "the most a take takes, before the mark and after");
+    let split = |y: &Account, amount: i64| y.c_state(KIND_C_SPLIT, amount, 2, &[p12, P10], y.b_min_counter.max(T0), y.a_margin, y.a_key).is_ok();
+    let most = (1..=40).map(|k| k * KAS1).filter(|a| split(&x, *a)).max();
+    assert_eq!(most, (1..=40).map(|k| k * KAS1).filter(|a| split(&after, *a)).max(), "the most a split leaves with the short, before the mark and after");
+    let at = cov47(&w, &[long, short], need, 0).s;
+    let under = Account { a_margin: need - 1, ..at.clone() };
+    assert!(under.c_state(KIND_C_MARK, 0, 1, &[p12, P10], T0, need - 1, under.a_key).is_err(), "an account a sompi under the test of a take marks");
+    let (_, _, o_at) = at.c_state(KIND_C_MARK, 0, 1, &[p12, P10], T0, need, at.a_key).expect("an account at the test of a take marks");
+    let marked_at = o_at.after.unwrap();
+    let g = P10 * w.terms().g_bps / 10_000;
+    let stepped = |pl: i64, ps: i64| marked_at.c_state(KIND_C_STEP, 0, 1, &[pl, ps], marked_at.b_min_counter, need, xk(&w.w)).is_ok() || marked_at.c_state(KIND_C_STEP, 0, 2, &[pl, ps], marked_at.b_min_counter, need, xk(&w.w)).is_ok();
+    let steps = (stepped(p12, P10), stepped(p12 - g, P10 + g), stepped(p12 - 12 * g, P10 + 10 * g));
+    assert!(!steps.0 && !steps.1, "an account that marked at the test's edge is a step's at the price stated, or at the tolerance against it");
+    // Under a call: the leg marked before it, and not.
+    let mut under_call = vec![];
+    for price in [P10 * 12 / 10, P10 * 13 / 10, P10 * 11 / 10] {
+        let call = call54(&w, [price, P10, P10, P10], T0 + 1_000).s;
+        let plain = x.call_step_over(&call, x.a_margin, None).unwrap();
+        let marked = after.call_step_over(&call, after.a_margin, None).unwrap();
+        under_call.push((price / (P10 / 10), (plain.user, plain.note.asked), (marked.user, marked.note.asked, note.asked)));
+    }
+    println!("T1b R60 marks against the leaving alone: a mark and the leaving at one price ask what the leaving alone asks, to the sompi, on {same} random legs; twice at one price, a leg that lost and another key: no mark; three marks at rising prices and the leaving at the top: the leaving alone; after a mark and a fall the marker has more than the leaving alone at the last price, the most of the band: {worst:?} (the first leg, for falls of nothing, half the band, the band, twice the band, a tenth: (which, more, the band) {falls:?}); a take and a split after a mark are those before it; an account at the edge of the test marks, and is then a step's at (the price stated, the tolerance against it, far against it): {steps:?}; under a call (the price in tenths, not marked: (has back, asks), marked before: (has back, asks, the note of the mark)) {under_call:?}");
+}
+
+/// Round 60, items 5 and 6: the note of a mark at the engine. An account long 10 units from 10 with 60 KAS; the
+/// price 12; marked to the nearest entry.
+///  - Stated, applied after its dispute period: the account with the leg at its new entry, 60 KAS, the time
+///    6,900; and the note, holding a note's least.
+///  - Applied (`KpfTMarkNote`) to a shard that has the leg and holds 100 KAS: what is asked is paid to the user's
+///    key; the rows as they were; what the legs were entered at moved by what is asked; what the shard holds,
+///    owes and says its legs were entered at, together, as before. The same on a shard that holds 5 KAS (5 paid,
+///    a note of the rest for the rest, owed), that holds nothing (a note of the rest for all), that is called
+///    (nothing paid, owed whole), and that no longer has the leg in any row (N13).
+///  - A note that asks a sompi more or less than its leg gained between its two entries: refused. A note of a leg
+///    that is in no account, of entries 1 and 500 on 1,000 units: TAKEN: everything the shard holds is paid to
+///    its key and the rest is owed; the three numbers together are as before. A leg whose worth is beyond what
+///    is counted: refused.
+///  - The note of a mark and the note that the same leg left, in both orders, and two marks' notes of one leg in
+///    both orders: the same shard and the same coins paid (the model).
+///  - By the sources: no script but `KpfTCMark` and `KpfTMarkNote` writes or opens a note of kind 13.
+///  - Under a call: a mark stated at the call's time is ended by the call's step; one stated before it is not.
+#[test]
+fn t1b_r60_the_note_of_a_mark_is_applied_whatever_the_books_hold_and_moves_no_equity() {
+    let w = ow();
+    let long = w.fut(0, 10, LONG, P10);
+    let p12 = P10 * 12 / 10;
+    let acct = cov47(&w, &[long], 60 * KAS1, 0);
+    let x = acct.s.clone();
+    let change = w.script("KpfTChange");
+    let (fa, fa2, ff) = ([fund(xk(&w.a), 33, 1_000)], [fund(xk(&w.a), 34, 1_000)], [fund(xk(&w.f), 72, 1_000)]);
+    let (sb, st, said, o) = c_state(&w.lib, &acct, &change, KIND_C_MARK, 0, 1, &[p12], T0, xk(&w.a), w.payer(&w.a, &fa)).unwrap();
+    let (after, note) = (o.after.clone().unwrap(), o.mark.unwrap());
+    let s1 = signed("a mark stated", &sb, &only_keys(&[&w.a]));
+    let ab = stated_settle(&w.lib, &nth(&s1, 0, st, 6_510), &w.script("KpfTChangeSettle"), w.payer(&w.a, &fa2)).unwrap();
+    let a1 = signed("a mark applied", &ab, &w.keys);
+    let (i0, i1) = (out_at47(&a1, &hash_spk(&w.lib, &after.hash())), out_at47(&a1, &hash_spk(&w.lib, &note.hash())));
+    assert_eq!((a1.tx.outputs[i0].value, a1.tx.outputs[i1].value, after.a_margin, after.b_min_counter, after.expiry, after.legs[0].entry, note.entry, note.leg), (60 * KAS1 as u64, NOTE_MIN as u64, 60 * KAS1, 6_900, x.expiry, said.amount, said.amount, long));
+    let settler = spent57(&[&a1], &[xk(&w.a)]) - a1.fee as i64 - 200_000 + st.bond;
+    let note_live = nth(&a1, i1, note, 6_700);
+    let script = w.script("KpfTMarkNote");
+    // Applied to shards of four kinds, and to one that no longer has the leg.
+    let mut applied = vec![];
+    for (what, held, called, legs) in [("holding 100 KAS", 100 * KAS1, 0, vec![long]), ("holding 5 KAS", 5 * KAS1, 0, vec![long]), ("holding nothing", 0, 0, vec![long]), ("called", 100 * KAS1, T0, vec![long]), ("without the leg in a row", 100 * KAS1, 0, vec![])] {
+        let shard = shard_with47(&w, &legs, held, called);
+        let (b, next, rest) = mark_apply(&w.lib, &shard, &note_live, &script, w.payer(&w.f, &ff)).unwrap();
+        let sg = signed(&format!("the note of a mark applied to a shard {what}"), &b, &only_keys(&[&w.f]));
+        let paid_out = paid(&sg, &xk(&w.a));
+        assert_eq!(sg.tx.outputs[0].script_public_key, hash_spk(&w.lib, &next.hash()));
+        assert_eq!((next.rows, next.called, shard.s.held - next.held, next.owed - shard.s.owed, rest.as_ref().map(|n| n.amount).unwrap_or(0)), (shard.s.rows, called, paid_out, note.asked - paid_out, note.asked - paid_out), "{what}");
+        assert_eq!((next.held - next.owed) - next.basis, (shard.s.held - shard.s.owed) - shard.s.basis, "{what}: what it holds, owes and says its legs were entered at, together");
+        assert_eq!(shard.s.basis - next.basis, note.asked, "{what}: a long's mark takes what is asked off what the legs were entered at");
+        applied.push((what, paid_out, next.owed, sg.mass.size));
+    }
+    // Notes that ask otherwise, of a leg in no account, and beyond what is counted.
+    let shard = shard_with47(&w, &[long], 100 * KAS1, 0);
+    let made = |n: MarkNote| note_made46(&shard, n, 97, 6_700);
+    let apply_as = |n: MarkNote, paid_out: i64| {
+        let next = Shard { held: shard.s.held - paid_out, owed: shard.s.owed + n.asked - paid_out, basis: shard.s.basis - n.asked, ..shard.s };
+        let rest = (n.asked > paid_out).then(|| RestNote { sid: n.sid, key: n.key, amount: n.asked - paid_out });
+        mark_apply_as(&w.lib, &shard, &made(n), next, paid_out, rest, &script, w.payer(&w.f, &ff)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    assert!(apply_as(note, note.asked), "(control) the note written by hand");
+    let mut refused = 0;
+    for off in [MarkNote { asked: note.asked + 1, ..note }, MarkNote { asked: note.asked - 1, ..note }, MarkNote { entry: note.entry + 1, ..note }, MarkNote { leg: XLeg { entry: long.entry - 1, ..long }, ..note }] {
+        assert!(shard.s.marked(&off).is_err() && !apply_as(off, off.asked.min(shard.s.held)), "a note that asks otherwise than its leg gained between its two entries is applied");
+        refused += 1;
+    }
+    let ghost_leg = XLeg { size: 1_000 * long.scale, entry: 1, ..w.fut(3, 1, LONG, P10) };
+    let ghost = MarkNote { sid: SID47, leg: ghost_leg, entry: 500, key: xk(&w.w), asked: 499 * 1_000 };
+    let (gb, gnext, grest) = mark_apply(&w.lib, &shard, &made(ghost), &script, w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&gb, &w.keys) && grest.is_none() && shard.s.held - gnext.held == 499_000 && shard.s.basis - gnext.basis == 499_000, "a note of a leg that is in no account is applied, and moves the two numbers alike");
+    let rich = MarkNote { leg: XLeg { size: 1_000_000 * long.scale, entry: 1, ..ghost_leg }, entry: P10 * 100, asked: 1_000_000 * (P10 * 100 - 1), ..ghost };
+    let (rb, rnext, rrest) = mark_apply(&w.lib, &shard, &made(rich), &script, w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&rb, &w.keys) && rnext.held == 0 && rrest.is_some_and(|n| n.amount == rich.asked - shard.s.held) && (rnext.held - rnext.owed) - rnext.basis == shard.s.held - shard.s.basis, "everything the shard holds, the rest owed, and the three numbers together as before");
+    let huge = MarkNote { leg: XLeg { size: i64::MAX / 2, scale: 1, entry: 1, ..ghost_leg }, entry: 1_000, asked: 1, ..ghost };
+    assert!(shard.s.marked(&huge).is_err(), "the model applies a note of a worth beyond what is counted");
+    // The orders (the model).
+    let leaving = x.c_state(KIND_C_LEAVE, 0, ALL, &[p12], T0, 60 * KAS1, x.a_key).unwrap().2.note.unwrap();
+    let later = after.c_state(KIND_C_LEAVE, 0, ALL, &[p12 + P10 / 10], 6_900, 60 * KAS1, x.a_key).unwrap().2.note.unwrap();
+    assert!(leaving.asked > 0 && later.legs[0].entry == note.entry);
+    let left = |s: &Shard, n: &Left| s.left(n).map(|(next, _, paid_out, rest)| (next, paid_out + rest.map(|r| r.amount).unwrap_or(0))).unwrap();
+    let marked = |s: &Shard, n: &MarkNote| s.marked(n).map(|(next, paid_out, rest)| (next, paid_out + rest.map(|r| r.amount).unwrap_or(0))).unwrap();
+    for held in [100 * KAS1, 5 * KAS1] {
+        let s0 = shard_with47(&w, &[long], held, 0).s;
+        let (m_then, a1) = marked(&s0, &note);
+        let (ml, a2) = left(&m_then, &later);
+        let (l_then, b1) = left(&s0, &later);
+        let (lm, b2) = marked(&l_then, &note);
+        assert_eq!((ml.rows, ml.basis, ml.held - ml.owed, a1 + a2), (lm.rows, lm.basis, lm.held - lm.owed, b1 + b2), "the note of a mark and the leg's leaving, in both orders, the shard holding {held}");
+        assert!(ml.rows == [ShardRow::EMPTY; 4] && ml.basis == 0 && a1 + a2 == left(&s0, &Left { legs: vec![long], asked: note.asked + later.asked, ..later.clone() }).1, "and the books then empty, with what the two asked");
+    }
+    let second = MarkNote { leg: after.legs[0], entry: note.entry + P10 / 20, asked: 10 * (P10 / 20), ..note };
+    let s0 = shard_with47(&w, &[long], 100 * KAS1, 0).s;
+    assert_eq!(marked(&marked(&s0, &note).0, &second).0, marked(&marked(&s0, &second).0, &note).0, "two notes of one leg's marks, in both orders");
+    let _ = leaving;
+    // By the sources: who writes or opens a note of kind 13.
+    let mut of_13 = vec![];
+    for name in kpf_protocol::thin_artifacts::SCRIPTS {
+        let src = std::fs::read_to_string(format!("{}/../../contracts/{name}.sil", env!("CARGO_MANIFEST_DIR"))).expect("the source");
+        let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        if code.contains("i9(NOTE_TAG) + mv.slice(138, 171) + i9(13)") {
+            of_13.push(name);
+        }
+    }
+    assert_eq!(of_13, vec!["KpfTCMark", "KpfTMarkNote"], "the scripts that write or open a note of kind 13");
+    // Under a call.
+    let fb = [fund(xk(&w.b), 56, 1_000)];
+    let standing = nth(&s1, 0, st, 6_510);
+    let (eb, ended) = call_step(&w.lib, &standing, &x, Some((&st, None)), &call54(&w, [p12, P10, P10, P10], T0), &w.script("KpfTCStep"), w.payer(&w.b, &fb)).unwrap();
+    assert!(taken30(&eb, &w.keys) && ended.user >= st.bond, "a mark of the call's time is ended by the call's step, its bond back");
+    assert!(call_step(&w.lib, &standing, &x, Some((&st, None)), &call54(&w, [p12, P10, P10, P10], 6_511), &w.script("KpfTCStep"), w.payer(&w.b, &fb)).is_err(), "a mark stated before the call's time is ended by a step");
+    println!("T1b R60 the note of a mark: a mark of 10 units from 10 at 12 to the entry {} asks {} sompi; stated in {} bytes and applied in {} (whoever applies the statement puts {settler} sompi in beside its fee: the note's least); the note applied to a shard (which, paid, owed after, bytes) {applied:?}; {refused} notes that ask otherwise refused; a note of a leg in no account is applied and takes what the shard holds, the rest owed, the three numbers together as before; the mark's note and the leg's leaving, and two marks' notes, end the books the same in both orders; a mark of the call's time is ended by the call's step", note.entry, note.asked, s1.mass.size, a1.mass.size);
+}
+
+/// Round 60, item 9: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
+#[test]
+fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
+    let kit = kpf_protocol::thin_artifacts::kit();
+    let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
+    println!("T1b R60 sizes: {sizes:?}");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 66);
+    assert_eq!(sizes, vec![("KpfTCMark", 2220), ("KpfTMarkNote", 1154), ("KpfTCRow", 2607), ("KpfTChange", 1595), ("KpfTCStep", 3251), ("KpfTStepPrice", 1699), ("KpfTPoint", 2588)]);
 }

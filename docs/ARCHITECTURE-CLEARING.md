@@ -2061,7 +2061,7 @@ books. This section asks again, row by row, of the form as it is, and writes wha
 | A leg moves between accounts | one account is made two by a statement (16.2), and the new one is joined to another (15.2): at the price of a dispute period and the join's wait | yes | yes (`KpfTCSplit`, `KpfTJoinC`: 16.7) |
 | One price | the committee's signed price, cited (4a) | yes | yes |
 | Gains are usable: margin for another position | a gain of one leg counts for the standing of the others (14.2) | yes | yes |
-| Gains are usable: taken out without closing | **no.** A leg's entry stays; what it gained is paid when it leaves | 16.3 | no |
+| Gains are usable: taken out without closing | a mark (16.3): the leg is from now entered at a higher price and the shard is asked what it gained up to there; the band a leaving takes stays in the leg | yes | yes (`KpfTCMark`, `KpfTMarkNote`: 16.9) |
 | Spot as margin | **no**, in no form (section 10: a design) | 16.5 | no |
 | A spot purchase and a futures sale in one transaction | **no** | 16.5 | no |
 | Default is handled in steps | a step takes one leg that lost, or all (14.2, kind 9) | yes | yes |
@@ -2069,8 +2069,8 @@ books. This section asks again, row by row, of the form as it is, and writes wha
 | ... touched only at its default | not so: an entry spends it (14.3), every note of a leaving or a step is applied to it, and a join shows it. What does not touch it: a hand-over, a take, a split, and the statement of a leaving or a step itself | said as it is | yes |
 | Options | on an account no shard covers (4b); not under a shard | 16.4 | on an account no shard covers only |
 
-Three things are missing: a gain taken out, options under a shard, spot (a leg that moves was the fourth: 16.7).
-The first is a piece of work with what exists; the last two each ask something new of the shard or of the chain.
+Two things are missing: options under a shard, and spot (a leg that moves and a gain taken out were the others:
+16.7, 16.9). Each asks something new of the shard or of the chain.
 
 ### 16.2 One account made two: a leg leaves for an account of its own (kind 12)
 
@@ -2108,41 +2108,67 @@ no leg left them.
 
 ### 16.3 A gain taken out without closing: a mark (kind 13)
 
-**Leg i is marked at the price stated for it**: its entry becomes that price. What it gained since its entry is
-asked of the shard, whole; what it lost is paid to the shard out of the account's coins. It is a leaving of leg i
-and an entry of the same leg at the same price, in one statement, and it changes no row of the books: the same
-units, in the same market.
+**The user states that leg i is from now entered at a price it says**, between the leg's entry and the price
+stated for it. What the leg gained up to that new entry is asked of the shard. What the leg has beyond it,
+unrealized at the price stated, is at the least the tolerance twice of what the leg is worth there: the band a
+leaving takes. No unit moves: the leg stays, in the same market, with the same size, and no row of the books
+changes.
 
-- *No band* (review 59, N12): the price stated becomes the entry, so what it is off by, within the tolerance,
-  comes back when the leg leaves (which takes the band once); and the end's test holds the tolerance already.
-- *Who states it* (N15): the user, of any leg of its own; **anyone, of a leg that lost**. A mark of a winner alone
-  would have a book that is set off pay its winners out of its owner's coins while its losers sat: with this the
-  shard (in practice its owner's program) brings in what the losers lost as the winners take what they won, as a
-  clearing house settles its members' accounts to the day's price. A mark of a leg that lost leaves the account
-  standing or is no mark: an account that cannot pay and stand is a step's.
-- *The time* (N17): the user's own mark waits by the account's time and writes it, as a take; another's does
-  neither, as a step.
+- *The band is taken once.* A leaving asks what the leg gained less the band. A mark asks what the leg gained up
+  to its new entry and leaves the band in the leg; the leg then leaves from its new entry, and the leaving takes
+  the band. At one price, and at any later price at or above it, the two together ask exactly what the leaving
+  alone asks: there a mark is an advance on the leaving. Where the price comes back by the band or more, the leg
+  leaves from its new entry as a leg that lost: it pays back what it lost, whole, and no band is taken. The user
+  then has up to the band more than the leaving alone gives at that price, and never more than the leg gained
+  from its first entry at the last price stated: it is the band that is not earned, not coins that were not
+  gained (review 60, F107). What bounds how often is the time a mark writes: no statement of the user's for
+  twice the longest a statement lives.
+- *Why not without a band* (what review 59's N12 asked, and what was decided there and is taken back): a price is
+  stated within the tolerance of the committee's. A mark at the price itself, stated at the tolerance above a
+  price that did not move, would be paid the tolerance of the leg's worth; the leg then leaves at the same stated
+  price having gained nothing, and the shard has paid for nothing. The band at the leaving does not cover it:
+  the entry moved. With the band left in the leg, the new entry is below the committee's price less the tolerance
+  whatever is stated, and what is paid was gained.
+- *Who states it:* the user, of a leg that gained more than the band. Nobody marks a leg for another, and no leg
+  that lost is marked (decided after N15, built, and taken back). A mark of a leg that lost is a leaving and an
+  entry at the lower price: where the price comes back the user is out by as much as the band, each time, since a
+  gain from the new entry pays the band again; and the one who gains by it is the shard's owner, who would do it
+  at every dip. Leaving the band with the user instead has the shard forgive two thirds of a fall marked in steps.
+  The sum a leaving pays is not a straight line (a loss whole, a gain less the band), so no entry written by
+  another is fair to both.
+- *What N15 found stays so:* a shard pays a mark from the coins it holds, and a book that is set off holds its
+  owner's coins while the legs that lost stay where they are. Where it holds less than is asked the rest is a note
+  of the rest: counted in what the shard owes, paid as the shard comes to hold, ending every draw until then, and
+  a claim under a call. A user that will not wait hands the account to a clearing party and takes one of the same
+  legs back at today's price (15): that asks somebody's leave, and the mark does not.
+- *The time:* it waits by the account's time and writes it, as a take.
 
-The end is right where the account, with the leg at its new entry, passes the test of a take: its coins (less
-what it pays, where the leg lost), less a note's least, are at least the maintenance and the tolerance of what
-all its legs are worth, and what the other legs lost, each counted alone. Applied, it writes the account with
-the leg at its new entry, and **a note that a leg was marked** (the leg as it was, its new entry, the user's
-key, what is asked; it holds what the account paid). The shard applies it whatever its rows hold by then (the leg
-may have left first, by a note applied before this one: N13), and no script spends it for nothing: what its legs
-were entered at moves by the leg's worth at the new entry less its worth at the old, each as an entry counts it
-(N14), and what is asked is paid (or counted, and the note of the rest written) as any.
+The end is right where the statement is the user's, at or after the account's time; the leg gained something up
+to its new entry; what it has beyond is the tolerance twice of its worth or more; and the account passes the
+test of a take: its coins, less a note's least, are at least the maintenance and the tolerance of what all its
+legs are worth, and what the other legs lost, each counted alone. Applied, it writes the account with the leg at
+its new entry (the coins as they were), and **a note that a leg was marked**: the leg as it was, its new entry,
+the user's key, what is asked. (The note's least is put in by whoever applies the statement, as a leaving's is;
+the end's test keeps as much of the account's coins out of every sum.)
 
-- *The books between the statement and the note.* Until the note is applied the books say the old entry and
-  have not paid: what the shard is counted to have lost by the leg is what it will pay. Its equity is the same
-  either way but for the band. Such a note ends a draw until it is applied, as a note that legs left does.
+- *The note cannot be a lie that costs the shard its equity.* The script that applies it computes, of the leg and
+  its two entries, what the leg gained between them, and takes no note that asks anything else. What the legs
+  were entered at moves by exactly what is asked: at any price the shard's equity is what it was. A note that asks
+  otherwise (a statement nobody disputed wrote it) is applied by nothing; it holds a note's least and ends no
+  draw.
+- *It is applied whatever the rows hold by then* (N13): no row is read. The leg may have left first: the two
+  notes end the books the same in either order. So a note of a mark that is not applied ends no draw either:
+  until it is applied the books say the old entry and have not paid, and the equity is the same.
+- *The rows.* A mark's trace has a covered account's five sums, read so: what all the legs are worth; what the
+  others are worth (so that the marked leg's worth is had apart); what the others lost, each counted alone;
+  what the marked leg gained up to its new entry; and, where the others have what all gained, what the marked leg
+  keeps beyond it, to which no other leg adds. `KpfTCRow` answers them (it has the leg and its direction); the
+  end holds the sums to the rule (it has the tolerance).
 - *No entry's rule is asked* (a lateness after the last, the two signatures): no unit enters the books.
-- *Under a call* a mark stated at or after the call's time is ended by a step, as kinds 7 to 9 are.
-- New: a row of a mark in `KpfTCRow` (the second chain takes the leg at its new entry, where a leaving passes
-  it by); the end of kind 13 (`KpfTCMark`); the applying of its note (`KpfTLeft`'s third entry, or a script of
-  its own); the note in `KpfTDrawNote`.
-- With the stock of 15, the same is had with no statement: the account is handed to the clearing party and one
-  of the same legs at today's price is handed back, in one transaction. The mark is the way that waits for
-  nobody's leave.
+- *Under a call* a mark stated at or after the call's time is ended by a step, as kinds 7 to 9 and 12 are. A
+  note of a mark applied to a called shard is owed whole, as a note that a leg left is.
+- New: the row of a mark in `KpfTCRow`; the end of kind 13 (`KpfTCMark`); the applying of its note
+  (`KpfTMarkNote`); kind 13 in `KpfTChange`, `KpfTPoint`, `KpfTStepPrice` and `KpfTCStep`.
 
 ### 16.4 Options under a shard
 
@@ -2232,12 +2258,61 @@ On paper (sections 16.3 to 16.5), and what was decided:
 
 | | What it found | Decided |
 |---|---|---|
-| N12 | the band at a mark is taken for nothing: the stated price becomes the entry, and the end holds the tolerance | no band at a mark (16.3) |
+| N12 | the band at a mark is taken for nothing: the stated price becomes the entry, and the end holds the tolerance | first: no band. **Taken back** while building: a mark at the tolerance above a price that did not move, and a leaving at the same stated price, had the shard pay the tolerance for nothing. The band stays in the leg, and is taken once (16.3) |
 | N13 | a mark's note must be applied whatever its row holds by then, and spent for nothing by no script | so (16.3) |
 | N14 | the books' number moves by the leg's worth at the new entry less at the old, as an entry counts each | so |
-| N15 | a mark is the winner's alone: a book set off pays its winners from the owner's coins while its losers sit | anyone marks a leg that lost (16.3) |
+| N15 | a mark is the winner's alone: a book set off pays its winners from the owner's coins while its losers sit | first: anyone marks a leg that lost. Built, and **taken back**: it costs the user the band at every dip that comes back, to the gain of whoever owns the shard. It is said as it is: the note of the rest waits (16.3) |
 | N16, N17 | the books between statement and note, under a draw and a call: as written; a mark is no way round the entry's rule, a step or a take | the user's mark waits by the account's time and writes it |
-| N18 | build it | next |
+| N18 | build it | built (16.9) |
 | N19 to N21 | options under a shard: a row a strike is as sound as a futures row and no better; the expiry is not said, nor what a row is worth after it; a holder is asked several times its risk; four rows make a shard a series | **not under a shard in this form.** Options are legs of an account no shard covers (4b: built, reviewed), where futures and options are netted in one account. Under a shard: after the expiry is designed, and only if the goal asks it there |
 | N22 | spot: what a step, a call's step, the vault and the discount need; three rows of 16.1 were wrong | 16.5 and the table say it |
+
+### 16.9 Built: 16.3, a gain taken out of a leg that stays (26 November 2026; at the engine, my tests)
+
+`KpfTCMark` and `KpfTMarkNote`; the library has 66 scripts. Kind 13 is stated by `KpfTChange` (with the floor of
+a covered account's bond), disputed by `KpfTPoint`, its rows answered by `KpfTCRow`, its prices by
+`KpfTStepPrice`, and a mark stated at or after a call's time is ended by a step. A mark is stated in 3,193 bytes
+and applied in 2,643; its end is answered in 3,856; its note is applied in 2,785 (2,820 where a note of the rest
+is written).
+
+Run (`tests/thin_draw.rs`): a long of 10 units from 10, at 12, in an account of 40 KAS beside a short. Its new
+entry is the nearest to 12 that leaves the band of 120 KAS in the leg; the shard is asked what the leg gained up
+to there and pays it; its rows are as they were and its equity is the same at three sets of prices. The leg then
+leaves at 12: **the mark and the leaving together ask what the leaving alone asks, to the sompi**, and the two
+notes end the books the same in either order. A short that gained, the same. A shard that holds less pays what it
+holds and owes the rest; a called one pays nothing; a shard whose rows have nothing of the leg takes the note. A
+note that asks a sompi more or less than the leg gained between its two entries is applied by no transaction.
+
+The ends that are not the rule's, each answered wrong at the engine and right refused: an entry a step nearer the
+price than the band allows; at the price; beyond it; the leg's own entry; below it (a loss is no mark); none; by
+another key; no leg or every leg; a leg that gained less than the band; before the account's time; a sompi less
+than stands, alone and beside a leg that lost. The rows that are not: a leaving's; the marked leg said to keep
+more; another leg adding to what it keeps; the marked leg passed by in the chain.
+
+Not tested by me, and asked of review 60: random accounts against the model; a mark under a call; a leg of a
+fraction of a unit (the nearest entry is searched a price's step at a time, 64 steps: a leg too small has none).
+
+### 16.10 Review 60
+
+At the engine, the mark as built. On 80 random accounts of one to six legs (long and short, whole units and
+fractions; new entries at the nearest the rule allows, a step each side, the leg's own entry, the price itself;
+coins at the take's test and a sompi each side) the engine takes the model's verdict at the end and no other, and
+the marked leg's row is answered as the model says; 13 ways of writing the account or the note otherwise are
+wrong. On 200 random legs a mark and the leaving at one price ask what the leaving alone asks, to the sompi, and
+so do three marks at rising prices and the leaving at the top; a second mark at one price, a leg that lost and
+another key are refused. A take and a split after a mark are what they were before it; an account at the take's
+test marks and is then no step's at the price stated or at the tolerance against it. Under a call the total a
+user is asked or has back is the same marked or not. The note: applied to a shard that holds enough, less,
+nothing, that is called, and whose rows no longer have the leg, the rows are unchanged and what it holds less
+what it owes less what its legs were entered at is as before; a note that asks otherwise is refused. Taking back
+"no band" (N12) and "anyone marks a leg that lost" (N15) is right for the form as built. The default workspace:
+612 tests, 251 seconds; with the features 1,306, 1,035 seconds; none failed. `KpfTCMark` is 2,220 bytes,
+`KpfTMarkNote` 1,154, `KpfTCRow` 2,607 (it was 2,245).
+
+| Finding | What it is | Decided |
+|---|---|---|
+| F107 (low) | a mark, a fall of the band, the leaving: no band is taken (a long of 10 from 10, marked at 12 to 11.88 and paid 18.8 KAS, leaves at 11.5 and pays 3.8 back: 15 KAS, where the leaving alone at 11.5 asks 13.85) | said as it is in 16.3. The form that closes it (the leg keeps its entry and remembers what was advanced: eight bytes in every leg, a line in every script that reads one) is not built now: the band as a fee is tuning, which waits |
+| F108 (low) | a draw stands in front of a mark's note: the equity is the same but the coins are not, and `KpfTDrawNote` opens no note of kind 13. A shard of 30 KAS, a mark that will ask 18.8, a draw of 25: the note is paid 5 and the user holds a note of the rest | `KpfTDrawNote` takes a mark's note as it takes a note that legs left, where the note is one the shard would apply (16.11) |
+| said | a note of a leg that is in no account (a statement nobody disputed wrote it) takes what the shard holds while its equity stands, so that no call is due and honest claims wait behind it: the worst a wrong leaving's note does in coins, without the call | as every statement: it is disputed in its time |
+| said | a set-off book whose winners all mark runs out of coins after a move of a few per cent while its equity has not moved; winners then hold notes of the rest and are paid as losers leave. The books do not know the winners' part, so the upper level cannot ask coins for it | a line in what a user reads of a shard: what it holds in coins against what it owes |
 

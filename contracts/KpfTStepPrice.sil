@@ -165,7 +165,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(rows.length == 112 * n);
         require(kind >= 2);
         require(kind <= 4 || kind >= 6);
-        require(kind <= 10 || kind == 12);
+        require(kind <= 10 || kind == 12 || kind == 13);
         require(at >= 2);
         require(at % 2 == 0);
         int i = at / 2;

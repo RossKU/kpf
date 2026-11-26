@@ -150,7 +150,8 @@ contract KpfTCRow(int init_version) {
         require(rows.length == 112 * n);
         require(kind >= 7);
         // (12, a split: its rows are a leaving's of one leg.)
-        require(kind <= 10 || kind == 12);
+        // (13, a mark: the leg named stays, at the entry the statement says.)
+        require(kind <= 10 || kind == 12 || kind == 13);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);
@@ -205,15 +206,38 @@ contract KpfTCRow(int init_version) {
                 int ws = 0;
                 int ls = 0;
                 int gl = 0;
+                // (What the row's first sum takes: what the leg gained or lost; of a mark, see below.)
+                int dg = d;
                 byte[32] h = byte[32](before.slice(80, 112));
                 if (leaves == 1) {
                     gl = d;
+                    if (kind == 13) {
+                        // A mark: the leg stays, entered from now at the price the statement says where a take
+                        // has its amount. What it gained up to there is what the shard is asked (the fifth
+                        // sum); what it has beyond, unrealized at the price of its row, is the first sum, which
+                        // no other leg of a mark adds to; and its worth is not among the worth of the others,
+                        // so that the end has it apart.
+                        int ne = int(byte[8](said.slice(0, 8)));
+                        if (ne <= 0 || ne > int(byte[8](lg.slice(76, 84)))) {
+                            ok = 0;
+                        } else {
+                            int wne = quoteAt(size, scale, ne);
+                            gl = wne - quoteAt(size, scale, int(byte[8](lg.slice(103, 111))));
+                            dg = worth - wne;
+                            if (dir != DIR_LONG) {
+                                gl = 0 - gl;
+                                dg = 0 - dg;
+                            }
+                            h = blake2b(before.slice(80, 112) + lg.slice(0, 103) + byte[](ne as byte[8]));
+                        }
+                    }
                 } else {
                     ws = worth;
                     if (d < 0) { ls = 0 - d; }
                     h = blake2b(before.slice(80, 112) + lg);
+                    if (kind == 13) { dg = 0; }
                 }
-                if (int(byte[8](row.slice(8, 16))) != int(byte[8](before.slice(8, 16))) + d) { ok = 0; }
+                if (int(byte[8](row.slice(8, 16))) != int(byte[8](before.slice(8, 16))) + dg) { ok = 0; }
                 if (int(byte[8](row.slice(16, 24))) != int(byte[8](before.slice(16, 24))) + worth) { ok = 0; }
                 if (int(byte[8](row.slice(24, 32))) != int(byte[8](before.slice(24, 32))) + ws) { ok = 0; }
                 if (int(byte[8](row.slice(32, 40))) != int(byte[8](before.slice(32, 40))) + ls) { ok = 0; }

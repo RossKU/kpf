@@ -138,7 +138,7 @@ contract KpfTCStep(int init_version) {
             // again, or is disputed, is an object no older than the answer or the dispute: it is held to its own
             // time. Review 54, F90.)
             require(kind >= 7);
-            require(kind <= 9 || kind == 12);
+            require(kind <= 9 || kind == 12 || kind == 13);
             int after = 0;
             if (t0 >= ctime) { after = 1; }
             if (form == 1 && late < LATE_AGAIN) {

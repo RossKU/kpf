@@ -212,6 +212,37 @@ impl Left {
     }
 }
 
+/// The note that a leg of a covered account was marked (`KpfTMarkNote`; docs 16.3).
+pub const NOTE_MARK: i64 = 13;
+
+/// The note that a leg was marked: the leg as it was, its new entry, the user's key, and what the shard is asked:
+/// what the leg gained between its two entries. No unit moves by it: the shard's rows are as they were, and what
+/// its legs were entered at takes the new entry for the old.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MarkNote {
+    pub sid: [u8; 32],
+    pub leg: XLeg,
+    pub entry: i64,
+    pub key: [u8; 32],
+    pub asked: i64,
+}
+
+impl MarkNote {
+    pub fn hash(&self) -> [u8; 32] {
+        self.hash_of(&Left::chain(&[self.leg]))
+    }
+
+    /// The note's hash with the chain of its leg given.
+    pub fn hash_of(&self, chain: &[u8; 32]) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_MARK), p33(chain), i9(self.entry), p33(&self.key), i9(self.asked)].concat())
+    }
+
+    /// What the note holds: a note's least.
+    pub fn value(&self) -> i64 {
+        NOTE_MIN
+    }
+}
+
 /// What a note that legs left asked and the shard did not pay: counted in what the shard owes when it is written,
 /// and paid as far as the shard holds, later; or, of a called shard, at one share once no row has a unit (docs
 /// 14.6; review 54, F94).
@@ -389,6 +420,37 @@ impl Shard {
         }
         let held = self.held.checked_add(held_for(n.asked, holds)).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
         Ok(Shard { held, ..*self })
+    }
+
+    /// `KpfTMarkNote.apply`: the shard once the note that a leg was marked is applied. What is asked is what the
+    /// leg gained between its two entries (a note that asks anything else is applied by nothing); what the legs
+    /// were entered at moves by as much, so that the equity is what it was at any price; and it is paid as far as
+    /// the shard holds (nothing while it is called), the rest owed and written as a note of the rest. No row is
+    /// read: it is applied whatever the rows hold by then.
+    pub fn marked(&self, n: &MarkNote) -> Result<(Shard, i64, Option<Rest>)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the note that a leg was marked is not applied: {why}")));
+        if n.sid != self.sid {
+            return no("it is to another shard");
+        }
+        let l = &n.leg;
+        if (l.dir != LONG && l.dir != crate::state::SHORT) || l.size <= 0 || l.scale <= 0 || l.entry <= 0 || n.entry <= 0 || n.asked <= 0 {
+            return no("it is of a futures leg, an entry, and something asked");
+        }
+        let beyond = || Error::Invalid("the books are beyond what is counted".into());
+        let fits = |v: Option<i64>| v.filter(|x| *x != i64::MIN).ok_or_else(beyond);
+        let (we, wn) = (fits(worth(l.size, l.scale, l.entry))?, fits(worth(l.size, l.scale, n.entry))?);
+        let dlt = fits(wn.checked_sub(we))?;
+        let gained = if l.dir == LONG { dlt } else { fits(0i64.checked_sub(dlt))? };
+        if n.asked != gained {
+            return no("it asks other than what the leg gained between its two entries");
+        }
+        let mut s = *self;
+        // (Side B's units in the leg: the size below zero where A is long.)
+        s.basis = fits(if l.dir == LONG { s.basis.checked_sub(dlt) } else { s.basis.checked_add(dlt) })?;
+        let pay = if self.called != 0 { 0 } else { n.asked.min(s.held) };
+        s.held -= pay;
+        s.owed = s.owed.checked_add(n.asked - pay).ok_or_else(beyond)?;
+        Ok((s, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.

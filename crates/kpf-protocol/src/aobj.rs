@@ -53,6 +53,8 @@ pub enum AObj {
     Left(Left),
     /// What such a note asked and its shard did not hold.
     Rest(Rest),
+    /// The note that a leg of a covered account was marked.
+    Mark(crate::reserve::MarkNote),
     Stated { on: Host, st: Stated, said: Vec<u8> },
     Pointed { on: Host, q: Pointed, said: Vec<u8> },
 }
@@ -75,6 +77,7 @@ pub fn outcome(on: &Host, st: &Stated, said: &[u8]) -> Vec<AObj> {
                 v.extend(o.after.map(AObj::Account));
                 v.extend(o.note.map(AObj::Left));
                 v.extend(o.split.map(AObj::Account));
+                v.extend(o.mark.map(AObj::Mark));
             }
         }
         Host::Account(x) => {
@@ -238,6 +241,7 @@ impl AObj {
             AObj::Shard(s) => s.hash(),
             AObj::Left(n) => n.hash(),
             AObj::Rest(n) => n.hash(),
+            AObj::Mark(n) => n.hash(),
             AObj::Stated { st, .. } => st.hash(),
             AObj::Pointed { q, .. } => q.hash(),
         }
@@ -249,6 +253,7 @@ impl AObj {
             AObj::Shard(_) => "shard",
             AObj::Left(_) => "note that legs left",
             AObj::Rest(_) => "note of the rest",
+            AObj::Mark(_) => "note that a leg was marked",
             AObj::Stated { on: Host::Shard(_), .. } => "stated draw",
             AObj::Stated { .. } => "statement",
             AObj::Pointed { on: Host::Shard(_), .. } => "disputed draw",
@@ -263,6 +268,7 @@ impl AObj {
             AObj::Shard(s) => s.held + SHARD_CARRIER,
             AObj::Left(n) => n.value(),
             AObj::Rest(n) => n.value(),
+            AObj::Mark(n) => n.value(),
             AObj::Stated { st, .. } => st.held + st.bond,
             AObj::Pointed { q, .. } => q.st.held + 2 * q.st.bond,
         }
@@ -274,6 +280,7 @@ impl AObj {
             AObj::Shard(s) => [vec![21], s.terms(), s.rows_bytes(), s.moving()].concat(),
             AObj::Left(n) => [vec![22], n.sid.to_vec(), vec![n.legs.len() as u8], n.legs.iter().flat_map(leg_bytes).collect(), n.key.to_vec(), i9(n.asked)].concat(),
             AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
+            AObj::Mark(n) => [vec![29], n.sid.to_vec(), leg_bytes(&n.leg), i9(n.entry), n.key.to_vec(), i9(n.asked)].concat(),
             AObj::Stated { on, st, said } => [vec![23], stated_bytes(on, st, said)].concat(),
             AObj::Pointed { on, q, said } => [vec![24], stated_bytes(on, &q.st, said), q.disputer.to_vec(), i9(q.point)].concat(),
         }
@@ -302,6 +309,7 @@ impl AObj {
                 AObj::Left(Left { sid, legs, key: r.key()?, asked: r.int()? })
             }
             25 => AObj::Rest(Rest { sid: r.key()?, key: r.key()?, amount: r.int()? }),
+            29 => AObj::Mark(crate::reserve::MarkNote { sid: r.key()?, leg: leg_of(&mut r)?, entry: r.int()?, key: r.key()?, asked: r.int()? }),
             23 => {
                 let (on, st, said) = stated_of(&mut r)?;
                 AObj::Stated { on, st, said }

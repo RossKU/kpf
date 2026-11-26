@@ -179,6 +179,10 @@ fn show(o: &AObj, net: Network) {
             }
         }
         AObj::Rest(n) => println!("  to the shard {}: {} KAS still owed to {}", to_hex(&n.sid), fmt_kas(n.amount as i128), p2pk_address(&n.key, net)),
+        AObj::Mark(n) => {
+            println!("  to the shard {}: a leg marked, from now entered at {}; the shard is asked {} KAS for {}", to_hex(&n.sid), n.entry, fmt_kas(n.asked as i128), p2pk_address(&n.key, net));
+            println!("    {}", leg_line(&n.leg));
+        }
         AObj::Stated { on, st, said } => show_stated(on, st, said, None, net),
         AObj::Pointed { on, q, said } => show_stated(on, &q.st, said, Some((q.disputer, q.point)), net),
     }
