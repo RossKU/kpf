@@ -14792,3 +14792,98 @@ fn t1b_r66_a_deposit_and_a_vaults_payment_written_otherwise_are_refused() {
     let payment = (ps.mass.size, ps.mass.storage, paid(&ps, &xk(&w.f)) - 1_000 * KAS1, refused.borrow().len() - before);
     println!("T1b R66 the vault: a deposit (bytes, storage mass, what the vault holds, what the tokens' output holds, transactions written otherwise and refused): {deposit:?}; a ticket paid (bytes, storage mass, what whoever paid has after it, refused): {payment:?}; refused: {:?}", refused.borrow());
 }
+
+// ================================================================================================================
+// Round 67. The vault, the rest: what every script holds a named input's state to (N27).
+
+/// Round 67, (A) item 1, by the sources and at the engine.
+/// **By the sources**: every line of every script of the library that holds an input's slot state to something
+/// (`... == byte[32](xs.slice(STATE_AT, STATE_AT + 32))`), by how what it is held to begins. A vault's state is
+/// the hash of a preimage that begins with the numbers 12 and 16. The test fails where a script other than
+/// `KpfTVaultPay` holds an input to a preimage that begins so, where a script holds an input's state to
+/// something that is not a hash this test knows the beginning of, and where a script that reads a slot
+/// (`slotOf`) holds its state to nothing.
+/// **At the engine**: a real vault (a deposit's, with its id) put in the place of the account in an addition of
+/// coins, a hand-over and a payment of what is owed, each otherwise the builder's own transaction: refused.
+#[test]
+fn t1b_r67_no_script_but_the_vaults_payment_takes_an_input_whose_state_is_a_vaults() {
+    let mut table: Vec<(String, Vec<String>)> = vec![];
+    let (mut vault_openers, mut unknown, mut unheld) = (vec![], vec![], vec![]);
+    for name in kpf_protocol::thin_artifacts::SCRIPTS {
+        let src = std::fs::read_to_string(format!("{}/../../contracts/{name}.sil", env!("CARGO_MANIFEST_DIR"))).expect("the source");
+        let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        // (Some scripts read the state into `st` first and compare that.)
+        let by_st = code.contains("byte[32] st = byte[32](rs.slice(STATE_AT, STATE_AT + 32));");
+        let mut forms: Vec<String> = vec![];
+        for line in code.lines().filter(|l| (l.contains(".slice(STATE_AT, STATE_AT + 32))") && l.contains("require(") && l.contains("==")) || (by_st && (l.contains("st == ") || l.contains(" == st")))) {
+            let has = |x: &str| line.contains(x);
+            let form = if has("i9(NOTE_TAG) + i9(16)") {
+                "a vault (12, 16)"
+            } else if has("i9(NOTE_TAG) + i9(14)") {
+                "a ticket (12, 14)"
+            } else if has("i9(NOTE_TAG)") {
+                "a note (12, then a push or a kind that is not 16)"
+            } else if has("i9(POINT_TAG)") {
+                "a disputed point (its tag)"
+            } else if has("changeHash(") || has("blake2b(pre + ") || has("(c0 ") || has("i9(CHANGE_TAG)") {
+                "a statement (10)"
+            } else if has("i9(KIND_ANCHOR)") || has("blake2b(i9(7))") {
+                "an anchor (one number alone)"
+            } else if has("exitHash(") {
+                "an exit (2)"
+            } else if has("orderHash(") {
+                "an order (3)"
+            } else if has("claimHash(") || has("liqHash(") || has("blake2b(p33(") || has("(position ==") || has("(acct ==") || has("objHash(") || has("stateHash(") || (has("(h0 == st)") && code.contains("byte[32] h0 = liqHash(")) {
+                "an account, a shard, a position or a claim on one (a push of 32 bytes first)"
+            } else if has("blake2b(i9(") {
+                "another object of a number first"
+            } else {
+                unknown.push((name.to_string(), line.trim().chars().take(110).collect::<String>()));
+                "?"
+            };
+            if form.starts_with("a vault") && name != "KpfTVaultPay" {
+                vault_openers.push(name.to_string());
+            }
+            if !forms.iter().any(|f| f == form) {
+                forms.push(form.to_string());
+            }
+        }
+        if forms.is_empty() && code.contains(" = slotOf(") {
+            unheld.push(name.to_string());
+        }
+        table.push((name.to_string(), forms));
+    }
+    let of_vaults: Vec<&String> = table.iter().filter(|r| r.1.iter().any(|f| f.starts_with("a vault"))).map(|r| &r.0).collect();
+    println!("T1b R67 what each script holds a named input's state to: {table:?}");
+    println!("T1b R67 the scripts that hold an input to a vault's state: {of_vaults:?}; held to something this test does not know the beginning of: {unknown:?}; a slot read and its state held to nothing: {unheld:?}");
+    assert!(vault_openers.is_empty() && of_vaults == vec!["KpfTVaultPay"], "N27: a script other than the vault's payment holds an input to a vault's state: {vault_openers:?} {of_vaults:?}");
+    assert!(unknown.is_empty(), "N27: an input's state held to something of an unknown beginning: {unknown:?}");
+    assert!(unheld.is_empty(), "N27: a script reads a slot and holds its state to nothing this test finds: {unheld:?}");
+    // At the engine: a real vault in the account's place.
+    let w = ow();
+    let long = w.fut(0, 10, LONG, P10);
+    let acct = cov47(&w, &[long], 30 * KAS1, 0);
+    let (scale, pmax) = (w.markets[0].p.scale, w.markets[0].p.price_max);
+    let mine = OLive { s: TokenState::p2pk(150 * scale, xk(&w.a), Hash::from_bytes([0; 32])), value: KAS1 as u64, id: Some(Hash::from_bytes([0x7c; 32])), op: op(50), daa: T0 as u64 };
+    let fa = [fund(xk(&w.a), 44, 1_000)];
+    let (b, _, vault, _, _) = spot_add(&w.lib, &acct, &w.script("KpfTAddSpot"), &mine, 100 * scale, 2_000, scale, pmax, w.payer(&w.a, &fa)).unwrap();
+    let sg = signed("tokens enter an account", &b, &w.keys);
+    let vault_live = nth(&sg, 2, vault, 6_700);
+    let mut owing = cov47(&w, &[long], 3 * KAS1, 5 * KAS1);
+    owing.value = 3 * KAS1 as u64;
+    let honest: Vec<(&str, OBuilt)> = vec![
+        ("an addition of coins", account_add(&w.lib, &acct, &w.script("KpfTAddC"), SIDE_A, KAS1, w.payer(&w.a, &fa)).unwrap().0),
+        ("a hand-over", account_pass(&w.lib, &acct, &w.script("KpfTPass"), xk(&w.w), 0, w.payer(&w.a, &fa)).unwrap().0),
+        ("a payment of what is owed", owed_pay(&w.lib, &owing, &w.script("KpfTOwed"), KAS1, w.payer(&w.a, &fa)).unwrap().0),
+    ];
+    let mut refused = vec![];
+    for (what, hb) in honest {
+        assert!(taken30(&hb, &w.keys), "(control) {what}");
+        let mut t = hb.clone();
+        object_made(&mut t, &w.lib, 0, &vault_live.s.hash());
+        (t.entries[0].covenant_id, t.entries[0].amount, t.tx.inputs[0].previous_outpoint) = (vault_live.id, vault_live.value, vault_live.op);
+        assert!(!taken30(&t, &w.keys), "N27: {what} takes a vault in the account's place");
+        refused.push(what);
+    }
+    println!("T1b R67 a real vault in the account's place of {refused:?}: refused");
+}

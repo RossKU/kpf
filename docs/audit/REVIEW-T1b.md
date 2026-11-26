@@ -12244,3 +12244,91 @@ Failed, default: thin_builders.rs (18 of 19); thin_change.rs (8 of 8); thin_fees
 transaction's storage mass is 509,041 (or 509,043, or 512,678) grams, above the block limit 500000" (32 and 32
 such messages in the two logs): F115. I did not touch those files. Of mine in both runs: `auditT1_builders` 195,
 `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48, none failed; `thin_draw` 42 passed.
+
+# Round 67
+
+Scope asked: (A) at the engine, what round 66 left of the vault (five items); (B) on paper, section 17 (options
+under a shard; the books in a tree). **Done: (A) item 1, and item 5. Not done: (A) items 2, 3 and 4, and all
+of (B): section 17 was not read.** This reviewer's session has reached the end of what it can carry; the next
+round should be given to a reviewer that starts afresh from this file. Working tree after 86c346e; no src,
+contract, `Cargo.toml` or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **N27 holds by a test that fails when a script breaks it.** Of the 70 scripts, `KpfTVaultPay` alone holds an
+  input's slot state to a preimage that begins as a vault's does (the numbers 12 and 16). Every other line of
+  every script that holds an input's state holds it to a hash that begins otherwise; no script reads a slot and
+  holds its state to nothing. A real vault put in the account's place of an addition, a hand-over and a payment
+  of what is owed is refused at the engine.
+- The default workspace: 630 passed, 0 failed in 60 targets (170 s). F115's fix holds: the three files that were red in round 66
+  pass.
+
+## (A) 1. The proof of custody, as far as a test of the sources carries it
+
+`t1b_r67_no_script_but_the_vaults_payment_takes_an_input_whose_state_is_a_vaults`.
+
+`KpfSlot.go` lets an object be spent where an input under the library's id names it at one of three places.
+What then stands between a vault and a script that knows nothing of vaults is that every script holds each
+input it reads to a state of a form of its own. The test reads every script of the library's table and takes
+every line that compares an input's slot state (`... == byte[32](xs.slice(STATE_AT, STATE_AT + 32))`, or the
+state read into `st` first), and sorts what it is compared to by how its preimage begins:
+
+| What the state is held to | How its preimage begins | A vault's? |
+|---|---|---|
+| an account, a shard, a position, a claim or a liquidation on one | a push of 32 bytes (0x20) | no |
+| a statement | the number 10 | no |
+| a disputed point | its own tag | no |
+| a note that legs left, of the rest, that a leg did not enter, a call, a mark, what was paid | the number 12, then a push (the shard's id) | no |
+| a ticket | the numbers 12 and 14 | no |
+| an exit; an order; an anchor | the numbers 2; 3; one number alone | no |
+| **a vault** | **the numbers 12 and 16** | `KpfTVaultPay` alone |
+
+The test fails where a script other than `KpfTVaultPay` holds an input to the vault's form; where a line holds
+a state to something whose beginning the test does not know (so a script added later must be sorted into the
+table or the test is red); and where a script reads a slot and holds its state on no line. A vault's state is
+the hash of a preimage that begins 0x08 and the number 12, then 0x08 and 16: it equals a hash of another
+beginning only by a collision.
+
+At the engine: the vault of a real deposit, with its own id, in the account's place of an addition of coins
+(`KpfTAddC`), a hand-over (`KpfTPass`) and a payment of what is owed (`KpfTOwed.pay`), each otherwise the
+builder's transaction and taken as it is: refused, three of three.
+
+**What this test is not.** It sorts the lines that hold a state; it does not go entry by entry and place by
+place (an entry that names three places and holds two would pass it). My older static test (`t1b_a3...`, in
+`auditT1_tests.rs`) holds that every entry names its places by `who`; the two together are most of N27, not
+the list you asked for. `release` names a place of the script's own copy and reads no object. Not run:
+`KpfTAcctEnd` shown a vault; `KpfTVaultPay` shown something that is not a vault at its first place (by its
+line, the state must be a vault's, so only a vault passes; tokens owned by an account's id would be anybody's
+only if somebody sent them to the registry's id, and no script pays from it).
+
+## Not reached
+
+- **(A) 2**: the bearer rule with a real vault through a split, a join, a hand-over, a step and a sale, a
+  call's step, with the vault's payment at each end.
+- **(A) 3**: the time of a deposit.
+- **(A) 4**: every case round 66 read and did not run (no ticket; the same ticket twice; other amounts; a
+  continuation as the born output; a look-alike program; `ti` elsewhere; a delegate under the vault's id; legs
+  of other lengths; an account that owes, of six legs, a shard, the marked account).
+- **(B)**: section 17, all of it. Nothing was read; nothing is said of N-h to N-m.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| N27 | Medium, on paper | holds by a test of the sources and three engine runs; not the entry-by-entry list |
+| F115 | Medium | fixed in 86c346e (`lib_copy_least`); the default run is whole again (below) |
+| F114 | Medium | as round 65 left it |
+| F113, the note at its least | Low | as round 65 left it |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 196 tests (was 195). New:
+  `t1b_r67_no_script_but_the_vaults_payment_takes_an_input_whose_state_is_a_vaults`.
+- The three other files of mine: unchanged (11, 55, 48).
+
+## The workspace, once
+
+`cargo test --workspace --no-fail-fast --jobs 2`: 60 targets, 630 passed, 0 failed, 170 s. No test failed, so
+there is no name to give. It is your 629 and one more of mine (`auditT1_builders` 195 to 196). The legacy
+features were not run: nothing of mine behind them changed. No script's size changed.

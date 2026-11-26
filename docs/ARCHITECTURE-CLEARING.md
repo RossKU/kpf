@@ -2055,22 +2055,22 @@ books. This section asks again, row by row, of the form as it is, and writes wha
 
 | Service of the goal | In this form | On paper | Scripts, at the engine |
 |---|---|---|---|
-| One account, one risk number | a covered account of up to six futures legs: one pot of coins, standing counted on the net (14.2) | yes | yes, for futures legs. Options and spot are not in a covered account: 16.4, 16.5 |
+| One account, one risk number | a covered account of up to six legs, futures and tokens: one pot of coins, standing counted on the net, tokens counted as coins at a discount (14.2, 16.12) | yes | yes, for futures and token legs. Options are not in a covered account: section 17, on paper |
 | Any counterparty: a side is handed over without the party that stays | a hand-over (15.1): the user's side to another key, the shard not shown | yes | yes (`KpfTPass`) |
 | A clearing party takes the user's side at once | the owner (or anyone who makes a market) is the taker of a hand-over: at once, or within a lateness where the account's time is ahead (15.10) | yes | yes |
 | A leg moves between accounts | one account is made two by a statement (16.2), and the new one is joined to another (15.2): at the price of a dispute period and the join's wait | yes | yes (`KpfTCSplit`, `KpfTJoinC`: 16.7) |
 | One price | the committee's signed price, cited (4a) | yes | yes |
 | Gains are usable: margin for another position | a gain of one leg counts for the standing of the others (14.2) | yes | yes |
 | Gains are usable: taken out without closing | a mark (16.3): the leg is from now entered at a higher price and the shard is asked what it gained up to there; the band a leaving takes stays in the leg | yes | yes (`KpfTCMark`, `KpfTMarkNote`: 16.9) |
-| Spot as margin | **no**, in no form (section 10: a design) | 16.5 | no |
-| A spot purchase and a futures sale in one transaction | **no** | 16.5 | no |
+| Spot as margin | a token leg: the tokens are owned by a vault born for them under an id of its own, count as coins at their worth less a discount, leave by a ticket, and are sold where the account owes (16.12 to 16.24) | yes | yes, at the engine with the reference token's own script (`KpfTAddSpot`, `KpfTVaultPay`, `KpfTCTok`, `KpfTOwed`). No command yet; parts of the vault not yet reviewed (16.24) |
+| A spot purchase and a futures sale in one transaction | **two transactions**: the tokens bought are margin from the block they are bought in (a deposit beside the order book's fill: the places do not collide), and the futures leg is an entry stated on that transaction's output, in the next block (16.12 (g)) | said as it is | not run (the deposit alone is) |
 | Default is handled in steps | a step takes one leg that lost, or all (14.2, kind 9) | yes | yes |
 | One bond behind many accounts | the shard, held to its requirement, called by anyone (12 to 14) | yes | yes |
 | ... touched only at its default | not so: an entry spends it (14.3), every note of a leaving or a step is applied to it, and a join shows it. What does not touch it: a hand-over, a take, a split, and the statement of a leaving or a step itself | said as it is | yes |
-| Options | on an account no shard covers (4b); not under a shard | 16.4 | on an account no shard covers only |
+| Options | on an account no shard covers (4b). Under a shard: section 17, on paper | 17 | on an account no shard covers only |
 
-Two things are missing: options under a shard, and spot (a leg that moves and a gain taken out were the others:
-16.7, 16.9). Each asks something new of the shard or of the chain.
+One thing is missing: options under a shard (a leg that moves, a gain taken out and spot were the others: 16.7,
+16.9, 16.23). It asks the shard's books to hold any number of rows: section 17.
 
 ### 16.2 One account made two: a leg leaves for an account of its own (kind 12)
 
@@ -2829,6 +2829,23 @@ Round 67.
 Stuck for good, by reasoning: the tokens of a leg that left by a wrong statement nobody disputed (no ticket was
 written: its user's loss, as with any wrong statement); the tokens of an account that owes more than they are
 worth (N41).
+
+### 16.25 Review 67
+
+N27, the proof of custody, as a test that reads the sources of all 70 scripts: every line that holds an input's
+slot to a state is sorted by how that state's preimage begins (an account, a shard or a position: a push of 32
+bytes; a statement: the number 10; a disputed point: its own tag; a note: 12 and then a push or a kind that is
+not 16; a ticket: 12 and 14; a vault: 12 and 16). Only `KpfTVaultPay` holds an input to a vault's form; nothing
+is unsorted; no script reads a slot and holds its state on no line; and the test fails where any of the three
+stops being so. At the engine a real vault put in the account's place of an addition, a hand-over and a payment
+of what is owed is refused, each beside its honest transaction. It sorts lines, not entries and places: with the
+older test that every entry names its places it covers most of N27, and is not the list by entry that was asked.
+The default workspace: 630 tests, 170 seconds; none failed (F115's fix holds).
+
+Not done by round 67, whose reviewer had reached what one session carries: the bearer rule with a real vault
+(a split, a join, a hand-over, a step, a sale, a call's step); the time of a deposit; what round 66 read and did
+not run; and section 17. They go to two reviewers that start from the review file: one at the engine (the
+vault), one on paper (section 17).
 
 ## 17. Options under a shard, and the books in a tree (27 November 2026; on paper, nothing built)
 
