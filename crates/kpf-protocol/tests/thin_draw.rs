@@ -782,7 +782,7 @@ use kpf_protocol::covered::{CSaid, ALL, KIND_C_LEAVE, KIND_C_STEP, KIND_C_TAKE};
 
 /// A covered account of the user's (`w`) under the shard: its coins, its legs, nothing of the clearing side.
 fn cov(w: &World, shard: &OLive<Shard>, legs: &[XLeg], coins: i64) -> OLive<Account> {
-    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.w), b_key: xk(&w.c), a_margin: coins, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: legs.len() as i64, b_min_counter: 0, shard: Some(shard.s.sid) };
+    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.w), b_key: xk(&w.c), a_margin: coins, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: legs.len() as i64, b_min_counter: 0, shard: Some(shard.s.sid) };
     OLive { s, value: coins as u64, id: shard.id, op: op(80), daa: 6_100 }
 }
 
@@ -1420,11 +1420,21 @@ fn an_entry_is_refused_or_answered_wrong_and_a_gain_is_margin_for_it() {
         let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, &st0, &said0, &next, w.payer(&w.w, &f));
         assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}");
     }
-    // (A shard that says a later time keeps it.)
-    let later = OLive { s: Shard { expiry: T0 + 10 * life, ..shard.s }, ..shard.clone() };
-    assert_eq!(later.s.entered(&leg, 0, T0).unwrap().expiry, T0 + 10 * life);
-    let b = c_enter_state_as(&w.lib, &acct, &later, &enter, SEED, &st0, &said0, &later.s.entered(&leg, 0, T0).unwrap(), w.payer(&w.w, &f)).unwrap();
-    assert!(accepted(&b, &w.keys), "the time a shard says is kept where it is later");
+    // An entry's time is a lateness after the last (review 57, F103): what it writes is a lateness or more after
+    // what the shard says. A shard that says exactly that much less takes it; a block more, and it does not
+    // (by the model, and at the engine with the shard put in).
+    let late = shard.s.t.late_daa;
+    let edge = OLive { s: Shard { expiry: T0 + life - late, ..shard.s }, ..shard.clone() };
+    assert_eq!(edge.s.entered(&leg, 0, T0).unwrap().expiry, T0 + life);
+    let b = c_enter_state_as(&w.lib, &acct, &edge, &enter, SEED, &st0, &said0, &edge.s.entered(&leg, 0, T0).unwrap(), w.payer(&w.w, &f)).unwrap();
+    assert!(accepted(&b, &w.keys), "an entry a lateness after the last");
+    let near = OLive { s: Shard { expiry: T0 + life - late + 1, ..shard.s }, ..shard.clone() };
+    assert!(near.s.entered(&leg, 0, T0).is_err());
+    let b = c_enter_state_as(&w.lib, &acct, &near, &enter, SEED, &st0, &said0, &Shard { expiry: T0 + life, ..edge.s.entered(&leg, 0, T0).unwrap() }, w.payer(&w.w, &f));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "an entry a block less than a lateness after the last");
+    // (So a second entry at the same time is no entry: a lateness later it is.)
+    let once = shard.s.entered(&leg, 0, T0).unwrap();
+    assert!(once.entered(&leg, 0, T0).is_err() && once.entered(&leg, 0, T0 + late - 1).is_err() && once.entered(&leg, 0, T0 + late).is_ok());
     for (what, bad) in [("no direction", XLeg { dir: 5, ..leg }), ("no size", XLeg { size: 0, ..leg }), ("an entry beyond the limit of its market", XLeg { entry: leg.price_max + 1, ..leg })] {
         assert!(acct.s.c_marked(&bad, 0, T0).is_none(), "{what}");
         let m = mark(&acct.s, bad);
@@ -2271,7 +2281,10 @@ fn an_account_changes_hands_and_two_of_one_user_become_one() {
     let ff = [fund(xk(&w.f), 36)];
     let (b, mine) = account_pass(&w.lib, &a1, &w.script("KpfTPass"), xk(&w.f), 0, w.payer(&w.f, &ff)).unwrap();
     let sg = signed("an account handed over", &b, &w.keys);
-    assert_eq!(mine, Account { a_key: xk(&w.f), ..a1.s.clone() });
+    // (The account says the time before which nothing is done on it at will again: when its output landed, and a
+    // lateness. Review 57, F104.)
+    let late = a1.s.t.late_daa;
+    assert_eq!(mine, Account { a_key: xk(&w.f), expiry: a1.daa as i64 + late, ..a1.s.clone() });
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (a1.value, &hash_spk(&w.lib, &mine.hash())));
     // (What the taker pays the leaver is in the same transaction, and no script's: the two signatures hold it.)
     let (paid, _) = account_pass(&w.lib, &a1, &w.script("KpfTPass"), xk(&w.f), 3 * KAS1, w.payer(&w.f, &ff)).unwrap();
@@ -2281,6 +2294,8 @@ fn an_account_changes_hands_and_two_of_one_user_become_one() {
     // Not: the account written with other coins, another leg's entry, another time, or holding less.
     for (what, other) in [
         ("a coin more in it", Account { a_margin: mine.a_margin + 1, ..mine.clone() }),
+        ("no time written", Account { expiry: 0, ..mine.clone() }),
+        ("a time a block sooner", Account { expiry: mine.expiry - 1, ..mine.clone() }),
         ("a leg at another entry", Account { legs: vec![XLeg { entry: P10 / 2, ..l1 }], ..mine.clone() }),
         ("no time before which its user states nothing", Account { b_min_counter: mine.b_min_counter + 1, ..mine.clone() }),
         ("another shard", Account { shard: Some([0x44; 32]), ..mine.clone() }),
@@ -2297,6 +2312,31 @@ fn an_account_changes_hands_and_two_of_one_user_become_one() {
     let mut only = KeySet::new();
     only.add_keypair(w.w);
     assert!(b.sign(&only).is_err() || !accepted(&b, &only), "handed over without the taker's signature");
+    // Handed on at once it is not: the taker's coin landed before the time the account now says. With a coin that
+    // landed at that time, it is; and an addition waits the same way.
+    let handed = OLive { s: mine.clone(), daa: 6_150, ..a1.clone() };
+    let old_coin = [fund(xk(&w.w), 38)];
+    assert!(account_pass(&w.lib, &handed, &w.script("KpfTPass"), xk(&w.w), 0, w.payer(&w.w, &old_coin)).is_err());
+    assert!(account_add(&w.lib, &handed, &w.script("KpfTAddC"), SIDE_A, KAS1, w.payer(&w.f, &old_coin)).is_err());
+    let new_coin = [KeyUtxo { daa: mine.expiry as u64, ..fund(xk(&w.w), 39) }];
+    let (b, back) = account_pass(&w.lib, &handed, &w.script("KpfTPass"), xk(&w.w), 0, w.payer(&w.w, &new_coin)).unwrap();
+    signed("handed on, a lateness later", &b, &w.keys);
+    assert_eq!((back.a_key, back.expiry), (xk(&w.w), mine.expiry.max(6_150 + late)));
+    // (The same transaction with the coin a block older: refused at the engine.)
+    let mut t = b.clone();
+    for e in t.entries.iter_mut().skip(2).take(1) {
+        e.block_daa_score = mine.expiry as u64 - 1;
+    }
+    assert!(!accepted(&t, &w.keys), "handed on before the time the account says");
+    let new_f = [KeyUtxo { daa: mine.expiry as u64, ..fund(xk(&w.f), 40) }];
+    let (b, more) = account_add(&w.lib, &handed, &w.script("KpfTAddC"), SIDE_A, KAS1, w.payer(&w.f, &new_f)).unwrap();
+    signed("added to, a lateness later", &b, &w.keys);
+    assert_eq!((more.a_margin, more.expiry), (mine.a_margin + KAS1, mine.expiry.max(6_150 + late)));
+    let mut t = b.clone();
+    for e in t.entries.iter_mut().skip(2).take(1) {
+        e.block_daa_score = mine.expiry as u64 - 1;
+    }
+    assert!(!accepted(&t, &w.keys), "added to before the time the account says");
     // The account is the taker's from there: a statement of its own, and the old user states none.
     let held = a1.value as i64;
     assert!(mine.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, held, xk(&w.f)).is_ok() && mine.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, held, xk(&w.w)).is_err());

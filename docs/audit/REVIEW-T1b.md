@@ -10091,3 +10091,273 @@ run by the second command, so the listing dropped none. (The second run counts k
 tests, which the count of 1,288 in 134 on the three crates did not.) Of mine in both: `auditT1_builders` 176,
 `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 32, `committee_cli` 13,
 `clearing_cli` 1.
+
+# Round 58
+
+Scope, at the engine: what closes round 57's F103 and F104 ("a time written in the object", docs 15.10): the
+account's time in `KpfTAddC`, `KpfTPass`, `KpfTJoinC` and `KpfTOpenC`, and the entry's rule in `KpfTEnterS`. My
+file brought along; the workspace run twice. Working tree after cf786f0; no src, contract, `Cargo.toml` or
+`kpf-out` file touched; no commit.
+
+## Headline
+
+- **F104 is closed.** An addition and a hand-over show an input that landed at or after the time the account
+  says, and write the later of that time and the account's landing and a lateness. A third party's round moves
+  no time: the user adds at once on the output it gives back (run). 42 other transactions refused.
+- **F103 is closed for an entry**: an entry is stated at once on a shard that a note, an addition or a call
+  just spent, and is a lateness after the last by its own time. With notes at any rate, 0.99 entries a
+  lateness are taken. **The join's wait is left**, as 15.10 says (the age; the numbers are round 57's).
+- **F105 (Medium), new: a statement out of its time is ended by its own claimer's key, and the bond comes
+  back.** `KpfTChangeLate` gives the WHOLE bond to whoever ends such a statement, and nothing holds a
+  statement's time to the chain. A step of a time ahead on anybody's account, a call or a draw of a time ahead
+  on a shard: stated, and ended by the same key in the next block, the round of two transactions costs
+  0.0144 KAS on an object of any size (the wrong-answer round of round 57 costs 0.129 KAS and half a bond
+  above that). The price is then only a race for the end. The owner's entries of times ahead are the same
+  thing: 15.10's "each costs it a bond and an account" holds only where another key is first; ended and
+  undone by its own keys an entry costs 0.0245 KAS of fees. They land in every block, and each block of them
+  is a lateness in which the shard takes no entry.
+- **F106 (Low), new: a taker can be handed an account it cannot add to, or hand on, for up to a lateness.**
+  The time a hand-over writes is the landing of the account's output and a lateness; whoever landed the
+  account last (the leaver, by anything) chooses it. The taker's tool should show it before it signs.
+- The workspace: by default 601 passed, 0 failed in 60 targets (2 min 49 s); with the three features 1,295 passed, 0
+  failed in 138 targets (14 min 54 s).
+
+## The account's time (item 2)
+
+`t1b_fixed_f104_an_addition_and_a_hand_over_show_an_input_that_landed_at_the_accounts_time` (it replaces the
+finding's test and the test of F98 by the age). Both scripts, on an account that says 6,300 and landed at
+6,100 (a lateness is 100):
+
+| What | An addition | A hand-over |
+|---|---|---|
+| a coin that landed at 6,300 shown (input 2) | taken; the time stays 6,300 | the same |
+| the coin a block older (6,299), or of the beginning | refused (the builder; the engine) | the same |
+| the coin a block or a long time younger | taken | the same |
+| f beyond the inputs, 5 beyond, below nothing, the largest number | refused | the same |
+| f the script's own input, the copy landed at 6,299 / at 6,300 | refused / taken | the same |
+| f the account's own input (it landed at 6,100) | refused | the same |
+| an account that landed AT 6,300: the builder shows the account itself | taken; it then says 6,400 | the same |
+| the time written a block less, a block more, as it was, nothing | refused (8 each) | the same |
+| a coin of a third key shown, the user's own old | taken with that key's signature, not without | the same |
+
+- **Somebody else's input.** Nothing is wrong with it. What is read of the input is when it landed, which
+  nobody chooses; an input that landed at or after a time shows that the chain is at that time, whoever owns it.
+  A coin's owner signed the whole transaction. The script's own copy is nobody's and is taken the same way: a
+  copy that was used at or after the account's time shows it (so does any object in the transaction).
+- **An input that has not landed.** A node gives an output that is still in its mempool the largest number as
+  its landing (`UNACCEPTED_DAA_SCORE`, in the node's source this workspace builds against). Run with that number:
+  an addition and a hand-over that show such a coin are refused. A wallet shows a coin that is in a block; and
+  since both scripts read the landing of the account's own input, neither is sent before the account's output
+  is in a block.
+- **Two in a row, then the wait.** An account at rest (it landed at 6,100, says nothing): an addition lands at
+  6,400 and writes 6,200; a second is made at once on that output (it shows the output itself) and writes
+  6,500; a third is no transaction with a coin of 6,499 (the builder; the engine; nor with the account's own
+  output, nor is a hand-over) and is taken with a coin of 6,500, writing 6,501.
+- **F104's round.** On the account that says 6,200 and landed at 6,400: two keys that are not its own state a
+  step that is not the rule's, dispute and answer it wrong (0.1287 KAS). The account is again as it was, the
+  time unmoved; the user adds 5 KAS at once on that output, showing the output itself. What the round does
+  change: the user's addition then writes the round's landing and a lateness (6,612, not 6,500): after any
+  number of rounds the user has one addition at once and one a lateness, where an account at rest has two at
+  once. That is no finding.
+- **Can anybody push the time far ahead?** No. What is written is the later of the old time and the landing of
+  the account's own input and a lateness: never more than a lateness ahead of the chain. `KpfTOpenC` asks
+  nothing there (run: an account opened saying a time is refused); a join writes the later of two; every other
+  script copies the place. A hand-over there and back at once (run): the first writes 6,200, the second is made
+  at once and writes 6,500, and the leaver then adds nothing for 99 blocks.
+- **A join**: two accounts that say 6,200 and 6,450 are joined in either order into one that says 6,450; written
+  with 6,200, 6,449, 6,451 or nothing it is refused.
+
+## The entry's rule (item 4) and F103's numbers (item 5)
+
+`t1b_fixed_f103_an_entry_is_a_lateness_after_the_last_by_its_time_and_a_join_still_waits`,
+`t1b_fixed_f82_...` (its table of times rewritten for the rule), `t1b_r51_what_the_stating_of_an_entry_...`.
+
+- **At once.** On shards as they come out of a note applied by another key, of the owner's addition, of a
+  third party's call that was not due: an entry is stated with no age on either input, and taken. A join on
+  the same three carries the lateness as the shard's age and is refused a block young.
+- **The edge.** An entry of 6,500 writes 6,700. On shards that say 0, 6,000, 6,599, 6,600 and -5: taken; that
+  say 6,601, 6,700, 9,000 and the largest number: refused (the model, the builder's own, and the engine). The
+  shard written with a time one less, one more, as it was, or nothing: refused (20). **Two entries of one
+  time**: after an entry of 6,500 a second of 6,500 or of 6,599 is refused, of 6,600 taken (the shard says
+  6,800).
+- **After a draw.** A draw of 6,500 applied leaves the shard saying 6,900. An entry of 6,799 is refused, of
+  6,800 taken: entries wait three latenesses after a draw's own time (the draw lives a lateness and a dispute
+  period of them).
+- **Does a third party move a shard's time?** By the sources, two scripts write the place in a shard:
+  `KpfTEnterS` (the user's and the owner's signatures) and `KpfTShardEnd` on the right end of a draw (wrong
+  where the claimer is not the owner). `KpfTAddC` writes it as it is. No.
+- **The count again** (a loop, not transactions; one entry and one join always waiting; notes applied at
+  random; 2,000 latenesses; a note takes the shard's output of its block):
+
+  | Notes applied a lateness | 0 | 0.5 | 1 | 2 | 3 | 5 |
+  |---|---|---|---|---|---|---|
+  | Entries taken a lateness (round 57) | 0.99 | 0.76 | 0.59 | 0.30 | 0.16 | 0.03 |
+  | Entries taken a lateness (round 58) | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 |
+  | Joins taken a lateness (left) | 0.99 | 0.75 | 0.57 | 0.30 | 0.15 | 0.03 |
+
+  A join's wait is as round 57 found it: on a shard where three things land a lateness, one join in about
+  seven latenesses; and a third party ends every pause for the price of a statement on the shard (F105 below:
+  0.0144 KAS where it ends its own statement).
+
+## Findings
+
+### F105 (Medium). A statement out of its time is ended by its own claimer's key, and the bond is no price
+
+`t1b_finding_f105_a_statement_out_of_its_time_is_ended_by_its_own_claimers_key_for_two_fees`.
+
+15.8: "where no age can be asked the bond is the price". The price was run in round 57 on a statement that is
+answered wrong: half the bond stays in the script's copy whoever answers. A statement that is OUT OF ITS TIME
+(it landed before the time it says, or more than a lateness after it) is another path: it is neither applied
+nor disputed (the builders; and both transactions, taken with the landing in time, refused with the true
+landing), and `KpfTChangeLate` ends it: the object again as it was, and the **whole bond to the key that
+whoever ends it names**. `KpfTChange` and `KpfTEnterS` hold the time a statement says to nothing but "below
+500,000,000,000", and ask no age. So the claimer says a time ahead of the chain (or long past), and ends its
+own statement in the next block:
+
+| The statement | By | Its bond | The round of two transactions costs |
+|---|---|---|---|
+| a step of an account, time 7,500 (the chain at 6,510) | a key that is not the account's | 0.2 KAS | 0.0144 KAS |
+| a step of an account, time 6,000 | the same | 0.2 KAS | 0.0144 KAS |
+| a call of a shard of 100 KAS, time 7,500 | a third key | 1 KAS | 0.0144 KAS |
+| a draw of that shard, time 7,500 | its owner | 1 KAS | 0.0143 KAS |
+
+Each time the object is again as it was, and the same statement is stated on that output at once (run). The
+same rounds answered wrong cost 0.1287 KAS, 0.5292 KAS and more with the size: the floors of round 57 and the
+rates are no price on this path.
+
+- **What is left as the price is a race.** The end reads the landing of the statement's output, so it is not
+  sent before the statement is in a block (run: with the landing a node gives an output still in its mempool,
+  the end is refused). In that block anybody may send it and take the bond. Where another key is first, the
+  claimer has lost its whole bond (0.2 KAS and more: more than the 0.1 KAS of the wrong answer); where its own
+  is first, two fees. Nothing but who is first decides, and the claimer chooses the block.
+- **The owner's entries of times ahead** (item 4). Three accounts of its own (both keys the owner's): entries
+  of 6,500, 6,600 and 6,700 are stated in three blocks in a row (landing at 6,501, 6,502, 6,503), each on the
+  shard the one before wrote, each at no age, each taken. What becomes of the third: not applied, not disputed;
+  ended by the owner's key as out of its time (the bond back; the marked account holding what the account
+  held); undone by the owner's key with `KpfTEnterOff` (the keeper's fee of 0.1 KAS out of its own account to
+  its own key). The cycle costs the owner **0.0245 KAS of fees** and a note's least that stands in the note
+  until it is applied. Where others are first at both: the bond and the keeper's fee, 0.3 KAS. An entry reads
+  no landing, so the next entry IS sent on the output of the one before while that is in the mempool: a row of
+  them holds the shard's output for as many blocks.
+  What the shard loses: after three blocks it says 6,900, and an entry of the chain's own time (6,504) is
+  refused, as is every time under 6,800 (run). **A block of this is a lateness in which the shard takes no
+  entry** (and gives no draw): a minute of it at ten blocks a second is 100 minutes. Its users lose the
+  entries, and for as long as it is held their notes and anybody's call are no transactions; they leave as
+  before.
+- **One entry of the last time** (499,999,999,999; taken, round 52's test): the shard then takes no entry and
+  gives no draw, ever: no later time is a statement's (the model). It takes the owner's signature; what an
+  owner's tool must check before it signs an entry is its time.
+
+Scenario: a key that wants an account of 20 KAS not to be added to, left or stepped states a step of the next
+year on it in every second block and ends it in the block after: 0.0144 KAS a round, 0.0072 KAS a block, while
+nobody else ends its statements first. Its next statement is sent on the output of its own end before that is
+in a block; the user's addition, which reads its own input's landing, is not.
+
+Direction: (1) `KpfTChangeLate` splits the bond as a wrong answer does: half to whoever ends it, half to the
+script's copy. The round then costs half a bond whoever is first. (2) An entry shows an input that landed at
+or after its own time, as an addition now shows one for the account's: an entry is then never ahead of the
+chain, the owner's row of entries and the last time are gone, and two entries are a lateness apart in the
+chain's time, not only in what they say.
+
+### F106 (Low). A taker is handed an account it cannot add to or hand on for up to a lateness
+
+In `t1b_fixed_f104_...` (the last third).
+
+A hand-over writes the landing of the account's output and a lateness. An account that landed at 6,399 is
+handed over in the next block: it says 6,499, and its taker's addition with a coin of 6,498 is no transaction
+(the builder; the engine); with a coin of 6,499 it is taken. Who chooses: whoever landed the account last. The
+leaver does it with an addition of a sompi a block before (two in a row are its own), or with any statement;
+a third key does it with F105's round. In these terms the wait is ten seconds; it is a lateness in any terms,
+in which the taker of a leg that is falling cannot add. A stock account whose entry was applied a moment ago
+does it to its taker with nobody meaning to.
+
+What the taker should check before it signs: the landing of the account's output and a lateness against the
+chain's time (`Account::at_will(landed)` is what it will say). 15.3 still says a user that is handed an account
+and wants out in the same second "hands it on: nothing waits": that is so only where the account's output had
+stood a lateness.
+
+## What the rule does not cover (item 3)
+
+| What its party does at will | Held by |
+|---|---|
+| an addition to an account, a hand-over | the account's time: two in a row, then one a lateness (closed) |
+| an addition to a shard | 0.2 KAS at the least, which stay in it (round 57) |
+| a join | the age of its three outputs (left: starved on a shard in use; a third key keeps any of the three young) |
+| a statement of kinds 7 to 9 by the user, a draw, a call | the bond where it is answered wrong (half of it); **nothing but a race where it is out of its time (F105)** |
+| an entry | the shard's time by what the entry SAYS; nothing holds what it says to the chain (F105) |
+| the undo of an entry, a note applied | once an entry, once a note |
+
+So: yes. A statement of a time ahead, ended by its own key, is held by nothing but who is first.
+
+## Notes on the paper
+
+- 15.10: an owner's entries of times ahead are "times ahead of the chain, which nothing settles: each costs it
+  a bond and an account". `KpfTChangeLate` ends them and `KpfTEnterOff` gives the account back; the bond and the
+  keeper's fee are lost only to whoever is first.
+- 15.10: "What it asks of a wallet: a coin that landed after the account's last such change": after that
+  change's own input landed, and a lateness; and a coin that is in a block (one still in the mempool has no
+  landing).
+- 15.3's "nothing waits" (F106).
+
+## Sizes (item 6)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTAddC` | 618 | 563 |
+| `KpfTPass` | 602 | 537 |
+| `KpfTJoinC` | 1,625 | 1,565 |
+| `KpfTEnterS` | 2,293 | 2,309 |
+| `KpfTOpenC` | 684 | 672 |
+
+`t1b_r58_the_sizes_of_the_scripts_that_changed`. Transactions: an addition to an account 1,699 bytes (fee
+0.0048 KAS); a hand-over 1,780 (0.0059); the end of a statement out of its time 1,749 (0.0042).
+
+## Not reached
+
+- A mempool: that a node refuses the end, or an addition, whose input has not landed is read from the node's
+  constant and run with that number at the engine; no node was run. Who is first at the end of a statement out
+  of its time was not measured.
+- The command line for the account's time and the entry's rule (the CLI's tests pass; no command run by hand).
+- A join under the account's time beyond the two times written (its age is round 56's test).
+- F105 on an account no shard covers and on a position (the same script ends their statements; not run).
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F104 | Medium | fixed (round 58), verified |
+| F103 | Medium | fixed for an entry, verified; the join's wait left by 15.10 |
+| F98 | Medium | for an account: closed by the account's time (two in a row, then one a lateness) |
+| F105 | Medium | open, new: a statement out of its time is ended by its own claimer's key for two fees; the owner's entries of times ahead are its case (F100's half on a shard, again) |
+| F106 | Low | open, new: a taker cannot add to or hand on an account for up to a lateness |
+| F88, the rest | Medium | priced at half a bond where answered wrong (round 57); by F105 at two fees |
+| F102 | Low | left for an account no shard covers |
+| F95 | Medium | open by decision |
+| F97, F99 | Low | left, said in the paper |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 177 tests (was 176). Brought along: seven accounts that said
+  a lease of 9,000,000 say nothing; `enter_by_hand52` (the shard's time is the entry's own);
+  `t1b_fixed_f82_...` (the table of times), `t1b_r51_what_the_stating_of_an_entry_...` (a shard that says
+  6,600), `t1b_fixed_f64_...` (an account opened saying a time is refused), `t1b_r51_the_time_of_a_shard_...`
+  (six scripts read the place), `t1b_r53_the_sizes_...`, `t1b_r57_the_sizes_...`, `t1b_fixed_f100_...` (renamed:
+  an entry asks no age), `t1b_r56_a_hand_over_...` (the time written, no age), `t1b_r56_a_join_...` (the place
+  of a lease need not be equal). Gone: `t1b_fixed_f98_...` and the tests of F103 and F104 as findings. New:
+  `coin58`, `landed58`, `told58`, `stated_late58`, and `t1b_fixed_f104_...`, `t1b_fixed_f103_...`,
+  `t1b_finding_f105_...`, `t1b_r58_the_sizes_of_the_scripts_that_changed`.
+- `auditT1_solvency.rs` (11), `auditT1_tests.rs` (55), `auditT1_cli.rs` (48): unchanged.
+
+## The workspace, twice (item 6)
+
+One cargo command after the other, two jobs.
+
+| Run | Command | Targets | Passed | Failed | Wall time | Of it, tests |
+|---|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 601 | 0 | 169 s | 141 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,295 | 0 | 894 s | 765 s |
+
+No test failed in either, so there is no name to give. The default is the 600 of before (582 and the 18 that
+held the old numbers, all brought along) and one more test of mine (176 to 177). Of mine in both:
+`auditT1_builders` 177, `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 32,
+`committee_cli` 13, `clearing_cli` 1.

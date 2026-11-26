@@ -108,6 +108,8 @@ contract KpfTOpenC(int init_version) {
         require(am <= MARGIN_MAX);
         // A covered account has nothing of a second party's (docs 14.2; review 47, F74): the bytes of nothing.
         require(mv.slice(76, 84) == byte[](0 as byte[8]));
+        // (And no time before which nothing is done on it at will: where a position has its lease.)
+        require(mv.slice(85, 93) == byte[](0 as byte[8]));
         // Where a position has its asks a covered account counts its legs and keeps the time before which its
         // user states nothing again: none and none at its opening. (The bytes: an account opened with a count
         // below zero took legs without end. Review 49, R6.)

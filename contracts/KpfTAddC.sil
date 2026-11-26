@@ -72,7 +72,7 @@ contract KpfTAddC(int init_version) {
         require(checkSig(s, pubkey(byte[32](key))));
     }
 
-    entry add(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int side, int delta, sig s) {
+    entry add(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int side, int delta, int f, sig s) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -82,14 +82,23 @@ contract KpfTAddC(int init_version) {
         byte[] mv = byte[](moving);
         require(blake2b(p33(fixed) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(delta > 0);
-        // An account has stood a lateness. (An addition is made at will and costs no bond: one made in every
-        // block would keep the account from every other transaction, a step's or a call's. Review 55, F98.)
-        // A shard is added to at no age, a note's least or more at a time: anybody's note or join makes its
-        // output young, and its owner adds while its users leave, which is when a call comes (review 56, F101).
+        // An addition is made at will and costs no bond: one made in every block would keep the object from every
+        // other transaction, a step's or a call's (review 55, F98). So a covered account says, where a position
+        // has its lease, the time before which nothing is done on it at will: the transaction shows an input that
+        // landed at or after that time (it is that late), and writes the time its own output landed and a
+        // lateness. (Not the age of the output: anybody lands an account again, by a statement that is not the
+        // rule's, and its user would add nothing. Review 57, F104.)
+        // A shard is added to at any time, a note's least or more at a time: its owner adds while its users
+        // leave, which is when a call comes (review 56, F101).
+        byte[] wt = mv.slice(85, 93);
         if (mv.slice(34, 66) == byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])) {
             require(delta >= NOTE_MIN);
         } else {
-            require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
+            require(f >= 0);
+            require(f < tx.inputs.length);
+            require(OpTxInputDaaScore(f) >= int(byte[8](wt)));
+            int w = OpTxInputDaaScore(j) + int(byte[8](mv.slice(94, 102)));
+            if (w > int(byte[8](wt))) { wt = byte[](w as byte[8]); }
         }
         // (Side A alone: a covered account has nothing of a second party's, and a shard has no second party.)
         require(side == SIDE_A);
@@ -102,7 +111,7 @@ contract KpfTAddC(int init_version) {
         require(OpCovInputCount(id) == 1);
         require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(fixed) + mv.slice(0, at) + byte[](m as byte[8]) + mv.slice(at + 8, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(fixed) + mv.slice(0, at) + byte[](m as byte[8]) + mv.slice(at + 8, 85) + wt + mv.slice(93, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value + delta);
         goesOn();
     }

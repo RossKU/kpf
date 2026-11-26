@@ -3,7 +3,8 @@ pragma silverscript ^0.1.0;
 // Two covered accounts of one user under one shard become one (docs/ARCHITECTURE-CLEARING.md 15.2), by that
 // user's signature: the legs of the first then the legs of the second (six at most), the coins of both, the
 // later of the two times before which the user states nothing. Neither account carries a statement or a mark
-// (those are other objects), and the two are the same in everything but their legs, coins, count and time.
+// (those are other objects), and the two are the same in everything but their legs, coins, count and their two
+// times (the one account has the later of each).
 // The shard is shown, and written again as it is: it is not called. (Under a call a gain is paid at a share and a
 // loss in full: an account that lost, joined after the call to one that gained, would set the one off against the
 // other at par, out of what the other users are owed. Review 55, N3. A shard that carries a statement, a draw or a
@@ -85,7 +86,8 @@ contract KpfTJoinC(int init_version) {
         // One user's, under one shard, in one form: the same but for the coins, the count and the time.
         require(m1.slice(0, 67) == m2.slice(0, 67));
         require(m1.slice(34, 66) != z8 + z8 + z8 + z8);
-        require(m1.slice(75, 121) == m2.slice(75, 121));
+        require(m1.slice(75, 85) == m2.slice(75, 85));
+        require(m1.slice(93, 121) == m2.slice(93, 121));
         require(m1.slice(138, 171) == m2.slice(138, 171));
         require(m1.slice(76, 84) == z8);
         require(int(ageb) >= int(byte[8](m1.slice(94, 102))));
@@ -124,6 +126,8 @@ contract KpfTJoinC(int init_version) {
         require(coins <= MARGIN_MAX);
         int time = int(byte[8](m1.slice(130, 138)));
         if (int(byte[8](m2.slice(130, 138))) > time) { time = int(byte[8](m2.slice(130, 138))); }
+        int will = int(byte[8](m1.slice(85, 93)));
+        if (int(byte[8](m2.slice(85, 93))) > will) { will = int(byte[8](m2.slice(85, 93))); }
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpInputCovenantId(h) == id);
@@ -131,7 +135,7 @@ contract KpfTJoinC(int init_version) {
         require(OpCovOutputCount(id) == 2);
         int c = OpCovOutputIdx(id, 0);
         int c1 = OpCovOutputIdx(id, 1);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(g))) + m1.slice(0, 67) + byte[](coins as byte[8]) + m1.slice(75, 121) + byte[]((n1 + n2) as byte[8]) + m1.slice(129, 130) + byte[](time as byte[8]) + m1.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(g))) + m1.slice(0, 67) + byte[](coins as byte[8]) + m1.slice(75, 85) + byte[](will as byte[8]) + m1.slice(93, 121) + byte[]((n1 + n2) as byte[8]) + m1.slice(129, 130) + byte[](time as byte[8]) + m1.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value + tx.inputs[n].value);
         require(tx.outputs[c1].scriptPubKey == tx.inputs[h].scriptPubKey);
         require(tx.outputs[c1].value >= tx.inputs[h].value);

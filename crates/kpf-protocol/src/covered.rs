@@ -396,9 +396,16 @@ impl Account {
 
     /// `KpfTPass`: this covered account in another user's hands: the key `to` where its user's was, and nothing
     /// else of it changed (`docs/ARCHITECTURE-CLEARING.md` 15.1). Its shard's books are as they were.
-    pub fn passed(&self, to: [u8; 32]) -> Result<Account> {
+    pub fn passed(&self, to: [u8; 32], landed: i64) -> Result<Account> {
         self.c_check()?;
-        Ok(Account { a_key: to, ..self.clone() })
+        Ok(Account { a_key: to, expiry: self.at_will(landed), ..self.clone() })
+    }
+
+    /// The time before which nothing is done on a covered account at will (an addition, a hand-over), where a
+    /// position has its lease: after such a thing done on an output that landed at `landed`, that time and a
+    /// lateness, or the time it had where that is later (review 57, F104).
+    pub fn at_will(&self, landed: i64) -> i64 {
+        self.expiry.max(landed.saturating_add(self.t.late_daa))
     }
 
     /// `KpfTJoinC`: this covered account and `other`, of one user under one shard that is not called, as one: the
@@ -406,12 +413,12 @@ impl Account {
     pub fn joined(&self, other: &Account, shard: &crate::reserve::Shard) -> Result<Account> {
         self.c_check()?;
         other.c_check()?;
-        let same = self.a_key == other.a_key && self.b_key == other.b_key && self.t == other.t && self.expiry == other.expiry && self.dispute_daa == other.dispute_daa && self.bond_bps == other.bond_bps && self.shard == other.shard;
+        let same = self.a_key == other.a_key && self.b_key == other.b_key && self.t == other.t && self.dispute_daa == other.dispute_daa && self.bond_bps == other.bond_bps && self.shard == other.shard;
         if !same || self.shard != Some(shard.sid) || self.b_key != shard.owner || shard.called != 0 || self.legs.len() + other.legs.len() > C_LEGS_MAX {
             return Err(Error::Invalid("two accounts are joined where they are one user's under one shard, the same but for their legs, coins and time; the shard is not called; and they have six legs at most between them".into()));
         }
         let coins = add(self.a_margin, other.a_margin).ok_or_else(|| Error::Invalid("the coins of the two are beyond what is counted".into()))?;
-        Ok(Account { legs: [self.legs.clone(), other.legs.clone()].concat(), a_margin: coins, a_min_counter: (self.legs.len() + other.legs.len()) as i64, b_min_counter: self.b_min_counter.max(other.b_min_counter), ..self.clone() })
+        Ok(Account { legs: [self.legs.clone(), other.legs.clone()].concat(), a_margin: coins, a_min_counter: (self.legs.len() + other.legs.len()) as i64, b_min_counter: self.b_min_counter.max(other.b_min_counter), expiry: self.expiry.max(other.expiry), ..self.clone() })
     }
 }
 

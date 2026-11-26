@@ -2270,16 +2270,17 @@ fn add_c<T>(lib: &[u8; 32], obj: &OLive<T>, script: &LibScript, fixed: [u8; 32],
     }
     let h = crate::committee::blake2b(&[&[0x20][..], &fixed, &moving].concat());
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    // (An account has stood a lateness: `KpfTAddC` asks it, and the input's age says it. Review 55, F98. A shard is
-    // added to at no age, a note's least or more at a time: review 56, F101.)
+    // (A shard is added to at any time, a note's least or more at a time: review 56, F101. An account says the time
+    // before which nothing is done on it at will, and the transaction shows an input that landed at or after it:
+    // review 57, F104.)
     let shard = moving.get(34..66).is_some_and(|k| k.iter().all(|x| *x == 0));
     if shard && delta < crate::reserve::NOTE_MIN {
         return invalid("a shard is added to by a note's least or more at a time");
     }
-    let late = if shard { 0 } else { moving.get(94..102).map(crate::state::int8).filter(|x| *x >= 0).ok_or_else(|| Error::Invalid("the moving part has no lateness".into()))? };
-    let mut args = vec![bv(vec![0; 24]), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64)];
-    args.extend([bv(fixed.to_vec()), bv(moving), iv(side), iv(delta), Arg::Sig(key)]);
-    let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, late as u64)?;
+    let f = if shard { 0 } else { at_will_input(moving.get(85..93).map(crate::state::int8).unwrap_or(0), obj.daa, p.funds)? };
+    let mut args = slot_head();
+    args.extend([bv(fixed.to_vec()), bv(moving), iv(side), iv(delta), iv(f), Arg::Sig(key)]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, label, script, "KpfTAddC", "add", args, 0)?;
     d.out(obj.value + delta as u64, hash_spk(lib, &next), Some((0, id)), label, None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);
@@ -2297,7 +2298,7 @@ pub fn shard_fund(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
 pub fn account_add(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, delta: i64, p: Payer) -> Result<(OBuilt, Account)> {
     let a = &account.s;
     let (key, next) = match side {
-        crate::cross::SIDE_A => (a.a_key, Account { a_margin: a.a_margin + delta, ..a.clone() }),
+        crate::cross::SIDE_A => (a.a_key, Account { a_margin: a.a_margin + delta, expiry: a.at_will(account.daa as i64), ..a.clone() }),
         crate::cross::SIDE_B => (a.b_key, Account { b_margin: a.b_margin + delta, ..a.clone() }),
         _ => return invalid("a margin is added by side a (1) or b (2)"),
     };
@@ -2495,14 +2496,12 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    // (The account and the shard have stood a lateness: review 56, F100.)
-    let late = a.t.late_daa.max(0);
     let args = vec![
-        bv(who), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
         bv(seed.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
-    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, late as u64)?;
-    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", late as u64);
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
+    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
     d.lock(st.t0 as u64);
     d.out(account.value + (said.add + st.bond) as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated entry", None);
     keep(&mut d, script, lid)?;
@@ -2783,16 +2782,31 @@ pub fn shard_call(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
     Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
 }
 
+/// The input that shows a covered account's time has come (`KpfTAddC`, `KpfTPass`): one that landed at or after the
+/// time before which nothing is done on the account at will. The first of the funder's coins (input 2), or the
+/// account itself (input 0). `Err` where neither did: the funder's coin is older than the account's last change
+/// and a lateness.
+fn at_will_input(time: i64, object_daa: u64, funds: &[KeyUtxo]) -> Result<i64> {
+    if funds.first().is_some_and(|c| c.daa as i64 >= time) {
+        Ok(2)
+    } else if object_daa as i64 >= time {
+        Ok(0)
+    } else {
+        invalid("nothing is done on the account at will before the time it says: fund with a coin that landed at or after it")
+    }
+}
+
 /// `KpfTPass.pass`: a covered account's user hands its side to the key `to` (docs 15.1): both sign, the taker (the
 /// funder here) pays the leaver `paid` in plain coins in the same transaction, and the account's output has stood
 /// a lateness. Nothing else of the account changes, and its shard is not shown.
 pub fn account_pass(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, to: [u8; 32], paid: i64, p: Payer) -> Result<(OBuilt, Account)> {
     let a = &account.s;
-    let next = a.passed(to)?;
-    let late = a.t.late_daa.max(0);
+    let next = a.passed(to, account.daa as i64)?;
+    let f = at_will_input(a.expiry, account.daa, p.funds)?;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let args = vec![bv(vec![0; 24]), bv(sm8(late).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.fixed_hash().to_vec()), bv(a.moving()), bv(to.to_vec()), Arg::Sig(a.a_key), Arg::Sig(to)];
-    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTPass", "pass", args, late as u64)?;
+    let mut args = slot_head();
+    args.extend([bv(a.fixed_hash().to_vec()), bv(a.moving()), bv(to.to_vec()), iv(f), Arg::Sig(a.a_key), Arg::Sig(to)]);
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTPass", "pass", args, 0)?;
     d.out(account.value, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);

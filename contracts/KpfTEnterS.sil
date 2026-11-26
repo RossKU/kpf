@@ -134,9 +134,6 @@ contract KpfTEnterS(int init_version) {
         require(mv.slice(34, 66) != z32);
         require(mv.slice(33, 66) == sm.slice(0, 33));
         require(mv.slice(138, 171) == sm.slice(138, 171));
-        // (The account and the shard have stood a lateness: an entry is its two parties' at will, and an owner
-        // that entered a leg of its own in every block would keep its shard from a call. Review 56, F100.)
-        require(int(ageb) >= int(byte[8](mv.slice(94, 102))));
         require(sm.slice(130, 138) == z8);
         require(mv.slice(76, 84) == z8);
         byte[32] id = OpInputCovenantId(j);
@@ -219,9 +216,14 @@ contract KpfTEnterS(int init_version) {
         // The shard's time, before which no draw is stated (docs 14.5): no sooner than when this entry is settled
         // or ended (its time, its lateness and two dispute periods). The books a draw reads then have no leg that
         // may yet not enter but one whose entry ended and is not undone, which is shown to end the draw.
-        int time = iAt(sm, 85);
+        // And an entry's time is a lateness after the last: the time this entry writes is a lateness or more after
+        // the time the shard says. (An entry is its two parties' at will: an owner that entered a leg of its own
+        // in every block would keep its shard from a call. Not the age of the shard's output, which anybody's note
+        // makes young: reviews 56 and 57, F100, F103. An owner that states entries of times ahead of the chain
+        // has them settled by nothing, and its shard takes no entry and gives no draw till then.)
         int until = t0 + iAt(mv, LATE_AT) + 2 * iAt(mv, DISPUTE_AT);
-        if (until > time) { time = until; }
+        require(until >= iAt(sm, 85) + iAt(mv, LATE_AT));
+        int time = until;
         int c1 = OpCovOutputIdx(id, 1);
         require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ss.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + sm.slice(0, 85) + byte[](time as byte[8]) + sm.slice(93, 121) + byte[](basis as byte[8]) + sm.slice(129, 171))) + ss.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c1].value >= tx.inputs[k].value);

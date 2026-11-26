@@ -295,10 +295,15 @@ impl Shard {
         let (Some(net), Some(gross), Some(b)) = (net, gross, s.basis.checked_add(basis).filter(|b| *b != i64::MIN)) else { return no("its books are beyond what is counted") };
         s.rows[r] = ShardRow { head, net, gross };
         s.basis = b;
-        // (The shard's time: no draw before the entry is settled or ended. Review 51, F82.)
+        // (The shard's time: no draw before the entry is settled or ended. Review 51, F82. And an entry's time is
+        // a lateness after the last: what this entry writes is a lateness or more after what the shard says.
+        // Review 57, F103.)
         let until = self.dispute_daa.checked_mul(2).and_then(|w| w.checked_add(self.t.late_daa)).and_then(|x| x.checked_add(t0));
         let Some(until) = until else { return no("its time is beyond what is counted") };
-        s.expiry = s.expiry.max(until);
+        if self.expiry.checked_add(self.t.late_daa).is_none_or(|least| until < least) {
+            return no("an entry's time is a lateness after the last: the shard's time is too near, or ahead");
+        }
+        s.expiry = until;
         Ok(s)
     }
 

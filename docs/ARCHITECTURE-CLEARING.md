@@ -1834,9 +1834,10 @@ shown.
   which both sign or neither.
 - *The taker signs* (review 55, N11): what it is handed can lose no more than the coins in it, but an account
   handed to a key nobody has would keep its legs in the books for good.
-- *The output has stood a lateness* (N1): a hand-over is made at will and for no bond, and one made in every
-  block would keep the account from a step and from a call's step. "In the same second" is "a lateness after
-  the account last changed": a second with the terms in use.
+- *It waits a lateness after the last thing done at will* (N1; 15.10): a hand-over is made at will and for no
+  bond, and one made in every block would keep the account from a step and from a call's step. The account says
+  the time before which nothing is done on it at will; "in the same second" is "a lateness after the last
+  addition or hand-over".
 - *Who signs last has an option on the other* (N5): a hand-over says no time, and a script cannot hold "no later
   than". The taker signs first and the account's side lands it; the tool of whoever signed first moves its coin
   where the other has not landed it within a number of blocks.
@@ -1857,8 +1858,9 @@ is a user of that shard like any.
 
 Spends two covered accounts of one user's key under one shard, neither carrying a statement or a mark and the
 same in everything but their legs, coins, count and time (N8), by that key's signature; writes one: the legs of
-the first then the legs of the second (six at most), the coins of both, the later of the two times. **The shard
-is shown, and written again as it is: it is not called** (N3). Every object has stood a lateness.
+the first then the legs of the second (six at most), the coins of both, the later of each of their two times.
+**The shard is shown, and written again as it is: it is not called** (N3). Every object has stood a lateness (a
+join is in no hurry: 15.10).
 
 - *Why the shard is shown.* Under a call a gain is paid at a share and a loss in full. An account that lost,
   bought after the call and joined to one that gained, would set the one off against the other at par, out of
@@ -1987,4 +1989,46 @@ What the age of an output does not hold (and 15.8 said it did):
 |---|---|
 | F103 (medium) | a shard that is spent in every lateness takes no entry and no join: both ask the shard's output age, and every note applied, addition, draw, call, entry and join makes it young. With two notes a lateness three entries in ten are taken; a third party's call that is not due, timed at the lateness, costs it 0.13 KAS a lateness of no entry |
 | F104 (medium) | anyone keeps an account young for half a bond, and its user adds nothing to it: an addition asks the account's age, a false step by two keys that are not the account's lands it again at no age (0.1287 KAS a round). A key that wants a step's fee keeps the user from adding margin until the price is below its maintenance |
+
+### 15.10 After review 57: a time written in the object (26 November 2026; at the engine, my tests; the reviewer's are round 58)
+
+The age of an output is the wrong clock for what a party does at will: anybody makes an output young (a note
+applied, a statement that is not the rule's and is answered wrong), and the party that must act in time then
+cannot (15.8's premise, "an object that nobody else spends without it", held for none of its cases). The clock
+is a time written in the object. A script has no "now", but an input that landed at or after a time shows that
+it is that late; so:
+
+- **A covered account says, where a position has its lease, the time before which nothing is done on it at will**
+  (nothing at its opening). An addition and a hand-over show an input that landed at or after that time (a coin
+  of whoever funds the transaction, or the account's own output), and write the time the account's output landed
+  and a lateness. One who does such a thing in a row has two at most, then a lateness between two. Whoever lands
+  the account again by a statement of its own moves no time: the user adds to its account as soon as the
+  account is there (F104). What it asks of a wallet: a coin that landed after the account's last such change.
+- **A shard takes an entry whose time is a lateness after the last**: what the entry writes as the shard's time
+  (its own time, a lateness and two dispute periods) is a lateness or more after the time the shard says. No age
+  is asked (F103): notes applied, additions and calls are nothing to an entry. An owner that states entries of
+  its own in every block must say times ahead of the chain, which nothing settles: each costs it a bond and an
+  account, and its shard takes no entry and gives no draw until the chain is there. After a draw is applied
+  entries wait until the draw's time is a lateness behind.
+- **A join keeps the age** of its three outputs: it spends the shard, is in no hurry, and a shard that changes in
+  every lateness takes none (the rest of F103, left: a user holds its legs in two accounts meanwhile). The two
+  accounts need not say the same time; the one has the later.
+- A covered account is opened with no such time (`KpfTOpenC`), and the command says none.
+
+### 15.11 Review 58, at the engine
+
+F104 is closed: an addition and a hand-over show an input that landed at the account's time (a block older
+refused by both scripts; an output that is in no block refused; somebody else's coin taken, since what is read is
+when it landed, which nobody chooses), write the time (a block less or more refused), and after two in a row
+wait; a third party's false step answered wrong costs it 0.1287 KAS and moves no time, and the user adds at once.
+Nobody pushes an account's time more than a lateness ahead of the chain. F103 is closed for an entry: it is stated
+at no age on a shard that just came out of a note, an addition or a call, a lateness after the last by its time
+(0.99 entries a lateness whatever the notes); a join's wait is left, as 15.10 says. The default workspace: 601
+tests, 169 seconds; with the features 1,295, 894 seconds; none failed. Sizes: `KpfTAddC` 618 bytes, `KpfTPass`
+602, `KpfTJoinC` 1,625, `KpfTEnterS` 2,293, `KpfTOpenC` 684.
+
+| Finding | What it is |
+|---|---|
+| F105 (medium) | a statement out of its time is ended by its own claimer's key, and the bond comes back: `KpfTChangeLate` gives the whole bond to the key the ender names, and nothing holds a statement's time to the chain. A step of next year on an account, a call or a draw of a time ahead, each stated and ended by one party, costs two fees (0.0144 KAS) and no bond: the floors of 15.8 are gone round. The owner's entries of times ahead (15.10) are this case: three in three blocks, and the shard refuses every entry for a lateness a block; one entry of the largest time closes a shard to entries and draws for good |
+| F106 (low) | a taker is handed an account it cannot add to, or hand on, for up to a lateness: a hand-over writes when the account's output landed and a lateness. Whoever landed it last chooses that; a stock account whose entry was just applied does it with nobody meaning to. The taker's tool checks the time before it signs |
 

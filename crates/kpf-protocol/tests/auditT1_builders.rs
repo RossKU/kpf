@@ -6308,7 +6308,7 @@ impl OW {
     }
     /// A covered account of the user against the clearing party, with `am` and `bm` of margin and no leg.
     fn covered(&self, sid: [u8; 32], am: i64, bm: i64) -> OLive<Account> {
-        let a = Account { t: self.terms(), legs: vec![], a_key: xk(&self.a), b_key: xk(&self.b), a_margin: am, b_margin: bm, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
+        let a = Account { t: self.terms(), legs: vec![], a_key: xk(&self.a), b_key: xk(&self.b), a_margin: am, b_margin: bm, expiry: 0, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sid) };
         let f = [fund(xk(&self.a), 41, 1_000)];
         let b = account_open_c(&self.lib, &self.anchors[1], &self.script("KpfTOpenC"), &a, shard_seed(&self.anchors[0]), self.markets[0].committee_id, self.payer(&self.a, &f)).unwrap();
         let s = signed("covered account opened", &b, &self.keys);
@@ -7183,7 +7183,10 @@ fn t1b_fixed_f64_a_covered_account_is_opened_only_with_its_shards_terms_and_peri
         refused += 1;
     }
     for (what, y) in [("another lease", Account { expiry: base.expiry + 1_000, ..base.clone() })] {
-        assert!(open(&y).is_ok() && open_as(&y, seed, committee), "{what} is not of the id");
+        // (Round 58: where a position has its lease a covered account says the time before which nothing is
+        // done on it at will: nothing at its opening, by the script.)
+        assert!(!open_as(&y, seed, committee), "{what}: a covered account is opened saying a time");
+        refused += 1;
     }
     // (Round 50, R6: where a position has its asks a covered account counts its legs and keeps its time: nothing
     // at its opening, by the script.)
@@ -8079,7 +8082,7 @@ const SID47: [u8; 32] = [0x5d; 32];
 /// A covered account of the user's (`a`) against the clearing party (`b`) as an output stands on the chain, under
 /// the id the shards of these tests have: its coins, its legs, and `bm` of side B's (none, in the form of stage 3).
 fn cov47(w: &OW, legs: &[XLeg], coins: i64, bm: i64) -> OLive<Account> {
-    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.a), b_key: xk(&w.b), a_margin: coins, b_margin: bm, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: legs.len() as i64, b_min_counter: 0, shard: Some(SID47) };
+    let s = Account { t: w.terms(), legs: legs.to_vec(), a_key: xk(&w.a), b_key: xk(&w.b), a_margin: coins, b_margin: bm, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: legs.len() as i64, b_min_counter: 0, shard: Some(SID47) };
     OLive { value: (coins + bm) as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(80), daa: 6_100 }
 }
 
@@ -8564,7 +8567,7 @@ fn t1b_r47_what_a_shard_is_good_for_falls_by_no_statement_of_a_covered_accounts_
         let p: Vec<i64> = legs.iter().map(|l| l.entry / 100 * r.range(90, 111)).collect();
         let worth: i64 = legs.iter().zip(&p).map(|(l, x)| (l.size as i128 * *x as i128 / l.scale as i128) as i64).sum();
         let coins = (worth / 1_000 * r.range(5, 600)).max(NOTE_MIN / 2);
-        let mut x = Account { t: w.terms(), a_min_counter: legs.len() as i64, legs, a_key: xk(&w.a), b_key: xk(&w.b), a_margin: coins, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, b_min_counter: 0, shard: Some(SID47) };
+        let mut x = Account { t: w.terms(), a_min_counter: legs.len() as i64, legs, a_key: xk(&w.a), b_key: xk(&w.b), a_margin: coins, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, b_min_counter: 0, shard: Some(SID47) };
         let mut p = p;
         for _ in 0..6 {
             let n = x.legs.len();
@@ -8805,7 +8808,7 @@ fn t1b_fixed_r6_a_covered_account_is_opened_with_nothing_where_a_position_has_it
     let shard = w.shard();
     let mut taken = 0;
     for (count, time) in [(-58i64, 0i64), (6, 0), (0, 400_000_000_000), (0, 0)] {
-        let a = Account { t: w.terms(), legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 20 * KAS1, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: count, b_min_counter: time, shard: Some(shard.s.sid) };
+        let a = Account { t: w.terms(), legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 20 * KAS1, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 100, a_min_counter: count, b_min_counter: time, shard: Some(shard.s.sid) };
         let f = [fund(xk(&w.a), 41, 1_000)];
         let opened = account_open_c(&w.lib, &w.anchors[1], &w.script("KpfTOpenC"), &a, shard_seed(&w.anchors[0]), w.markets[0].committee_id, w.payer(&w.a, &f)).is_ok_and(|b| taken30(&b, &w.keys));
         println!("T1b R49: a covered account opened with {count} where the legs are counted and {time} where its time stands: {opened}");
@@ -9203,7 +9206,8 @@ fn enter_by_hand52(w: &OW, acct: &OLive<Account>, m: &Marked, prices: &[i64], sh
     let held = acct.value as i64 + said.add;
     let st = Stated { position: m.hash(), window: acct.s.dispute_daa, late: acct.s.t.late_daa, kind: KIND_C_ENTER, t0, arg: said.arg(), outs: Outs::of(&[Out { key: false, to: after.hash(), value: held }]).unwrap(), bond: m.0.c_bond(), claimer: acct.s.a_key, held };
     let mut next = booked_by_hand51(&shard.s, &l, r);
-    next.expiry = next.expiry.max(t0.wrapping_add(life));
+    // (Round 58: the shard's time is written as the entry's own; it was the later of the two.)
+    next.expiry = t0.wrapping_add(life);
     let f = [fund(xk(&w.a), 33, 1_000)];
     (c_enter_state_as(&w.lib, acct, shard, &w.script("KpfTEnterS"), seed, &st, &said, &next, w.payer(&w.a, &f)), st, said, next)
 }
@@ -9275,19 +9279,19 @@ fn t1b_fixed_f80_a_leg_enters_a_shard_of_its_own_committee_and_no_other() {
 /// zero (a row of no market with units); a row whose gross would be beyond the bound; an account whose lateness is
 /// the mark (F79); a shard under another id; and an account of another shard's id. Taken: an account whose two
 /// keys are one (both signatures are that key's); a sixth leg (the count at five); a leg into the row its market
-/// has. The shard's time (the place of the expiry), where it is later than the entry's own (7,777 against 6,700),
-/// is copied into the shard it writes (round 52: the entry writes the later of the two).
+/// has. The shard's time (the place of the expiry) is written as the entry's own (6,700 on a shard that said
+/// 6,600; round 58: it was the later of the two, and an entry is now a lateness after the last).
 #[test]
 fn t1b_r51_what_the_stating_of_an_entry_takes_and_refuses() {
     let w = ow();
     let leg = w.fut(0, 10, LONG, P10);
-    let shard = OLive { s: Shard { expiry: 7_777, ..shard51(&w, &[], 500 * KAS1, 0).s }, ..shard51(&w, &[], 500 * KAS1, 0) };
+    let shard = OLive { s: Shard { expiry: 6_600, ..shard51(&w, &[], 500 * KAS1, 0).s }, ..shard51(&w, &[], 500 * KAS1, 0) };
     let acct = cov51(&w, &[], 20 * KAS1, 0);
     let (b, st, _, next) = enter_by_hand51(&w, &acct, &mark51(&acct.s, leg, 5 * KAS1), &[P10], &shard, 0, T0);
     let b = b.unwrap();
     let sg = signed("an entry stated", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key, sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), ((25 * KAS1 + st.bond) as u64, &hash_spk(&w.lib, &st.hash()), shard.value, &hash_spk(&w.lib, &next.hash())));
-    assert_eq!((next.expiry, next.held, next.rows[0].gross, next.basis), (7_777, shard.s.held, leg.size, -100 * KAS1), "the shard's time and coins are copied; the row and the number take the leg");
+    assert_eq!((next.expiry, next.held, next.rows[0].gross, next.basis), (6_700, shard.s.held, leg.size, -100 * KAS1), "the shard's time is the entry's and its coins are copied; the row and the number take the leg");
     let with = |g: &dyn Fn(&mut OBuilt)| {
         let mut t = b.clone();
         g(&mut t);
@@ -9360,7 +9364,7 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
         let legs: Vec<XLeg> = (0..n).map(|_| w.fut(r.range(0, 4) as usize, r.range(5, 30), dir(&mut r), P10 * r.range(80, 121) / 100)).collect();
         let leg = w.fut(r.range(0, 4) as usize, r.range(5, 30), dir(&mut r), P10 * r.range(80, 121) / 100);
         let prices: Vec<i64> = legs.iter().map(|l| l.entry * r.range(90, 111) / 100).chain([leg.entry]).collect();
-        let probe = mark51(&Account { t: w.terms(), legs: legs.clone(), a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 0, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: n as i64, b_min_counter: 0, shard: Some(sid52(&w)) }, leg, 0);
+        let probe = mark51(&Account { t: w.terms(), legs: legs.clone(), a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 0, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: n as i64, b_min_counter: 0, shard: Some(sid52(&w)) }, leg, 0);
         let last = *probe.0.c_trace(&prices, 0).unwrap().last().unwrap();
         let need = rate_up(last.wa, up) - last.gain + NOTE_MIN;
         let coins = match r.range(0, 6) {
@@ -9610,12 +9614,12 @@ fn t1b_r51_the_time_of_a_shard_a_draw_is_held_to_and_writes() {
     for name in kpf_protocol::thin_artifacts::SCRIPTS {
         let src = std::fs::read_to_string(format!("{}/../../contracts/{name}.sil", env!("CARGO_MANIFEST_DIR"))).expect("the source");
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-        if ["mv.slice(85, 93)", "sm.slice(85, 93)", "moving.slice(85, 93)", "iAt(mv, 85)", "iAt(sm, 85)"].iter().any(|n| code.contains(n)) {
+        if ["mv.slice(85, 93)", "sm.slice(85, 93)", "m1.slice(85, 93)", "moving.slice(85, 93)", "iAt(mv, 85)", "iAt(sm, 85)"].iter().any(|n| code.contains(n)) {
             readers.push(name);
         }
     }
     readers.sort();
-    assert_eq!(readers, vec!["KpfTEnterS", "KpfTShardEnd"], "the scripts that read the place of the expiry in a moving part (round 52: an entry writes the later time)");
+    assert_eq!(readers, vec!["KpfTAddC", "KpfTEnterS", "KpfTJoinC", "KpfTOpenC", "KpfTPass", "KpfTShardEnd"], "the scripts that read the place of the expiry in a moving part (a shard's: an entry and a draw; round 58, an account's: an addition, a hand-over, a join, the opening)");
     // A time after its landing.
     let shard = shard51(&w, &legs, 500 * KAS1, 0);
     let fb = [fund(xk(&w.b), 55, 1_000)];
@@ -9671,7 +9675,7 @@ fn t1b_fixed_f79_nothing_is_stated_on_an_object_whose_lateness_is_the_mark_or_mo
     let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: vec![] };
     let f = [fund(xk(&w.w), 33, 1_000)];
     for (late, stated) in [(mark, false), (mark + 7, false), (-1, false), (mark - 1, true), (100, true)] {
-        let a = Account { t: XTerms { late_daa: late, ..w.terms() }, legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 100 * KAS1, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0, shard: Some(sid52(&w)) };
+        let a = Account { t: XTerms { late_daa: late, ..w.terms() }, legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 100 * KAS1, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0, shard: Some(sid52(&w)) };
         let acct = OLive { s: a.clone(), value: (100 * KAS1) as u64, id: Some(Hash::from_bytes([0x72; 32])), op: op(80), daa: 6_100 };
         let held = acct.value as i64;
         let outs = Outs::of(&[Out { key: true, to: stranger, value: held }]).unwrap();
@@ -9721,12 +9725,16 @@ fn t1b_fixed_f82_an_entry_writes_the_shards_time_and_no_statement_is_shown_to_en
     let acct = cov52(&w, &[], 20 * KAS1);
     let f = [fund(xk(&w.a), 33, 1_000)];
     let mut wrong_times = 0;
-    for (says, writes) in [(0i64, 6_700i64), (6_000, 6_700), (6_699, 6_700), (6_700, 6_700), (6_701, 6_701), (9_000, 9_000), (i64::MAX, i64::MAX), (-5, 6_700)] {
+    // (Round 58: an entry's time is a lateness after the last. What it writes, 6,700, is a lateness of 100 or more
+    // after what the shard says, or it is refused; and it writes its own time, not the later of the two.)
+    for (says, writes) in [(0i64, Some(6_700i64)), (6_000, Some(6_700)), (6_599, Some(6_700)), (6_600, Some(6_700)), (6_601, None), (6_700, None), (9_000, None), (i64::MAX, None), (-5, Some(6_700))] {
         let base = shard52(&w, &[], 500 * KAS1);
         let shard = OLive { s: Shard { expiry: says, ..base.s }, ..base };
         let (b, st, said, next) = enter_by_hand52(&w, &acct, &mark51(&acct.s, leg, 0), &[P10], &shard, 0, T0, SEED52);
-        assert_eq!((next.expiry, shard.s.entered(&leg, 0, T0).unwrap().expiry), (writes, writes), "the shard says {says}");
-        assert!(b.is_ok_and(|b| taken30(&b, &w.keys)), "F82: an entry on a shard that says {says}");
+        assert_eq!(shard.s.entered(&leg, 0, T0).ok().map(|s| s.expiry), writes, "the model, the shard says {says}");
+        assert_eq!(b.is_ok_and(|b| taken30(&b, &w.keys)), writes.is_some(), "F82 and round 58: an entry on a shard that says {says}");
+        let Some(writes) = writes else { continue };
+        assert_eq!(next.expiry, writes);
         for other in [writes.wrapping_sub(1), writes.wrapping_add(1), says, 0] {
             if other != writes {
                 let wrong = Shard { expiry: other, ..next };
@@ -10492,7 +10500,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
     // (Round 55: KpfTChange has the floor of a draw's bond, 1,543; KpfTDrawNote is shown the legs, 1,393.)
     // (Round 56: the ages of an addition and of a draw; the deposit note out of KpfTAcctEnd; what a shard owes in KpfTDrawNote.)
-    assert_eq!(sizes, vec![("KpfTChange", 1571), ("KpfTPoint", 2588), ("KpfTOpenC", 672), ("KpfTAddC", 563), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1571), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
 }
 
 // ================================================================================================================
@@ -12231,44 +12239,6 @@ fn age_told56(b: &OBuilt) -> i64 {
     }
 }
 
-/// Round 55, F98 (Medium), fixed in round 56; round 57 keeps it for an account alone. An addition to an account
-/// (`KpfTAddC`) asks that the account's output has stood a lateness (100 blocks in these terms): it is built
-/// with the lateness as the age its script is told and as its input's own age, and taken; told a block less it
-/// is refused by the script; with the input a block younger than it is told, by the slot; told a block more
-/// than the input's age, by the slot. Three additions in a row are each on the output of the one before and each
-/// carry the lateness: the second is no transaction for a lateness after the first.
-/// From round 57 on (F101) an addition to a shard and a draw's statement ask no age (the test of F101 below runs
-/// them); a call (kind 11) is stated at no age as before.
-#[test]
-fn t1b_fixed_f98_an_addition_to_an_account_asks_that_it_has_stood_a_lateness() {
-    let w = ow();
-    let late = w.terms().late_daa;
-    let (fa, fb, fw) = ([fund(xk(&w.a), 44, 1_000)], [fund(xk(&w.b), 56, 1_000)], [fund(xk(&w.w), 30, 1_000)]);
-    let mut edges = 0;
-    // An account that is due a step, and three additions in a row.
-    let mut acct = cov47(&w, &[w.fut(0, 10, LONG, P10)], 3 * KAS1, 0);
-    for round in 0..3 {
-        let (b, next) = account_add(&w.lib, &acct, &w.script("KpfTAddC"), SIDE_A, 1, w.payer(&w.a, &fa)).unwrap();
-        let what = format!("an addition to an account, {round}");
-        assert_eq!((age_told56(&b), b.tx.inputs[0].sequence), (late, late as u64), "F98 is open: {what} asks no age");
-        assert!(taken30(&b, &w.keys), "{what}, the object having stood a lateness");
-        assert!(!taken30(&with_arg(&b, 1, bytes_arg(&sm8(late - 1))), &w.keys), "F98 is open: {what}, the script told a block less");
-        assert!(!taken30(&with_arg(&b, 1, bytes_arg(&sm8(0))), &w.keys), "F98 is open: {what}, the script told no age");
-        assert!(!taken30(&younger56(&b, 0, 1), &w.keys), "F98 is open: {what}, the object a block younger than the script is told");
-        assert!(!taken30(&with_arg(&b, 1, bytes_arg(&sm8(late + 1))), &w.keys), "{what}, the script told a block more than the object's age");
-        edges += 4;
-        acct = nth(&signed("a sompi added to the account", &b, &w.keys), 0, next, acct.daa);
-    }
-    // A shard: no age (round 57), and a call's statement, which asked none.
-    let shard = short54(&w, 10 * KAS1, 100);
-    let (sb, _) = shard_fund(&w.lib, &shard, &w.script("KpfTAddC"), NOTE_MIN, w.payer(&w.b, &fb)).unwrap();
-    assert_eq!((age_told56(&sb), sb.tx.inputs[0].sequence), (0, 0), "an addition to a shard asks no age (round 57)");
-    let (cb, _, _) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), [P10 * 12 / 10, 0, 0, 0], T0, xk(&w.w), w.payer(&w.w, &fw)).unwrap();
-    assert_eq!((age_told56(&cb), cb.tx.inputs[0].sequence), (0, 0), "a call is stated on a shard of any age");
-    assert!(taken30(&sb, &w.keys) && taken30(&cb, &w.keys));
-    println!("T1b R56 F98 is closed for an account: three additions in a row each carry the lateness of {late} as the age told and as the input's; {edges} transactions at the edges refused; an addition to a shard and a call are made at no age");
-}
-
 /// Round 55, F96 (Medium), fixed in round 56: a note of the rest that its shard does not owe ends no draw and is
 /// spent by anyone for nothing. A shard of 100 KAS that owes 30:
 ///  - a note of 30 KAS (counted) ends a draw; a note of 31 in its place does not (the builder refuses; the same
@@ -12409,9 +12379,10 @@ fn t1b_r56_a_hand_over_takes_two_signatures_and_a_lateness_and_changes_one_key()
     let script = w.script("KpfTPass");
     let (b, next) = account_pass(&w.lib, &acct, &script, to, 3 * KAS1, w.payer(&w.f, &ff)).unwrap();
     let sg = signed("an account handed over", &b, &w.keys);
-    let want = Account { a_key: to, ..x.clone() };
-    assert_eq!((next.hash(), sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key, paid(&sg, &x.a_key)), (want.hash(), acct.value, &hash_spk(&w.lib, &want.hash()), 3 * KAS1), "the account with the taker's key, and nothing else changed; the leaver paid");
-    assert_eq!((age_told56(&b), b.tx.inputs[0].sequence), (late, late as u64));
+    // (Round 58: and the time before which nothing is done on it at will: the landing of its output, 6,100, and a lateness.)
+    let want = Account { a_key: to, expiry: acct.daa as i64 + late, ..x.clone() };
+    assert_eq!((next.hash(), sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key, paid(&sg, &x.a_key)), (want.hash(), acct.value, &hash_spk(&w.lib, &want.hash()), 3 * KAS1), "the account with the taker's key and its time, and nothing else changed; the leaver paid");
+    assert_eq!((age_told56(&b), b.tx.inputs[0].sequence), (0, 0), "no age is asked (round 58)");
     let refused = std::cell::Cell::new(0);
     let no = |what: &str, t: &OBuilt, keys: &KeySet| {
         assert!(!taken30(t, keys), "{what}");
@@ -12420,9 +12391,6 @@ fn t1b_r56_a_hand_over_takes_two_signatures_and_a_lateness_and_changes_one_key()
     no("without the user's signature", &b, &only_keys(&[&w.w, &w.f]));
     no("without the taker's signature", &b, &only_keys(&[&w.a, &w.f]));
     assert!(taken30(&b, &only_keys(&[&w.a, &w.w, &w.f])), "the two and whoever funds it");
-    no("told an age a block below the lateness", &with_arg(&b, 1, bytes_arg(&sm8(late - 1))), &w.keys);
-    no("told no age", &with_arg(&b, 1, bytes_arg(&sm8(0))), &w.keys);
-    no("the account a block younger than told", &younger56(&b, 0, 1), &w.keys);
     let with = |spk: ScriptPublicKey| {
         let mut t = b.clone();
         t.tx.outputs[0].script_public_key = spk;
@@ -12471,7 +12439,7 @@ fn t1b_r56_a_hand_over_takes_two_signatures_and_a_lateness_and_changes_one_key()
     no("an account under a statement", &t, &w.keys);
     // To the user's own key, and to the owner's.
     let (sb, same) = account_pass(&w.lib, &acct, &script, x.a_key, 0, w.payer(&w.f, &ff)).unwrap();
-    assert!(taken30(&sb, &w.keys) && same.hash() == x.hash(), "to its own key: the same account, in a new output, a lateness after the last");
+    assert!(taken30(&sb, &w.keys) && same.hash() == Account { expiry: acct.daa as i64 + late, ..x.clone() }.hash(), "to its own key: the same account with its time, in a new output");
     let (bb, owned) = account_pass(&w.lib, &acct, &script, x.b_key, 0, w.payer(&w.f, &ff)).unwrap();
     assert!(taken30(&bb, &w.keys) && owned.a_key == owned.b_key);
     // In its new hands.
@@ -12540,7 +12508,6 @@ fn t1b_r56_a_join_takes_two_accounts_equal_but_for_legs_coins_and_time_and_the_s
         ("its second key", Account { b_key: xk(&w.w), ..s2.clone() }),
         ("its terms", Account { t: other_terms, ..s2.clone() }),
         ("the lateness of its terms", Account { t: XTerms { late_daa: late + 1, ..s2.t }, ..s2.clone() }),
-        ("the place of a lease", Account { expiry: s2.expiry + 1, ..s2.clone() }),
         ("its dispute period", Account { dispute_daa: s2.dispute_daa + 1, ..s2.clone() }),
         ("its bond rate", Account { bond_bps: s2.bond_bps + 1, ..s2.clone() }),
         ("its shard", Account { shard: Some([0x44; 32]), ..s2.clone() }),
@@ -12812,7 +12779,7 @@ fn t1b_fixed_f101_a_shard_is_added_to_and_drawn_at_no_age_and_a_join_asks_the_sh
     assert!(jab.tx.inputs[0].sequence == 0 && taken30(&jab, &w.keys), "F101 is open: after a join the owner's addition waits");
     // An account whose second key is the owner: opened with the owner's signature.
     let sh = w.shard();
-    let acct = Account { t: w.terms(), legs: vec![], a_key: xk(&w.w), b_key: xk(&w.b), a_margin: KAS1, b_margin: 0, expiry: 9_000_000, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sh.s.sid) };
+    let acct = Account { t: w.terms(), legs: vec![], a_key: xk(&w.w), b_key: xk(&w.b), a_margin: KAS1, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 100, a_min_counter: 0, b_min_counter: 0, shard: Some(sh.s.sid) };
     let ob = account_open_c(&w.lib, &w.anchors[1], &w.script("KpfTOpenC"), &acct, shard_seed(&w.anchors[0]), w.markets[0].committee_id, w.payer(&w.w, &fw)).unwrap();
     assert!(taken30(&ob, &w.keys) && !taken30(&ob, &third), "an account whose second key is the shard's owner is opened without that key");
     println!("T1b R57 F101 is closed: after a note applied by another key the owner adds 0.2 KAS three times in a row and states a draw, all at no age; (what a shard holds, the bond of a draw on it) {bonds:?}; {refused} transactions refused (less than a note's least added, a bond a sompi off, the real shard under a join of accounts of another second key); an account of the owner's second key is opened with its signature alone");
@@ -12890,14 +12857,11 @@ fn t1b_r57_what_the_owners_round_of_a_draw_costs_at_no_age_and_an_honest_small_d
 ///    two keys of one party, on accounts of 3 and 20 KAS: a bond of 0.2 KAS on both; answered wrong at once, or
 ///    left to lapse, it costs half the bond and three fees. The wrong answer on the bond of the least account is
 ///    a transaction (F102: half of 0.2 KAS is an output).
-///  - **An entry's age.** An entry is built with the lateness as the age told and as the age of BOTH inputs (the
-///    account's and the shard's), and taken; refused with the script told a block less (both inputs that old),
-///    told nothing, with the account a block younger than told, with the shard a block younger than told.
-/// What is not closed is in the two findings below (F103, F104) and in the report's list.
+///  - Round 58: an entry asks no age any more (round 57's was the root of F103); its time is held to the
+///    shard's, which the tests of round 58 run.
 #[test]
-fn t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor_and_an_entry_asks_a_lateness() {
+fn t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor() {
     let w = ow();
-    let late = w.terms().late_daa;
     let leg = w.fut(0, 10, LONG, P10);
     let small = XLeg { size: leg.size / 100, ..leg };
     let fw = [fund(xk(&w.w), 30, 1_000)];
@@ -12969,25 +12933,12 @@ fn t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor_and_an
         assert!(answered >= NOTE_MIN / 2 && lapsed >= NOTE_MIN / 2, "F100 is open: a round costs less than half a note's least");
         rounds.push((coins / KAS1, st.bond, answered, lapsed));
     }
-    // An entry's age.
+    // (Round 58: an entry asks no age; its time is held to the shard's, which the tests of round 58 run.)
     let acct = cov52(&w, &[], 20 * KAS1);
     let (eb, _, _, _, _, _) = c_enter_state(&w.lib, &acct, &s52, &w.script("KpfTEnterS"), SEED52, small, 0, &[], T0, w.payer(&w.a, &fa)).unwrap();
-    let shard_in = second_at55(&eb);
-    assert_eq!((age_told56(&eb), eb.tx.inputs[0].sequence, eb.tx.inputs[shard_in].sequence), (late, late as u64, late as u64), "F100 is open: an entry asks no age of its account or of its shard");
-    assert!(taken30(&eb, &w.keys), "an entry, the account and the shard having stood a lateness");
-    let told = |age: i64, both: u64| {
-        let mut t = with_arg(&eb, 1, bytes_arg(&sm8(age)));
-        (t.tx.inputs[0].sequence, t.tx.inputs[shard_in].sequence) = (both, both);
-        t
-    };
-    assert!(!taken30(&told(late - 1, late as u64 - 1), &w.keys), "F100 is open: an entry, the script told a block less and both inputs that old");
-    assert!(!taken30(&told(0, 0), &w.keys), "F100 is open: an entry at no age");
-    assert!(!taken30(&told(late - 1, late as u64), &w.keys), "F100 is open: an entry, the script told a block less");
-    assert!(!taken30(&younger56(&eb, 0, 1), &w.keys), "F100 is open: an entry on an account a block younger than told");
-    assert!(!taken30(&younger56(&eb, shard_in, 1), &w.keys), "F100 is open: an entry on a shard a block younger than told");
-    assert!(taken30(&told(late + 1, late as u64 + 1), &w.keys), "an entry on objects a block older, told so");
-    refused += 5;
-    println!("T1b R57 F100 is closed for statements and entries: (coins, the bond of kinds 7 to 9 at 1 %) {bonds:?}; (coins, the bond of an entry at 10 %) {entry_bonds:?}; the round of a false step by one party's keys (coins in KAS, the bond, what it costs answered wrong at once, left to lapse) {rounds:?}; an entry carries the lateness of {late} as the age of its account and of its shard; {refused} transactions refused. F102: the wrong answer on the least bond is a transaction");
+    assert_eq!((age_told56(&eb), eb.tx.inputs[0].sequence, eb.tx.inputs[second_at55(&eb)].sequence), (0, 0, 0));
+    assert!(taken30(&eb, &w.keys));
+    println!("T1b R57 F100 is closed for statements and entries: (coins, the bond of kinds 7 to 9 at 1 %) {bonds:?}; (coins, the bond of an entry at 10 %) {entry_bonds:?}; the round of a false step by one party's keys (coins in KAS, the bond, what it costs answered wrong at once, left to lapse) {rounds:?}; an entry asks no age (round 58); {refused} transactions refused. F102: the wrong answer on the least bond is a transaction");
 }
 
 /// Round 57, item 3: whether the floor breaks anything honest. A bond of 0.2 KAS is more than the coins of an
@@ -13049,23 +13000,241 @@ fn t1b_r57_a_bond_above_an_accounts_coins_is_posted_and_comes_back_at_the_end_an
     println!("T1b R57 a bond above the coins: leavings of small accounts stated with a bond of 0.2 KAS and applied (coins, (paid to the user, the account goes on, what the note holds)) {leavings:?}; under a call a step over a statement on an account of 0.3 KAS pays the claimer's bond back standing, and both bonds disputed; the user of that step has {} sompi and whoever stepped a fee of {}", step2.user, step2.fee);
 }
 
-/// Round 57, F103 (Medium). An entry (round 57) and a join (round 56) ask that the SHARD's output has stood a
-/// lateness, and everything that spends a shard makes it young: a note applied (anybody, no signature of the
-/// owner's, no age), the owner's addition, a draw's statement and its end, a call that is not due and its end,
-/// an entry, a join. So a shard that is in use takes entries and joins only in its pauses:
-///  - at the engine, on shards as they come out of (a) a note applied by a key that is not the owner's, (b) the
-///    owner's addition, (c) a call by a third party that is not due, disputed and answered wrong by that party:
-///    an entry and a join are built with the lateness as the shard's age, and are refused on the shard a block
-///    younger; the note, the addition and the call are all made at no age. The third party's round of (c) costs
-///    half a call's bond and three fees (0.1 KAS and fees on a shard of 1.5 KAS at 10 %);
-///  - in numbers (a count, no engine): one entry is always waiting, and notes are applied at random at a rate of
-///    0, 0.5, 1, 2, 3 and 5 a lateness over 2,000 latenesses: the entries taken a lateness. With a note every 99
-///    blocks: none, ever.
-/// And the paper's own way to a size (15.3: accounts of 20, 10, 5 and 2 joined to 37) is three joins: three
-/// latenesses of the shard at the least, in which its owner enters nothing of its stock.
-/// Passes while an entry or a join is refused on a shard that something else just spent.
+/// Round 57, item 7: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
 #[test]
-fn t1b_finding_f103_a_shard_that_is_spent_in_every_lateness_takes_no_entry_and_no_join() {
+fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
+    let kit = kpf_protocol::thin_artifacts::kit();
+    let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
+    println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
+    // (Round 58: the three that changed again.)
+    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1571, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2293, 2282), ("KpfTEnterOff", 719, 719)]);
+}
+
+// ================================================================================================================
+// Round 58. What closes round 57's findings (F103, F104): a time written in the object (docs 15.10).
+
+/// A coin of 1,000 KAS that landed at `daa`.
+fn coin58(key: [u8; 32], n: u8, daa: u64) -> KeyUtxo {
+    KeyUtxo { daa, ..fund(key, n, 1_000) }
+}
+
+/// A built transaction with its input `i` landed at `daa` (what `OpTxInputDaaScore` reads of it).
+fn landed58(b: &OBuilt, i: usize, daa: u64) -> OBuilt {
+    let mut t = b.clone();
+    t.entries[i].block_daa_score = daa;
+    t
+}
+
+/// The number a built transaction's script is told as its argument `i`.
+fn told58(b: &OBuilt, i: usize) -> i64 {
+    match &args_of(&mut b.clone(), 1)[i] {
+        Arg::V(ArtifactValue::Int(v)) => *v,
+        _ => panic!("argument {i} is a number"),
+    }
+}
+
+/// A statement on an object of this world that is out of its time, ended by `KpfTChangeLate` (the builders have
+/// this for a position's statement only): built for a position's, then made the statement's. The bond goes to
+/// `ender`, who funds it with the coin `n`.
+fn stated_late58(w: &OW, obj: &OLive<Stated>, ender: &Keypair, n: u8) -> OBuilt {
+    let x = Cross { t: w.terms(), legs: [w.fut(0, 10, LONG, P10), XLeg::none()], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 40 * KAS1, b_margin: 60 * KAS1, expiry: 6_000 + w.markets[0].p.term };
+    let position = Position { x, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0 };
+    position.check().unwrap();
+    let c = position.take(Take { side: SIDE_A, a: [P12, 0], amount: 0 }, T0, x.floor()).unwrap();
+    let dummy = OLive { s: c, value: x.floor() as u64 + c.bond as u64, id: Some(Hash::from_bytes([0x71; 32])), op: op(77), daa: (T0 + x.t.late_daa + 1) as u64 };
+    let f = [fund(xk(ender), n, 1_000)];
+    let (mut b, _) = change_late(&w.lib, &dummy, &w.script("KpfTChangeLate"), xk(ender), w.payer(ender, &f)).unwrap();
+    let st = &obj.s;
+    b.tx.inputs[0].previous_outpoint = obj.op;
+    b.entries[0].amount = obj.value;
+    b.entries[0].block_daa_score = obj.daa;
+    b.entries[0].covenant_id = obj.id;
+    object_made(&mut b, &w.lib, 0, &st.hash());
+    let args = args_of(&mut b, 1);
+    args[3] = bytes_arg(&st.position);
+    args[4] = int_arg(st.kind);
+    args[5] = int_arg(st.t0);
+    args[6] = bytes_arg(&st.arg);
+    args[7] = bytes_arg(&st.outs.hash());
+    args[8] = int_arg(st.bond);
+    args[9] = bytes_arg(&st.claimer);
+    args[10] = int_arg(st.window);
+    args[11] = int_arg(st.late);
+    args[12] = int_arg(st.held);
+    b.tx.outputs[0] = TransactionOutput { value: obj.value - st.bond as u64, script_public_key: hash_spk(&w.lib, &st.position), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: obj.id.expect("an id") }) };
+    let n = b.tx.outputs.len();
+    b.tx.outputs[n - 1].value = st.bond as u64;
+    b
+}
+
+/// Round 57, F104 (Medium), fixed in round 58; and what closes F98 for an account now. A covered account says,
+/// where a position has its lease, the time before which nothing is done on it at will. `KpfTAddC` (an account)
+/// and `KpfTPass` are told an input `f` and ask that it landed at or after that time; they write the later of
+/// that time and the landing of the account's own output and a lateness. No age is asked.
+/// Each of the two, on an account that says 6,300 and landed at 6,100 (the lateness is 100):
+///  - funded by a coin that landed at 6,300: taken (f is that coin, input 2; the time stays 6,300, the later);
+///    the coin a block older: the builder refuses, and the engine; a block or a year younger: taken;
+///  - f beyond the inputs, below nothing, the largest number: refused; f the script's own input: taken exactly
+///    where the copy landed at or after the time (any input shows that it is that late: its owner signed the
+///    transaction, and what is read of it is when it landed, which nobody chooses); f the account's own input:
+///    refused (it landed before), and on an account that landed AT its time it is what the builder shows, and
+///    the account then says 6,400;
+///  - the time written a block less, a block more, as it was, or nothing: refused;
+///  - a coin of a third key shown, the user's own being old: taken with that key's signature and not without.
+/// Then: two additions in a row and the wait (an account at rest: the first writes 6,200, the second is made at
+/// once on the first's output and writes its landing and a lateness, the third is no transaction until a coin
+/// landed at that time; nor is a hand-over). F104's round on an account that says 6,200: two keys that are not
+/// its own state a step that is not the rule's, dispute and answer it wrong; the account is again as it was,
+/// its time unmoved, and its user adds to it at once. A hand-over there and back at once, after which the
+/// leaver adds nothing for 99 blocks. An account that landed a block ago, handed over: the taker adds nothing
+/// to it for 99 blocks (F106 below). A join of accounts that say 6,200 and 6,450: the one says 6,450, and
+/// written with the earlier it is refused.
+#[test]
+fn t1b_fixed_f104_an_addition_and_a_hand_over_show_an_input_that_landed_at_the_accounts_time() {
+    let w = ow();
+    let late = w.terms().late_daa;
+    let leg = XLeg { size: w.fut(0, 1, LONG, P10).size / 10, ..w.fut(0, 1, LONG, P10) };
+    let acct_of = |time: i64, landed: u64| {
+        let mut a = cov47(&w, &[leg], 20 * KAS1, 0);
+        (a.s.bond_bps, a.s.expiry, a.daa) = (100, time, landed);
+        a
+    };
+    let (add_s, pass_s) = (w.script("KpfTAddC"), w.script("KpfTPass"));
+    let refused = std::cell::Cell::new(0);
+    // (How many of the two are taken where the coin shown has no landing yet: the largest number as its score.)
+    let unlanded = std::cell::Cell::new(0usize);
+    let no = |what: &str, t: &OBuilt| {
+        assert!(!taken30(t, &w.keys), "F104: {what}");
+        refused.set(refused.get() + 1);
+    };
+    // (The transaction, the account it writes, the place of f among the script's arguments.)
+    let build = |pass: bool, a: &OLive<Account>, funds: &[KeyUtxo]| -> kpf_protocol::Result<(OBuilt, Account, usize)> {
+        if pass {
+            account_pass(&w.lib, a, &pass_s, xk(&w.w), 0, w.payer(&w.a, funds)).map(|(b, n)| (b, n, 6))
+        } else {
+            account_add(&w.lib, a, &add_s, SIDE_A, KAS1, w.payer(&w.a, funds)).map(|(b, n)| (b, n, 7))
+        }
+    };
+    let acct = acct_of(6_300, 6_100);
+    for pass in [false, true] {
+        let what = if pass { "a hand-over" } else { "an addition" };
+        let (b, next, fi) = build(pass, &acct, &[coin58(xk(&w.a), 44, 6_300)]).unwrap();
+        assert_eq!((told58(&b, fi), age_told56(&b), b.tx.inputs[0].sequence, next.expiry), (2, 0, 0, 6_300), "{what}: the coin is shown, no age, and the later time stays");
+        assert!(taken30(&b, &w.keys), "{what}, a coin that landed at the time");
+        assert!(build(pass, &acct, &[coin58(xk(&w.a), 44, 6_299)]).is_err(), "the builder: {what} with a coin a block older than the time");
+        no(&format!("{what}, the coin a block older than the time"), &landed58(&b, 2, 6_299));
+        no(&format!("{what}, the coin of the beginning"), &landed58(&b, 2, 0));
+        assert!(taken30(&landed58(&b, 2, 6_301), &w.keys) && taken30(&landed58(&b, 2, 37_000_000), &w.keys), "{what}, a younger coin");
+        unlanded.set(unlanded.get() + taken30(&landed58(&b, 2, u64::MAX), &w.keys) as usize);
+        let n = b.tx.inputs.len() as i64;
+        for f in [n, n + 5, -1, i64::MAX] {
+            no(&format!("{what}, f said {f}"), &with_arg(&b, fi, int_arg(f)));
+        }
+        // The script's own input, and the account's.
+        let own = with_arg(&b, fi, int_arg(1));
+        no(&format!("{what}, f the script's copy, which landed a block before the time"), &landed58(&own, 1, 6_299));
+        assert!(taken30(&landed58(&own, 1, 6_300), &w.keys), "{what}, f the script's copy, which landed at the time");
+        no(&format!("{what}, f the account's own input, which landed before its time"), &with_arg(&b, fi, int_arg(0)));
+        let (fb, fnext, _) = build(pass, &acct_of(6_300, 6_300), &[coin58(xk(&w.a), 44, 0)]).unwrap();
+        assert_eq!((told58(&fb, fi), fnext.expiry), (0, 6_400), "{what}: an account that landed at its time shows itself, and says its landing and a lateness");
+        assert!(taken30(&fb, &w.keys));
+        // The time written.
+        for (t, to, others) in [(&fb, &fnext, [6_399i64, 6_401, 6_300, 0]), (&b, &next, [6_299, 6_301, 6_200, 0])] {
+            for other in others {
+                let mut wrong = t.clone();
+                wrong.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Account { expiry: other, ..to.clone() }.hash());
+                no(&format!("{what}, the account written with the time {other}"), &wrong);
+            }
+        }
+        // A coin of a third key.
+        let (ob, _, _) = build(pass, &acct, &[coin58(xk(&w.f), 45, 6_300), coin58(xk(&w.a), 44, 0)]).unwrap();
+        assert!(told58(&ob, fi) == 2 && taken30(&ob, &w.keys) && !taken30(&ob, &only_keys(&[&w.a, &w.w])), "{what}, a coin of a third key shown: with that key's signature");
+    }
+    // Two in a row, and the wait.
+    let old = [coin58(xk(&w.a), 44, 0)];
+    let add = |a: &OLive<Account>, funds: &[KeyUtxo]| account_add(&w.lib, a, &add_s, SIDE_A, 1, w.payer(&w.a, funds));
+    let (b1, n1) = add(&acct_of(0, 6_100), &old).unwrap();
+    let a1 = nth(&signed("an addition to an account at rest", &b1, &w.keys), 0, n1, 6_400);
+    assert_eq!(a1.s.expiry, 6_200);
+    let (b2, n2) = add(&a1, &old).unwrap();
+    assert_eq!((told58(&b2, 7), n2.expiry), (0, 6_500), "the second at once: it shows the first's output");
+    let a2 = nth(&signed("a second addition, on the output of the first", &b2, &w.keys), 0, n2, 6_401);
+    assert!(add(&a2, &old).is_err() && add(&a2, &[coin58(xk(&w.a), 44, 6_499)]).is_err(), "the builder: a third addition before the time");
+    assert!(account_pass(&w.lib, &a2, &pass_s, xk(&w.w), 0, w.payer(&w.a, &old)).is_err(), "the builder: a hand-over before the time");
+    let (b3, n3) = add(&a2, &[coin58(xk(&w.a), 44, 6_500)]).unwrap();
+    assert!(taken30(&b3, &w.keys) && n3.expiry == 6_501, "a third addition, a lateness after the first's landing");
+    no("a third addition, the coin a block before the time", &landed58(&b3, 2, 6_499));
+    no("a third addition, the account's own output shown", &with_arg(&b3, 7, int_arg(0)));
+    // F104's round: on the account that says 6,200 and landed at 6,400.
+    let x = a1.s.clone();
+    let third = only_keys(&[&w.w, &w.f]);
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+    let st = stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: a1.value as i64 }]).unwrap(), a1.value as i64, xk(&w.w));
+    assert_eq!(x.c_end_judged(KIND_C_STEP, &said, &st.claimer, &st.outs, a1.value as i64, T0), Some(false));
+    let (f1, f2, f3) = ([fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.f), 73, 1_000)]);
+    let s1 = signed("a step that is not the rule's, by a key that is not the account's", &account_state(&w.lib, &a1, &w.script("KpfTChange"), &st, &said.said(), w.payer(&w.w, &f1)).unwrap(), &third);
+    let (pb, q) = point_dispute(&w.lib, &nth(&s1, 0, st, 6_510), &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.f, &f2)).unwrap();
+    let s2 = signed("disputed by their other key", &pb, &third);
+    let (eb, right) = c_end(&w.lib, &nth(&s2, 0, q, 6_511), &x, &said, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.f, &f3), None).unwrap();
+    let s3 = signed("answered wrong by it", &eb, &third);
+    assert!(!right && s3.tx.outputs[0].script_public_key == hash_spk(&w.lib, &x.hash()), "the account again as it was: its time is not moved");
+    let given = nth(&s3, 0, x.clone(), 6_512);
+    let (gb, gn) = account_add(&w.lib, &given, &add_s, SIDE_A, 5 * KAS1, w.payer(&w.a, &old)).expect("F104 is open: the user adds nothing to an account a third party gave back");
+    assert_eq!((told58(&gb, 7), gb.tx.inputs[0].sequence, gn.expiry), (0, 0, 6_612));
+    assert!(taken30(&gb, &w.keys), "F104 is open: the user's addition at once on the output of the round");
+    let round = spent57(&[&s1, &s2, &s3], &[xk(&w.w), xk(&w.f)]);
+    // A hand-over there and back, at once; then the leaver's wait.
+    let at_rest = acct_of(0, 6_100);
+    let (tb, there) = account_pass(&w.lib, &at_rest, &pass_s, xk(&w.w), 0, w.payer(&w.a, &old)).unwrap();
+    let there = nth(&signed("handed over", &tb, &w.keys), 0, there, 6_400);
+    let fw = [coin58(xk(&w.w), 46, 0)];
+    let (bb, back) = account_pass(&w.lib, &there, &pass_s, xk(&w.a), 0, w.payer(&w.w, &fw)).unwrap();
+    let back = nth(&signed("and handed back at once", &bb, &w.keys), 0, back, 6_401);
+    assert_eq!((there.s.expiry, back.s.expiry, back.s.a_key), (6_200, 6_500, xk(&w.a)));
+    assert!(add(&back, &[coin58(xk(&w.a), 44, 6_499)]).is_err() && add(&back, &[coin58(xk(&w.a), 44, 6_500)]).is_ok_and(|b| taken30(&b.0, &w.keys)), "the leaver adds 99 blocks after it has the account back");
+    // An account that landed a block ago, handed over: the taker's wait (F106).
+    let fresh = acct_of(0, 6_399);
+    let (hb, taken_over) = account_pass(&w.lib, &fresh, &pass_s, xk(&w.w), 0, w.payer(&w.a, &old)).unwrap();
+    let theirs = nth(&signed("an account that landed a block ago, handed over", &hb, &w.keys), 0, taken_over, 6_400);
+    let take_add = |coin: u64| account_add(&w.lib, &theirs, &add_s, SIDE_A, KAS1, w.payer(&w.w, &[coin58(xk(&w.w), 46, coin)]));
+    assert_eq!(theirs.s.expiry, 6_499);
+    let taker_waits = take_add(6_498).is_err() && take_add(6_499).is_ok_and(|b| taken30(&b.0, &w.keys) && !taken30(&landed58(&b.0, 2, 6_498), &w.keys));
+    assert!(taker_waits);
+    // A join: the later of the two times.
+    let shard = shard_with47(&w, &[], 100 * KAS1, 0);
+    let (mut j1, mut j2) = (cov47(&w, &[], 2 * KAS1, 0), OLive { op: op(88), ..cov47(&w, &[], 3 * KAS1, 0) });
+    (j1.s.expiry, j2.s.expiry) = (6_200, 6_450);
+    let mut joins = 0;
+    for (p, q) in [(&j1, &j2), (&j2, &j1)] {
+        let (jb, joined) = account_join(&w.lib, p, q, &shard, &w.script("KpfTJoinC"), w.payer(&w.a, &old)).unwrap();
+        assert!(joined.expiry == 6_450 && jb.tx.inputs[0].sequence == late as u64 && taken30(&jb, &w.keys), "two accounts of two times joined: the later");
+        for other in [6_200i64, 6_449, 6_451, 0] {
+            let mut wrong = jb.clone();
+            wrong.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Account { expiry: other, ..joined.clone() }.hash());
+            no(&format!("a join that writes the time {other}"), &wrong);
+        }
+        joins += 1;
+    }
+    println!("T1b R58 F104 is closed: an addition and a hand-over show an input that landed at or after the account's time and write the later of it and the account's landing and a lateness; {} transactions refused; two additions in a row, the third a lateness after the first's landing; after a third party's round of a step that is not the rule's ({round} sompi) the account's time is unmoved and its user adds 5 KAS at once; a hand-over there and back at once, then the leaver waits 99 blocks; a taker of an account that landed a block ago waits 99 blocks ({taker_waits}); {joins} joins write the later time; with the largest number as the landing of the coin shown, {} of the two are taken", refused.get(), unlanded.get());
+}
+
+/// Round 57, F103 (Medium), fixed in round 58 for an entry; the join's wait is left, as 15.10 says. `KpfTEnterS`
+/// asks no age: what it writes as the shard's time (the entry's time, a lateness and two dispute periods) is a
+/// lateness or more after what the shard says.
+///  - On shards as they come out of (a) a note applied by a key that is not the owner's, (b) the owner's
+///    addition, (c) a third party's call that is not due, answered wrong: an entry is stated AT ONCE (no age on
+///    either input). A join on the same three still carries the lateness as the shard's age and is refused a
+///    block young: the rest of F103.
+///  - Two entries of one time: after an entry of 6,500 (the shard says 6,700) a second of 6,500 or of 6,599 is
+///    refused (the builder; and written by hand, the engine), of 6,600 taken (the shard says 6,800).
+///  - After a draw of 6,500 is applied the shard says 6,900 (the draw's time and twice a lateness and two
+///    periods): an entry of 6,799 is refused, of 6,800 taken: entries wait three latenesses after a draw's time.
+///  - The count of round 57 again, one entry or one join always waiting, notes applied at random at 0 to 5 a
+///    lateness over 2,000 latenesses: entries taken a lateness (a note takes the shard's output of its block,
+///    and the entry the next), and joins (the age, as it was).
+#[test]
+fn t1b_fixed_f103_an_entry_is_a_lateness_after_the_last_by_its_time_and_a_join_still_waits() {
     let w = ow();
     let late = w.terms().late_daa;
     let leg = w.fut(0, 10, LONG, P10);
@@ -13075,26 +13244,23 @@ fn t1b_finding_f103_a_shard_that_is_spent_in_every_lateness_takes_no_entry_and_n
     let shard = shard52(&w, &[small], 3 * KAS1 / 2);
     let acct = cov52(&w, &[], 20 * KAS1);
     let second = OLive { op: op(88), ..acct.clone() };
-    // What an entry and a join ask of a shard that just came out of a transaction.
-    let waits = |what: &str, young: &OLive<Shard>| -> bool {
-        let (eb, _, _, _, _, _) = c_enter_state(&w.lib, &acct, young, &w.script("KpfTEnterS"), SEED52, small, 0, &[], 6_600, w.payer(&w.a, &fa)).unwrap_or_else(|e| panic!("{what}: an entry: {e}"));
+    let enter = w.script("KpfTEnterS");
+    // (An entry is stated at once, a join waits a lateness) on a shard that just came out of a transaction.
+    let on = |what: &str, young: &OLive<Shard>| -> (bool, bool) {
+        let (eb, _, _, _, _, _) = c_enter_state(&w.lib, &acct, young, &enter, SEED52, small, 0, &[], 6_600, w.payer(&w.a, &fa)).unwrap_or_else(|e| panic!("{what}: an entry: {e}"));
         let (jb, _) = account_join(&w.lib, &acct, &second, young, &w.script("KpfTJoinC"), w.payer(&w.a, &fa)).unwrap_or_else(|e| panic!("{what}: a join: {e}"));
         let e_in = second_at55(&eb);
-        let entry = eb.tx.inputs[e_in].sequence == late as u64 && taken30(&eb, &w.keys) && !taken30(&younger56(&eb, e_in, 1), &w.keys);
+        let entry = age_told56(&eb) == 0 && eb.tx.inputs[0].sequence == 0 && eb.tx.inputs[e_in].sequence == 0 && taken30(&eb, &w.keys);
         let join = jb.tx.inputs[3].sequence == late as u64 && taken30(&jb, &w.keys) && !taken30(&younger56(&jb, 3, 1), &w.keys);
-        entry && join
+        (entry, join)
     };
-    // (a) A note applied by a key that is not the owner's.
     let note = note_made46(&shard, Left { sid, legs: vec![small], key: xk(&w.a), asked: 0 }, 75, 6_050);
     let (nb, after_note, _) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
     let ns = signed("a note applied by a key that is not the owner's", &nb, &only_keys(&[&w.f]));
-    let a = nb.tx.inputs[0].sequence == 0 && waits("after a note", &nth(&ns, out_at47(&ns, &hash_spk(&w.lib, &after_note.hash())), after_note, 6_590));
-    // (b) The owner's addition.
+    let a = on("after a note", &nth(&ns, out_at47(&ns, &hash_spk(&w.lib, &after_note.hash())), after_note, 6_590));
     let (ab, added) = shard_fund(&w.lib, &shard, &w.script("KpfTAddC"), NOTE_MIN, w.payer(&w.b, &fb)).unwrap();
-    let b = ab.tx.inputs[0].sequence == 0 && waits("after an addition", &nth(&signed("the owner's addition", &ab, &w.keys), 0, added, 6_590));
-    // (c) A call that is not due, by a third party; disputed and answered wrong by it.
+    let b = on("after an addition", &nth(&signed("the owner's addition", &ab, &w.keys), 0, added, 6_590));
     let third = only_keys(&[&w.w]);
-    assert!(shard_call(&w.lib, &shard, &w.script("KpfTChange"), [P10, 0, 0, 0], T0, xk(&w.w), w.payer(&w.w, &fw)).is_err(), "(the builder states no call that is not due: written by hand)");
     let (cst, cd) = call_by_hand54(&shard, [P10, 0, 0, 0], [P10, 0, 0, 0], w.terms().keeper_fee_min, 0, T0, xk(&w.w)).unwrap();
     let cb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &cst, &cd.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
     let c1 = signed("a call that is not due, by a third party", &cb, &third);
@@ -13103,102 +13269,188 @@ fn t1b_finding_f103_a_shard_that_is_spent_in_every_lateness_takes_no_entry_and_n
     let (eb, right) = call_end(&w.lib, &nth(&c2, 0, q, 6_511), &shard.s, &cd, &w.script("KpfTCallEnd"), xk(&w.w), w.payer(&w.w, &fw3), None).unwrap();
     assert!(!right, "the call is not due");
     let c3 = signed("answered wrong by it", &eb, &third);
-    assert_eq!((c3.tx.outputs[0].value, &c3.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &shard.s.hash())), "the shard again as it was");
-    let call_cost = spent57(&[&c1, &c2, &c3], &[xk(&w.w)]);
-    let c = cb.tx.inputs[0].sequence == 0 && waits("after a call that was not due", &nth(&c3, 0, shard.s, 6_512));
+    let c = on("after a call that was not due", &nth(&c3, 0, shard.s, 6_512));
+    assert!(a.0 && b.0 && c.0, "F103 is open: an entry waits on a shard that something else just spent: {a:?} {b:?} {c:?}");
+    // Two entries of one time.
+    let base = shard52(&w, &[], 500 * KAS1);
+    let (b1, _, _, _, _, s1) = c_enter_state(&w.lib, &acct, &base, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &fa)).unwrap();
+    let s1 = nth(&signed("an entry of 6,500", &b1, &w.keys), 2, s1, 6_501);
+    assert_eq!(s1.s.expiry, 6_700);
+    let mut edges = vec![];
+    for (t0, takes) in [(T0, false), (6_599, false), (6_600, true), (6_601, true)] {
+        assert_eq!(c_enter_state(&w.lib, &second, &s1, &enter, SEED52, small, 0, &[], t0, w.payer(&w.a, &fa)).is_ok(), takes, "the builder, a second entry of {t0}");
+        let (hb, _, _, next) = enter_by_hand52(&w, &second, &mark51(&second.s, small, 0), &[P10], &s1, 0, t0, SEED52);
+        assert_eq!(hb.is_ok_and(|b| taken30(&b, &w.keys)), takes, "F103: a second entry of {t0} on a shard that says 6,700");
+        edges.push((t0, takes, next.expiry));
+    }
+    // After a draw.
+    let drawn = base.s.drawn(KAS1, T0);
+    assert_eq!(drawn.expiry, 6_900);
+    let after_draw = OLive { s: drawn, value: base.value - KAS1 as u64, op: op(97), ..base.clone() };
+    for (t0, takes) in [(6_799i64, false), (6_800, true)] {
+        let (hb, _, _, _) = enter_by_hand52(&w, &acct, &mark51(&acct.s, small, 0), &[P10], &after_draw, 0, t0, SEED52);
+        assert_eq!(hb.is_ok_and(|b| taken30(&b, &w.keys)), takes, "an entry of {t0} after a draw of 6,500");
+    }
     // The count.
-    let mut rng = Rng(0x5157);
-    let (l, spans) = (late, 2_000i64);
-    let mut taken = vec![];
+    let mut rng = Rng(0x5158);
+    let spans = 2_000i64;
+    let mut counted = vec![];
     for per_mille in [0i64, 500, 1_000, 2_000, 3_000, 5_000] {
-        let (mut age, mut entries) = (0i64, 0i64);
-        for _ in 0..l * spans {
-            if rng.range(0, l * 1_000) < per_mille {
+        // (An entry: its time is the block it lands in, a lateness after the last; a note takes the block's output.
+        // A join: the shard has stood a lateness.)
+        let (mut since, mut entries, mut age, mut joins) = (late, 0i64, 0i64, 0i64);
+        for _ in 0..late * spans {
+            let note = rng.range(0, late * 1_000) < per_mille;
+            if !note && since >= late {
+                (since, entries) = (0, entries + 1);
+            } else {
+                since += 1;
+            }
+            if note {
                 age = 0;
-            } else if age >= l {
-                (age, entries) = (0, entries + 1);
+            } else if age >= late {
+                (age, joins) = (0, joins + 1);
             } else {
                 age += 1;
             }
         }
-        taken.push((per_mille as f64 / 1_000.0, entries as f64 / spans as f64));
+        counted.push((per_mille as f64 / 1_000.0, entries as f64 / spans as f64, joins as f64 / spans as f64));
     }
-    let every_99 = (0..l * spans).fold((0i64, 0i64), |(age, n), t| if t % (l - 1) == 0 { (0, n) } else if age >= l { (0, n + 1) } else { (age + 1, n) }).1;
-    println!("T1b R57 F103: an entry and a join wait a lateness of {late} blocks on a shard that came out of a note applied by another key ({a}), of its owner's addition ({b}), of a third party's call that was not due ({c}; its round costs the third party {call_cost} sompi, the bond {}); with an entry always waiting and notes applied at random (notes a lateness, entries taken a lateness) {taken:?}; with a note every {} blocks: {every_99} entries in {spans} latenesses", cst.bond, l - 1);
-    if !a && !b && !c {
-        println!("F103 is closed: an entry and a join are made on a shard that something else just spent");
-        return;
-    }
-    assert!(a && b && c && every_99 == 0 && taken[0].1 > 0.98 && taken[4].1 < 0.2 && call_cost < cst.bond / 2 + 5_000_000);
-    println!("T1b R57 F103 OPEN: a shard in use takes entries and joins only in its pauses, and a third party makes a pause end for {call_cost} sompi");
+    println!("T1b R58 F103 is closed for an entry: (stated at once, a join waits a lateness) on a shard that came out of a note applied by another key {a:?}, of its owner's addition {b:?}, of a third party's call that was not due {c:?}; a second entry on a shard that says 6,700 (its time, taken, what the shard then says) {edges:?}; after a draw of 6,500 an entry of 6,800 is the first; (notes a lateness, entries taken a lateness, joins taken a lateness) {counted:?}");
+    assert!(counted.iter().all(|r| r.1 > 0.94) && counted[4].2 < 0.2);
+    assert!(a.1 && b.1 && c.1, "(the join's wait is left; where this fails it is gone)");
 }
 
-/// Round 57, F104 (Medium). An addition to an account asks that the account has stood a lateness (round 56,
-/// F98; kept in round 57: `KpfTAddC` has no age for a shard alone). A step is anybody's statement and asks no
-/// age. So two keys that are neither the user's nor the owner's state a step of the account that is not the
-/// rule's, dispute it and answer it wrong: the account again as it was, in a new output; and its user adds
-/// nothing to it for a lateness (nor enters, hands it over or joins it: those ask the age too). At the block the
-/// addition would be one, the same round is made again, at no age. The price is half the bond and three fees a
-/// lateness: 0.1 KAS and fees on every account of 20 KAS or less at 1 % (half of one per cent of its coins above
-/// that). The user's leaving is still stated at no age: it can go, it cannot add.
-/// Run on accounts of 3, 20 and 1,000 KAS: the round by the two keys alone; the user's addition on the output
-/// carrying the lateness, refused a block young and at no age; the next round's statement on it taken at no age;
-/// the user's leaving on it taken at no age. Passes while that is so.
+/// Round 58, F105 (Medium). "Where no age can be asked the bond is the price" (docs 15.8) holds where somebody
+/// else ends the statement. A statement that is out of its time (it landed before the time it says, or more than
+/// a lateness after it) is neither applied nor disputed: `KpfTChangeLate` ends it, the object again as it was,
+/// and gives its WHOLE bond to the key whoever ends it names. `KpfTChange` and `KpfTEnterS` hold a statement's
+/// time to nothing (below 500,000,000,000), and ask no age. So a claimer states a time ahead of the chain, and
+/// its own key ends the statement in the next block and has the bond back: the round is two transactions and
+/// costs two fees, on an object of any size, and the floors of round 57 are no price.
+///  - **An account, by anyone**: a step of the year after (6,500 + 1,000), by a key that is not the account's:
+///    not applied and not disputed (the builders; and at the engine with the landing put in); ended by that key,
+///    which has its 0.2 KAS back; the account as it was, and the next such statement is stated on it at once.
+///    The same with a time long past.
+///  - **A shard, by anyone**: a call of a time ahead (a bond of 0.2 KAS and more), ended by its own key.
+///  - **A shard, by its owner**: a draw of a time ahead (a bond of 1 KAS), ended by its own key.
+///  - **A shard, by its owner: entries of times ahead** (15.10: "each costs it a bond and an account"). Three
+///    accounts of its own (both keys the owner's): entries of 6,500, 6,600 and 6,700 are stated in three blocks
+///    in a row, each on the shard the one before wrote. The last, out of its time, is ended by the owner's key
+///    (the bond back), the marked account undone by it (the keeper's fee back), and the account is as it was
+///    less nothing but fees. The shard then says 6,900: an entry of the chain's own time (6,504) is refused,
+///    and of every time below 6,800. One block of this is one lateness in which the shard takes no entry.
+///  - One entry of the last time (499,999,999,999): the shard takes no entry and gives no draw after it, ever
+///    (no later time is a statement's).
+/// Passes while the claimer has its bond back.
 #[test]
-fn t1b_finding_f104_anyone_keeps_an_account_young_for_half_a_bond_and_its_user_adds_nothing_to_it() {
+fn t1b_finding_f105_a_statement_out_of_its_time_is_ended_by_its_own_claimers_key_for_two_fees() {
     let w = ow();
-    let late = w.terms().late_daa;
     let leg = w.fut(0, 10, LONG, P10);
     let small = XLeg { size: leg.size / 100, ..leg };
-    let third = only_keys(&[&w.w, &w.f]);
-    let mut rows = vec![];
-    for coins in [3 * KAS1, 20 * KAS1, 1_000 * KAS1] {
-        let mut acct = cov47(&w, &[small], coins, 0);
-        acct.s.bond_bps = 100;
-        let x = acct.s.clone();
-        assert!(x.a_key != xk(&w.w) && x.b_key != xk(&w.w) && x.a_key != xk(&w.f) && x.b_key != xk(&w.f));
-        let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
-        let st = stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: coins }]).unwrap(), coins, xk(&w.w));
-        assert_eq!(x.c_end_judged(KIND_C_STEP, &said, &st.claimer, &st.outs, coins, T0), Some(false), "a step of an account that stands is not the rule's");
-        let (f1, f2, f3, fa) = ([fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.f), 73, 1_000)], [fund(xk(&w.a), 44, 1_000)]);
-        let b1 = account_state(&w.lib, &acct, &w.script("KpfTChange"), &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
-        assert_eq!(b1.tx.inputs[0].sequence, 0);
-        let s1 = signed("a step that is not the rule's, by a key that is not the account's", &b1, &third);
-        let (b2, q) = point_dispute(&w.lib, &nth(&s1, 0, st, 6_510), &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.f, &f2)).unwrap();
-        let s2 = signed("disputed by their other key", &b2, &third);
-        let (b3, right) = c_end(&w.lib, &nth(&s2, 0, q, 6_511), &x, &said, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.f, &f3), None).unwrap();
-        assert!(!right);
-        let s3 = signed("answered wrong by it", &b3, &third);
-        assert_eq!((s3.tx.outputs[0].value, &s3.tx.outputs[0].script_public_key), (acct.value, &hash_spk(&w.lib, &x.hash())), "the account again as it was");
-        let cost = spent57(&[&s1, &s2, &s3], &[xk(&w.w), xk(&w.f)]);
-        let young = nth(&s3, 0, x.clone(), 6_512);
-        // The user's addition on that output.
-        let (ab, _) = account_add(&w.lib, &young, &w.script("KpfTAddC"), SIDE_A, KAS1, w.payer(&w.a, &fa)).unwrap();
-        let mut at_once = with_arg(&ab, 1, bytes_arg(&sm8(0)));
-        at_once.tx.inputs[0].sequence = 0;
-        let waits = ab.tx.inputs[0].sequence == late as u64 && taken30(&ab, &w.keys) && !taken30(&younger56(&ab, 0, 1), &w.keys) && !taken30(&at_once, &w.keys);
-        // The next round, and the user's leaving, at no age.
-        let again = account_state(&w.lib, &young, &w.script("KpfTChange"), &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
-        let next_round = again.tx.inputs[0].sequence == 0 && taken30(&again, &third);
-        let leaves = c_state(&w.lib, &young, &w.script("KpfTChange"), KIND_C_LEAVE, 0, ALL, &[P10], 6_512, xk(&w.a), w.payer(&w.a, &fa)).is_ok_and(|l| l.0.tx.inputs[0].sequence == 0 && taken30(&l.0, &w.keys));
-        rows.push((coins / KAS1, st.bond, cost, waits, next_round, leaves));
+    let ahead = T0 + 1_000;
+    let change = w.script("KpfTChange");
+    // (The cost of the round to the claimer's keys, the object again as it was, a statement of the same kind
+    // stated on that output at once.)
+    let mut rows: Vec<(String, i64, i64, bool)> = vec![];
+    let mut neither = true;
+    // (Whether the end is taken where the statement's output has no landing yet: the largest number as its score.)
+    let mut unlanded = vec![];
+    // An account, by a key that is not its own: a time ahead, and a time long past.
+    let mut acct = cov47(&w, &[small], 20 * KAS1, 0);
+    acct.s.bond_bps = 100;
+    let x = acct.s.clone();
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+    for (what, t0) in [("a step of a time ahead, by a third key", ahead), ("a step of a time long past, by a third key", 6_000)] {
+        let st = Stated { t0, ..stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 20 * KAS1 }]).unwrap(), 20 * KAS1, xk(&w.w)) };
+        let f1 = [fund(xk(&w.w), 30, 1_000)];
+        let third = only_keys(&[&w.w]);
+        let sb = account_state(&w.lib, &acct, &change, &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
+        assert_eq!(sb.tx.inputs[0].sequence, 0);
+        let s1 = signed(what, &sb, &third);
+        let live = nth(&s1, 0, st, 6_510);
+        // Not applied, not disputed.
+        let fw = [fund(xk(&w.w), 31, 1_000)];
+        assert!(stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &fw)).is_err() && point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.w, &fw)).is_err(), "the builders");
+        let twin = OLive { daa: t0 as u64, ..live.clone() };
+        let settle = stated_settle(&w.lib, &twin, &w.script("KpfTChangeSettle"), w.payer(&w.w, &fw)).unwrap();
+        let dispute = point_dispute(&w.lib, &twin, &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.w, &fw)).unwrap().0;
+        neither &= taken30(&settle, &w.keys) && taken30(&dispute, &w.keys) && !taken30(&landed50(&settle, 6_510), &w.keys) && !taken30(&landed50(&dispute, 6_510), &w.keys);
+        // Ended by its own key.
+        let lb = stated_late58(&w, &live, &w.w, 32);
+        unlanded.push(taken30(&landed58(&lb, 0, u64::MAX), &third));
+        let l1 = signed("ended as out of its time by the claimer's own key", &lb, &third);
+        let back = l1.tx.outputs[0].value == acct.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &x.hash());
+        let again = account_state(&w.lib, &nth(&l1, 0, x.clone(), 6_511), &change, &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
+        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(&w.w)]), back && again.tx.inputs[0].sequence == 0 && taken30(&again, &third)));
     }
-    println!("T1b R57 F104: a step that is not the rule's, by two keys that are not the account's, disputed and answered wrong by them (the account in KAS, the bond, what the round costs them, the user's addition waits a lateness of {late} blocks on the output, the next round is stated on it at no age, the user's leaving is stated on it at no age) {rows:?}");
-    if rows.iter().all(|r| !r.3) {
-        println!("F104 is closed: a user adds to an account that a third party just gave back");
+    // A shard, by a third key: a call of a time ahead.
+    let shard = shard_with47(&w, &[small], 100 * KAS1, 0);
+    let state = |st: &Stated, d: &Draw, by: &Keypair, n: u8| state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), n, 1_000)])).unwrap();
+    let (cst, cd) = call_by_hand54(&shard, [P10, 0, 0, 0], [P10, 0, 0, 0], w.terms().keeper_fee_min, 0, ahead, xk(&w.w)).unwrap();
+    let (dst, dd) = draw_by_hand45(&shard, KAS1, [P10, 0, 0, 0], xk(&w.b)).unwrap();
+    let dst = Stated { t0: ahead, ..dst };
+    for (what, st, d, by) in [("a call of a time ahead, by a third key", cst, cd, &w.w), ("a draw of a time ahead, by the owner", dst, dd, &w.b)] {
+        let own = only_keys(&[by]);
+        let s1 = signed(what, &state(&st, &d, by, 30), &own);
+        let l1 = signed("ended as out of its time by the claimer's own key", &stated_late58(&w, &nth(&s1, 0, st, 6_510), by, 32), &own);
+        let back = l1.tx.outputs[0].value == shard.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &shard.s.hash());
+        let again = state_raw(&w.lib, &nth(&l1, 0, shard.s, 6_511), &shard.s.fixed_hash(), &shard.s.moving(), &st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), 30, 1_000)])).unwrap();
+        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(by)]), back && again.tx.inputs[0].sequence == 0 && taken30(&again, &own)));
+    }
+    // The owner's entries of times ahead: three in three blocks.
+    let owners = only_keys(&[&w.b, &w.f]);
+    let enter = w.script("KpfTEnterS");
+    let mut on = nth_shard58(&shard52(&w, &[], 500 * KAS1), 6_500);
+    let mut last = None;
+    let mut entry_sgs = vec![];
+    for i in 0..3u8 {
+        let mut own = cov52(&w, &[], 20 * KAS1);
+        (own.s.a_key, own.op) = (xk(&w.f), op(120 + i));
+        let t0 = T0 + 100 * i as i64;
+        let (eb, est, _, marked, _, next) = c_enter_state(&w.lib, &own, &on, &enter, SEED52, small, 0, &[], t0, w.payer(&w.f, &[fund(xk(&w.f), 60 + i, 1_000)])).unwrap_or_else(|e| panic!("the owner's entry {i} of the time {t0}: {e}"));
+        assert_eq!((eb.tx.inputs[0].sequence, eb.tx.inputs[second_at55(&eb)].sequence, next.expiry), (0, 0, t0 + 200));
+        let es = signed(&format!("the owner's entry {i}, of the time {t0}, landing at {}", 6_501 + i as u64), &eb, &owners);
+        on = nth(&es, 2, next, 6_501 + i as u64);
+        last = Some((nth(&es, 0, est, 6_501 + i as u64), marked, own));
+        entry_sgs.push(es);
+    }
+    let (entry, marked, own) = last.unwrap();
+    assert!(!entry.s.in_time(entry.daa) && entry.s.t0 == 6_700 && on.s.expiry == 6_900);
+    let l1 = signed("the entry of a time ahead, ended by the owner's key", &stated_late58(&w, &entry, &w.f, 70), &owners);
+    assert_eq!((l1.tx.outputs[0].value, &l1.tx.outputs[0].script_public_key), (own.value, &hash_spk(&w.lib, &marked.hash())), "the marked account, holding what the account held");
+    let (ob, undone, _) = enter_off(&w.lib, &nth(&l1, 0, marked.clone(), 6_504), &w.script("KpfTEnterOff"), w.payer(&w.f, &[fund(xk(&w.f), 71, 1_000)])).unwrap();
+    let o1 = signed("the marked account undone by the owner's key", &ob, &owners);
+    let cycle = spent57(&[&entry_sgs[2], &l1, &o1], &[xk(&w.b), xk(&w.f)]) + (own.s.a_margin - undone.a_margin);
+    assert_eq!(own.s.a_margin - undone.a_margin, w.terms().keeper_fee_min, "the account less the keeper's fee, which its own key has");
+    // What the shard then takes.
+    let user = cov52(&w, &[], 20 * KAS1);
+    let fa = [fund(xk(&w.a), 33, 1_000)];
+    let honest: Vec<(i64, bool)> = [6_504i64, 6_799, 6_800].iter().map(|t0| (*t0, c_enter_state(&w.lib, &user, &on, &enter, SEED52, small, 0, &[], *t0, w.payer(&w.a, &fa)).is_ok_and(|e| taken30(&e.0, &w.keys)))).collect();
+    assert_eq!(honest, vec![(6_504, false), (6_799, false), (6_800, true)]);
+    // The last time.
+    let far = shard52(&w, &[], 500 * KAS1).s.entered(&small, 0, 499_999_999_999).unwrap();
+    let never = far.entered(&small, 0, 499_999_999_999).is_err() && far.draw_end_judged(&Draw { amount: KAS1, prices: [P10, 0, 0, 0] }, &xk(&w.b), 499_999_999_999) == Some(false);
+    println!("T1b R58 F105: a statement out of its time is neither applied nor disputed ({neither}); ended by its own claimer's key (what, the bond, what the round of two transactions costs the claimer, the object as it was and the same stated on it at once) {rows:?}; the owner's entries of 6,500, 6,600 and 6,700 land in three blocks in a row, and the last, ended and undone by its own keys, costs it {cycle} sompi (a note's least of it is in the note that the leg did not enter, and comes back where the note is applied); with the largest number as the landing of the statement's output the end is taken: {unlanded:?}; the shard then says {} and takes an entry of (its time, taken) {honest:?}; after an entry of the last time a shard takes no entry and gives no draw ({never})", on.s.expiry);
+    if rows.iter().all(|r| r.2 >= r.1 / 2) {
+        println!("F105 is closed: a statement out of its time costs its claimer half its bond or more, whoever ends it");
         return;
     }
-    assert!(rows.iter().all(|r| r.3 && r.4 && r.5));
-    assert!(rows[0].2 >= NOTE_MIN / 2 && rows[0].2 < NOTE_MIN / 2 + 4_000_000 && rows[2].2 >= 5 * KAS1 && rows[2].2 < 5 * KAS1 + 4_000_000);
-    println!("T1b R57 F104 OPEN: for {} sompi a lateness on an account of 20 KAS or less, anyone keeps its user from adding to it", rows[0].2);
+    assert!(neither && never && rows.iter().all(|r| r.3 && r.2 < 3_000_000) && cycle < NOTE_MIN + 4_000_000);
+    println!("T1b R58 F105 OPEN: an account or a shard is landed again at will for {} sompi a round by a statement of a time ahead that its own claimer ends; an owner's entries of times ahead cost it {cycle} sompi each", rows[0].2);
 }
 
-/// Round 57, item 7: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
+/// The live shard `s`, as landed at `daa`.
+fn nth_shard58(s: &OLive<Shard>, daa: u64) -> OLive<Shard> {
+    OLive { daa, ..s.clone() }
+}
+
+/// Round 58, item 6: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
 #[test]
-fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
+fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
-    let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
-    println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
+    let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
+    println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
-    assert_eq!(sizes, vec![("KpfTAddC", 563, 528), ("KpfTChange", 1571, 1571), ("KpfTJoinC", 1565, 1550), ("KpfTEnterS", 2309, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 618), ("KpfTPass", 602), ("KpfTJoinC", 1625), ("KpfTEnterS", 2293), ("KpfTOpenC", 684)]);
 }

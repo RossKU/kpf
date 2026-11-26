@@ -388,7 +388,7 @@ pub fn shard_note_cmd(a: &Args) -> R<()> {
 /// leg (a covered account has nothing of a second party's: docs 14.2). Its terms are the shard's. Both sign: both
 /// keys are given here (`--key` twice).
 pub fn open_cmd(a: &Args) -> R<()> {
-    only(a, &["shard", "seed", "market1", "a", "b", "a-margin", "dispute-daa", "bond-bps", "exit-daa", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
+    only(a, &["shard", "seed", "market1", "a", "b", "a-margin", "dispute-daa", "bond-bps", "anchor", "script", "registry", "registry-unchecked", "lib", "lib-unchecked"])?;
     let net = network(a)?;
     let mut node = connect(a)?;
     let (l, shard) = shard_of(a, &mut node, net)?;
@@ -396,7 +396,7 @@ pub fn open_cmd(a: &Args) -> R<()> {
     if b_key != shard.owner {
         return Err("REFUSED: --b is not the owner of --shard: the shard applies no note of such an account and pays nothing it owes".into());
     }
-    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: 0, expiry: int_or(a, "exit-daa", 864_000)?, dispute_daa: int_or(a, "dispute-daa", shard.dispute_daa)?, bond_bps: int_or(a, "bond-bps", shard.bond_bps)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
+    let x = Account { t: shard.t, legs: vec![], a_key, b_key, a_margin: price(a, "a-margin")?, b_margin: 0, expiry: 0, dispute_daa: int_or(a, "dispute-daa", shard.dispute_daa)?, bond_bps: int_or(a, "bond-bps", shard.bond_bps)?, a_min_counter: 0, b_min_counter: 0, shard: Some(shard.sid) };
     // (An account has its shard's terms and periods: the dispute period and the bond rate are the shard's unless
     // given, and given otherwise the opening is refused. The shard's id is opened by its seed and its committee.)
     let seed = hex32(a.need("seed")?).map_err(e)?;
