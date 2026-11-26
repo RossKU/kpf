@@ -2543,3 +2543,110 @@ Not reached by the review: the price of a token row at the engine (a wrong seed,
 market); an entry on an account that holds a token leg; the edges of a split, a mark and a step with what the
 tokens count; a sale disputed at a row or a price; directions 15 and 23.
 
+### 16.16 After review 62 (27 November 2026; at the engine, my tests; the reviewer's are round 63)
+
+- **F109: the end of kinds 14 and 15 is shown the leg the statement names.** `KpfTCTok.answer` has one argument
+  more, the leg: it hashes to the chain the statement says (with no such leg shown nobody answers the end, and
+  the point lapses against the claimer), and where it is not a token leg the end is wrong. The model writes no
+  trace of these kinds that names another leg. (A statement that says a token leg's chain and passes a futures
+  leg by in its rows has a right end and a wrong row, as a leaving that names one leg and passes another by.)
+- **F110: nothing is put in at the stating of a sale.** `KpfTChange` is as it was. The claimer pays as it applies
+  its statement (a settlement's outputs hold at least what the statement says, and whoever applies it funds
+  them; the ticket is the claimer's, so nobody else does). **A sale nobody applies is ended by anyone**
+  (`KpfTCTok.lapse`): where the statement's output is as old as a lateness and two dispute periods, the account
+  again, half of the bond to whoever ends it and half in the script's copy. So a claimer that is a block late or
+  a price's step off loses a bond, as with any statement, and one that states a sale and leaves it has held the
+  account for that long for a bond.
+
+Run: a futures leg named by a 14: no trace, the end answered wrong and right refused, its row answered wrong.
+A sale stated (the statement holds the account and the bond), applied by its claimer who pays; the same sale not
+applied, ended at its life (half the bond to whoever ends it) and not a block before.
+
+### 16.17 Step 4 on paper: an account that owes (27 November 2026; replaces 16.12 (f); nothing built)
+
+16.12 (f), "the rule of the coins", had the call's step refuse an account that holds tokens and whose coins do
+not pay, until somebody bought the tokens. Building it showed what it rests on: a buyer. A token nobody buys (it
+fell to nothing; its market has no committee left) would keep the account's legs in the shard's rows for good,
+and a call ends only when no row has a unit: one such account would hold every claim of a called shard. The same
+outside a call: "not every leg while tokens are held" leaves the clearing party with an account it cannot close.
+
+**The rule instead: the legs leave, and the account owes.**
+
+- A covered account's moving part has a number that is nothing today (where a position has side B's margin).
+  It is **what the account owes its shard**. Every script that takes a covered account asks that it is nothing
+  (they do today), but the three below: an account that owes does nothing else until it has paid.
+- **A step of every leg** (kind 9, stated of every leg) on an account that holds token legs: the futures legs
+  leave, the coins pay what they can (a note's least stays), and the account goes on with its token legs and
+  owes the rest. Its note names all the account's legs, as today; the scripts that apply it pass a token leg by.
+  (A step that names one leg and turns to every leg by its sums is still not the rule's while tokens are held:
+  its rows do not say the chain of the token legs alone. It is stated of every leg.)
+- **The call's step** on an account that holds token legs: the same. The futures legs are counted at the call's
+  prices, the coins pay what they can, the account goes on with its tokens and owes the rest; where the coins
+  pay everything it owes nothing and has what is left. The step is never refused: a call reaches its end
+  whatever a token is worth.
+- **An account that owes** has two ways on. Its user pays (a script that takes coins of the user's and writes
+  the payment to the shard). Or anyone sells a token leg (kind 15): of an account that owes, a sale is the rule's
+  with no other test; what the claimer pays goes to the shard first, as far as the account owes, and the rest to
+  the account's coins. When it owes nothing it is an account as any, and its tokens leave by its user's
+  statement.
+- **What is paid to the shard** is a note that holds the coins and says its shard, which a script of one line
+  applies (the shard holds that much more). Under a call it is what the claims are paid from, late or not.
+- The sale before any debt (16.12 (c), kind 15: where a step is due and the coins pay no step on a futures leg)
+  stays: it keeps a user's futures legs where its tokens can pay. The debt is for what is left when nobody did.
+
+**What changes in what is built.** `KpfTCRow`: of a step of every leg, a token leg stays and adds one to the
+third sum (which is nothing there: so the end knows how many legs the account goes on with). `KpfTCEnd`: a step
+of every leg with tokens writes the account that owes and no payment to the user. `KpfTLeftAll`, `KpfTLeftVoid`:
+a token leg in a note's legs is passed by, and is no leg "that is not in the books". `KpfTCStep`: token legs
+passed by in the sum; the account that goes on. `KpfTCTok`: the sale of an account that owes. New: the payment's
+note and the script that applies it; the user's payment.
+
+**Asked of the review, on paper:** whether the number is safe where every other script asks nothing of it (a
+script that forgot to); what an account that owes and whose tokens are worth less than it owes ends as; whether
+the user's own payment and a sale can race or cross; what the three covenant outputs of the call's step weigh
+(the call, the note, the account that goes on) and what the account must hold; a split, a hand-over or a join
+that makes an account owe without its user (none should: they ask that it owes nothing); and whether the sale
+before any debt and the debt together leave a state with no way on.
+
+### 16.18 Review 63, and step 4 as it will be built
+
+At the engine: F109 is closed (a statement of kind 14 on a futures leg is written by no tool, and written by
+hand has a wrong end) and F110 is (a sale's statement holds the account and the bond; ended, it leaves nothing
+in the account). Whoever applies a sale of 50 KAS puts in 50.2076, and the ticket is the claimer's. A sale lives
+200 blocks: ended then by another key the claimer has lost its bond of 0.2 KAS; a block short is refused. An
+honest claimer applies from an age of 50. A claimer that disputes itself restarts the life once, no more (no
+dispute lands after the last time to dispute). The default workspace: 621 tests, none failed (my run, after the
+reviewer's one count was brought along). `KpfTCTok` is 3,394 bytes.
+
+| | What it found | Decided |
+|---|---|---|
+| F111 (low) | a sale never applied holds an account 200 blocks for the least bond: sixty times cheaper a block than a wrong step | a sale's bond is no less than a hundredth of what it pays, and its life is a dispute period and a lateness |
+| N36 (high) | four scripts ask nothing of the number 16.17 uses (`KpfTAddC`, `KpfTPass`, `KpfTCStep`, `KpfTCallEnter`), and `KpfTChange` adds it to the coins for the bond | each asks that it is nothing, but where the rule below gives an account that owes a way on. First, alone |
+| N37 (high) | a note that names a token leg is applied by nothing and spent for nothing by anybody | no note names a token leg: see below |
+| N38 (medium) | three outputs under the id in the call's step weigh close to what a block takes where the account that goes on holds a note's least; the step's fee is taken from the coins before the shard is paid | measured when built; the loss is paid before the fee |
+| N39 (medium) | a user that owes a little is sold whole in the next block | the step that makes an account owe writes its time; a sale is stated at or after it |
+| N40 (medium) | coins that reach a called shard after its claims were paid at one share | decided with `KpfTCallPay` read, when the payment's note is built |
+| N41 (low) | an account that owes more than its tokens are worth owes for good | with the vault |
+| N42 (low) | with the debt no account is left with no way on; the sale before any debt is one rule too many | so: a sale is of an account that owes, and of no other |
+
+**Step 4, as it will be built** (16.17, with these, and one thing more: a step of one leg makes the account owe,
+so that no step of every leg is needed and no note names a token leg):
+
+- **What an account owes** is the number at bytes 76 to 84 of its moving part. Every script that takes a covered
+  account asks that it is nothing, but: a step (kind 9), a sale (kind 15), the call's step, and the payment.
+- **A step of one futures leg on an account that holds tokens** does not turn to every leg where the coins do not
+  pay: the leg leaves, the coins pay what they can of what it lost (and then of the fee), and the account owes
+  the rest. Default stays in steps, a leg at a time. The standing a step is due by counts what the account owes
+  against it. A step of every leg is not stated while tokens are held, as built.
+- **The call's step** on an account that holds tokens: the futures legs leave by a note that names them alone
+  (the step reads the legs: it has their chain), the coins pay what they can, and the account goes on with its
+  token legs, owing the rest.
+- A step that makes an account owe more writes the account's time: the time of what it reads, a lateness and a
+  dispute period.
+- **A sale (kind 15)** is of an account that owes, stated at or after the account's time: the claimer pays at
+  least the leg's worth less the liquidation fee's rate; the shard is paid first, as far as the account owes, by
+  a note that holds the coins; the rest is the account's coins. (The sale where a step was due and the coins did
+  not pay a step, as built in step 3, goes.)
+- **The payment**: anyone pays what an account owes, in part or whole, by a script that writes the same note.
+- An account that owes nothing is an account as any: its tokens leave by its user's statement.
+

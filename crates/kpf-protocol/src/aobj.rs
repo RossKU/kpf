@@ -275,8 +275,7 @@ impl AObj {
             AObj::Rest(n) => n.value(),
             AObj::Mark(n) => n.value(),
             AObj::Ticket(n) => n.value(),
-            // (Tokens sold in a step: the statement holds what its claimer pays the account, too.)
-            AObj::Stated { st, said, .. } => st.held + st.bond + if st.kind == crate::covered::KIND_C_TOK_SOLD && said.len() >= 8 { crate::state::int8(&said[..8]).max(0) } else { 0 },
+            AObj::Stated { st, .. } => st.held + st.bond,
             AObj::Pointed { q, .. } => q.st.held + 2 * q.st.bond,
         }
     }

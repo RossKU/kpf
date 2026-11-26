@@ -10501,7 +10501,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
     // (Round 55: KpfTChange has the floor of a draw's bond, 1,543; KpfTDrawNote is shown the legs, 1,393.)
     // (Round 56: the ages of an addition and of a draw; the deposit note out of KpfTAcctEnd; what a shard owes in KpfTDrawNote.)
-    assert_eq!(sizes, vec![("KpfTChange", 1653), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1629), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1700), ("KpfTLeftVoid", 1747)]);
 }
 
 // ================================================================================================================
@@ -11616,7 +11616,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3257), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1653), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3257), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1629), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12217,7 +12217,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 67);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1653), ("KpfTCStep", 3257), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1629), ("KpfTCStep", 3257), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -13011,7 +13011,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 67);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1653, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1629, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13744,7 +13744,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 67);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1653), ("KpfTCRow", 2574), ("KpfTStepPrice", 1825), ("KpfTCStep", 3257), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1629), ("KpfTCRow", 2574), ("KpfTStepPrice", 1825), ("KpfTCStep", 3257), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
 // ================================================================================================================
@@ -14113,7 +14113,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 67);
-    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2574), ("KpfTChange", 1653), ("KpfTCStep", 3257), ("KpfTStepPrice", 1825), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2574), ("KpfTChange", 1629), ("KpfTCStep", 3257), ("KpfTStepPrice", 1825), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -14419,12 +14419,14 @@ fn t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes() {
     assert!(after.c_state(KIND_C_TOK_OUT, 0, 2, &[P10, P10], 6_900, 60 * KAS1, xk(&w.a)).is_err(), "a second ticket of a leg that left");
     // A ticket of a FUTURES leg: what the model states, what the end says of it, what the leg's row says.
     let plain = cov47(&w, &[long, w.fut(2, 3, SHORT, P10)], 60 * KAS1, 0);
-    let on_futures = plain.s.c_state(KIND_C_TOK_OUT, 0, 1, &[P10, P10], T0, 60 * KAS1, xk(&w.a)).ok().map(|(fst, fs, fo)| {
-        let row = c_row_judged_of(KIND_C_TOK_OUT, &[0; 32], &long, &kpf_protocol::thin::Row::ZERO, &fs.rows[0], 1, &fs);
-        let q = w.pointed(&OLive { daa: 6_510, ..w.stated(&plain, &fst, &fs.said()) }, 1);
-        (end_taken60(&w, &plain, &fst, &fs, "KpfTCTok"), row, c_row_taken47(&w, &q, &fs, 1, &[0; 32], &long), fo.note.is_some(), fo.after.map(|a| a.legs.len()))
-    });
-    println!("T1b R62 a ticket of a futures leg: (the end taken (right, wrong), the model's verdict on the leg's row, the row taken (right, wrong), a note to the shard, the legs the account keeps) {on_futures:?}");
+    // (Round 62, F109, fixed in round 63: the model states none, and the end, which is now shown the leg, is wrong.)
+    assert!(plain.s.c_state(KIND_C_TOK_OUT, 0, 1, &[P10, P10], T0, 60 * KAS1, xk(&w.a)).is_err() && plain.s.c_trace_tok(KIND_C_TOK_OUT, &[P10, P10], 1).is_none(), "F109 is open: the model states a ticket of a futures leg");
+    let fs = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), rows: plain.s.c_trace(&[P10, P10], 1).unwrap() };
+    let without = Account { legs: vec![plain.s.legs[1]], a_min_counter: 1, b_min_counter: 6_900, ..plain.s.clone() };
+    let f_outs = Outs::with_notes(&[(Out { key: false, to: without.hash(), value: 60 * KAS1 }, false), (Out { key: false, to: Ticket { chain: fs.lc, key: xk(&w.a) }.hash(), value: NOTE_MIN }, true)]).unwrap();
+    let fst = stated57(&plain.s, KIND_C_TOK_OUT, &fs, f_outs, 60 * KAS1, xk(&w.a));
+    let on_futures = (plain.s.c_end_judged(KIND_C_TOK_OUT, &fs, &fst.claimer, &fst.outs, 60 * KAS1, T0), end_taken60(&w, &plain, &fst, &fs, "KpfTCTok"));
+    assert_eq!(on_futures, (Some(false), (false, true)), "F109 is open: the end of a ticket of a futures leg, written by hand, is not wrong");
     // 15.
     let low = P10 * 85 / 100;
     // (A token leg at a discount of 90 %: it counts 5 KAS, and the account is below its level.)
@@ -14434,13 +14436,14 @@ fn t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes() {
     let by_user = poor.s.c_state(KIND_C_TOK_SOLD, pays, 2, &[low, P10], T0, KAS1, xk(&w.a)).is_ok();
     let (b15, st15, s15, o15) = c_state(&w.lib, &poor, &change, KIND_C_TOK_SOLD, pays, 2, &[low, P10], T0, xk(&w.w), w.payer(&w.w, &[fund(xk(&w.w), 30, 1_000)])).unwrap();
     let c1 = signed("tokens sold: stated by a third key", &b15, &only_keys(&[&w.w]));
-    assert_eq!(c1.tx.outputs[0].value as i64, KAS1 + st15.bond + pays, "the statement holds what the account held, the bond, and what the claimer pays");
+    // (Round 62, F110, fixed in round 63: nothing is put in when a sale is stated; whoever applies it pays.)
+    assert_eq!(c1.tx.outputs[0].value as i64, KAS1 + st15.bond, "F110 is open: the statement holds more than what the account held and the bond");
     let live = nth(&c1, 0, st15, 6_510);
     let c2 = signed("tokens sold: applied", &stated_settle(&w.lib, &live, &settle, w.payer(&w.f, &[fund(xk(&w.f), 72, 1_000)])).unwrap(), &w.keys);
     let (sold_after, sold_ticket) = (o15.after.clone().unwrap(), o15.ticket.unwrap());
     let a_at = out_at47(&c2, &hash_spk(&w.lib, &sold_after.hash()));
     assert_eq!((sold_after.a_margin, c2.tx.outputs[a_at].value as i64, sold_ticket.key, paid(&c2, &xk(&w.w))), (KAS1 + pays, KAS1 + pays, xk(&w.w), st15.bond), "the account's coins more by what was paid; the ticket the claimer's; its bond back");
-    let applied = spent57(&[&c1], &[xk(&w.w)]) - paid(&c2, &xk(&w.w));
+    let applied = spent57(&[&c2], &[xk(&w.f)]);
     // The same with the ticket written to another key: answered wrong.
     let bent_outs = Outs::with_notes(&[(st15.outs.list()[0], false), (Out { to: Ticket { key: xk(&w.f), chain: sold_ticket.chain }.hash(), ..st15.outs.list()[1] }, true)]).unwrap();
     let bent = Stated { outs: bent_outs, ..st15 };
@@ -14451,11 +14454,25 @@ fn t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes() {
     let e1 = signed("answered wrong by another key", &eb, &w.keys);
     assert!(!right && e1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &poor.s.hash()));
     let wrong = (spent57(&[&b1], &[xk(&w.w)]) - paid(&e1, &xk(&w.w)), e1.tx.outputs[0].value as i64 - KAS1, paid(&e1, &xk(&w.f)) - 1_000 * KAS1);
+    assert_eq!(wrong.1, 0, "F110 is open: a sale answered wrong leaves coins in the account");
     // Of a time ahead: ended as out of its time by another key.
     let ahead = Stated { t0: T0 + 1_000, ..st15 };
     let h1 = signed("a sale of a time ahead", &account_state(&w.lib, &poor, &change, &ahead, &s15.said(), w.payer(&w.w, &[fund(xk(&w.w), 30, 1_000)])).unwrap(), &only_keys(&[&w.w]));
     let l1 = signed("ended as out of its time by another key", &stated_late58(&w, &nth(&h1, 0, ahead, 6_510), &w.f, 74), &only_keys(&[&w.f]));
     let late = (spent57(&[&h1], &[xk(&w.w)]) - paid(&l1, &xk(&w.w)), l1.tx.outputs[0].value as i64 - KAS1, paid(&l1, &xk(&w.f)) - 1_000 * KAS1);
+    assert_eq!(late.1, 0, "F110 is open: a sale out of its time leaves coins in the account");
+    // A sale that stands and is not applied: ended at the end of its life (a lateness and two dispute periods).
+    let life = live.s.sale_life();
+    let lapse = |obj: &OLive<Stated>, age: u64| tok_lapse(&w.lib, obj, &w.script("KpfTCTok"), xk(&w.f), age, w.payer(&w.f, &[fund(xk(&w.f), 75, 1_000)]));
+    let lb = lapse(&live, life as u64).unwrap();
+    let ls = signed("a sale not applied, ended at the end of its life by another key", &lb, &only_keys(&[&w.f]));
+    assert_eq!((life, lb.tx.inputs[0].sequence, ls.tx.outputs[0].value, &ls.tx.outputs[0].script_public_key), (200, 200, poor.value, &hash_spk(&w.lib, &poor.s.hash())), "the account again as it was, the sale having stood 200 blocks");
+    let mut short = with_arg(&lb, 1, bytes_arg(&sm8(life - 1)));
+    short.tx.inputs[0].sequence = life as u64 - 1;
+    assert!(!taken30(&short, &w.keys) && !taken30(&younger56(&lb, 0, 1), &w.keys) && lapse(&live, life as u64 - 1).map_or(true, |b| !taken30(&b, &w.keys)), "a sale ended a block before the end of its life");
+    let standing14 = nth(&s1, 0, st, 6_510);
+    assert!(lapse(&standing14, life as u64).is_err(), "the builder ends a statement of another kind as a sale not applied");
+    let lapsed = (spent57(&[&c1], &[xk(&w.w)]), paid(&ls, &xk(&w.f)) - 1_000 * KAS1);
     // Accounts on which nothing is the rule's.
     let mut r = Rng(0x5162_0003);
     let lo = w.terms().mmr_bps - w.terms().g_bps;
@@ -14486,7 +14503,7 @@ fn t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes() {
             first = first.or(Some((coins, last.gain, last.tk, last.wa, last.ea, legs.iter().map(|l| (l.dir, l.entry)).collect::<Vec<_>>(), why)));
         }
     }
-    println!("T1b R62 kinds 14 and 15: tokens leave by their user's statement and the ticket is the user's; a second ticket of that leg: none; tokens sold by a third key for {pays} sompi: the statement holds the payment beside the bond, the account's coins grow by it, the ticket is the claimer's, and stated and applied it has cost the claimer {applied} sompi in all; the user itself as the claimer of a sale: {by_user}; a sale answered wrong (the claimer has lost, the account's output holds more than before, whoever answered has): {wrong:?}; a sale of a time ahead, ended by another key (the same three): {late:?}; of {below} random accounts below the lower level by their sums, {stuck} on which no step and no sale is the rule's (the first: coins, what all gained, the tokens' sum, the worth, what the others lost, the legs' directions) {first:?}");
+    println!("T1b R62 kinds 14 and 15: tokens leave by their user's statement and the ticket is the user's; a second ticket of that leg: none; tokens sold by a third key for {pays} sompi: the statement holds the payment beside the bond, the account's coins grow by it, the ticket is the claimer's, and whoever applies it puts in {applied} sompi in all (the payment, the ticket's least, its fee); the user itself as the claimer of a sale: {by_user}; a sale answered wrong (the claimer has lost, the account's output holds more than before, whoever answered has): {wrong:?}; a sale of a time ahead, ended by another key (the same three): {late:?}; a sale that stands and is never applied is ended after {life} blocks (the claimer has lost, whoever ended it has): {lapsed:?}; of {below} random accounts below the lower level by their sums, {stuck} on which no step and no sale is the rule's (the first: coins, what all gained, the tokens' sum, the worth, what the others lost, the legs' directions) {first:?}");
 }
 
 /// Round 62, item 8: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
@@ -14496,5 +14513,5 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 67);
-    assert_eq!(sizes, vec![("KpfTCTok", 2713), ("KpfTCRow", 2574), ("KpfTCEnd", 3342), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1825), ("KpfTChange", 1653), ("KpfTCStep", 3257), ("KpfTEnterS", 2323), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3394), ("KpfTCRow", 2574), ("KpfTCEnd", 3342), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1825), ("KpfTChange", 1629), ("KpfTCStep", 3257), ("KpfTEnterS", 2323), ("KpfTPoint", 2588)]);
 }

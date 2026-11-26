@@ -10,8 +10,12 @@ pragma silverscript ^0.1.0;
 //     gained and what the token legs count, the one sold too, are below the lower level) and no step on a futures
 //     leg is (no leg has lost, or the coins less what the legs lost are below the liquidation fee of what all are
 //     worth). The claimer says what it pays where a take has its amount: at least the leg's worth at the price
-//     stated less the liquidation fee's rate. The account's coins grow by it. (The claimer put it in as it stated:
-//     KpfTChange.)
+//     stated less the liquidation fee's rate. The account's coins grow by it: whoever applies the statement pays
+//     it in, and the ticket is the claimer's, so the claimer applies it. A sale nobody applies within a lateness
+//     and two dispute periods of its landing is ended by anyone (`lapse`): the account again, half of the bond
+//     to whoever ends it and half in this script's copy (review 62, F110).
+// The end is shown the leg the statement names (it hashes to the chain said) and asks that it is a token leg: no
+// ticket is written for a leg of another kind (review 62, F109).
 // What is stated is a leaving's: the amount, the leg, the chain of that leg alone, and the trace (a row a leg, six
 // sums). KpfTCRow answers the rows: of these kinds the leg named is a token leg, its worth whole is the fifth sum,
 // and it counts in the sixth only where it is sold. The prices are answered by KpfTStepPrice.
@@ -21,7 +25,8 @@ pragma silverscript ^0.1.0;
 //
 // KpfTCTok: the answer of the point 0 of a statement of kind 14 or 15.
 //   answer(who, ageb, slotLen, terms, root, moving, kind, t0, said, outs, bond, claimer, window, late, held, dkey,
-//          point, at, rkey, verdict)                                                                           anyone.
+//          point, at, rkey, verdict, leg)                                                                      anyone.
+//   lapse(who, ageb, slotLen, position, t0, arg, outs, bond, claimer, window, late, held, ender)             anyone.
 contract KpfTCTok(int init_version) {
     int version = init_version;
 
@@ -115,7 +120,7 @@ contract KpfTCTok(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, int kind, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[111] leg) {
         byte[] mv = byte[](moving);
         byte[] tb = byte[](terms);
         byte[32] position = blake2b(p33(blake2b(tb + p33(root))) + mv);
@@ -170,6 +175,9 @@ contract KpfTCTok(int init_version) {
         int when = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
         if (skip < 1) { ok = 0; }
         if (skip > n) { ok = 0; }
+        // The leg the statement names, shown: a token leg (direction 7).
+        require(blake2b(z32 + byte[](leg)) == byte[32](said.slice(16, 48)));
+        if (int(byte[8](byte[](leg).slice(94, 102))) != 7) { ok = 0; }
         int cafter = coins;
         int wtime = quiet;
         byte[] tkey = mv.slice(0, 33);
@@ -206,6 +214,45 @@ contract KpfTCTok(int init_version) {
         }
         require(ok == verdict);
         ends(j, rs, slotLen, verdict, c1, position, bond, claimer, dkey, rkey);
+    }
+
+    entry lapse(byte[24] who, byte[8] ageb, int slotLen, byte[32] position, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] ender) {
+        require(version == 1);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        // A sale (kind 15) that stands, not disputed, and that nobody applied: this object is as old as a
+        // lateness and two dispute periods.
+        require(blake2b(i9(CHANGE_TAG) + p33(position) + i9(15) + i9(t0) + p33(arg) + p33(outs) + i9(bond) + p33(claimer) + i9(window) + i9(late) + i9(held)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        int lateness = late;
+        if (late >= LATE_AGAIN) { lateness = late - LATE_AGAIN; }
+        require(window > 0);
+        require(lateness >= 0);
+        require(int(ageb) >= lateness + 2 * window);
+        // The account again; half of the bond to whoever ends it, half in this copy.
+        int v = tx.inputs[j].value;
+        require(bond > 0);
+        require(v >= bond);
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v - bond);
+        int half = bond / 2;
+        if (half > 0) {
+            int m = tx.outputs.length - 1 - 4 * j;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(ender))));
+            require(tx.outputs[m].value >= half);
+        }
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
     // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named

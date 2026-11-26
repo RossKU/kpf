@@ -762,7 +762,7 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
         // the fee and what is left of the disputer's bond after the two quarters.)
         // (Round 59: KpfTChangeLate a third time, where it keeps half the bond of a statement out of its time: the
         // going-on is written in the entry, and its `goesOn` is left in the source, called by nothing.)
-        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if name == "KpfTPoint" { 4 } else if ["KpfTLiq", "KpfTKind", "KpfTChangeLate"].contains(&name) { 3 } else { 2 }, "{name}: ORACLE_FEE is read where the copy goes on and nowhere else");
+        assert_eq!(code.matches("ORACLE_FEE").count(), if collector { 0 } else if name == "KpfTPoint" { 4 } else if ["KpfTLiq", "KpfTKind", "KpfTChangeLate", "KpfTCTok"].contains(&name) { 3 } else { 2 }, "{name}: ORACLE_FEE is read where the copy goes on and nowhere else");
         // Where the four conditions live: the entry body, plus any `goesOn`/`ends` the entry calls.
         let func = |n: &str| -> Option<String> { code.split(&format!("function {n}()")).nth(1).map(|b| b.split("\n    }").next().unwrap().to_string()) };
         let ends_fn = code.split("function ends(").nth(1).map(|b| b.split("\n    }").next().unwrap().to_string());
@@ -824,7 +824,7 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     pinned.sort();
     assert_eq!(sorted, pinned, "every script of the library");
     assert_eq!(COLLECTORS, kpf_protocol::thin_artifacts::COLLECTORS);
-    assert_eq!((entries, releases), (77, 65));
+    assert_eq!((entries, releases), (78, 65));
 }
 
 /// Round 19, the places over the sources. `release` (and `KpfSlot.go`, `KpfFeePool.go`) asks only to be named at a

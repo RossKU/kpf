@@ -207,14 +207,7 @@ contract KpfTChange(int init_version) {
         for (i, 1, outs.length / 41, 3) {
             require(outs.slice(41 * i, 41 * i + 1) == byte[](0x01) || outs.slice(41 * i, 41 * i + 1) == byte[](0x02));
         }
-        // (Tokens sold in a step, kind 15: the claimer puts in, as it states, what it pays the account (what it
-        // says where a take has its amount), so that anybody applies the statement. docs 16.12.)
-        int prepaid = 0;
-        if (kind == 15) {
-            prepaid = int(byte[8](said.slice(0, 8)));
-            require(prepaid > 0);
-        }
-        becomes(j, rs, slotLen, changeHash(position, kind, t0, blake2b(said), blake2b(outs), bond, claimer, iAt(mv, DISPUTE_AT), iAt(mv, LATE_AT), tx.inputs[j].value), tx.inputs[j].value + bond + prepaid);
+        becomes(j, rs, slotLen, changeHash(position, kind, t0, blake2b(said), blake2b(outs), bond, claimer, iAt(mv, DISPUTE_AT), iAt(mv, LATE_AT), tx.inputs[j].value), tx.inputs[j].value + bond);
         require(int(ageb) >= 0);
         goesOn();
     }

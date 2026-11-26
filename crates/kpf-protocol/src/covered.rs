@@ -290,7 +290,11 @@ impl Account {
         let mut rows: Vec<Row> = vec![];
         for (i, (l, p)) in self.legs.iter().zip(a).enumerate() {
             let before = rows.last().copied().unwrap_or(Row::ZERO);
-            rows.push(if skip == i as i64 + 1 && l.dir == DIR_SPOT {
+            // (These kinds name a token leg: there is no trace of them that names another.)
+            if skip == i as i64 + 1 && l.dir != DIR_SPOT {
+                return None;
+            }
+            rows.push(if skip == i as i64 + 1 {
                 let w = worth(l.size, l.scale, *p)?;
                 let counted = add(rate_down(w, sub(BPS, l.entry)?)?, 1)?;
                 let tk = if kind == KIND_C_TOK_SOLD { add(before.tk, counted)? } else { before.tk };
@@ -594,7 +598,10 @@ impl Account {
         let zero = Row::ZERO;
         let row = s.rows.last().unwrap_or(&zero);
         let (gain, w, ls, tw, tk) = (row.gain, row.wa, row.ea, row.eb, row.tk);
-        let mut ok = n >= 1 && row.g == self.legs_root() && w >= 0 && ls >= 0 && tw >= 0 && tk >= 0 && self.b_margin == 0;
+        // (The end is shown the leg the statement names, which hashes to the chain said: with none it takes
+        // neither verdict. And it is a token leg. Review 62, F109.)
+        let named = self.legs.iter().find(|l| chain_of_one(l) == s.lc)?;
+        let mut ok = n >= 1 && row.g == self.legs_root() && w >= 0 && ls >= 0 && tw >= 0 && tk >= 0 && self.b_margin == 0 && named.dir == DIR_SPOT;
         let coins = self.a_margin;
         let m = sub(coins, NOTE_MIN)?;
         let g = self.t.g_bps;
@@ -681,7 +688,7 @@ impl Account {
         } else {
             amount
         };
-        let rows = if kind == KIND_C_MARK { self.c_trace_marked(a, skip, amount) } else if tok { self.c_trace_tok(kind, a, skip) } else { self.c_trace(a, skip) }.ok_or_else(|| no("a sum of its trace is beyond what is counted"))?;
+        let rows = if kind == KIND_C_MARK { self.c_trace_marked(a, skip, amount) } else if tok { self.c_trace_tok(kind, a, skip) } else { self.c_trace(a, skip) }.ok_or_else(|| no("a sum of its trace is beyond what is counted (or the leg named is no token leg, where tokens leave or are sold)"))?;
         let lc = if skip >= 1 { self.legs.get(skip as usize - 1).map(chain_of_one).unwrap_or([0; 32]) } else { [0; 32] };
         let mut s = CSaid { amount, skip, lc, rows };
         // (A step states its fee: the rule's.)

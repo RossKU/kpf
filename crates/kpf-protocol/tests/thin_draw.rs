@@ -2928,7 +2928,8 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
 
     // The ends that are not the rule's; and the rows.
     let lie = |what: &str, x: &OLive<Account>, kind: i64, prices: &[i64; 2], amount: i64, skip: i64, claimer: [u8; 32], want: bool| {
-        let named = skip.clamp(1, 2);
+        // (The token leg is the second of every account here: the trace names it, whatever the statement says.)
+        let named = 2i64;
         let s = CSaid { amount, skip, lc: chain_of_one(&x.s.legs[named as usize - 1]), rows: x.s.c_trace_tok(kind, prices, named).unwrap() };
         let judged = x.s.c_end(kind, &s, &claimer, x.value as i64, T0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
@@ -2944,15 +2945,19 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     lie("every leg named", &rich, KIND_C_TOK_OUT, &a, 0, ALL, xk(&w.w), false);
     let waits = OLive { s: Account { b_min_counter: T0 + 1, ..rich.s.clone() }, ..rich.clone() };
     lie("before the account's time", &waits, KIND_C_TOK_OUT, &a, 0, 2, xk(&w.w), false);
-    // (A futures leg named by these kinds: the end has only sums, and the leg's row is what is wrong.)
+    // A futures leg named by these kinds: the model writes no such trace; its row is wrong, and so is the end,
+    // which is shown the leg named and asks a token leg (review 62, F109).
+    assert!(rich.s.c_trace_tok(KIND_C_TOK_OUT, &a, 1).is_none() && rich.s.c_state(KIND_C_TOK_OUT, 0, 1, &a, T0, rich.value as i64, xk(&w.w)).is_err());
     for kind in [KIND_C_TOK_OUT, KIND_C_TOK_SOLD] {
-        let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace_tok(kind, &a, 1).unwrap() };
+        let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace(&a, 0).unwrap() };
         assert_eq!(c_row_judged_of(kind, &[0; 32], &long, &kpf_protocol::thin::Row::ZERO, &s.rows[0], 1, &s), Some(false));
         let every = CSaid { skip: ALL, ..s.clone() };
         assert_eq!(c_row_judged_of(kind, &s.rows[0].g, &tok, &s.rows[0], &s.rows[1], 2, &every), Some(false));
     }
-    let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace_tok(KIND_C_TOK_OUT, &a, 1).unwrap() };
+    let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace(&a, 0).unwrap() };
+    assert_eq!(rich.s.c_end(KIND_C_TOK_OUT, &s, &xk(&w.w), rich.value as i64, T0), Some(None), "the leg named is no token leg");
     let lv = acct_stated(&w, &rich, &Stated { arg: s.arg(), ..live.s }, &s.said());
+    end_answered(&w, "tokens leave, a futures leg named", &rich, &lv, &s, false);
     let (b, right) = c_row(&w.lib, &w.pointed(&lv, 1), &s, 1, &[0u8; 32], &long, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(!right);
     signed("tokens leave, a futures leg named: its row answered wrong", &b, &w.keys);
@@ -2963,7 +2968,7 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
 
     // Sold in a step. At 9.5 the long has lost 500 KAS; the account has 10 KAS and 10 tokens that count 80. A step
     // is due and its coins pay no step on the long: the tokens are sold. The claimer pays their worth less the
-    // fee's rate; it put that in as it stated, and anybody applies the statement.
+    // fee's rate, as it applies the statement (nothing is put in at the stating: review 62, F110).
     let few_tok = tleg(&w, 1, 10);
     let few = cov(&w, &shard, &[long, few_tok], 10 * KAS1);
     let down = [P10 * 95 / 100, P10];
@@ -2972,7 +2977,17 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     let (live, said, o, sg) = c_applied(&w, "tokens sold in a step", &few, KIND_C_TOK_SOLD, 0, 2, &down, &w.f);
     let (after, ticket) = (o.after.clone().unwrap(), o.ticket.unwrap());
     assert_eq!((said.amount, ticket), (pay, Ticket { chain: chain_of_one(&few_tok), key: xk(&w.f) }));
-    assert_eq!(live.value, few.value + (live.s.bond + pay) as u64, "the statement holds what its claimer pays");
+    assert_eq!(live.value, few.value + live.s.bond as u64, "the statement holds the account and the bond, and nothing of the payment");
+    // A sale nobody applies: as old as a lateness and two dispute periods it is ended by anyone, for half its bond.
+    let ff = [fund(xk(&w.c), 46)];
+    let life = live.s.sale_life() as u64;
+    assert_eq!(life as i64, t.late_daa + 2 * few.s.dispute_daa);
+    let b = tok_lapse(&w.lib, &live, &w.script("KpfTCTok"), xk(&w.c), life, w.payer(&w.c, &ff)).unwrap();
+    let lp = signed("a sale nobody applied, ended", &b, &w.keys);
+    assert_eq!((lp.tx.outputs[0].value, &lp.tx.outputs[0].script_public_key, b.tx.inputs[0].sequence), (few.value, &hash_spk(&w.lib, &few.s.hash()), life));
+    assert!(pays(&lp, &xk(&w.c), live.s.bond / 2));
+    let b = tok_lapse(&w.lib, &live, &w.script("KpfTCTok"), xk(&w.c), life - 1, w.payer(&w.c, &ff)).unwrap();
+    assert!(!accepted(&b, &w.keys), "a sale ended a block before its life is over");
     assert_eq!((after.legs.clone(), after.a_margin, after.a_min_counter, after.b_min_counter), (vec![long], 10 * KAS1 + pay, 1, few.s.b_min_counter));
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (few.value + pay as u64, &hash_spk(&w.lib, &after.hash())));
     assert_eq!((said.rows[1].eb, said.rows[1].tk), (100 * KAS1, counted(10, P10)), "sold: it counts for the standing the step is due by");
@@ -2981,8 +2996,7 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     lie("a sompi less paid for the tokens", &few, KIND_C_TOK_SOLD, &down, pay - 1, 2, xk(&w.f), false);
     lie("more paid for the tokens", &few, KIND_C_TOK_SOLD, &down, pay + KAS1, 2, xk(&w.f), true);
     assert!(few.s.c_end(KIND_C_TOK_SOLD, &CSaid { amount: 0, ..said.clone() }, &xk(&w.f), few.value as i64, T0).unwrap().is_none(), "nothing paid (and no such statement is stated)");
-    // (A statement of 15 holds what its claimer pays: the test's coin of 1,000 KAS states one of 100.)
-    lie("no step is due", &rich, KIND_C_TOK_SOLD, &a, 100 * KAS1, 2, xk(&w.f), false);
+    lie("no step is due", &rich, KIND_C_TOK_SOLD, &a, 990 * KAS1, 2, xk(&w.f), false);
     // Futures legs first: where the coins pay a step on the long, the tokens are not sold, and the step is stated.
     let fee = 9_500 * KAS1 / 10_000 * t.liq_fee_bps;
     let pays = cov(&w, &shard, &[long, few_tok], NOTE_MIN + 500 * KAS1 + fee);

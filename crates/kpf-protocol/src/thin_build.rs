@@ -1897,9 +1897,7 @@ pub fn state_raw<T>(lib: &[u8; 32], obj: &OLive<T>, fixed: &[u8; 32], moving: &[
     let args = vec![bv(vec![0; 24]), bv(sm8(age).to_vec()), iv(pinned::kit().object_len() as i64), bv(fixed.to_vec()), bv(moving.to_vec()), iv(st.kind), iv(st.t0), bv(said.to_vec()), bv(st.outs.bytes()), bv(st.claimer.to_vec()), bv(form), Arg::Sig(st.claimer)];
     let (id, lid) = enter_hash(&mut d, lib, obj, &st.position, "object", script, "KpfTChange", "state", args, age as u64)?;
     d.lock(st.t0 as u64);
-    // (Tokens sold in a step, kind 15: the claimer puts in what it pays the account, as it states.)
-    let prepaid = if st.kind == crate::covered::KIND_C_TOK_SOLD && said.len() >= 8 { crate::state::int8(&said[..8]).max(0) as u64 } else { 0 };
-    d.out(obj.value + st.bond as u64 + prepaid, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
+    d.out(obj.value + st.bond as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated change", None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);
     d.finish()
@@ -2511,6 +2509,11 @@ pub fn c_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate:
         args.push(iv(c.kind));
     }
     args.extend(point_args_said(q, s.said(), 0, rkey, right));
+    if name == "KpfTCTok" {
+        // (The end of a token leg's leaving or sale is shown the leg the statement names.)
+        let Some(leg) = account.legs.iter().find(|l| crate::covered::chain_of_one(l) == s.lc) else { return invalid("the statement names no leg of the account: nobody answers its end") };
+        args.push(bv(crate::thin::leg_bytes(leg)));
+    }
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, name, "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
@@ -2826,6 +2829,28 @@ pub fn mark_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note:
         d.last(paid, &n.key, "what the user is paid", &p.change_to);
     }
     Ok((d.finish()?, next, rest))
+}
+
+/// `KpfTCTok.lapse`: a sale of tokens (kind 15) that stands and that nobody applied, as old as its life
+/// (`Stated::sale_life`), is ended by anyone: the account again, half of the bond to `ender`, half in the script's
+/// copy. `age`: the age the transaction says of the statement's output (the life, for whoever does not test).
+pub fn tok_lapse(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, ender: [u8; 32], age: u64, p: Payer) -> Result<OBuilt> {
+    let c = &obj.s;
+    if c.kind != crate::covered::KIND_C_TOK_SOLD {
+        return invalid("only a sale of tokens is ended as not applied");
+    }
+    let half = c.bond / 2;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(age as i64).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.t0), bv(c.arg.to_vec()), bv(c.outs.hash().to_vec()), iv(c.bond), bv(c.claimer.to_vec()), iv(c.window), iv(c.late), iv(c.held)];
+    args.push(bv(ender.to_vec()));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &c.hash(), "statement", script, "KpfTCTok", "lapse", args, age)?;
+    d.out(obj.value - c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "object", None);
+    keep_with(&mut d, script, lid, c.bond - half)?;
+    d.fund(p.funds, &p.change_to);
+    if half > 0 {
+        d.last(half, &ender, "half the bond, to who ended the sale", &p.change_to);
+    }
+    d.finish()
 }
 
 /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.

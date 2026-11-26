@@ -1036,6 +1036,12 @@ impl Stated {
     }
 
     /// The statement's lateness, standing again or not.
+    /// How old a sale (kind 15) that stands is before anyone ends it as not applied: a lateness and two dispute
+    /// periods (`KpfTCTok.lapse`; review 62, F110).
+    pub fn sale_life(&self) -> i64 {
+        self.lateness() + 2 * self.window
+    }
+
     pub fn lateness(&self) -> i64 {
         if self.late >= LATE_AGAIN {
             self.late - LATE_AGAIN
