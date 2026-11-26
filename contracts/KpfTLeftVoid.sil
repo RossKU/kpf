@@ -32,8 +32,11 @@ pragma silverscript ^0.1.0;
 //   blake2b(push8(12) + push(sid) + push8(7) + push(the user's key) + push8(the rest))
 // or, below zero, what the note holds is added to what the shard holds. (Applied a leg at a time, the books
 // between two legs were neither those before nor those after: review 48, F76.)
-// While the shard is called nothing is paid by this script: a note that asks something waits (the call's own
-// scripts pay every note the same share).
+// While the shard is called nothing is paid by this script: what a note asks is counted in what the shard owes by
+// claims (one number, where a position has side B's margin), and goes on as a claim, which the call's own scripts
+// pay at one share (docs 14.6):
+//   blake2b(push8(12) + push(sid) + push8(9) + push(the user's key) + push8(the amount))
+// A note of the rest that is shown to a called shard is counted and goes on as a claim the same way.
 // KpfTLeftVoid: a note of legs one of which is no leg of the shard's books (no futures leg; no row of its market;
 // or its market's row has fewer units than the note's legs of it) is applied by nothing. The scripts of legs write
 // no such note, but a statement nobody disputed could, and it would end every draw for good (review 51, F81).
@@ -49,6 +52,7 @@ contract KpfTLeftVoid(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
+    int constant CLAIM = 9;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
@@ -150,8 +154,13 @@ contract KpfTLeftVoid(int init_version) {
         require(OpCovInputCount(id) == 2);
         require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
+        // (What the note's output holds above a note's least, and no more than the note says: review 53, F86.)
         int more = 0;
-        if (asked < 0) { more = 0 - asked; }
+        if (asked < 0) {
+            more = tx.inputs[n].value - NOTE_MIN;
+            if (more < 0) { more = 0; }
+            if (asked > 0 - more) { more = 0 - asked; }
+        }
         require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(byte[](terms) + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((int(byte[8](mv.slice(67, 75))) + more) as byte[8]) + mv.slice(75, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value + more);
         goesOn();

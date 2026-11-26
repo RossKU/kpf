@@ -7403,7 +7403,7 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
             3 => -7,
             _ => 0,
         };
-        let s = Shard { t: terms, rows, owner, held, expiry: time, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis, called };
+        let s = Shard { t: terms, rows, owner, held, expiry: time, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis, called };
         let shard = shard_made45(s, 70);
         let most = s.draw_max(&prices);
         let amount = match if tame { [0, 6, 7, 8][r.range(0, 4) as usize] } else { r.range(0, 9) } {
@@ -7443,7 +7443,7 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
     assert!(rights > 20 && wrongs > 100 && nones > 30, "{rights} right, {wrongs} wrong, {nones} with no verdict");
     assert_eq!(model_wrong_script_none, 0, "F71 is open again: the model and the script's arithmetic differ on {model_wrong_script_none} draws");
     // ---- the outputs: the two numbers of the shard stay as they were.
-    let s = Shard { t: w.terms(), rows: [ShardRow { head: Head::of(&w.fut(0, 1, LONG, P10)), net: -10 * w.markets[0].p.scale, gross: 10 * w.markets[0].p.scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: -100 * KAS1, called: 0 };
+    let s = Shard { t: w.terms(), rows: [ShardRow { head: Head::of(&w.fut(0, 1, LONG, P10)), net: -10 * w.markets[0].p.scale, gross: 10 * w.markets[0].p.scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -100 * KAS1, called: 0 };
     let shard = shard_made45(s, 70);
     let prices = [P10, 0, 0, 0];
     let most = s.draw_max(&prices);
@@ -7477,7 +7477,7 @@ fn t1b_r45_a_short_rows_worth_is_rounded_down_which_is_for_the_owner() {
     let w = ow();
     let owner = xk(&w.b);
     let head = Head { scale: 10, ..Head::of(&w.fut(0, 1, LONG, P10)) };
-    let s = Shard { t: w.terms(), rows: [ShardRow { head, net: -15, gross: 15 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: 0, called: 0 };
+    let s = Shard { t: w.terms(), rows: [ShardRow { head, net: -15, gross: 15 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0 };
     let prices = [7, 0, 0, 0];
     // 15 * 7 / 10 = 10.5: counted 10. The requirement: 5.5 % and 2.25 % of 10, each rounded up: 1 + 1.
     assert_eq!((s.equity(&prices), s.requirement(&prices)), (Some(50 * KAS1 - 10), Some(2)));
@@ -7510,7 +7510,7 @@ fn t1b_fixed_f69_a_draw_whose_price_nobody_answers_costs_its_claimer_the_bond() 
     let real = Head::of(&w.fut(0, 1, LONG, P10));
     let made = Head::of(&XLeg { market: [0x6d; 32], ..w.fut(1, 1, LONG, P10) });
     // Side B is short 10 units of the first and 1,000 of the second, each entered at 10.
-    let s = Shard { t: w.terms(), rows: [ShardRow { head: real, net: -10 * scale, gross: 10 * scale }, ShardRow { head: made, net: -1_000 * scale, gross: 1_000 * scale }, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: -10_100 * KAS1, called: 0 };
+    let s = Shard { t: w.terms(), rows: [ShardRow { head: real, net: -10 * scale, gross: 10 * scale }, ShardRow { head: made, net: -1_000 * scale, gross: 1_000 * scale }, ShardRow::EMPTY, ShardRow::EMPTY], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -10_100 * KAS1, called: 0 };
     let shard = shard_made45(s, 70);
     let honest = [P10, P10, 0, 0];
     assert_eq!((s.equity(&honest), s.draw_max(&honest)), (Some(50 * KAS1), 0), "at the prices the legs entered at it holds 50 and is asked 782.75: no draw");
@@ -7607,7 +7607,7 @@ fn t1b_fixed_f70_a_shard_is_opened_with_eight_zero_bytes_for_its_basis_its_call_
 fn t1b_fixed_f71_the_model_gives_no_verdict_where_the_script_computes_an_equity_that_does_not_fit() {
     let w = ow();
     let owner = xk(&w.b);
-    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: i64::MAX, called: 0 };
+    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: i64::MAX, called: 0 };
     let shard = shard_made45(s, 70);
     let (st, d) = draw_by_hand45(&shard, s.held + 1, [0; 4], owner).unwrap();
     let (model, script) = (s.draw_end_judged(&d, &owner, T0), draw_end_as_the_script45(&s, &d, &owner));
@@ -7629,6 +7629,13 @@ fn note_made46<T>(shard: &OLive<Shard>, s: T, n: u8, daa: u64) -> OLive<T> {
 /// `KpfTLeft.apply`'s arithmetic in the script's own order, for the rows named: the shard that goes on, what is
 /// paid and the note of the rest; `None` where the script refuses or a number does not fit.
 fn left_as_the_script46(s: &Shard, n: &Left, at: &[usize]) -> Option<(Shard, i64, Option<RestNote>)> {
+    left_as_the_script54(s, n, at, NOTE_MIN.saturating_add(n.asked.checked_neg().unwrap_or(i64::MAX).max(0)))
+}
+
+/// (Round 54.) As above, of a note whose output holds `holds`: below zero, the shard takes what the output holds
+/// above a note's least and no more than the note says (F86); on a called shard nothing is paid, what is asked is
+/// added to what the shard owes by claims, and the note that goes on is a claim.
+fn left_as_the_script54(s: &Shard, n: &Left, at: &[usize], holds: i64) -> Option<(Shard, i64, Option<RestNote>)> {
     let worth = |n: i64, sc: i64, p: i64| (n / sc).checked_mul(p)?.checked_add((n % sc).checked_mul(p / sc)?)?.checked_add((n % sc).checked_mul(p % sc)? / sc);
     // (What is asked may be below zero: what the account paid for the legs, which the note holds. It is added to
     // what the shard holds, called or not, and nothing is paid.)
@@ -7654,15 +7661,21 @@ fn left_as_the_script46(s: &Shard, n: &Left, at: &[usize]) -> Option<(Shard, i64
         t.basis = basis;
     }
     if n.asked < 0 {
-        t.held = t.held.checked_sub(n.asked).filter(|v| *v > i64::MIN)?;
+        let mut more = holds.checked_sub(NOTE_MIN)?.max(0);
+        if n.asked > 0i64.checked_sub(more)? {
+            more = 0i64.checked_sub(n.asked)?;
+        }
+        t.held = t.held.checked_add(more)?;
         return Some((t, 0, None));
     }
-    if t.called != 0 && n.asked != 0 {
-        return None;
+    let mut pay = n.asked.min(t.held);
+    let called = t.called != 0;
+    if called {
+        pay = 0;
+        t.owed = t.owed.checked_add(n.asked)?;
     }
-    let pay = n.asked.min(t.held);
-    t.held -= pay;
-    Some((t, pay, (pay < n.asked).then_some(RestNote { sid: n.sid, key: n.key, amount: n.asked - pay })))
+    t.held = t.held.checked_sub(pay)?;
+    Some((t, pay, (pay < n.asked).then_some(RestNote { sid: n.sid, key: n.key, amount: n.asked - pay, counted: called })))
 }
 
 /// The row each leg of a note is read out of: the first of its market as the rows stand when its turn comes (as
@@ -7703,7 +7716,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
     let (mut cases, mut taken, mut refused) = (0, 0, 0);
     let mut parts = vec![];
     for case in 0..240 {
-        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: 0, called: 0 };
+        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0 };
         let mut booked: Vec<XLeg> = vec![];
         for _ in 0..r.range(1, 9) {
             let i = r.range(0, 5) as usize;
@@ -7761,8 +7774,8 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
             note_live.value = note.value() as u64;
         }
         let at = rows_for46(&s, &note);
-        let script = left_as_the_script46(&s, &note, &at);
-        let model = std::panic::catch_unwind(|| s.left(&note).ok());
+        let script = left_as_the_script54(&s, &note, &at, note_live.value as i64);
+        let model = std::panic::catch_unwind(|| s.left_holding(&note, note_live.value as i64).ok());
         match &model {
             Ok(m) => {
                 let same = match (m, &script) {
@@ -7821,7 +7834,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_i
     let w = ow();
     let owner = xk(&w.b);
     let (l1, l2, l3) = (XLeg { entry: P10 * 9 / 10, ..w.fut(0, 10, LONG, P10) }, w.fut(1, 4, SHORT, P10), w.fut(0, 3, SHORT, P10 * 11 / 10));
-    let empty = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: 20 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: 0, called: 0 };
+    let empty = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: 20 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0 };
     let s = empty.booked(&l1).unwrap().booked(&l2).unwrap().booked(&l3).unwrap();
     let scale = w.markets[0].p.scale;
     assert_eq!((s.rows[0].net, s.rows[0].gross, s.rows[1].net, s.basis), (-7 * scale, 13 * scale, 4 * scale, (-90 + 33 + 40) * KAS1), "the books: side B short 10 at 9 and long 3 at 11 of the first market, long 4 at 10 of the second");
@@ -7878,11 +7891,14 @@ fn t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_i
     assert!(taken30(&hb, &w.keys) && hrest.is_none() && hnext.held == 30 * KAS1);
     let id = held.id.expect("an id");
     let mut extra = hb.clone();
-    extra.tx.outputs.push(TransactionOutput { value: kpf_protocol::reserve::NOTE_MIN as u64, script_public_key: hash_spk(&w.lib, &RestNote { sid: s.sid, key, amount: KAS1 }.hash()), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: id }) });
+    extra.tx.outputs.push(TransactionOutput { value: kpf_protocol::reserve::NOTE_MIN as u64, script_public_key: hash_spk(&w.lib, &RestNote { sid: s.sid, key, amount: KAS1, counted: false }.hash()), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: id }) });
     no("a note of the rest where all that is asked is paid", extra);
     // While the shard is called.
     let called = shard_made45(Shard { called: 6_000, ..s }, 74);
-    assert!(called.s.left(&note).is_err() && !left_taken46(&w, &called, &note_made46(&called, note.clone(), 75, 6_050), &[0, 1], Shard { called: 6_000, ..next }, 20 * KAS1, Some(rest)), "a note that asks something is applied to a shard that is called");
+    // (Round 54: it is applied; nothing is paid, what it asks is owed by claims, and the note that goes on is a claim.)
+    let (kb, knext, krest) = left_apply(&w.lib, &called, &note_made46(&called, note.clone(), 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
+    assert!(taken30(&kb, &w.keys) && (knext.held, knext.owed, knext.called) == (s.held, note.asked, 6_000) && krest == Some(RestNote { sid: s.sid, key, amount: note.asked, counted: true }), "a note that asks something, applied to a shard that is called, is a claim of all it asks");
+    assert!(!left_taken46(&w, &called, &note_made46(&called, note.clone(), 75, 6_050), &[0, 1], Shard { called: 6_000, ..next }, 20 * KAS1, Some(rest)), "a note that asks something is paid by a shard that is called");
     refused.set(refused.get() + 1);
     let quiet = Left { asked: 0, ..note.clone() };
     let (cb, cnext, crest) = left_apply(&w.lib, &called, &note_made46(&called, quiet, 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
@@ -7908,8 +7924,8 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     let w = ow();
     let owner = xk(&w.b);
     let key = xk(&w.a);
-    let of = |held: i64, called: i64| shard_made45(Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], basis: 0, called }, 74);
-    let rest = RestNote { sid: [0x5d; 32], key, amount: 30 * KAS1 };
+    let of = |held: i64, called: i64| shard_made45(Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called }, 74);
+    let rest = RestNote { sid: [0x5d; 32], key, amount: 30 * KAS1, counted: false };
     let f = [fund(xk(&w.f), 73, 1_000)];
     let apply = |shard: &OLive<Shard>, r: RestNote| rest_apply(&w.lib, shard, &note_made46(shard, r, 75, 6_050), &w.script("KpfTLeft"), w.payer(&w.f, &f));
     // In full.
@@ -7951,7 +7967,10 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     none.tx.outputs[2].covenant = None;
     no("no note of what is left", none);
     // Nothing held, a shard that is called, a note of nothing.
-    assert!(apply(&of(0, 0), rest).is_err() && apply(&of(50 * KAS1, 6_000), rest).is_err() && apply(&rich, RestNote { amount: 0, ..rest }).is_err(), "the model pays where nothing is held, while called, or a note of nothing");
+    assert!(apply(&of(0, 0), rest).is_err() && apply(&rich, RestNote { amount: 0, ..rest }).is_err(), "the model pays where nothing is held, or a note of nothing");
+    // (Round 54: shown to a called shard it is not paid; it is counted and goes on as a claim.)
+    let (qb, qnext, qleft) = apply(&of(50 * KAS1, 6_000), rest).unwrap();
+    assert!(taken30(&qb, &w.keys) && (qnext.held, qnext.owed) == (50 * KAS1, 30 * KAS1) && qleft == Some(RestNote { counted: true, ..rest }), "a note of the rest shown to a called shard is a claim");
     // (At the engine: the transaction of the first, with the shard shown as one that is called, and with a note
     // of nothing.)
     let called = of(50 * KAS1, 6_000);
@@ -8063,7 +8082,7 @@ fn cov47(w: &OW, legs: &[XLeg], coins: i64, bm: i64) -> OLive<Account> {
 
 /// A shard with the legs in its books as the statement of an entry will write them (rows and basis), under the same id.
 fn shard_with47(w: &OW, legs: &[XLeg], held: i64, called: i64) -> OLive<Shard> {
-    let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, basis: 0, called: 0 };
+    let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0 };
     for l in legs {
         s = s.booked(l).expect("booked");
     }
@@ -8405,7 +8424,11 @@ fn t1b_r47_the_note_a_leaving_of_the_rules_writes_is_applied_where_its_legs_are_
                 }
                 assert_eq!(next.basis, want.basis, "{what}: the basis");
                 assert_eq!(next.held, shard.s.held - spaid + (-note.s.asked).max(0), "{what}: what the shard holds");
-                assert!(o.fee >= 0 && (note.s.asked <= 0 || shard.s.called == 0), "{what}");
+                // (Round 54: on a called shard a note that asks something is applied: nothing paid, owed by claims.)
+                assert!(o.fee >= 0 && (note.s.asked <= 0 || shard.s.called == 0 || (spaid == 0 && next.owed == note.s.asked && rest.is_some_and(|r| r.counted))), "{what}");
+                if shard.s.called != 0 && note.s.asked > 0 {
+                    waited += 1;
+                }
                 if note.s.asked < 0 {
                     paying += 1;
                 }
@@ -9909,7 +9932,7 @@ fn t1b_r52_a_note_is_spent_only_where_a_leg_of_it_is_no_leg_of_the_books_and_nev
     let owner = xk(&w.b);
     let (mut spent, mut kept, mut applied, mut neither, mut named) = (0, 0, 0, 0, 0);
     for case in 0..170 {
-        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, basis: 0, called: 0 };
+        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0 };
         let mut booked: Vec<XLeg> = vec![];
         for _ in 0..r.range(1, 9) {
             let i = r.range(0, 5) as usize;
@@ -10195,7 +10218,7 @@ fn t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_wr
 fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 57);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 61, "(round 54: 57 and the four of the call)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10218,7 +10241,8 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     // (Of a shard's moving part, its basis and its call: KpfTLeft, KpfTLeftAll, KpfTShardEnd, KpfTShardOpen. Of an
     // account's, as a count and a time: KpfTCEnd, KpfTEnterOff, KpfTEnterS, KpfTOpenC. As asks, in coins: KpfTStepEnd
     // alone, where it answers a take of kind 2.)
-    assert_eq!(readers, vec!["KpfTCEnd", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen", "KpfTStepEnd"]);
+    // (Round 54: KpfTCallEnd and KpfTCallPay read a shard's call and basis; KpfTCStep an account's count of legs.)
+    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCStep", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen", "KpfTStepEnd"]);
 }
 
 /// Rounds 45 and 47, F68 (High), closed by the removal: a leg is in a shard's rows and in its basis by one
@@ -10431,7 +10455,7 @@ fn t1b_r53_no_script_takes_a_note_of_the_old_form_and_none_of_a_covered_account_
     let draw = nth(&signed("a draw stated", &db, &w.keys), 0, st, 6_600);
     let (sid, owner, user) = (s.s.sid, s.s.owner, xk(&w.a));
     let left = note_made46(&s, Left { sid, legs: vec![leg], key: user, asked: 5 * KAS1 }, 76, 6_590);
-    let rest = note_made46(&s, RestNote { sid, key: user, amount: 5 * KAS1 }, 77, 6_590);
+    let rest = note_made46(&s, RestNote { sid, key: user, amount: 5 * KAS1, counted: false }, 77, 6_590);
     let by_left = draw_note_left(&w.lib, &draw, &st, None, &s.s, &left, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &fw)).unwrap();
     let by_rest = draw_note_rest(&w.lib, &draw, &st, None, &s.s, &rest, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.w, &fw)).unwrap();
     assert!(taken30(&by_left, &w.keys) && taken30(&by_rest, &w.keys), "(controls) a note that legs left, and a note of the rest, end a draw");
@@ -10511,7 +10535,8 @@ fn t1b_finding_f85_what_went_is_still_written_in_five_scripts_behind_conditions_
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         for part in code.split("i9(NOTE_TAG) + mv.slice(138, 171) + i9(").skip(1) {
             let tag = part.split(')').next().unwrap().to_string();
-            if !["6", "7", "8", "LEFT", "REST", "UNENTERED", "tag"].contains(&tag.as_str()) {
+            // (Round 54: the call, 11 and CALL; a claim, CLAIM; `out`: the rest or a claim.)
+            if !["6", "7", "8", "LEFT", "REST", "UNENTERED", "tag", "11", "CALL", "CLAIM", "out"].contains(&tag.as_str()) {
                 notes.push((name.to_string(), tag));
             }
         }
@@ -10537,77 +10562,1510 @@ fn t1b_finding_f85_what_went_is_still_written_in_five_scripts_behind_conditions_
 fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTChange", "KpfTPoint", "KpfTOpenC", "KpfTAddC", "KpfTAcctEnd", "KpfTDrawNote", "KpfTLeftVoid"].iter().map(|n| (*n, kpf_protocol::thin_artifacts::kit().script(n).unwrap().len())).collect();
     println!("T1b R53 sizes: {sizes:?}");
-    assert_eq!(sizes, vec![("KpfTChange", 1417), ("KpfTPoint", 2588), ("KpfTOpenC", 672), ("KpfTAddC", 516), ("KpfTAcctEnd", 682), ("KpfTDrawNote", 1159), ("KpfTLeftVoid", 1719)]);
+    // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
+    assert_eq!(sizes, vec![("KpfTChange", 1508), ("KpfTPoint", 2588), ("KpfTOpenC", 672), ("KpfTAddC", 516), ("KpfTAcctEnd", 682), ("KpfTDrawNote", 1159), ("KpfTLeftVoid", 1747)]);
 }
 
-/// Round 53, F86 (Medium: F81 again, for a note that asks below zero). `KpfTLeft`, `KpfTLeftAll` and, since this
-/// round (F84's fix), `KpfTLeftVoid` write the shard holding `-asked` more where a note asks below zero, in state
-/// and in value, and read nothing of what the note itself holds. A right statement writes such a note holding
-/// exactly that. A statement nobody disputed (F81's premise) writes one that says more than it holds: it holds a
-/// note's least and says 600 KAS. Then whoever applies it (its leg is in the books) or spends it (its leg is in no
-/// row) pays the 600 KAS into the shard itself; and one that says more than is counted (the largest number less
-/// five) is applied and spent by nothing, whatever is paid. While it stands it ends every draw (`KpfTDrawNote`
-/// takes a note that legs left whatever it asks). The first half was so in round 52 for a leg of the books; F84's
-/// fix made it so for a leg in no row, which round 52 spent for nothing. Passes while the clearing costs what the
-/// note says, and the largest is cleared by nothing and ends a draw.
+// ================================================================================================================
+// Round 54. F86 fixed; the call (docs 14.6, 14.10 (c)): a call stated and ended, a called shard's notes and
+// claims, a step under a call, an entry ended under a call.
+
+/// Round 53, F86 (Medium), fixed in round 54: the three scripts that clear a note add to the shard what the
+/// note's own output holds above a note's least, and no more than the note says (`KpfTLeft` and `KpfTLeftAll`,
+/// their shared settling; `KpfTLeftVoid`; `held_for`, `Shard::left_holding`, `Shard::voided_holding`). Round 53's
+/// cases and more, each for a leg of the books (applied) and for a leg in no row (spent): a note that says 600 KAS
+/// and holds nothing above its least, 12 KAS, all 600, or 900; one that says the largest number, or that less
+/// five, and holds nothing or 12 KAS; one that says a sompi. Each is cleared by the builder's transaction, whoever
+/// clears it paying nothing (it has the note's least, and what the note held beyond what it says); the shard holds
+/// exactly `min(what it says, what it holds)` more, in state and in value. Refused: the shard written with what
+/// the note says where it holds less, and with a sompi less than the note holds for it. Also a note of two legs
+/// (`KpfTLeftAll`) and a called shard. Such a note still ends a draw while it stands, and now anyone clears it.
 #[test]
-fn t1b_finding_f86_a_note_that_says_it_holds_more_than_it_does_is_cleared_at_its_clearers_cost_or_by_nothing() {
+fn t1b_fixed_f86_a_note_gives_its_shard_what_it_holds_and_is_cleared_by_anyone_for_nothing() {
     let w = ow();
-    let (leg, ghost) = (w.fut(0, 10, LONG, P10), w.fut(2, 3, SHORT, P10));
+    let (leg, leg2, ghost) = (w.fut(0, 10, LONG, P10), w.fut(1, 4, SHORT, P10), w.fut(2, 3, SHORT, P10));
+    let f = [fund(xk(&w.f), 73, 3_000)];
+    let fb = [fund(xk(&w.b), 55, 1_000)];
+    let (mut cleared, mut refused, mut ended) = (0, 0, 0);
+    for called in [0i64, 6_000] {
+        let shard = shard_with47(&w, &[leg, leg2], 100 * KAS1, called);
+        for (what, legs) in [("a leg of the books", vec![leg]), ("two legs of the books", vec![leg, leg2]), ("a leg in no row", vec![ghost])] {
+            for (says, above) in [(600 * KAS1, 0i64), (600 * KAS1, 12 * KAS1), (600 * KAS1, 600 * KAS1), (600 * KAS1, 900 * KAS1), (i64::MAX, 0), (i64::MAX - 5, 0), (i64::MAX - 5, 12 * KAS1), (1, 0), (1, 5), (1, 1)] {
+                let n = Left { sid: SID47, legs: legs.clone(), key: xk(&w.w), asked: -says };
+                let holds = NOTE_MIN + above;
+                let live = OLive { value: holds as u64, ..note_made46(&shard, n.clone(), 75, 6_050) };
+                let want = says.min(above);
+                assert_eq!(kpf_protocol::reserve::held_for(n.asked, holds), want);
+                let gone = shard.s.gone(&n);
+                let (b, next) = if gone {
+                    (left_void(&w.lib, &shard, &live, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &f)).unwrap(), shard.s.voided_holding(&n, holds).unwrap())
+                } else {
+                    let (b, next, rest) = left_apply(&w.lib, &shard, &live, &w.script(left_script(legs.len())), w.payer(&w.f, &f)).unwrap();
+                    assert!(rest.is_none());
+                    (b, next)
+                };
+                let sg = signed("a note cleared", &b, &w.keys);
+                assert_eq!((next.held, next.owed, next.called), (shard.s.held + want, 0, called), "{what}, says {says}, holds {above}");
+                assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value + want as u64, &hash_spk(&w.lib, &next.hash())), "F86 is open: {what}, says {says}, holds {above} above its least");
+                let gain = paid(&sg, &xk(&w.f)) - 3_000 * KAS1;
+                assert!(gain > 0 && gain >= above - want + NOTE_MIN - 3_000_000, "F86 is open: clearing it costs whoever clears it ({gain})");
+                cleared += 1;
+                // Written with what the note says, where it holds less; and with a sompi less than it holds for the shard.
+                if says > above && says < 1_000 * KAS1 {
+                    let mut t = b.clone();
+                    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: shard.s.held + says, ..next }.hash());
+                    t.tx.outputs[0].value = shard.value + says as u64;
+                    assert!(!taken30(&t, &w.keys), "F86 is open: the shard is written with what the note says");
+                    refused += 1;
+                }
+                if want > 0 {
+                    let mut t = b.clone();
+                    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: next.held - 1, ..next }.hash());
+                    t.tx.outputs[0].value -= 1;
+                    assert!(!taken30(&t, &w.keys), "the shard is written a sompi short of what the note held for it");
+                    refused += 1;
+                }
+                // While it stands it ends a draw.
+                if called == 0 && above == 0 && legs.len() == 1 {
+                    let (db, st, _) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, [P10, P10, 0, 0], T0, w.payer(&w.b, &fb)).unwrap();
+                    let draw = nth(&signed("a draw stated", &db, &w.keys), 0, st, 6_600);
+                    assert!(draw_note_left(&w.lib, &draw, &st, None, &shard.s, &live, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.f, &f)).is_ok_and(|b| taken30(&b, &w.keys)));
+                    ended += 1;
+                }
+            }
+        }
+    }
+    println!("T1b R54 F86 is closed: {cleared} notes that say 1 sompi to the largest number and hold nothing to 900 KAS above a note's least are applied or spent by the builder's transaction, the shard holding the lesser of the two more, at no cost to whoever clears them; {refused} transactions that write the shard otherwise refused; {ended} of them end a draw while they stand");
+}
+
+/// Round 54, F87 (Medium: what is left of F81). `KpfTDrawNote` ends a draw by an object whose state is the hash
+/// of a note that legs left, and reads of it the 32 bytes where the chain of its legs stands, a key and an
+/// amount; it opens no chain. The scripts that clear such a note (`KpfTLeft`, `KpfTLeftAll`, `KpfTLeftVoid`) are
+/// shown its legs, one to six. So a note whose chain is of seven legs, or 32 bytes that are no chain of any legs,
+/// is cleared by nothing and ends every draw of its shard for good, half the owner's bond to whoever shows it.
+/// A statement nobody disputed writes one (F81's premise; rounds 52 and 53 cleared the notes whose legs can be
+/// shown). Passes while such an object ends a draw and no script takes it.
+#[test]
+fn t1b_finding_f87_a_note_whose_chain_nobody_opens_ends_every_draw_and_is_cleared_by_nothing() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
     let shard = shard_with47(&w, &[leg], 100 * KAS1, 0);
     let f = [fund(xk(&w.f), 73, 1_000)];
-    let says = 600 * KAS1;
-    let mut costs = vec![];
-    for (what, l) in [("a leg of the books", leg), ("a leg in no row", ghost)] {
-        let n = Left { sid: SID47, legs: vec![l], key: xk(&w.w), asked: -says };
-        let live = note_made46(&shard, n.clone(), 75, 6_050);
-        assert_eq!(live.value as i64, NOTE_MIN, "the note holds a note's least");
-        let b = if shard.s.gone(&n) { left_void(&w.lib, &shard, &live, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &f)) } else { left_apply(&w.lib, &shard, &live, &w.script("KpfTLeft"), w.payer(&w.f, &f)).map(|x| x.0) };
-        let cost = match b {
-            Ok(b) if taken30(&b, &w.keys) => {
-                let sg = signed("a note that says more than it holds, cleared", &b, &w.keys);
-                assert_eq!(sg.tx.outputs[0].value, shard.value + says as u64, "the shard is paid what the note says");
-                Some(1_000 * KAS1 - paid(&sg, &xk(&w.f)))
-            }
-            _ => None,
-        };
-        costs.push((what, cost));
-    }
-    println!("T1b R53 F86: a note that says 600 KAS and holds a note's least: what clearing it costs whoever clears it (sompi; None: not cleared) {costs:?}");
-    if costs.iter().all(|(_, c)| c.is_some_and(|c| c < KAS1)) {
-        println!("F86 is closed: a note that says more than it holds is cleared for what it holds");
-        return;
-    }
-    assert!(costs.iter().all(|(_, c)| c.is_none_or(|c| c > says - NOTE_MIN)), "{costs:?}");
-    // One that says more than is counted: applied and spent by nothing; and it ends a draw.
-    let big = -(i64::MAX - 5);
     let fb = [fund(xk(&w.b), 55, 1_000)];
     let (db, st, _) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, [P10, 0, 0, 0], T0, w.payer(&w.b, &fb)).unwrap();
     let draw = nth(&signed("a draw stated", &db, &w.keys), 0, st, 6_600);
     let note_at = |b: &OBuilt| b.plans.iter().enumerate().filter(|(_, p)| p.name().starts_with("KpfSlot")).map(|(i, _)| i).nth(1).expect("the note's input");
-    let mut cleared = vec![];
-    for (what, l) in [("a leg of the books", leg), ("a leg in no row", ghost)] {
-        // The transaction of a note of the same leg that holds what it says (12 KAS), with this note and what it
-        // says in its place: the shard as that transaction writes it, as it was, and holding the most that is counted.
-        let fair = Left { sid: SID47, legs: vec![l], key: xk(&w.w), asked: -12 * KAS1 };
-        let fair_live = OLive { value: fair.value() as u64, ..note_made46(&shard, fair.clone(), 75, 6_050) };
-        let b = if shard.s.gone(&fair) { left_void(&w.lib, &shard, &fair_live, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &f)).unwrap() } else { left_apply(&w.lib, &shard, &fair_live, &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap().0 };
-        assert!(taken30(&b, &w.keys), "(control) {what}: a note that holds the 12 KAS it says is cleared");
-        let n = Left { sid: SID47, legs: vec![l], key: xk(&w.w), asked: big };
-        let mut any = false;
-        let most = Shard { held: kpf_protocol::cross::MARGIN_MAX, ..shard.s };
-        for spk in [b.tx.outputs[0].script_public_key.clone(), hash_spk(&w.lib, &shard.s.hash()), hash_spk(&w.lib, &most.hash())] {
-            // (Arguments of KpfTLeft.apply and of KpfTLeftVoid.void: 9 what is asked.)
-            let mut t = with_arg(&b, 9, int_arg(big));
-            object_made(&mut t, &w.lib, note_at(&b), &n.hash());
-            t.tx.outputs[0].script_public_key = spk;
+    // Seven legs: the builder of the end of a draw writes it as any note; no builder of a clearing does.
+    let seven = Left { sid: SID47, legs: vec![leg; 7], key: xk(&w.w), asked: 0 };
+    let seven_live = note_made46(&shard, seven.clone(), 75, 6_050);
+    let by_seven = draw_note_left(&w.lib, &draw, &st, None, &shard.s, &seven_live, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.f, &f)).is_ok_and(|b| taken30(&b, &w.keys));
+    // 32 bytes that are no chain: the transaction of a note of one leg, with the object and the bytes in its place.
+    let made = [0x77u8; 32];
+    let h = blake2b(&[i9(12), p33(&SID47), i9(6), p33(&made), p33(&xk(&w.w)), i9(0)].concat());
+    let one = note_made46(&shard, Left { sid: SID47, legs: vec![leg], key: xk(&w.w), asked: 0 }, 76, 6_050);
+    let b1 = draw_note_left(&w.lib, &draw, &st, None, &shard.s, &one, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.f, &f)).unwrap();
+    let at = out_at47(&signed("(the note's output)", &b1, &w.keys), &hash_spk(&w.lib, &one.s.hash()));
+    let mut t = with_arg(&b1, 17, bytes_arg(&[&[0x20u8][..], &made[..], &[0u8; 51][..]].concat()));
+    object_made(&mut t, &w.lib, note_at(&b1), &h);
+    t.tx.outputs[at].script_public_key = hash_spk(&w.lib, &h);
+    let by_made = taken30(&t, &w.keys);
+    if !by_seven && !by_made {
+        println!("F87 is closed: a note whose chain is of no one to six legs ends no draw");
+        return;
+    }
+    assert!(by_seven && by_made, "{by_seven} {by_made}");
+    // Cleared by nothing: no legs of one to six make the chain; the three scripts shown the object with the legs of
+    // a note they do take.
+    assert!(left_void(&w.lib, &shard, &seven_live, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &f)).is_err() && shard.s.left(&seven).is_err() && shard.s.voided(&seven).is_err(), "the model clears a note of seven legs");
+    let ghost = note_made46(&shard, Left { sid: SID47, legs: vec![w.fut(2, 3, SHORT, P10)], key: xk(&w.w), asked: 0 }, 77, 6_050);
+    let two = note_made46(&shard_with47(&w, &[leg, leg], 100 * KAS1, 0), Left { sid: SID47, legs: vec![leg, leg], key: xk(&w.w), asked: 0 }, 78, 6_050);
+    let clears = [
+        left_void(&w.lib, &shard, &ghost, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &f)).unwrap(),
+        left_apply(&w.lib, &shard, &one, &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap().0,
+        left_apply(&w.lib, &shard_with47(&w, &[leg, leg], 100 * KAS1, 0), &two, &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap().0,
+    ];
+    let mut any = false;
+    for c in &clears {
+        assert!(taken30(c, &w.keys), "(control)");
+        for object in [h, seven.hash()] {
+            let mut t = c.clone();
+            object_made(&mut t, &w.lib, note_at(c), &object);
             any |= taken30(&t, &w.keys);
         }
-        let live = note_made46(&shard, n.clone(), 76, 6_050);
-        let ends = draw_note_left(&w.lib, &draw, &st, None, &shard.s, &live, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.f, &f)).is_ok_and(|b| taken30(&b, &w.keys));
-        cleared.push((what, any, ends));
     }
-    println!("T1b R53 F86: a note that says the largest number less five: (cleared, ends a draw) {cleared:?}");
-    assert!(cleared.iter().all(|(_, any, ends)| !any && *ends), "{cleared:?}");
-    println!("T1b R53 F86 OPEN: a note that asks below zero is cleared by whoever pays what it says into the shard (600 KAS here), of a leg of the books or of none; one that says more than is counted is cleared by nothing, and ends a draw");
+    assert!(!any, "a script clears the object");
+    println!("T1b R54 F87 OPEN: an object whose state is a note that legs left with a chain of seven legs, or of no legs at all, ends a draw (half the bond of {} sompi to whoever shows it) and is applied and spent by nothing", st.bond);
+}
+
+use kpf_protocol::reserve::{Called, CALL_HOLD, KIND_CALL, SHARD_CARRIER};
+
+/// A call stated on `shard` at `prices` and `t0` by `claimer`, written whatever the rule says: the shard called
+/// and holding `pay` less, the call (at `shown`), and `pay` to the claimer where it is something; with `amount`
+/// where a draw says its amount. `None` where an output would hold less than nothing.
+#[allow(clippy::too_many_arguments)]
+fn call_by_hand54(shard: &OLive<Shard>, prices: [i64; 4], shown: [i64; 4], pay: i64, amount: i64, t0: i64, claimer: [u8; 32]) -> Option<(Stated, Draw)> {
+    let s = &shard.s;
+    let d = Draw { amount, prices };
+    let held = shard.value as i64;
+    let next = Shard { held: s.held.checked_sub(pay)?, called: t0, ..*s };
+    let call = Called { sid: s.sid, time: t0, heads: s.rows.map(|r| r.head), prices: shown };
+    let mut v = vec![(Out { key: false, to: next.hash(), value: held.checked_sub(pay)?.checked_sub(CALL_HOLD)? }, false), (Out { key: false, to: call.hash(), value: CALL_HOLD }, true)];
+    if pay > 0 {
+        v.push((Out { key: true, to: claimer, value: pay }, false));
+    }
+    Some((Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_CALL, t0, arg: d.arg(), outs: Outs::with_notes(&v)?, bond: s.call_bond(), claimer, held }, d))
+}
+
+/// `KpfTCallEnd.answer`'s verdict written out in the script's own order, for a call that says `d` at `t0` on a
+/// shard whose output held `held`, with the outputs `outs`: `None` where a number of the script does not fit.
+fn call_end_as_the_script54(s: &Shard, d: &Draw, t0: i64, held: i64, outs: &Outs, claimer: &[u8; 32]) -> Option<bool> {
+    const BPS: i64 = 10_000;
+    let fit = |v: Option<i64>| v.filter(|x| *x != i64::MIN);
+    let mut ok = d.amount == 0 && t0 > 0;
+    let g = s.t.g_bps;
+    let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
+    for (row, p) in s.rows.iter().zip(&d.prices) {
+        if row.head.market == [0; 32] {
+            continue;
+        }
+        let (sc, pm, p) = (row.head.scale, row.head.price_max, *p);
+        let (mut net, mut gross, mut short) = (row.net, row.gross, false);
+        if net < 0 {
+            net = fit(0i64.checked_sub(net))?;
+            short = true;
+        }
+        if gross < 0 {
+            gross = fit(0i64.checked_sub(gross))?;
+        }
+        if p <= 0 || p > pm || sc <= 0 {
+            ok = false;
+        }
+        if ok {
+            let mut q = fit(p.checked_mul(BPS - g))? / BPS;
+            if !short && net > 0 {
+                q = fit(fit(p.checked_mul(BPS + g))?.checked_add(BPS - 1))? / BPS;
+                if q > pm {
+                    q = pm;
+                }
+            }
+            let worth = |n: i64| fit(fit(fit((n / sc).checked_mul(q))?.checked_add(fit((n % sc).checked_mul(q / sc))?))?.checked_add(fit((n % sc).checked_mul(q % sc))? / sc));
+            let w = worth(net)?;
+            wn = fit(wn.checked_add(w))?;
+            sn = if short { fit(sn.checked_sub(w))? } else { fit(sn.checked_add(w))? };
+            wg = fit(wg.checked_add(worth(gross)?))?;
+        }
+    }
+    let mmr = s.t.mmr_bps;
+    let rn = (mmr.checked_sub(g)?).max(0);
+    let rg = (mmr.checked_sub(fit(3i64.checked_mul(g))?)? / 2).max(0);
+    let part = |w: i64, r: i64| fit(fit((w / BPS).checked_mul(r))?.checked_add(fit(fit((w % BPS).checked_mul(r))?.checked_add(BPS - 1))? / BPS));
+    let need = fit(part(wn, rn)?.checked_add(part(wg, rg)?))?;
+    if s.called != 0 {
+        ok = false;
+    }
+    if fit(fit(s.held.checked_add(sn))?.checked_sub(s.basis))? >= need {
+        ok = false;
+    }
+    let mut pay = s.t.keeper_fee_min.max(0);
+    if s.held < pay {
+        pay = 0;
+    }
+    if fit(fit(held.checked_sub(pay))?.checked_sub(CALL_HOLD))? < CALL_HOLD {
+        ok = false;
+    }
+    if ok {
+        let next = Shard { held: s.held - pay, called: t0, ..*s };
+        let call = Called { sid: s.sid, time: t0, heads: s.rows.map(|r| r.head), prices: d.prices };
+        let mut v = vec![(Out { key: false, to: next.hash(), value: held - pay - CALL_HOLD }, false), (Out { key: false, to: call.hash(), value: CALL_HOLD }, true)];
+        if pay > 0 {
+            v.push((Out { key: true, to: *claimer, value: pay }, false));
+        }
+        if Outs::with_notes(&v).as_ref() != Some(outs) {
+            ok = false;
+        }
+    }
+    Some(ok)
+}
+
+/// What the engine takes of the answer of the end of a call (made by hand as an object, disputed at the engine):
+/// (right taken, wrong taken).
+fn call_end_taken54(w: &OW, shard: &OLive<Shard>, st: &Stated, d: &Draw) -> (bool, bool) {
+    let live = OLive { s: *st, value: (st.held + st.bond) as u64, id: shard.id, op: op(91), daa: (st.t0.max(0) + 10) as u64 };
+    let q = w.pointed(&live, 0);
+    let take = |v: bool| {
+        let f = [fund(xk(&w.f), 72, 1_000)];
+        call_end(&w.lib, &q, &shard.s, d, &w.script("KpfTCallEnd"), xk(&w.f), w.payer(&w.f, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    (take(true), take(false))
+}
+
+/// Round 54, item c: `KpfTCallEnd` against the model and against its arithmetic written out, at the edges and on
+/// random shards. The edges, one a case: a price at its limit where the shard is long (moved up, held to the
+/// limit); a price of 1 where it is short (moved down to nothing: the row is worth nothing); a row with gross and
+/// no net; a maintenance rate below the tolerance (the lower level is nothing: called only below no equity); a
+/// tolerance of nothing; a keeper's fee of nothing, below nothing, and above what the shard holds; a shard holding
+/// exactly the fee, and a sompi less; a time of nothing; a shard already called; the output holding less than a
+/// carrier beside what the shard holds; rows of the largest numbers (no verdict). Then 150 random shards, each
+/// with the call as the rule would write it and with one thing changed. The engine takes the verdict of the
+/// arithmetic written out, and neither where it has none; the model says the same.
+#[test]
+fn t1b_r54_the_end_of_a_call_is_the_models_at_the_edges_and_on_random_shards() {
+    let w = ow();
+    let caller = xk(&w.w);
+    let mk = w.markets[0].clone();
+    let (pm, sc) = (mk.p.price_max, mk.p.scale);
+    let head = |i: usize| Head::of(&w.fut(i, 1, LONG, P10));
+    let base = |rows: [ShardRow; 4], held: i64, basis: i64| Shard { t: w.terms(), rows, owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis, called: 0 };
+    let e = ShardRow::EMPTY;
+    let row = |i: usize, net: i64, gross: i64| ShardRow { head: head(i), net: net * sc, gross: gross * sc };
+    let fee = w.terms().keeper_fee_min;
+    let seen = std::cell::RefCell::new(std::collections::BTreeMap::<&str, usize>::new());
+    let check = |what: &str, s: Shard, value: i64, st: Option<(Stated, Draw)>| {
+        let Some((st, d)) = st else { return };
+        let mut shard = shard_made45(s, 74);
+        shard.value = value as u64;
+        let script = call_end_as_the_script54(&s, &d, st.t0, st.held, &st.outs, &st.claimer);
+        let model = s.call_end_judged(&d, st.t0, st.held).map(|_| s.call_end_right(&d, &st.claimer, &st.outs, st.held, st.t0));
+        assert_eq!(model, script, "{what}: the model and the arithmetic written out");
+        assert_eq!(call_end_taken54(&w, &shard, &st, &d), verdicts(script), "{what}: the engine");
+        *seen.borrow_mut().entry(match script { Some(true) => "right", Some(false) => "wrong", None => "no verdict" }).or_default() += 1;
+    };
+    let v_of = |s: &Shard| s.held + SHARD_CARRIER;
+    let by = |s: &Shard, value: i64, prices: [i64; 4], pay: i64, t0: i64| {
+        let mut o = shard_made45(*s, 74);
+        o.value = value as u64;
+        call_by_hand54(&o, prices, prices, pay, 0, t0, caller)
+    };
+    // ---- the edges.
+    // Long 10 units at an entry of the limit less a tenth, the price at the limit: moved up it is the limit.
+    let s = base([row(0, 10, 10), e, e, e], 5 * KAS1, 10 * (pm - pm / 10));
+    check("a price at its limit, the shard long", s, v_of(&s), by(&s, v_of(&s), [pm, 0, 0, 0], fee, T0));
+    check("a price above its limit", s, v_of(&s), by(&s, v_of(&s), [pm + 1, 0, 0, 0], fee, T0));
+    // Short 10 units entered at 10 (basis -100 KAS), the price 1 sompi: moved down, nothing.
+    let s = base([row(0, -10, 10), e, e, e], KAS1, -100 * KAS1);
+    check("a price of a sompi, the shard short", s, v_of(&s), by(&s, v_of(&s), [1, 0, 0, 0], fee, T0));
+    check("no price, the shard short", s, v_of(&s), by(&s, v_of(&s), [0, 0, 0, 0], fee, T0));
+    // No net, a gross of 1,000 units at 10: the lower level is 1.75 % of 9,950 KAS = 174.125; holding 174 and 175.
+    for held in [174 * KAS1, 175 * KAS1] {
+        let s = base([row(0, 0, 1_000), e, e, e], held, 0);
+        check("a gross and no net", s, v_of(&s), by(&s, v_of(&s), [P10, 0, 0, 0], fee, T0));
+    }
+    // The maintenance rate below the tolerance; a tolerance of nothing.
+    for (mmr, g, basis) in [(30i64, 50i64, 0i64), (30, 50, 1 + 5 * KAS1), (500, 0, 0), (0, 0, 0), (150, 50, 0)] {
+        let s = Shard { t: XTerms { mmr_bps: mmr, g_bps: g, ..w.terms() }, ..base([row(0, -10, 10), row(1, 4, 6), e, e], 5 * KAS1, basis - 100 * KAS1 + 40 * KAS1) };
+        check("rates at their edges", s, v_of(&s), by(&s, v_of(&s), [P10 * 12 / 10, P10, 0, 0], fee, T0));
+    }
+    // The fee.
+    for (kf, held) in [(0i64, 5 * KAS1), (-7, 5 * KAS1), (fee, fee), (fee, fee - 1), (fee, 0), (900 * KAS1, 5 * KAS1), (i64::MAX / 100, 5 * KAS1)] {
+        let s = Shard { t: XTerms { keeper_fee_min: kf, ..w.terms() }, ..base([row(0, -10, 10), e, e, e], held, -100 * KAS1) };
+        let pay = if kf > 0 && held >= kf { kf } else { 0 };
+        for said in [pay, fee, 0] {
+            check("the fee at its edges", s, v_of(&s), by(&s, v_of(&s), [P10 * 12 / 10, 0, 0, 0], said, T0));
+        }
+    }
+    // The time, a shard called, an output with less beside what the shard holds than a carrier.
+    let s = base([row(0, -10, 10), e, e, e], 5 * KAS1, -100 * KAS1);
+    let up = [P10 * 12 / 10, 0, 0, 0];
+    check("a time of nothing", s, v_of(&s), by(&s, v_of(&s), up, fee, 0));
+    check("a time of one", s, v_of(&s), by(&s, v_of(&s), up, fee, 1));
+    let called = Shard { called: 6_400, ..s };
+    check("a called shard", called, v_of(&called), by(&called, v_of(&called), up, fee, T0));
+    for beside in [SHARD_CARRIER - 1, SHARD_CARRIER, 2 * CALL_HOLD + fee - 1, CALL_HOLD] {
+        check("the output's coins beside the shard's", s, s.held + beside, by(&s, s.held + beside, up, fee, T0));
+    }
+    // The largest numbers.
+    let most = kpf_protocol::cross::MARGIN_MAX;
+    for (net, gross, p) in [(most, most, pm), (-most, most, pm), (0, most, pm), (most / sc * sc, most, 1), (-(most / 2), most, P10)] {
+        let s = base([ShardRow { head: Head { scale: 1, ..head(0) }, net, gross }, e, e, e], 5 * KAS1, 0);
+        check("rows of the largest numbers", s, v_of(&s), by(&s, v_of(&s), [p, 0, 0, 0], fee, T0));
+    }
+    let edges: usize = seen.borrow().values().sum();
+    // ---- random shards.
+    let mut r = Rng(0x54_0001);
+    for case in 0..150 {
+        let mut rows = [e; 4];
+        let mut prices = [0i64; 4];
+        let (mut basis, mut worth) = (0i64, 0i64);
+        for i in 0..r.range(1, 5) as usize {
+            let gross = r.range(1, 400);
+            let net = match r.range(0, 4) { 0 => 0, 1 => gross, 2 => -gross, _ => r.range(-gross, gross + 1) };
+            let entry = P10 * r.range(5, 20) / 10;
+            rows[i] = row(i, net, gross);
+            prices[i] = [P10 * r.range(3, 30) / 10, entry, 1, pm, pm + 1, 0][[0usize, 0, 0, 0, 1, 1, 2, 3, 4, 5][r.range(0, 10) as usize]];
+            basis += net * entry;
+            worth += net * prices[i].min(pm);
+        }
+        // What it holds: near where its equity meets its lower level, or anything.
+        let s0 = base(rows, 0, basis);
+        let level = s0.level(&prices, false).unwrap_or(0);
+        let held = match r.range(0, 4) { 0 => (level - worth + basis + r.range(-3, 4) * KAS1).max(0), 1 => r.range(0, 3) * fee / 2, _ => r.range(0, 2_000) * KAS1 };
+        let s = Shard { held, called: if r.range(0, 12) == 0 { 6_000 } else { 0 }, t: XTerms { g_bps: [50, 50, 0, 200, 600][r.range(0, 5) as usize], ..w.terms() }, ..s0 };
+        let value = v_of(&s) + if r.range(0, 10) == 0 { -r.range(1, CALL_HOLD) } else { 0 };
+        let pay = if s.held >= fee { fee } else { 0 };
+        let t0 = if r.range(0, 15) == 0 { 0 } else { T0 };
+        check(&format!("case {case}"), s, value, by(&s, value, prices, pay, t0));
+        // One thing changed.
+        let mut shard = shard_made45(s, 74);
+        shard.value = value as u64;
+        let other = match r.range(0, 6) {
+            0 => call_by_hand54(&shard, prices, prices, pay + 1, 0, t0, caller),
+            1 => call_by_hand54(&shard, prices, prices, pay, 1, t0, caller),
+            2 => call_by_hand54(&shard, prices, [prices[0] + 1, prices[1], prices[2], prices[3]], pay, 0, t0, caller),
+            3 => call_by_hand54(&shard, prices, prices, 0, 0, t0, caller),
+            4 => call_by_hand54(&shard, prices, prices, pay, 0, t0, caller).map(|(mut st, d)| {
+                st.held += 1;
+                (st, d)
+            }),
+            _ => call_by_hand54(&shard, prices, prices, pay, 0, t0, caller).map(|(mut st, d)| {
+                st.claimer = xk(&w.a);
+                (st, d)
+            }),
+        };
+        check(&format!("case {case}, one thing changed"), s, value, other);
+    }
+    let seen = seen.borrow();
+    println!("T1b R54 the end of a call: {edges} calls at the edges and {} on random shards: the engine takes the verdict of the arithmetic written out and the model's ({seen:?})", seen.values().sum::<usize>() - edges);
+    assert!(seen["right"] >= 15 && seen["wrong"] >= 80 && seen.get("no verdict").copied().unwrap_or(0) >= 2, "{seen:?}");
+}
+
+/// A shard whose side is short 10 units of market 0 from 10 (a user is long), holding `held`: at 12 it has lost
+/// 20 KAS.
+fn short54(w: &OW, held: i64, bond_bps: i64) -> OLive<Shard> {
+    let mut s = shard_with47(w, &[w.fut(0, 10, LONG, P10)], held, 0);
+    s.s.bond_bps = bond_bps;
+    s
+}
+
+/// Round 54, item c: the bond of a call, and who has what where a call ends. `KpfTChange` states kind 11 on a
+/// shard with a bond of the shard's own (its rate of what it holds), no more than a hundred of the terms' least
+/// keeper's fee (10 KAS here) and no less than 0.2 KAS: on shards of nothing, 1 KAS, 100 KAS and 5,000 KAS at 1 %
+/// the bond is 0.2, 0.2, 1 and 10 KAS, and a statement that says a sompi more or less is not stated. A shard is
+/// called on its 171 bytes alone (an account is not), by any key. A call that is the rule's, applied: the caller
+/// has its bond and the fee, the shard is called and holds the fee less, the call holds 0.5 KAS out of the
+/// shard's carrier. Disputed at its end and answered right: the call stands again, and the disputer's bond is
+/// lost (a quarter to the caller, a quarter to whoever answered). A call that is not the rule's, disputed and
+/// answered wrong: the shard again, the disputer's bond back, half the caller's to whoever answered.
+#[test]
+fn t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends() {
+    let w = ow();
+    let up = [P10 * 12 / 10, 0, 0, 0];
+    let fee = w.terms().keeper_fee_min;
+    let fw = [fund(xk(&w.w), 30, 1_000)];
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let fa = [fund(xk(&w.a), 31, 1_000)];
+    let mut bonds = vec![];
+    for (held, want) in [(0i64, NOTE_MIN), (KAS1, NOTE_MIN), (100 * KAS1, KAS1), (5_000 * KAS1, 100 * fee)] {
+        // (At 12 a shard short 10 units is below its level where it holds less than 26.8 KAS: the books of the larger
+        // shards are made ten and a thousand times as large.)
+        let mut shard = short54(&w, held, 100);
+        let m = if held > 1_000 * KAS1 { 1_000 } else if held > 20 * KAS1 { 10 } else { 1 };
+        shard.s.rows[0].net *= m;
+        shard.s.rows[0].gross *= m;
+        shard.s.basis *= m;
+        assert_eq!(shard.s.call_bond(), want, "the model's bond, a shard of {held}");
+        let (b, st, _) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+        let sg = signed("a call stated", &b, &w.keys);
+        assert_eq!((st.bond, sg.tx.outputs[0].value), (want, shard.value + want as u64), "a shard of {held}");
+        for other in [want + 1, want - 1, shard.s.bond()] {
+            if other != want {
+                let d = Draw { amount: 0, prices: up };
+                let t = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &Stated { bond: other, ..st }, &d.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
+                assert!(!taken30(&t, &w.keys), "a call is stated with a bond of {other} on a shard of {held}");
+            }
+        }
+        bonds.push((held / KAS1, want));
+    }
+    // On an account, covered or not: no call.
+    let acct = cov47(&w, &[w.fut(0, 10, LONG, P10)], 100 * KAS1, 0);
+    let d = Draw { amount: 0, prices: up };
+    let on_acct = Stated { position: acct.s.hash(), window: 50, late: 100, kind: KIND_CALL, t0: T0, arg: d.arg(), outs: Outs::of(&[Out { key: false, to: acct.s.hash(), value: acct.value as i64 }]).unwrap(), bond: NOTE_MIN, claimer: xk(&w.w), held: acct.value as i64 };
+    let t = state_raw(&w.lib, &acct, &acct.s.fixed_hash(), &acct.s.moving(), &on_acct, &d.said(), acct.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
+    assert!(!taken30(&t, &w.keys), "a call is stated on an account");
+    // The rule's call, applied.
+    let shard = short54(&w, 5 * KAS1, 100);
+    let (b, st, d) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    let live = nth(&signed("a call stated", &b, &w.keys), 0, st, 6_510);
+    let ap = signed("the call applied", &stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.f, &ff)).unwrap(), &w.keys);
+    let (next, call) = shard.s.called_at(&up, T0, fee);
+    assert_eq!((ap.tx.outputs[0].value, &ap.tx.outputs[0].script_public_key), (shard.value - fee as u64 - CALL_HOLD as u64, &hash_spk(&w.lib, &next.hash())));
+    assert_eq!((paid(&ap, &xk(&w.w)), ap.tx.outputs[out_at47(&ap, &hash_spk(&w.lib, &call.hash()))].value), (st.bond + fee, CALL_HOLD as u64), "the caller has its bond and the fee; the call holds half a carrier");
+    // Disputed at its end by another key, and answered right by a third.
+    let q = OLive { daa: 6_520, ..w.pointed(&live, 0) };
+    let (rb, right) = call_end(&w.lib, &q, &shard.s, &d, &w.script("KpfTCallEnd"), xk(&w.a), w.payer(&w.a, &fa), None).unwrap();
+    let rs = signed("the end of a right call answered", &rb, &w.keys);
+    assert!(right && rs.tx.outputs[0].script_public_key == hash_spk(&w.lib, &st.again().hash()), "the call stands again");
+    let (to_caller, to_answerer, to_disputer) = (paid(&rs, &xk(&w.w)), paid(&rs, &xk(&w.a)) - 1_000 * KAS1, paid(&rs, &xk(&w.w)));
+    // (The disputer of `OW::pointed` is the key `w`, the caller's own here: what it has back is the quarter.)
+    assert_eq!((to_caller, to_disputer), (st.bond / 4, st.bond / 4), "a quarter of the disputer's bond to the caller");
+    assert!(to_answerer > st.bond / 4 - 3_000_000 && to_answerer <= st.bond / 4, "a quarter to whoever answered, less its fees ({to_answerer})");
+    // A call that is not the rule's (at 9 the shard, short from 10, has gained), answered wrong.
+    let (wst, wd) = call_by_hand54(&shard, [P10 * 9 / 10, 0, 0, 0], [P10 * 9 / 10, 0, 0, 0], fee, 0, T0, xk(&w.b)).unwrap();
+    let fbb = [fund(xk(&w.b), 55, 1_000)];
+    let wb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &wst, &wd.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fbb)).unwrap();
+    let wlive = nth(&signed("a call that is not due, stated", &wb, &w.keys), 0, wst, 6_510);
+    let wq = w.pointed(&wlive, 0);
+    let (eb, right) = call_end(&w.lib, &wq, &shard.s, &wd, &w.script("KpfTCallEnd"), xk(&w.a), w.payer(&w.a, &fa), None).unwrap();
+    let es = signed("the end of a wrong call answered", &eb, &w.keys);
+    assert!(!right);
+    assert_eq!((es.tx.outputs[0].value, &es.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &shard.s.hash())), "the shard again");
+    let (back, got) = (paid(&es, &xk(&w.w)), paid(&es, &xk(&w.a)) - 1_000 * KAS1);
+    assert_eq!((back, paid(&es, &xk(&w.b))), (wst.bond, 0), "the disputer's bond back; nothing to the caller");
+    assert!(got > wst.bond / 2 - 3_000_000 && got <= wst.bond / 2, "half the caller's bond to whoever answered ({got})");
+    println!("T1b R54 the bond of a call (KAS held, bond in sompi) {bonds:?}; applied, the caller has its bond and the fee of {fee}; a right call disputed costs the disputer its bond of {} (a quarter each to the caller and the answerer); a wrong call costs the caller its bond, half to the answerer", st.bond);
+}
+
+/// Round 54, F88 (Medium). An owner keeps its shard from being called, and from every note, by statements of
+/// its own. A call is a statement on the shard, and a note is applied to the shard: neither is made while the
+/// shard stands under another statement. The owner states a draw that is not the rule's (the shard is below its
+/// levels), disputes its end with a second key of its own, answers it wrong with that key, and has the shard
+/// again as it was, to state on again: three transactions, in which every output is spent by the owner's next.
+/// What a round costs it: half the draw's bond (the other half and the disputer's bond come back to its own
+/// keys) and three fees. The draw's bond is a rate of what the shard HOLDS, so the nearer a shard is to holding
+/// nothing, which is when a call is due, the cheaper: here 10 KAS held at 1 %, a bond of 0.1 KAS. `KpfTChange`
+/// asks nothing of a draw's time (the end does), so the next draw is stated at once. Passes while the round ends
+/// with the same shard and costs less than a tenth of a KAS.
+#[test]
+fn t1b_finding_f88_an_owner_keeps_its_shard_under_statements_of_its_own_at_half_a_small_bond_a_round() {
+    let w = ow();
+    let shard = short54(&w, 10 * KAS1, 100);
+    let up = [P10 * 12 / 10, 0, 0, 0];
+    assert!(shard.s.call_due(&up) && shard.s.draw_max(&up) == 0, "a call is due, and nothing is drawn");
+    // Its owner's keys: `b` owns the shard; `f` is its second.
+    let fb = [fund(xk(&w.b), 55, 1_000)];
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let (dst, d) = draw_by_hand45(&shard, KAS1, up, xk(&w.b)).unwrap();
+    let Ok(b1) = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &dst, &d.said(), shard.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)) else {
+        println!("F88 is closed: a draw that is not the rule's is not stated");
+        return;
+    };
+    if !taken30(&b1, &w.keys) {
+        println!("F88 is closed: the engine states no draw that is not the rule's on this shard");
+        return;
+    }
+    let s1 = signed("the owner's draw, not the rule's", &b1, &w.keys);
+    let live = nth(&s1, 0, dst, 6_510);
+    let (b2, q) = point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.f, &ff)).unwrap();
+    let s2 = signed("disputed by its own second key", &b2, &w.keys);
+    let q = nth(&s2, 0, q, 6_511);
+    let (b3, right) = shard_end(&w.lib, &q, &shard.s, &d, &w.script("KpfTShardEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let s3 = signed("answered wrong by that key", &b3, &w.keys);
+    assert!(!right);
+    let same = s3.tx.outputs[0].value == shard.value && s3.tx.outputs[0].script_public_key == hash_spk(&w.lib, &shard.s.hash());
+    let cost = (1_000 * KAS1 - paid(&s1, &xk(&w.b))) + (1_000 * KAS1 - paid(&s2, &xk(&w.f))) + (1_000 * KAS1 - paid(&s3, &xk(&w.f)) - paid(&s3, &xk(&w.b)));
+    println!("T1b R54 F88: a round of three transactions (a draw of the owner's that is not the rule's, its dispute and its answer by the owner's second key): the shard again as it was: {same}; the bond of the draw {} sompi; what the round cost the owner's two keys: {cost} sompi", dst.bond);
+    if !same {
+        println!("F88 is closed: the shard does not come back as it was");
+        return;
+    }
+    assert_eq!(dst.bond, KAS1 / 10);
+    assert!(cost > dst.bond / 2 && cost < KAS1 / 10, "{cost}");
+    // And a shard of 1 KAS: a bond of 0.01 KAS.
+    assert_eq!(short54(&w, KAS1, 100).s.bond(), KAS1 / 100);
+    println!("T1b R54 F88 OPEN: an owner whose shard is due a call holds it under its own statements at {cost} sompi a round, and no call or note is made on it meanwhile");
+}
+
+use kpf_protocol::covered::CallStep;
+
+/// The shard called at `t0` at `prices`, as the applying of a call writes the two objects (the fee paid where the
+/// shard holds it): the shard called, and the call.
+fn called54(shard: &OLive<Shard>, prices: [i64; 4], t0: i64, daa: u64) -> (OLive<Shard>, OLive<Called>) {
+    let fee = shard.s.t.keeper_fee_min.max(0);
+    let pay = if shard.s.held >= fee { fee } else { 0 };
+    let (next, call) = shard.s.called_at(&prices, t0, pay);
+    (OLive { s: next, value: shard.value - pay as u64 - CALL_HOLD as u64, id: shard.id, op: op(92), daa }, OLive { s: call, value: CALL_HOLD as u64, id: shard.id, op: op(93), daa })
+}
+
+/// A call of the four first markets of the world at `prices` and `t0`, under the id the accounts of these tests have.
+fn call54(w: &OW, prices: [i64; 4], t0: i64) -> OLive<Called> {
+    let heads = [0usize, 1, 2, 3].map(|i| Head::of(&w.fut(i, 1, LONG, P10)));
+    OLive { s: Called { sid: SID47, time: t0, heads, prices }, value: CALL_HOLD as u64, id: Some(Hash::from_bytes([0x72; 32])), op: op(93), daa: (t0 + 60) as u64 }
+}
+
+/// `KpfTCStep.step`'s arithmetic in the script's own order, for the account `a` whose object holds `v` (the bonds
+/// of a statement on it in it: `stood` is the statement's bond, its claimer and whether it is disputed):
+/// (gain, pay, asked, fee, user, the claimer's bond, the disputer's). `None`: the script refuses, or a number does
+/// not fit.
+#[allow(clippy::type_complexity)]
+fn step_as_the_script54(a: &Account, call: &Called, v: i64, stood: Option<(i64, [u8; 32], bool)>) -> Option<(i64, i64, i64, i64, i64, i64, i64)> {
+    const PAY_MIN: i64 = 20_000_000;
+    let count = a.a_min_counter;
+    if !(1..=6).contains(&count) || a.legs.len() as i64 != count || a.shard != Some(call.sid) {
+        return None;
+    }
+    let worth = |n: i64, sc: i64, p: i64| (n / sc).checked_mul(p)?.checked_add((n % sc).checked_mul(p / sc)?)?.checked_add((n % sc).checked_mul(p % sc)? / sc);
+    let mut gain = 0i64;
+    for l in &a.legs {
+        let r = call.heads.iter().position(|h| *h == Head::of(l))?;
+        let p = call.prices[r];
+        if (l.dir != LONG && l.dir != SHORT) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 || p < 0 {
+            return None;
+        }
+        let (wp, we) = (worth(l.size, l.scale, p)?, worth(l.size, l.scale, l.entry)?);
+        gain = if l.dir == LONG { gain.checked_add(wp)?.checked_sub(we)? } else { gain.checked_add(we)?.checked_sub(wp)? };
+    }
+    let mut v = v;
+    if let Some((bond, _, disputed)) = stood {
+        let form = if disputed { 2 } else { 1 };
+        if bond <= 0 || v < form * bond {
+            return None;
+        }
+        v -= form * bond;
+    }
+    let room = (a.a_margin.checked_sub(NOTE_MIN)?).max(0);
+    let (mut pay, mut asked) = (0, gain);
+    if gain < 0 {
+        pay = (0i64.checked_sub(gain)?).min(room);
+        asked = -pay;
+    }
+    if v < pay {
+        return None;
+    }
+    let rest = v - pay;
+    let fee = a.t.keeper_fee_min.max(0).min(NOTE_MIN).min(rest);
+    let mut user = rest - fee;
+    let (mut cb, mut db) = (0, 0);
+    if let Some((bond, claimer, disputed)) = stood {
+        if claimer == a.a_key {
+            user = user.checked_add(bond)?;
+        } else {
+            cb = bond;
+        }
+        if disputed {
+            db = bond;
+        }
+    }
+    let least = |x: i64| if x < PAY_MIN { 0 } else { x };
+    Some((gain, pay, asked, fee, least(user), least(cb), least(db)))
+}
+
+/// Round 54, item c: `KpfTCStep` against `Account::call_step_over` and against its arithmetic written out, at the
+/// engine, on random accounts: one to six legs in the call's four markets, long and short, the call's prices from
+/// half to twice the entries; coins from a note's least up (at the edges of a note's least, of the fee and of the
+/// least payment: 0.2, 0.2 and a sompi, 0.25, 0.3 less a sompi, 0.3, 0.5, 1, 20, 500 KAS); the account's output
+/// holding its coins, or 5 KAS more; the account as it stands, or under a statement of kind 7, 8 or 9 of its
+/// user's or of another key's, standing or disputed. For each: the model and the arithmetic agree; the builder's
+/// transaction is taken; the note is the one of all the legs, asking what the arithmetic says, and holds a note's
+/// least and what the account pays; the user, the other claimer and the disputer have exactly what the arithmetic
+/// says; and what is left is whoever steps's (the fee, and every payment under 0.2 KAS). Then one thing changed:
+/// the user a sompi less, the note a sompi less, the note asking a sompi more: refused.
+#[test]
+fn t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts() {
+    let w = ow();
+    let mut r = Rng(0x54_0002);
+    let coins_of = [NOTE_MIN, NOTE_MIN + 1, 25_000_000, 30_000_000 - 1, 30_000_000, 50_000_000, KAS1, 20 * KAS1, 500 * KAS1];
+    let (mut steps, mut paying, mut asking, mut nothing_to_user, mut kept, mut over, mut refused) = (0, 0, 0, 0, 0i64, 0, 0);
+    for case in 0..140 {
+        let n = r.range(1, 7) as usize;
+        let legs: Vec<XLeg> = (0..n).map(|_| {
+            let i = r.range(0, 4) as usize;
+            XLeg { size: r.range(1, 40) * w.markets[i].p.scale / 4, entry: P10 * r.range(5, 30) / 10, ..w.fut(i, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) }
+        }).collect();
+        let prices = [0, 1, 2, 3].map(|_| P10 * r.range(5, 30) / 10);
+        let coins = coins_of[r.range(0, coins_of.len() as i64) as usize];
+        let call = call54(&w, prices, T0);
+        let mut acct = cov47(&w, &legs, coins, 0);
+        let v = coins + if r.range(0, 5) == 0 { 5 * KAS1 } else { 0 };
+        acct.value = v as u64;
+        let x = &acct.s;
+        // The form: the account, or a statement on it (what it says is nothing a step reads).
+        let form = r.range(0, 4);
+        let claimer = if r.range(0, 2) == 0 { xk(&w.a) } else { xk(&w.w) };
+        let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+        let st = stated47(x, [KIND_C_TAKE, KIND_C_LEAVE, KIND_C_STEP][r.range(0, 3) as usize], &said, Outs::of(&[Out { key: false, to: x.hash(), value: v }]).unwrap(), v, claimer);
+        let stood = match form { 1 => Some((st.bond, claimer, false)), 2 => Some((st.bond, claimer, true)), _ => None };
+        let total = v + stood.map(|(b, _, d)| if d { 2 * b } else { b }).unwrap_or(0);
+        let script = step_as_the_script54(x, &call.s, total, stood);
+        let model = x.call_step_over(&call.s, v, stood);
+        assert_eq!(model.as_ref().map(|s| (s.gain, s.pay, s.note.asked, s.fee, s.user, s.claimer_bond, s.disputer_bond)), script, "case {case}: the model and the arithmetic written out");
+        let (gain, pay, asked, fee, user, cb, db) = script.expect("an account of these tests is stepped");
+        let f = [fund(xk(&w.b), 56, 1_000)];
+        let (b, step): (OBuilt, CallStep) = match form {
+            1 => call_step(&w.lib, &OLive { s: st, value: total as u64, id: acct.id, op: op(94), daa: 6_520 }, x, Some((&st, None)), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)),
+            2 => call_step(&w.lib, &OLive { s: Pointed { st, disputer: xk(&w.f), point: 0 }, value: total as u64, id: acct.id, op: op(94), daa: 6_530 }, x, Some((&st, Some((xk(&w.f), 0)))), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)),
+            _ => call_step(&w.lib, &acct, x, None, &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)),
+        }.unwrap_or_else(|e| panic!("case {case}: {e}"));
+        let sg = signed(&format!("case {case}: a step of {n} legs, form {form}"), &b, &w.keys);
+        let note = Left { sid: SID47, legs: legs.clone(), key: x.a_key, asked };
+        assert_eq!(step.note, note, "case {case}");
+        assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (call.value, &hash_spk(&w.lib, &call.s.hash())), "case {case}: the call again");
+        assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), ((NOTE_MIN + pay) as u64, &hash_spk(&w.lib, &note.hash())), "case {case}: the note");
+        let (to_user, to_claimer, to_disputer) = (paid(&sg, &xk(&w.a)), paid(&sg, &xk(&w.w)), paid(&sg, &xk(&w.f)));
+        assert_eq!((to_user, to_claimer, to_disputer), (user, cb, db), "case {case}: gain {gain}, coins {coins}, held {v}: the user, another claimer, the disputer");
+        // What whoever steps has: all that came in, less what the note holds for the shard and what is paid, less the
+        // note's least it added, its transaction's fee and the copy's.
+        let copy = sg.tx.outputs[1].value as i64 - sg.entries[1].amount as i64;
+        let stepper = paid(&sg, &xk(&w.b)) - 1_000 * KAS1;
+        assert_eq!(stepper + NOTE_MIN + sg.fee as i64 + copy, total - pay - user - cb - db, "case {case}: what is left is whoever steps's");
+        kept += total - pay - user - cb - db - fee;
+        steps += 1;
+        paying += (pay > 0) as i32;
+        asking += (asked > 0) as i32;
+        nothing_to_user += (user == 0) as i32;
+        over += stood.is_some() as i32;
+        // One thing changed.
+        let mut t = b.clone();
+        let what = match r.range(0, 3) {
+            0 if user > 0 => {
+                let k = t.tx.outputs.len() - 1;
+                t.tx.outputs[k].value -= 1;
+                "the user a sompi less"
+            }
+            1 => {
+                t.tx.outputs[2].value -= 1;
+                "the note a sompi less"
+            }
+            _ => {
+                let mut more = note.clone();
+                more.asked += 1;
+                t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &more.hash());
+                "the note asking a sompi more"
+            }
+        };
+        assert!(!taken30(&t, &w.keys), "case {case}: {what}");
+        refused += 1;
+    }
+    println!("T1b R54 a step under a call on random accounts: {steps} steps taken as the arithmetic says ({paying} paid the shard, {asking} asked of it, {over} over a statement, {nothing_to_user} left the user nothing); beside the fee, whoever stepped kept {kept} sompi of payments under the least; {refused} transactions with a sompi changed refused");
+    assert!(paying >= 30 && asking >= 30 && over >= 40 && nothing_to_user >= 10, "{paying} {asking} {over} {nothing_to_user}");
+}
+
+/// Round 54, item c: `KpfTCStep`, around a control (an account of 50 KAS, long 10 units of market 0 and short 4
+/// of market 1, both from 10; the call at 12 and 11: a gain of 16 KAS; the user has its 50 KAS less the fee, the
+/// note asks 16). Refused at the engine: the call of another shard; another time or another price said of the
+/// call; the rows named the other way, beyond the fourth, below the first, of another market, too few, too many; a
+/// leg's entry changed, a leg dropped, added, the legs the other way; a call that has no row of a leg's market;
+/// the account said with other coins; the user's payment to another key; the call written holding less, or as
+/// another call; the account going on beside the two; a form that is none, the account said to be under a
+/// statement, a statement said to be the account; a statement of kind 2, 5, 6, 10 or 11; a statement that landed
+/// before the call's time (taken at the call's time itself); the account marked (its 180 bytes).
+/// Taken, and to be known: a statement that landed BEFORE the call's time and is disputed after it is stepped
+/// over as one that landed after (the script reads the time of the object it spends: F90).
+#[test]
+fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
+    let w = ow();
+    let (l1, l2) = (w.fut(0, 10, LONG, P10), w.fut(1, 4, SHORT, P10));
+    let prices = [P10 * 12 / 10, P10 * 11 / 10, P10, P10];
+    let call = call54(&w, prices, T0);
+    let acct = cov47(&w, &[l1, l2], 50 * KAS1, 0);
+    let x = &acct.s;
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    let script = w.script("KpfTCStep");
+    let fee = x.t.keeper_fee_min;
+    let (b, step) = call_step(&w.lib, &acct, x, None, &call, &script, w.payer(&w.b, &f)).unwrap();
+    let sg = signed("a step under a call", &b, &w.keys);
+    assert_eq!((step.gain, step.pay, step.note.asked, step.user, paid(&sg, &xk(&w.a))), (16 * KAS1, 0, 16 * KAS1, 50 * KAS1 - fee, 50 * KAS1 - fee));
+    let refused = std::cell::Cell::new(0);
+    let no = |what: &str, t: OBuilt| {
+        assert!(!taken30(&t, &w.keys), "{what}");
+        refused.set(refused.get() + 1);
+    };
+    let with = |g: &dyn Fn(&mut OBuilt)| {
+        let mut t = b.clone();
+        g(&mut t);
+        t
+    };
+    // The call.
+    let mut other = call.clone();
+    other.s.sid = [0x44; 32];
+    no("the call of another shard", call_step_as(&w.lib, &acct, x, None, &other, &step, &script, w.payer(&w.b, &f)).unwrap());
+    // (Arguments of KpfTCStep.step: 4 the legs, 5 the rows, 6 the moving part, 7 the call's time, 8 its body, 9 the form.)
+    no("another time said of the call", with_arg(&b, 7, int_arg(T0 + 1)));
+    let mut body = call.s.body();
+    body[336] ^= 1;
+    no("another price said of the call", with_arg(&b, 8, bytes_arg(&body)));
+    let mut lacking = call.clone();
+    lacking.s.heads[1] = Head::EMPTY;
+    assert!(x.call_step(&lacking.s, 50 * KAS1).is_none(), "the model steps an account one leg of which has no row in the call");
+    no("a call that has no row of a leg's market", call_step_as(&w.lib, &acct, x, None, &lacking, &step, &script, w.payer(&w.b, &f)).unwrap());
+    no("the call written holding a sompi less", with(&|t| t.tx.outputs[0].value -= 1));
+    let other_spk = hash_spk(&w.lib, &other.s.hash());
+    no("another call written", with(&|t| t.tx.outputs[0].script_public_key = other_spk.clone()));
+    // The rows and the legs.
+    let rows = |v: &[i64]| bytes_arg(&v.iter().flat_map(|x| sm8(*x)).collect::<Vec<u8>>());
+    for (what, at) in [("the other way", vec![1i64, 0]), ("beyond the fourth", vec![4, 1]), ("below the first", vec![-1, 1]), ("of another market", vec![2, 1]), ("one for two legs", vec![0]), ("three for two legs", vec![0, 1, 1])] {
+        no(&format!("the rows named {what}"), with_arg(&b, 5, rows(&at)));
+    }
+    let lb = |l: &XLeg| kpf_protocol::thin::leg_bytes(l);
+    let cheaper = XLeg { entry: l1.entry - 1, ..l1 };
+    no("a leg's entry changed", with_arg(&b, 4, bytes_arg(&[lb(&cheaper), lb(&l2)].concat())));
+    no("a leg dropped", with_arg(&b, 4, bytes_arg(&lb(&l1))));
+    no("a leg added", with_arg(&b, 4, bytes_arg(&[lb(&l1), lb(&l2), lb(&l2)].concat())));
+    no("the legs the other way", with_arg(&with_arg(&b, 4, bytes_arg(&[lb(&l2), lb(&l1)].concat())), 5, rows(&[1, 0])));
+    let richer = Account { a_margin: 51 * KAS1, ..x.clone() };
+    no("the account said with other coins", with_arg(&b, 6, bytes_arg(&richer.moving())));
+    // The outputs.
+    let third = p2pk_spk(&xk(&w.w));
+    no("the user's coins to another key", with(&|t| {
+        let k = t.tx.outputs.len() - 1;
+        t.tx.outputs[k].script_public_key = third.clone();
+    }));
+    let again = hash_spk(&w.lib, &x.hash());
+    no("the account going on beside the call and the note", with(&|t| {
+        let c = t.tx.outputs[0].covenant.clone();
+        t.tx.outputs.insert(3, TransactionOutput { value: 50 * KAS1 as u64, script_public_key: again.clone(), covenant: c });
+    }));
+    // The forms.
+    for form in [1i64, 2, 3, -1] {
+        no(&format!("the account as it stands said of form {form}"), with_arg(&b, 9, int_arg(form)));
+    }
+    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+    let st = stated47(x, KIND_C_TAKE, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 50 * KAS1 }]).unwrap(), 50 * KAS1, xk(&w.a));
+    let total = (50 * KAS1 + st.bond) as u64;
+    let stood = |daa: u64, s: Stated| OLive { s, value: total, id: acct.id, op: op(94), daa };
+    let (sb, sstep) = call_step(&w.lib, &stood(6_500, st), x, Some((&st, None)), &call, &script, w.payer(&w.b, &f)).unwrap();
+    let ss = signed("a step over a statement that landed at the call's time", &sb, &w.keys);
+    assert_eq!(paid(&ss, &xk(&w.a)), 50 * KAS1 - fee + st.bond, "the user has its coins less the fee, and its bond");
+    assert!(call_step(&w.lib, &stood(6_499, st), x, Some((&st, None)), &call, &script, w.payer(&w.b, &f)).is_err(), "the builder steps over a statement that landed before the call");
+    no("a statement that landed before the call's time", landed50(&sb, 6_499));
+    no("a statement said to be the account", with_arg(&sb, 9, int_arg(0)));
+    no("a statement standing said to be disputed", with_arg(&sb, 9, int_arg(2)));
+    for kind in [2i64, 5, 6, 10, 11] {
+        let mut k = st;
+        k.kind = kind;
+        no(&format!("a statement of kind {kind}"), call_step_as(&w.lib, &stood(6_520, k), x, Some((&k, None)), &call, &sstep, &script, w.payer(&w.b, &f)).unwrap());
+    }
+    // The account marked: its object and its 180 bytes.
+    let marked = mark51(x, w.fut(2, 1, LONG, P10), 0);
+    assert!(shown53(&w, &b, None, &x.moving(), &x.moving()) && !shown53(&w, &b, Some((object_at53(&b), marked.hash())), &x.moving(), &marked.moving()), "a marked account is stepped");
+    refused.set(refused.get() + 1);
+    // A statement that landed before the call's time, disputed after it: the object a step spends is the dispute.
+    let q = OLive { s: Pointed { st, disputer: xk(&w.f), point: 0 }, value: total + st.bond as u64, id: acct.id, op: op(95), daa: 6_600 };
+    let over_old = call_step(&w.lib, &q, x, Some((&st, Some((xk(&w.f), 0)))), &call, &script, w.payer(&w.b, &f)).is_ok_and(|b| taken30(&b.0, &w.keys));
+    println!("T1b R54 what a step takes and refuses: the control taken (a gain of 16 KAS: the user has {} sompi, the note asks 16 KAS); a step over a statement at the call's time taken; {} other transactions refused; a statement of before the call's time, disputed after it, is stepped over: {over_old}", 50 * KAS1 - fee, refused.get());
+    // The note the control wrote (two legs), applied by `KpfTLeftAll` to the called shard that has them: a claim.
+    let note = nth(&sg, 2, step.note.clone(), 6_580);
+    let mut shard = shard_with47(&w, &[l1, l2], 10 * KAS1, 0);
+    shard.s.called = T0;
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let (nb, next, claim) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).unwrap();
+    let ns = signed("the note of a step, applied to the called shard", &nb, &w.keys);
+    assert_eq!((next.rows, next.basis, next.owed, next.held, claim), ([ShardRow::EMPTY; 4], 0, 16 * KAS1, 10 * KAS1, Some(RestNote { sid: SID47, key: xk(&w.a), amount: 16 * KAS1, counted: true })));
+    assert!(left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err() || !taken30(&left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap().0, &w.keys), "a note of two legs is applied by the script of one");
+    // What the step left whoever made it (F93): the fee, less the note's least it put in, its transaction's fee and
+    // the copy's; and what applying the note leaves (the claim holds the note's least on).
+    let stepper = paid(&sg, &xk(&w.b)) - 1_000 * KAS1;
+    let applier = paid(&ns, &xk(&w.f)) - 1_000 * KAS1;
+    println!("T1b R54 F93: whoever steps an account that gained has {stepper} sompi of it (the fee of {fee}, less the note's least of {NOTE_MIN} it adds and its fees); whoever applies the note {applier}; the note's least is in the claim, and is whoever pays the claim's");
+}
+
+/// Round 54, F89 (Medium). An account whose output holds less than what it must pay is stepped by nothing, and
+/// while it has a leg in the books no row empties, no claim of the shard is paid, and the call never ends.
+/// `KpfTCStep` asks `v >= pay`, where `pay` is what the legs lost, up to the coins the account SAYS it has less a
+/// note's least, and `v` is what its output holds. Every script that writes an account writes it holding what it
+/// says; a statement nobody disputed (F81's premise) writes one that says more. Here: an account that says 1,000
+/// KAS and holds 30, long 10 units from 10; the call at 6: it lost 40 KAS. No step of it is taken, whatever the
+/// transaction writes (the model gives none). And the shard, called, with that leg's row: a claim on it is not
+/// paid. (Nor does the leg leave by its user's statement: a right leaving pays 40 KAS out of the 30.) Passes
+/// while the step is refused and the claim is not paid.
+#[test]
+fn t1b_finding_f89_an_account_that_holds_less_than_it_must_pay_is_stepped_by_nothing_and_no_claim_is_paid() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let prices = [P10 * 6 / 10, P10, P10, P10];
+    let call = call54(&w, prices, T0);
+    let sound = cov47(&w, &[leg], 1_000 * KAS1, 0);
+    let mut poor = sound.clone();
+    poor.value = 30 * KAS1 as u64;
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    let script = w.script("KpfTCStep");
+    let (b, step) = call_step(&w.lib, &sound, &sound.s, None, &call, &script, w.payer(&w.b, &f)).unwrap();
+    assert!(taken30(&b, &w.keys) && step.pay == 40 * KAS1, "(control) the account that holds what it says is stepped: it pays the 40 KAS");
+    if poor.s.call_step(&call.s, poor.value as i64).is_some() || call_step(&w.lib, &poor, &poor.s, None, &call, &script, w.payer(&w.b, &f)).is_ok_and(|b| taken30(&b.0, &w.keys)) {
+        println!("F89 is closed: an account that holds less than it lost is stepped for what it holds");
+        return;
+    }
+    // Written by hand: the control's transaction with the object holding 30 KAS, and the note and the user written
+    // every way that could be meant.
+    let object = object_at53(&b);
+    let mut any = false;
+    for (note_holds, asked, user) in [(NOTE_MIN + 40 * KAS1, -40 * KAS1, 0i64), (NOTE_MIN + 30 * KAS1, -30 * KAS1, 0), (30 * KAS1, -30 * KAS1 + NOTE_MIN, 0), (NOTE_MIN, 0, 0), (NOTE_MIN + 40 * KAS1, -40 * KAS1, 960 * KAS1)] {
+        let mut t = b.clone();
+        t.entries[object].amount = poor.value;
+        let note = Left { sid: SID47, legs: vec![leg], key: xk(&w.a), asked };
+        t.tx.outputs[2].value = note_holds as u64;
+        t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &note.hash());
+        let k = t.tx.outputs.len() - 1;
+        if user == 0 {
+            t.tx.outputs.truncate(k);
+        }
+        any |= taken30(&t, &w.keys);
+    }
+    assert!(!any, "a step of the account is taken");
+    // The shard, called, with the leg's row: no claim is paid, and the call is not ended.
+    let shard = shard_with47(&w, &[leg], 100 * KAS1, 0);
+    let (called, call_obj) = called54(&shard, prices, T0, 6_560);
+    let claim = RestNote { sid: SID47, key: xk(&w.w), amount: 5 * KAS1, counted: true };
+    let owing = OLive { s: Shard { owed: 5 * KAS1, ..called.s }, ..called.clone() };
+    let empty = OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..owing.s }, ..owing.clone() };
+    let pay = |on: &OLive<Shard>| claim_pay(&w.lib, on, &note_made46(on, claim, 96, 6_600), &w.script("KpfTCallPay"), w.payer(&w.b, &f));
+    let (cb, _, paid_out) = pay(&empty).expect("(control) a claim on the shard with no row");
+    assert!(taken30(&cb, &w.keys) && paid_out == 5 * KAS1);
+    assert!(pay(&owing).is_err(), "the model pays a claim while a row has a unit");
+    // (Arguments of KpfTCallPay.claim: 4 the rows, 5 the moving part.)
+    let mut t = with_arg(&with_arg(&cb, 4, bytes_arg(&owing.s.rows_bytes())), 5, bytes_arg(&owing.s.moving()));
+    object_made(&mut t, &w.lib, object_at53(&cb), &owing.s.hash());
+    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: owing.s.held - 5 * KAS1, owed: 0, ..owing.s }.hash());
+    assert!(!taken30(&t, &w.keys), "a claim is paid while a row has a unit");
+    assert!(call_off(&w.lib, &owing, &call_obj, &w.script("KpfTCallPay"), w.payer(&w.b, &f)).is_err());
+    println!("T1b R54 F89 OPEN: an account that says 1,000 KAS and holds 30, its leg having lost 40 at the call's price, is stepped by no transaction (5 written); its leg stays in the shard's row, and no claim of the shard is paid while a row has a unit");
+}
+
+/// `KpfTCallPay.claim`'s share written out in the script's own order: what a claim of `amount` is paid by a shard
+/// that holds `held` and owes `owed` by claims. `None`: the script refuses, or a number does not fit.
+fn share_as_the_script54(held: i64, owed: i64, amount: i64) -> Option<i64> {
+    if amount <= 0 || amount > owed || held < 0 {
+        return None;
+    }
+    if held >= owed {
+        return Some(amount);
+    }
+    let mut u = 1i64;
+    for (at, unit) in [(3_000_000_000i64, 1_000i64), (3_000_000_000_000, 1_000_000), (3_000_000_000_000_000, 1_000_000_000), (3_000_000_000_000_000_000, 1_000_000_000_000)] {
+        if owed >= at {
+            u = unit;
+        }
+    }
+    let (h, o) = (held / u, (owed - 1) / u + 1);
+    (amount / o).checked_mul(h)?.checked_add((amount % o).checked_mul(h)? / o)
+}
+
+/// A called shard of no row that holds `held` and owes `owed` by claims, as an output stands.
+fn owing54(w: &OW, held: i64, owed: i64) -> OLive<Shard> {
+    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed, basis: 0, called: T0 };
+    OLive { value: (held as u64) + CALL_HOLD as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(97), daa: 6_700 }
+}
+
+/// Round 54, item c: `KpfTCallPay.claim`'s share against the model and its arithmetic written out, at the engine,
+/// at the edges of the units: what is owed just below, at and above 3e9, 3e12, 3e15 and 3e18 sompi, and the
+/// largest number; what is held nothing, a sompi, a unit less a sompi, a unit, half, what is owed less a sompi,
+/// exactly, and more; a claim of a sompi, of a unit, of half, of all less a sompi, of all. For each: the model
+/// and the arithmetic agree; the share is no more than the claim and no more than its exact share (amount times
+/// held over owed, computed in 128 bits); the builder's transaction is taken where one is written, and the same
+/// with a sompi more paid is refused. The largest shortfall against the exact share is printed. Then the claims
+/// of a shard together, on the model: 300 random sets of claims in random orders: what is paid never exceeds
+/// what is held, each claim is paid no more than it asks, and a claim paid later is paid at no lower a share.
+#[test]
+fn t1b_r54_a_claims_share_is_the_models_at_the_edges_of_the_units_and_the_claims_together_take_no_more_than_is_held() {
+    let w = ow();
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    let key = xk(&w.a);
+    let script = w.script("KpfTCallPay");
+    let (mut cases, mut taken, mut unwritten, mut refused) = (0, 0, 0, 0);
+    let (mut worst, mut worst_at, mut worst_abs) = (0f64, (0i64, 0i64, 0i64), 0i128);
+    for at in [3_000_000_000i64, 3_000_000_000_000, 3_000_000_000_000_000, 3_000_000_000_000_000_000] {
+        let unit = at / 3_000_000;
+        for owed in [at - 1, at, at + 1, at / 3 * 5, i64::MAX] {
+            if owed == i64::MAX && at != 3_000_000_000_000_000_000 {
+                continue;
+            }
+            for held in [0, 1, unit - 1, unit, owed / 2, owed - unit, owed - 1, owed, owed.saturating_add(1)] {
+                for amount in [1, unit, owed / 2, owed - 1, owed] {
+                    if held < 0 || amount <= 0 {
+                        continue;
+                    }
+                    let script_pay = share_as_the_script54(held, owed, amount);
+                    let shard = owing54(&w, held, owed);
+                    let claim = RestNote { sid: SID47, key, amount, counted: true };
+                    let model = shard.s.claim_paid(&claim).ok();
+                    assert_eq!(model.map(|x| x.1), script_pay, "held {held}, owed {owed}, a claim of {amount}");
+                    let pay = script_pay.expect("a claim of no more than is owed has a share");
+                    let exact = (amount as i128 * held.min(owed) as i128) / owed as i128;
+                    assert!(pay <= amount && pay as i128 <= exact, "held {held}, owed {owed}, a claim of {amount}: paid {pay}, exactly {exact}");
+                    if exact > 0 && held >= owed / 2 {
+                        let short = (exact - pay as i128) as f64 / exact as f64;
+                        if short > worst {
+                            (worst, worst_at) = (short, (held, owed, amount));
+                        }
+                    }
+                    worst_abs = worst_abs.max(exact - pay as i128);
+                    cases += 1;
+                    // At the engine (the amounts a transaction of the harness holds: below 2^62).
+                    if held < (1 << 62) && cases % 3 == 0 {
+                        let note = note_made46(&shard, claim, 96, 6_710);
+                        let (next, _) = model.unwrap();
+                        match claim_pay_as(&w.lib, &shard, &note, next, pay, &script, w.payer(&w.b, &f)) {
+                            Ok(b) => {
+                                assert!(taken30(&b, &w.keys), "held {held}, owed {owed}, a claim of {amount}: the share of {pay} is not taken");
+                                taken += 1;
+                            }
+                            Err(_) => unwritten += 1,
+                        }
+                        if pay < held {
+                            let more = Shard { held: held - pay - 1, ..next };
+                            if let Ok(b) = claim_pay_as(&w.lib, &shard, &note, more, pay + 1, &script, w.payer(&w.b, &f)) {
+                                assert!(!taken30(&b, &w.keys), "held {held}, owed {owed}, a claim of {amount}: a sompi more than its share is paid");
+                                refused += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The claims of a shard together.
+    let mut r = Rng(0x54_0003);
+    let (mut sets, mut dust) = (0, 0i128);
+    for _ in 0..300 {
+        let n = r.range(1, 9) as usize;
+        let scale = [1i64, 1_000, 1_000_000, KAS1, 1_000 * KAS1, 1_000_000 * KAS1][r.range(0, 6) as usize];
+        let mut claims: Vec<i64> = (0..n).map(|_| r.range(1, 5_000) * scale + r.range(0, 1_000)).collect();
+        let owed: i64 = claims.iter().sum();
+        let held0 = match r.range(0, 4) { 0 => 0, 1 => owed - 1, 2 => owed + r.range(0, 1_000), _ => (owed as i128 * r.range(1, 1_000) as i128 / 1_000) as i64 };
+        // A random order.
+        for i in (1..n).rev() {
+            claims.swap(i, r.range(0, i as i64 + 1) as usize);
+        }
+        let mut s = owing54(&w, held0, owed).s;
+        let (mut total, mut last_share) = (0i128, 0f64);
+        for a in &claims {
+            let (next, pay) = s.claim_paid(&RestNote { sid: SID47, key, amount: *a, counted: true }).expect("a claim counted is paid");
+            assert_eq!(Some(pay), share_as_the_script54(s.held, s.owed, *a));
+            assert!(pay >= 0 && pay <= *a && pay <= s.held, "a claim of {a} is paid {pay} of {} held", s.held);
+            let share = if s.owed > 0 { s.held as f64 / s.owed as f64 } else { 1.0 };
+            assert!(share + 1e-9 >= last_share.min(1.0), "the share of what is left fell from {last_share} to {share}");
+            last_share = share;
+            total += pay as i128;
+            s = next;
+        }
+        assert!(total <= held0 as i128 && s.owed == 0 && s.held as i128 == held0 as i128 - total);
+        if held0 < owed {
+            dust += s.held as i128;
+        }
+        sets += 1;
+    }
+    println!("T1b R54 the share of a claim: {cases} cases at the edges of the units, the model and the arithmetic written out agreeing, none paid above its exact share; {taken} taken at the engine ({unwritten} the builder writes no transaction for), {refused} with a sompi more refused; the largest shortfall where at least half is held: {worst:.3e} of the exact share (held, owed, amount) = {worst_at:?}; the largest in sompi {worst_abs}. {sets} random sets of claims in random orders: never more paid than held; what is left to the shard where it held less than it owed: {dust} sompi in all");
+    assert!(worst < 2e-6 && taken >= 100 && refused >= 100, "{worst} {taken} {refused}");
+}
+
+/// Round 54, item c: the whole way of a call at the engine, with what is asked about it on the way. A shard of 10
+/// KAS, short 10 units of market 0 to user A and long 6 to user B, all from 10; the price is 15. Called by a third
+/// key (stated, applied): the shard called, the call an object. Then:
+///  - no claim is paid and the call is not ended while a row has a unit (the builders refuse; F89's test runs
+///    the script);
+///  - A (30 KAS of coins) is stepped: it gained 50; its note asks 50; B (100 KAS) is stepped with the call as the
+///    first step wrote it again: it lost 30 and pays them; each user has its coins back less the fee and what it
+///    paid;
+///  - B's note is applied by `KpfTLeft`: the shard holds 30 KAS more; A's is applied: nothing paid, 50 KAS owed
+///    by claims, a claim written; the rows are empty and the basis nothing;
+///  - the owner adds 5 KAS to the called shard (`KpfTAddC`): what it owes and its call stay, and the share rises;
+///  - a note of the rest of 20 KAS written before the call is shown: it is counted (70 KAS owed) and goes on as
+///    a claim;
+///  - A's claim of 50 is paid 50 * 44.9 / 70 = 32.07 KAS, the other its 12.83; nothing is owed; the call ends:
+///    the shard is not called and its output has the call's coins again.
+/// And who gains by the order: had A's claim been paid before the note of the rest was shown, A had 44.9 of its
+/// 50 and the note's holder nothing of its 20 (the model, both orders).
+#[test]
+fn t1b_r54_the_whole_way_of_a_call_and_what_the_order_of_claims_does() {
+    let w = ow();
+    let (la, lb) = (w.fut(0, 10, LONG, P10), w.fut(0, 6, SHORT, P10));
+    let shard = shard_with47(&w, &[la, lb], 10 * KAS1, 0);
+    let fee = w.terms().keeper_fee_min;
+    let up = [P10 * 15 / 10, 0, 0, 0];
+    let (fw, ff, fb) = ([fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.b), 56, 1_000)]);
+    // Called.
+    let (b, st, _) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &fw)).unwrap();
+    let live = nth(&signed("a call stated", &b, &w.keys), 0, st, 6_510);
+    let ap = signed("the call applied", &stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.f, &ff)).unwrap(), &w.keys);
+    let (next, call) = shard.s.called_at(&up, T0, fee);
+    let mut s = nth(&ap, 0, next, 6_570);
+    let mut c = nth(&ap, out_at47(&ap, &hash_spk(&w.lib, &call.hash())), call, 6_570);
+    assert_eq!((s.s.called, s.s.held, s.s.owed, c.value), (T0, 10 * KAS1 - fee, 0, CALL_HOLD as u64));
+    assert!(call_off(&w.lib, &s, &c, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).is_err(), "the call is ended while rows have units");
+    // The two accounts stepped, the second with the call as the first wrote it again.
+    let a = cov47(&w, &[la], 30 * KAS1, 0);
+    let mut b_acct = cov47(&w, &[lb], 100 * KAS1, 0);
+    b_acct.s.a_key = xk(&w.w);
+    let mut notes = vec![];
+    for (who, acct, gain, pay) in [("A", &a, 50 * KAS1, 0i64), ("B", &b_acct, -30 * KAS1, 30 * KAS1)] {
+        let (sb, step) = call_step(&w.lib, acct, &acct.s, None, &c, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).unwrap();
+        let sg = signed(&format!("{who} stepped"), &sb, &w.keys);
+        assert_eq!((step.gain, step.pay, paid(&sg, &acct.s.a_key)), (gain, pay, acct.s.a_margin - pay - fee), "{who}");
+        notes.push(nth(&sg, 2, step.note.clone(), 6_580));
+        c = nth(&sg, 0, c.s, 6_580);
+    }
+    // The notes applied to the called shard: B's first (it pays), then A's (it asks).
+    let (nb, snext, rest) = left_apply(&w.lib, &s, &notes[1], &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    assert!(rest.is_none() && snext.held == 40 * KAS1 - fee);
+    s = nth(&signed("the note of what B paid, applied", &nb, &w.keys), 0, snext, 6_590);
+    let (nb, snext, rest) = left_apply(&w.lib, &s, &notes[0], &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let claim_a = rest.expect("a claim");
+    let sg = signed("the note of what A gained, applied", &nb, &w.keys);
+    assert_eq!((snext.held, snext.owed, snext.rows, snext.basis, claim_a), (40 * KAS1 - fee, 50 * KAS1, [ShardRow::EMPTY; 4], 0, RestNote { sid: SID47, key: xk(&w.a), amount: 50 * KAS1, counted: true }));
+    assert_eq!(paid(&sg, &xk(&w.a)), 0, "nothing is paid while the shard is called");
+    s = nth(&sg, 0, snext, 6_600);
+    let claim_a = nth(&sg, out_at47(&sg, &hash_spk(&w.lib, &claim_a.hash())), claim_a, 6_600);
+    assert!(call_off(&w.lib, &s, &c, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).is_err(), "the call is ended while a claim is owed");
+    // The owner adds 5 KAS.
+    let (ab, added) = shard_fund(&w.lib, &s, &w.script("KpfTAddC"), 5 * KAS1, w.payer(&w.b, &fb)).unwrap();
+    assert_eq!((added.held, added.owed, added.called), (45 * KAS1 - fee, 50 * KAS1, T0), "what it owes and its call stay");
+    let before_rest = s.s;
+    s = nth(&signed("the owner adds to its called shard", &ab, &w.keys), 0, added, 6_610);
+    // A note of the rest of before the call, shown now.
+    let old = RestNote { sid: SID47, key: xk(&w.w), amount: 20 * KAS1, counted: false };
+    let (rb, rnext, rleft) = rest_apply(&w.lib, &s, &note_made46(&s, old, 98, 6_400), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let claim_r = rleft.expect("a claim");
+    let sg = signed("a note of the rest shown to the called shard", &rb, &w.keys);
+    assert_eq!((rnext.held, rnext.owed, claim_r.counted, paid(&sg, &xk(&w.w))), (45 * KAS1 - fee, 70 * KAS1, true, 0));
+    let with_rest = nth(&sg, 0, rnext, 6_620);
+    let claim_r = nth(&sg, out_at47(&sg, &hash_spk(&w.lib, &claim_r.hash())), claim_r, 6_620);
+    // The two claims paid, and the call ended.
+    let (pb, pnext, pa) = claim_pay(&w.lib, &with_rest, &claim_a, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("A's claim paid its share", &pb, &w.keys);
+    assert_eq!((pa, paid(&sg, &xk(&w.a))), ((50i128 * (45 * KAS1 - fee) as i128 / 70) as i64, pa));
+    let s2 = nth(&sg, 0, pnext, 6_630);
+    let (pb, pnext, pr) = claim_pay(&w.lib, &s2, &claim_r, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("the other claim paid its share", &pb, &w.keys);
+    assert_eq!((pa + pr, pnext.owed, pnext.held, paid(&sg, &xk(&w.w))), (45 * KAS1 - fee - pnext.held, 0, pnext.held, pr));
+    assert!(pnext.held < 2, "what rounding leaves: {}", pnext.held);
+    let s3 = nth(&sg, 0, pnext, 6_640);
+    let (ob, onext) = call_off(&w.lib, &s3, &c, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("the call ended", &ob, &w.keys);
+    assert_eq!((onext.called, onext.owed, sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (0, 0, s3.value + CALL_HOLD as u64, &hash_spk(&w.lib, &onext.hash())));
+    // The other order, on the model: A's claim paid before the note of the rest is shown.
+    let early = Shard { held: 45 * KAS1 - fee, ..before_rest };
+    let (after_a, a_first) = early.claim_paid(&claim_a.s).unwrap();
+    let (shown, _, counted) = after_a.rest_paid(&old).unwrap();
+    let (_, r_after) = shown.claim_paid(&counted.unwrap()).unwrap();
+    println!("T1b R54 the whole way of a call: called, two accounts stepped, their notes applied (30 KAS in, 50 KAS owed), 5 KAS added by the owner, a note of the rest of 20 KAS counted: A's claim of 50 KAS is paid {pa} sompi and the note's holder {pr}; had A's claim been paid before the note was shown: A {a_first}, the note's holder {r_after}");
+}
+
+/// Round 54, item c: `KpfTCallEnter`, and what follows it. An entry of a long of 10 units stated at 6,500 and
+/// landed at 6,510 on an account of 20 KAS (its bond 2 KAS); its shard is then called, the call's time 6,505.
+/// Ended by showing the call, standing and disputed: the marked account again holding the account's 20 KAS, the
+/// call again, the bonds back (the user's, and the disputer's). Refused: the call's time after the entry's
+/// landing (6,511: the builder; the script, with the entry landed at 6,504); the call of another shard; another
+/// time or another body said of the call; the forms 0, 3 and -1; the marked account written holding a sompi less,
+/// or as the account without the mark; the call holding less; a bond a sompi short. An entry on an account of 1
+/// KAS (a bond of 0.1 KAS, under the least payment): ended, and the bond is whoever ends it's (F92).
+/// Then the marked account is undone by `KpfTEnterOff` (the keeper's fee to whoever undoes it), and the note that
+/// the leg did not enter is applied by `KpfTLeft` to the CALLED shard: the leg is out of its books, what it owes
+/// and its call as they were.
+#[test]
+fn t1b_r54_an_entry_under_a_call_is_ended_undone_and_its_leg_taken_out_of_the_called_shards_books() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let (entry, marked, shard, acct) = entered51(&w, 20 * KAS1, leg);
+    let st = entry.s;
+    let prices = [P10 * 12 / 10, 0, 0, 0];
+    let call_at = |t: i64| OLive { s: Called { sid: shard.s.sid, time: t, heads: shard.s.rows.map(|r| r.head), prices }, value: CALL_HOLD as u64, id: shard.id, op: op(93), daa: 6_600 };
+    let call = call_at(6_505);
+    let script = w.script("KpfTCallEnter");
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let b = call_enter_end(&w.lib, &entry, &st, None, &marked, &call, &script, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("an entry ended by showing the call", &b, &w.keys);
+    let m_at = out_at47(&sg, &hash_spk(&w.lib, &marked.hash()));
+    assert_eq!((sg.tx.outputs[m_at].value, paid(&sg, &xk(&w.a)), st.bond), (acct.value, st.bond, 2 * KAS1), "the marked account holds the account's coins; the user has its bond");
+    let c_at = out_at47(&sg, &hash_spk(&w.lib, &call.s.hash()));
+    assert_eq!(sg.tx.outputs[c_at].value, call.value, "the call again");
+    // Disputed.
+    let q = w.pointed(&entry, 2);
+    let qb = call_enter_end(&w.lib, &q, &st, Some((q.s.disputer, 2)), &marked, &call, &script, w.payer(&w.f, &ff)).unwrap();
+    let qs = signed("a disputed entry ended by showing the call", &qb, &w.keys);
+    assert_eq!((paid(&qs, &xk(&w.a)), paid(&qs, &q.s.disputer)), (st.bond, st.bond), "both bonds back");
+    let refused = std::cell::Cell::new(0);
+    let no = |what: &str, t: OBuilt| {
+        assert!(!taken30(&t, &w.keys), "{what}");
+        refused.set(refused.get() + 1);
+    };
+    let with = |g: &dyn Fn(&mut OBuilt)| {
+        let mut t = b.clone();
+        g(&mut t);
+        t
+    };
+    assert!(call_enter_end(&w.lib, &entry, &st, None, &marked, &call_at(6_511), &script, w.payer(&w.f, &ff)).is_err(), "the builder ends an entry that landed before the call's time");
+    no("an entry that landed before the call's time", landed50(&b, 6_504));
+    assert!(taken30(&landed50(&b, 6_505), &w.keys), "an entry that landed at the call's time");
+    let mut other = call.clone();
+    other.s.sid = [0x44; 32];
+    assert!(call_enter_end(&w.lib, &entry, &st, None, &marked, &other, &script, w.payer(&w.f, &ff)).is_err());
+    let call_in = b.plans.iter().enumerate().filter(|(_, p)| p.name().starts_with("KpfSlot")).map(|(i, _)| i).nth(1).expect("the call's input");
+    let other_hash = other.s.hash();
+    no("the call of another shard", with(&|t| {
+        object_made(t, &w.lib, call_in, &other_hash);
+        t.tx.outputs[c_at].script_public_key = hash_spk(&w.lib, &other_hash);
+    }));
+    // (Arguments of KpfTCallEnter.end: 4 the marked account's moving part, 13 the form, 16 the call's time, 17 the hash of its body.)
+    no("another time said of the call", with_arg(&b, 16, int_arg(6_504)));
+    no("another body said of the call", with_arg(&b, 17, bytes_arg(&[7u8; 32])));
+    for form in [0i64, 2, 3, -1] {
+        no(&format!("form {form}"), with_arg(&b, 13, int_arg(form)));
+    }
+    no("the marked account holding a sompi less", with(&|t| t.tx.outputs[m_at].value -= 1));
+    let plain = hash_spk(&w.lib, &acct.s.hash());
+    no("the account written without its mark", with(&|t| t.tx.outputs[m_at].script_public_key = plain.clone()));
+    no("the call holding a sompi less", with(&|t| t.tx.outputs[c_at].value -= 1));
+    no("the user's bond a sompi short", with(&|t| {
+        let k = t.tx.outputs.len() - 1;
+        t.tx.outputs[k].value -= 1;
+    }));
+    // A small account: a bond under the least payment.
+    let small = cov52(&w, &[], KAS1);
+    let small_leg = XLeg { size: leg.size / 100, ..leg };
+    let s52 = shard52(&w, &[], 500 * KAS1);
+    let (sb, sst, _, _) = enter_by_hand52(&w, &small, &mark51(&small.s, small_leg, 0), &[P10], &s52, 0, T0, SEED52);
+    let small_entry = nth(&signed("an entry on an account of 1 KAS", &sb.unwrap(), &w.keys), 0, sst, 6_510);
+    let small_marked = mark51(&small.s, small_leg, 0);
+    let eb = call_enter_end(&w.lib, &small_entry, &sst, None, &small_marked, &call, &script, w.payer(&w.f, &ff)).unwrap();
+    let es = signed("a small entry ended by showing the call", &eb, &w.keys);
+    let ender = paid(&es, &xk(&w.f)) - 1_000 * KAS1;
+    assert_eq!(sst.bond, KAS1 / 10);
+    let small_back = paid(&es, &xk(&w.a));
+    // The marked account undone, and its note applied to the called shard.
+    let m_live: OLive<Marked> = nth(&sg, m_at, marked.clone(), 6_610);
+    let (ob, back, note) = enter_off(&w.lib, &m_live, &w.script("KpfTEnterOff"), xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+    let os = signed("the marked account undone", &ob, &w.keys);
+    assert_eq!((back.legs.len(), back.a_min_counter, back.a_margin), (0, 0, 20 * KAS1 - w.terms().keeper_fee_min));
+    let note_live = nth(&os, out_at47(&os, &hash_spk(&w.lib, &note.hash())), note, 6_620);
+    let mut called = shard.clone();
+    (called.s.called, called.s.owed) = (6_505, 7 * KAS1);
+    let (nb, books) = unentered_apply(&w.lib, &called, &note_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&nb, &w.keys));
+    assert_eq!((books.rows, books.basis, books.held, books.owed, books.called), ([ShardRow::EMPTY; 4], 0, called.s.held, 7 * KAS1, 6_505), "the leg is out of the called shard's books; what it owes and its call stay");
+    println!("T1b R54 an entry under a call: ended standing and disputed (the bonds of {} sompi back), {} other transactions refused; of a bond of 0.1 KAS the user has {small_back} sompi back and whoever ended the entry {ender} after its fees (F92); the marked account is undone and its note applied to the called shard: no row, what it owes and its call as they were", st.bond, refused.get());
+}
+
+/// Round 54, item c: a called shard under every script that takes a shard. A shard called at 6,500 that owes 7 KAS
+/// by claims and has a leg in its books. Its owner adds to it (`KpfTAddC`): what it owes and its call stay, and the
+/// same transaction written without them is refused. A note of a leg in no row that holds 12 KAS is spent
+/// (`KpfTLeftVoid`): the same. No entry is stated on it (`KpfTEnterS`); a draw of it has a wrong end
+/// (`KpfTShardEnd`); a second call of it has a wrong end (`KpfTCallEnd`). A draw stated on it is ended by a note
+/// (`KpfTDrawNote`) into the shard as it was. A statement on it has a bond of its rate of what it holds AND what it
+/// owes (the place of a position's second margin): the model's, and `KpfTChange`'s.
+#[test]
+fn t1b_r54_a_called_shard_keeps_what_it_owes_and_its_call_under_every_script_that_takes_it() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let mut s = shard_with47(&w, &[leg], 100 * KAS1, 0);
+    (s.s.called, s.s.owed) = (T0, 7 * KAS1);
+    let (ff, fb) = ([fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.b), 56, 1_000)]);
+    let mut refused = 0;
+    let (bare_owed, bare_call) = (hash_spk(&w.lib, &Shard { owed: 0, held: s.s.held + 5 * KAS1, ..s.s }.hash()), hash_spk(&w.lib, &Shard { called: 0, held: s.s.held + 5 * KAS1, ..s.s }.hash()));
+    // The owner adds.
+    let (ab, added) = shard_fund(&w.lib, &s, &w.script("KpfTAddC"), 5 * KAS1, w.payer(&w.b, &fb)).unwrap();
+    assert!(taken30(&ab, &w.keys) && (added.held, added.owed, added.called, added.rows) == (105 * KAS1, 7 * KAS1, T0, s.s.rows));
+    for spk in [&bare_owed, &bare_call] {
+        let mut t = ab.clone();
+        t.tx.outputs[0].script_public_key = spk.clone();
+        assert!(!taken30(&t, &w.keys), "coins are added and what the shard owes, or its call, is gone");
+        refused += 1;
+    }
+    // A note of a leg in no row, spent.
+    let ghost = Left { sid: SID47, legs: vec![w.fut(2, 3, SHORT, P10)], key: xk(&w.w), asked: -12 * KAS1 };
+    let ghost_live = OLive { value: ghost.value() as u64, ..note_made46(&s, ghost.clone(), 75, 6_050) };
+    let vb = left_void(&w.lib, &s, &ghost_live, 0, &w.script("KpfTLeftVoid"), w.payer(&w.f, &ff)).unwrap();
+    let voided = s.s.voided(&ghost).unwrap();
+    let vs = signed("a note spent on a called shard", &vb, &w.keys);
+    assert_eq!((voided.held, voided.owed, voided.called, &vs.tx.outputs[0].script_public_key), (112 * KAS1, 7 * KAS1, T0, &hash_spk(&w.lib, &voided.hash())));
+    // No entry; a draw and a call have a wrong end.
+    let acct = cov47(&w, &[], 20 * KAS1, 0);
+    let mut s52 = shard52(&w, &[], 500 * KAS1);
+    (s52.s.called, s52.s.owed) = (T0, 7 * KAS1);
+    let a52 = cov52(&w, &[], 20 * KAS1);
+    let (eb, _, _, _) = enter_by_hand52(&w, &a52, &mark51(&a52.s, leg, 0), &[P10], &s52, 0, T0 + 10, SEED52);
+    assert!(refused51(eb, &w.keys) && s52.s.entered(&leg, 0, T0 + 10).is_err(), "a leg enters a called shard");
+    let _ = acct;
+    refused += 1;
+    let prices = [P10, 0, 0, 0];
+    let (dst, d) = draw_by_hand45(&s, KAS1, prices, xk(&w.b)).unwrap();
+    assert_eq!(draw_end_taken45(&w, &s, &dst, &d), Some((false, true)), "the end of a draw of a called shard");
+    let (cst, cd) = call_by_hand54(&s, [P10 * 3, 0, 0, 0], [P10 * 3, 0, 0, 0], w.terms().keeper_fee_min, 0, T0 + 100, xk(&w.w)).unwrap();
+    assert_eq!(call_end_taken54(&w, &s, &cst, &cd), (false, true), "the end of a second call");
+    // The bond of a statement on it: of what it holds and what it owes.
+    assert_eq!((s.s.bond(), dst.bond), (107 * KAS1 / 100, 107 * KAS1 / 100));
+    let stating = state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &dst, &d.said(), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap();
+    let ss = signed("a draw stated on a called shard", &stating, &w.keys);
+    let short = Stated { bond: KAS1, ..dst };
+    assert!(!taken30(&state_raw(&w.lib, &s, &s.s.fixed_hash(), &s.s.moving(), &short, &d.said(), s.s.form(), &w.script("KpfTChange"), w.payer(&w.b, &fb)).unwrap(), &w.keys), "a statement on it with the bond of what it holds alone");
+    refused += 1;
+    // That draw, ended by a note: the shard as it was.
+    let draw = nth(&ss, 0, dst, 6_600);
+    let note = note_made46(&s, Left { sid: SID47, legs: vec![leg], key: xk(&w.a), asked: 5 * KAS1 }, 76, 6_590);
+    let nb = draw_note_left(&w.lib, &draw, &dst, None, &s.s, &note, &w.script("KpfTDrawNote"), xk(&w.w), w.payer(&w.f, &ff)).unwrap();
+    let ns = signed("a draw on a called shard ended by a note", &nb, &w.keys);
+    assert!(ns.tx.outputs.iter().any(|o| o.script_public_key == hash_spk(&w.lib, &s.s.hash()) && o.value == s.value), "the shard again, as it was");
+    println!("T1b R54 a called shard that owes by claims: added to and a note spent on it, what it owes and its call stay; no leg enters; a draw and a second call have a wrong end; a statement on it has a bond of what it holds and owes; {refused} transactions that would lose either refused");
+}
+
+/// Round 54, item d and "what a block takes": the scripts that are new or changed, in bytes; and the transactions
+/// of a call at the smallest that is: an account of a note's least and one leg, and of six legs; a claim of a
+/// sompi, of 1,000 sompi, of 0.01 KAS, paid in full. Each is written by its builder and taken; its size, and the
+/// storage mass of its outputs against a block's 500,000.
+#[test]
+fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transactions() {
+    let w = ow();
+    let kit = kpf_protocol::thin_artifacts::kit();
+    let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
+    println!("T1b R54 sizes of the scripts: {sizes:?}");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 61);
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let mut rows = vec![];
+    let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
+        Ok(b) => {
+            let taken = taken30(&b, &w.keys);
+            let sg = b.sign(&w.keys).expect("signed");
+            rows.push((what.to_string(), taken, sg.mass.size, sg.mass.compute, sg.mass.storage));
+        }
+        Err(e) => rows.push((format!("{what}: NOT WRITTEN ({e})"), false, 0, 0, 0)),
+    };
+    let prices = [P10 * 8 / 10, P10, P10, P10];
+    let call = call54(&w, prices, T0);
+    let one = cov47(&w, &[w.fut(0, 1, LONG, P10)], NOTE_MIN, 0);
+    see("a step of an account of a note's least, one leg", call_step(&w.lib, &one, &one.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).map(|x| x.0));
+    let six: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
+    let six_acct = cov47(&w, &six, NOTE_MIN, 0);
+    see("a step of an account of a note's least, six legs", call_step(&w.lib, &six_acct, &six_acct.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).map(|x| x.0));
+    let rich = cov47(&w, &six, 500 * KAS1, 0);
+    let st = stated47(&rich.s, KIND_C_STEP, &CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] }, Outs::of(&[Out { key: false, to: rich.s.hash(), value: 500 * KAS1 }]).unwrap(), 500 * KAS1, xk(&w.w));
+    let q = OLive { s: Pointed { st, disputer: xk(&w.b), point: 0 }, value: (500 * KAS1 + 2 * st.bond) as u64, id: rich.id, op: op(94), daa: 6_530 };
+    see("a step of six legs over a disputed statement of another key (three payments)", call_step(&w.lib, &q, &rich.s, Some((&st, Some((xk(&w.b), 0)))), &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).map(|x| x.0));
+    // The note of six legs applied to a called shard: a claim written.
+    let mut shard = shard_with47(&w, &six, 10 * KAS1, 0);
+    shard.s.called = T0;
+    let n6 = note_made46(&shard, Left { sid: SID47, legs: six.clone(), key: xk(&w.a), asked: 3 * KAS1 }, 75, 6_600);
+    see("a note of six legs applied to a called shard, a claim written", left_apply(&w.lib, &shard, &n6, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).map(|x| x.0));
+    for amount in [1i64, 1_000, 1_000_000, 2_500_000, NOTE_MIN] {
+        let on = owing54(&w, 50 * KAS1, amount);
+        let claim = note_made46(&on, RestNote { sid: SID47, key: xk(&w.a), amount, counted: true }, 96, 6_710);
+        see(&format!("a claim of {amount} sompi paid in full"), claim_pay(&w.lib, &on, &claim, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).map(|x| x.0));
+    }
+    let done = owing54(&w, 0, 0);
+    let call_obj = OLive { id: done.id, ..call.clone() };
+    see("the call ended", call_off(&w.lib, &done, &call_obj, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).map(|x| x.0));
+    for (what, taken, size, compute, storage) in &rows {
+        println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
+    }
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3173), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1013), ("KpfTChange", 1508), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2239), ("KpfTLeftAll", 3846), ("KpfTLeftVoid", 1747)]);
+    let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
+    println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
+}
+
+/// Round 54, F91 (Low). The model stops where the scripts compute or refuse. `Left::value` adds a note's least to
+/// what the note says it holds, and `Shard::left` and `Shard::voided` call it: on a note that says the largest
+/// number or near it they overflow (a panic in a build that checks, a wrong number in one that does not), where
+/// `left_holding` with what the note's output holds gives the script's answer. And `Shard::call_bond` multiplies
+/// the terms' least keeper's fee by a hundred: on terms whose fee is above a hundredth of the largest number it
+/// overflows, where `KpfTChange` states no call at all (the product does not fit): a shard of such terms is
+/// called by nobody. Passes while the three stop.
+#[test]
+fn t1b_finding_f91_the_model_overflows_on_a_note_that_says_the_largest_number_and_on_a_fee_of_the_largest() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let shard = shard_with47(&w, &[leg], 100 * KAS1, 0);
+    let big = Left { sid: SID47, legs: vec![leg], key: xk(&w.w), asked: -(i64::MAX - 5) };
+    let s = shard.s;
+    let holding = s.left_holding(&big, NOTE_MIN).map(|x| x.0.held);
+    assert_eq!(holding.ok(), Some(100 * KAS1), "with what the note's output holds the model is the script's");
+    let (b1, b2) = (big.clone(), big.clone());
+    let left = std::panic::catch_unwind(move || s.left(&b1).is_ok()).is_err();
+    let value = std::panic::catch_unwind(move || b2.value()).is_err();
+    let fee_terms = Shard { t: XTerms { keeper_fee_min: i64::MAX / 100 + 1, ..w.terms() }, ..s };
+    let bond = std::panic::catch_unwind(move || fee_terms.call_bond()).is_err();
+    println!("T1b R54 F91: the model stops on a note that says the largest number less five (Shard::left {left}, Left::value {value}) and on a keeper's fee above a hundredth of the largest number (Shard::call_bond {bond})");
+    if !left && !value && !bond {
+        println!("F91 is closed: the model computes these");
+        return;
+    }
+    // The script, on those terms: no call is stated.
+    let on = shard_made45(fee_terms, 74);
+    let up = [P10 * 12 / 10, 0, 0, 0];
+    let d = Draw { amount: 0, prices: up };
+    let (next, call) = on.s.called_at(&up, T0, 0);
+    let outs = Outs::with_notes(&[(Out { key: false, to: next.hash(), value: on.value as i64 - CALL_HOLD }, false), (Out { key: false, to: call.hash(), value: CALL_HOLD }, true)]).unwrap();
+    let f = [fund(xk(&w.w), 30, 1_000)];
+    let mut stated = 0;
+    for bond in [NOTE_MIN, on.s.bond(), KAS1] {
+        let st = Stated { position: on.s.hash(), window: 50, late: 100, kind: KIND_CALL, t0: T0, arg: d.arg(), outs, bond, claimer: xk(&w.w), held: on.value as i64 };
+        stated += state_raw(&w.lib, &on, &on.s.fixed_hash(), &on.s.moving(), &st, &d.said(), on.s.form(), &w.script("KpfTChange"), w.payer(&w.w, &f)).is_ok_and(|b| taken30(&b, &w.keys)) as i32;
+    }
+    assert_eq!(stated, 0, "a call is stated on a shard whose terms' fee does not fit a hundred times");
+    assert!(left && value && bond);
+    println!("T1b R54 F91 OPEN: the model overflows where the scripts answer; and a shard whose terms say a keeper's fee above 922,337,203 KAS is called by no statement");
+}
+
+/// Round 54, F90 (Low). "A statement that landed before the call's time stands: it is answered and applied as
+/// any" (docs 14.6). `KpfTCStep` reads the time of the object it spends. A statement of before the call's time is
+/// not stepped over while it stands (run); disputed after the call's time, the object is the dispute, which
+/// landed after: the step ends both, the bonds back. So whoever would rather have the account stepped at the
+/// call's price than have the statement applied (the owner or any other claimant against a user's take or
+/// leaving of before the call; the user itself the other way) disputes it and steps: the rule holds for the
+/// statements nobody touches. Passes while the step over such a dispute is taken.
+#[test]
+fn t1b_finding_f90_a_statement_of_before_the_call_is_stepped_over_once_it_is_disputed_after_it() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let call = call54(&w, [P10 * 8 / 10, P10, P10, P10], T0);
+    let acct = cov47(&w, &[leg], 50 * KAS1, 0);
+    let x = &acct.s;
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    // The user's take of 10 KAS, stated and landed at 6,400: before the call's time of 6,500.
+    let said = CSaid { amount: 10 * KAS1, skip: 0, lc: [0; 32], rows: vec![] };
+    let st = Stated { t0: 6_390, ..stated47(x, KIND_C_TAKE, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 40 * KAS1 }, Out { key: true, to: xk(&w.a), value: 10 * KAS1 }]).unwrap(), 50 * KAS1, xk(&w.a)) };
+    let standing = OLive { s: st, value: (50 * KAS1 + st.bond) as u64, id: acct.id, op: op(94), daa: 6_400 };
+    assert!(call_step(&w.lib, &standing, x, Some((&st, None)), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)).is_err(), "the builder steps over a statement of before the call");
+    let at_call = OLive { daa: 6_500, ..standing.clone() };
+    let (b, _) = call_step(&w.lib, &at_call, x, Some((&st, None)), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)).unwrap();
+    assert!(taken30(&b, &w.keys) && !taken30(&landed50(&b, 6_400), &w.keys), "(control) standing, a statement of before the call is not stepped over");
+    // Disputed at 6,600 by any key.
+    let q = OLive { s: Pointed { st, disputer: xk(&w.f), point: 0 }, value: (50 * KAS1 + 2 * st.bond) as u64, id: acct.id, op: op(95), daa: 6_600 };
+    let over = call_step(&w.lib, &q, x, Some((&st, Some((xk(&w.f), 0)))), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f));
+    let Ok((ob, step)) = over else {
+        println!("F90 is closed: the builder steps over no dispute of a statement of before the call");
+        return;
+    };
+    if !taken30(&ob, &w.keys) {
+        println!("F90 is closed: a dispute of a statement of before the call is not stepped over");
+        return;
+    }
+    let sg = signed("a step over a dispute of a statement of before the call", &ob, &w.keys);
+    assert_eq!((step.pay, paid(&sg, &xk(&w.a)), paid(&sg, &xk(&w.f))), (20 * KAS1, 30 * KAS1 - x.t.keeper_fee_min + st.bond, st.bond), "the account pays the 20 KAS it lost at the call's price; the take of 10 KAS is not applied; the bonds back");
+    println!("T1b R54 F90 OPEN: a take of 10 KAS that landed at 6,400, before the call's time of 6,500, is ended by a step once any key disputes it after the call's time: the user has 30 KAS less the fee where the take applied had left it 10 KAS out and the account to be stepped after");
+}
+
+/// Round 54, F92 (Low). "An entry or a statement that a step ends costs nobody a bond" (docs 14.6). A bond of less
+/// than the least payment (0.2 KAS) is not asked of the transaction: it is whoever makes it's. A statement's bond
+/// is a rate of the account's coins: at 10 % every account under 2 KAS, at 1 % every account under 20 KAS. Here:
+/// a statement on an account of 1.5 KAS (a bond of 0.15 KAS), by a key that is not the user's, disputed by
+/// another: the step ends it, and neither has its bond; whoever stepped has 0.3 KAS of them. (The user's own
+/// bond is paid with its coins, in one output: the user has it where the two together are 0.2 KAS.) Passes while
+/// the two bonds are not paid.
+#[test]
+fn t1b_finding_f92_a_bond_under_the_least_payment_is_whoever_steps() {
+    let w = ow();
+    let leg = XLeg { size: w.fut(0, 1, LONG, P10).size / 10, ..w.fut(0, 1, LONG, P10) };
+    let call = call54(&w, [P10, P10, P10, P10], T0);
+    let acct = cov47(&w, &[leg], 3 * KAS1 / 2, 0);
+    let x = &acct.s;
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: vec![] };
+    let st = stated47(x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 3 * KAS1 / 2 }]).unwrap(), 3 * KAS1 / 2, xk(&w.w));
+    assert_eq!(st.bond, 15_000_000);
+    let q = OLive { s: Pointed { st, disputer: xk(&w.f), point: 0 }, value: (3 * KAS1 / 2 + 2 * st.bond) as u64, id: acct.id, op: op(95), daa: 6_600 };
+    let (b, step) = call_step(&w.lib, &q, x, Some((&st, Some((xk(&w.f), 0)))), &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)).unwrap();
+    let sg = signed("a step over a disputed statement of small bonds", &b, &w.keys);
+    let (claimer, disputer, stepper) = (paid(&sg, &xk(&w.w)), paid(&sg, &xk(&w.f)), paid(&sg, &xk(&w.b)) - 1_000 * KAS1);
+    println!("T1b R54 F92: two bonds of {} sompi: the claimer has {claimer}, the disputer {disputer}; whoever stepped {stepper} (the fee, the two bonds, less the note's least it added and its fees)", st.bond);
+    if claimer >= st.bond && disputer >= st.bond {
+        println!("F92 is closed: a bond under the least payment goes back");
+        return;
+    }
+    assert_eq!((step.claimer_bond, step.disputer_bond, claimer, disputer), (0, 0, 0, 0));
+    assert!(stepper > 2 * st.bond - NOTE_MIN - 3_000_000 + x.t.keeper_fee_min - 3_000_000);
+    println!("T1b R54 F92 OPEN: a claimer and a disputer whose bonds are under 0.2 KAS lose them to whoever steps the account under a call");
+}
+
+/// Round 54, F93 (Low). Who steps is not paid by the step. A step has no output of the fee: what the transaction
+/// leaves is its funder's. But the funder adds the note's least (0.2 KAS), which the fee is capped at; with the
+/// fee of these terms (0.1 KAS) a step of an account whose user is paid costs whoever steps it 0.11 KAS. The note's
+/// least goes to whoever applies the note (where it pays the shard or asks nothing) or stays in the claim, and is
+/// then whoever pays the claim's, after every row is empty. Every account has to be stepped before any claim is
+/// paid; a user steps its own to have its coins back, and nobody is paid to step another's unless it also wins
+/// the two later transactions. Passes while a step leaves its funder less than it had.
+#[test]
+fn t1b_finding_f93_a_step_costs_whoever_steps_more_than_its_fee() {
+    let w = ow();
+    let call = call54(&w, [P10 * 12 / 10, P10, P10, P10], T0);
+    let f = [fund(xk(&w.b), 56, 1_000)];
+    let mut left = vec![];
+    for (what, dir, coins) in [("an account that gained", LONG, 50 * KAS1), ("an account that lost and has coins left", SHORT, 50 * KAS1), ("an account that lost all its coins", SHORT, 5 * KAS1)] {
+        let acct = cov47(&w, &[w.fut(0, 10, dir, P10)], coins, 0);
+        let (b, step) = call_step(&w.lib, &acct, &acct.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.b, &f)).unwrap();
+        let sg = signed(what, &b, &w.keys);
+        left.push((what, step.fee, step.user, paid(&sg, &xk(&w.b)) - 1_000 * KAS1));
+    }
+    println!("T1b R54 F93: (the account, the fee, what the user is paid, what the step leaves whoever made it) {left:?}");
+    if left.iter().all(|x| x.3 >= 0) {
+        println!("F93 is closed: a step leaves whoever makes it no less than it had");
+        return;
+    }
+    assert!(left[0].3 < -10_000_000 && left[1].3 < -10_000_000 && left[2].3 < 0, "{left:?}");
+    println!("T1b R54 F93 OPEN: a step costs whoever makes it {} sompi where the user is paid, and {} where the account lost everything; the note's least it put in is whoever applies the note's, or whoever pays the claim's", -left[0].3, -left[2].3);
+}
+
+/// Round 54, F94 (Low). A note of the rest written before the call is counted in what the shard owes "when it is
+/// shown to the called shard" (docs 14.6), and a claim is paid at the share of what is counted then. So a claim
+/// paid before such a note is shown is paid at a share that does not count it, and the note's holder is paid out
+/// of what is left. A called shard of no row that holds 44.9 KAS: a claim of 50 KAS counted, and a note of the
+/// rest of 20 KAS not yet shown. The note shown first: the claim is paid 32.07 KAS and the note 12.83 (64 % each).
+/// The claim paid first: 44.9 KAS (90 %), and the note nothing. Showing is anyone's, at any time of the call; a
+/// claim is paid the moment the last row empties, by whoever empties it. Passes while the order decides.
+#[test]
+fn t1b_finding_f94_a_claim_paid_before_a_note_of_the_rest_is_shown_is_paid_at_a_share_that_does_not_count_it() {
+    let w = ow();
+    let s = owing54(&w, 4_490_000_000, 50 * KAS1).s;
+    let claim = RestNote { sid: SID47, key: xk(&w.a), amount: 50 * KAS1, counted: true };
+    let old = RestNote { sid: SID47, key: xk(&w.w), amount: 20 * KAS1, counted: false };
+    // The note shown first.
+    let (shown, _, counted) = s.rest_paid(&old).unwrap();
+    let (after, a_late) = shown.claim_paid(&claim).unwrap();
+    let (_, r_late) = after.claim_paid(&counted.unwrap()).unwrap();
+    // The claim paid first.
+    let (after, a_first) = s.claim_paid(&claim).unwrap();
+    let (shown, _, counted) = after.rest_paid(&old).unwrap();
+    let (_, r_first) = shown.claim_paid(&counted.unwrap()).unwrap();
+    println!("T1b R54 F94: the note shown first: the claim {a_late} sompi, the note {r_late}; the claim paid first: the claim {a_first}, the note {r_first}");
+    if a_first == a_late {
+        println!("F94 is closed: the order of a claim and of a note of the rest does not change what each is paid");
+        return;
+    }
+    assert_eq!((a_late, r_late, a_first, r_first), (3_207_142_857, 1_282_857_143, 4_490_000_000, 0));
+    // At the engine: the claim paid first.
+    let on = owing54(&w, 4_490_000_000, 50 * KAS1);
+    let f = [fund(xk(&w.f), 72, 1_000)];
+    let (b, _, paid_out) = claim_pay(&w.lib, &on, &note_made46(&on, claim, 96, 6_710), &w.script("KpfTCallPay"), w.payer(&w.f, &f)).unwrap();
+    assert!(taken30(&b, &w.keys) && paid_out == a_first);
+    println!("T1b R54 F94 OPEN: a claim of 50 KAS paid before a note of the rest of 20 KAS is shown has 44.9 KAS of the 44.9 held, and the note nothing; shown first, each has 64 %");
+}
+
+/// Round 54, F95 (Medium). "Every leg leaves at the call's one price for its row, for every account alike"
+/// (docs 14.6) holds for an account that is stepped. An account's own statements go on under a call: a leaving
+/// stated after the call's time, at the price of its own time, is a statement of the rule's (nobody answers it
+/// wrong), and it is applied after one dispute period unless somebody steps the account first. Its note is then
+/// applied to the called shard and counted as a claim of what it asks. So a user whose leg has gained more since
+/// the call leaves at the later price, and one whose leg has lost less pays less; each chooses, and what one
+/// takes more the other claims are paid less. The step over the statement is the answer (run: taken within the
+/// period), and F93 says who is paid to make it: nobody. Here: long 10 units from 10; the call at 12 (a gain of
+/// 20 KAS); the price 15 a hundred blocks later; the user's leaving at 15, applied: a note asking 48.5 KAS, and a
+/// claim of 48.5 KAS on the called shard. Passes while the leaving is applied and counted.
+#[test]
+fn t1b_finding_f95_under_a_call_a_user_leaves_at_a_later_price_by_its_own_statement_unless_it_is_stepped_within_a_period() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let call = call54(&w, [P10 * 12 / 10, P10, P10, P10], T0);
+    let acct = cov47(&w, &[leg], 50 * KAS1, 0);
+    let fa = [fund(xk(&w.a), 33, 1_000)];
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let at_call = acct.s.call_step(&call.s, 50 * KAS1).unwrap();
+    assert_eq!(at_call.note.asked, 20 * KAS1, "at the call's price the account gained 20 KAS");
+    // The user's own leaving, a hundred blocks after the call's time, at 15.
+    let Ok((b, st, _, o)) = c_state(&w.lib, &acct, &w.script("KpfTChange"), KIND_C_LEAVE, 0, ALL, &[P10 * 15 / 10], T0 + 100, xk(&w.a), w.payer(&w.a, &fa)) else {
+        println!("F95 is closed: no leaving is stated on this account");
+        return;
+    };
+    let live = nth(&signed("the user's leaving at a later price, stated under the call", &b, &w.keys), 0, st, 6_610);
+    // (Within its period anyone steps the account over it: the call's price.)
+    let (sb, step) = call_step(&w.lib, &live, &acct.s, Some((&st, None)), &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&sb, &w.keys) && step.note.asked == 20 * KAS1, "(the answer) a step over the statement");
+    // Nobody did: applied after the period.
+    let Ok(ab) = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.a, &fa)) else {
+        println!("F95 is closed: a leaving stated under a call is not applied");
+        return;
+    };
+    if !taken30(&ab, &w.keys) {
+        println!("F95 is closed: the engine applies no leaving stated under a call");
+        return;
+    }
+    let ap = signed("the leaving applied", &ab, &w.keys);
+    let note = o.note.clone().expect("the note that the leg left");
+    let note_live = nth(&ap, out_at47(&ap, &hash_spk(&w.lib, &note.hash())), note.clone(), 6_670);
+    let mut shard = shard_with47(&w, &[leg], 10 * KAS1, 0);
+    shard.s.called = T0;
+    let (nb, next, claim) = left_apply(&w.lib, &shard, &note_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    assert!(taken30(&nb, &w.keys));
+    let claim = claim.expect("a claim");
+    println!("T1b R54 F95: at the call's price the account's note asks {} sompi; by its own leaving at 15, a hundred blocks after, {}: applied to the called shard, a claim of {} (owed by claims {})", at_call.note.asked, note.asked, claim.amount, next.owed);
+    if claim.amount <= at_call.note.asked {
+        println!("F95 is closed: the claim is of no more than the call's price gives");
+        return;
+    }
+    assert_eq!((note.asked, claim.amount, claim.counted, next.owed), (4_850_000_000, 4_850_000_000, true, 4_850_000_000));
+    println!("T1b R54 F95 OPEN: a user that is not stepped within a dispute period leaves at the price of its own later statement: a claim of 48.5 KAS where the call's price gives 20");
 }

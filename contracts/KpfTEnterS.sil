@@ -96,6 +96,10 @@ contract KpfTEnterS(int init_version) {
     // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 10, a
     // leg that enters a covered account, is stated by KpfTEnterS alone; kind 6 is no kind any more.
     int constant KINDS = 9;
+    // A call (kind 11) is stated on a shard by anyone: its bond is the shard's, no more than a hundred times the
+    // terms' least fee of a keeper, and no less than a note's least (a shard that holds nothing is called still).
+    int constant CALL_FEE_AT = 37;
+    int constant CALL_BOND_MIN = 20000000;
 
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));

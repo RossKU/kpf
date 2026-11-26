@@ -1965,7 +1965,7 @@ pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p:
 /// the price of row i), with a bond as large as the claimer's.
 pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
     let c = &obj.s;
-    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_ENTER).contains(&c.kind) || point < 0 {
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::reserve::KIND_CALL).contains(&c.kind) || point < 0 {
         return invalid("the statement is not one on an account that landed in time, or the point is below zero");
     }
     if (obj.daa as i64) >= c.last_dispute() {
@@ -2630,7 +2630,7 @@ pub fn left_script(legs: usize) -> &'static str {
 /// shard without the legs, output 2 the note of the rest where the shard did not hold what was asked; what it paid
 /// is the last output, to the user's key.
 pub fn left_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
-    let (next, at, paid, rest) = shard.s.left(&note.s)?;
+    let (next, at, paid, rest) = shard.s.left_holding(&note.s, note.value as i64)?;
     left_apply_as(lib, shard, note, &at, next, paid, rest, script, p)
 }
 
@@ -2676,8 +2676,8 @@ fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
     // (The shard holds what the note held for it: `Shard::voided`. Where the leg named is a leg of the books the
     // shard is written as it is, and the script refuses.)
-    let more = (-n.asked).max(0);
-    let next = s.voided(n).unwrap_or(*s);
+    let more = crate::reserve::held_for(n.asked, note.value as i64);
+    let next = s.voided_holding(n, note.value as i64).unwrap_or(*s);
     d.out(shard.value + more as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
     keep(&mut d, script, lid)?;
     d.fund(p.funds, &p.change_to);
@@ -2705,8 +2705,9 @@ fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     }
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, left_script(n.legs.len()), "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
-    // (Below zero, what is asked is what the account paid: the note holds it, and the shard takes it.)
-    let taken = n.asked.checked_neg().unwrap_or(0).max(0);
+    // (Below zero, what is asked is what the account paid: the note holds it, and the shard takes what the note's
+    // output holds above a note's least, and no more than the note says.)
+    let taken = crate::reserve::held_for(n.asked, note.value as i64);
     let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
     d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
     keep(&mut d, script, lid)?;
@@ -2735,7 +2736,9 @@ pub fn rest_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &O
         d.out(left.value() as u64, hash_spk(lib, &left.hash()), Some((0, id)), "note", None);
     }
     d.fund(p.funds, &p.change_to);
-    d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
     Ok((d.finish()?, next, rest))
 }
 
@@ -2755,10 +2758,197 @@ pub fn shard_draw(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
 
 fn draw_open(obj: &OLive<Pointed>, shard: &crate::reserve::Shard, d: &crate::reserve::Draw) -> Result<()> {
     let c = &obj.s.st;
-    if c.kind != crate::thin::KIND_DRAW || c.arg != d.arg() || c.position != shard.hash() {
-        return invalid("the statement is not this draw on this shard");
+    if (c.kind != crate::thin::KIND_DRAW && c.kind != crate::reserve::KIND_CALL) || c.arg != d.arg() || c.position != shard.hash() {
+        return invalid("the statement is not this draw, or this call, on this shard");
     }
     Ok(())
+}
+
+/// `KpfTChange.state`: `claimer` (anyone) states a call of the shard at the prices `prices` of the time `t0`.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_call(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: &LibScript, prices: [i64; 4], t0: i64, claimer: [u8; 32], p: Payer) -> Result<(OBuilt, Stated, crate::reserve::Draw)> {
+    let s = &shard.s;
+    let (st, d) = s.call(prices, t0, shard.value as i64, claimer)?;
+    Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
+}
+
+/// What a statement on an object is shown as, standing or disputed: (the form, the hash of the object's state, the
+/// bonds it holds, the disputer's key, the point).
+fn stood_of(st: &Stated, pointed: Option<([u8; 32], i64)>) -> (i64, [u8; 32], i64, [u8; 32], i64) {
+    match pointed {
+        None => (1, st.hash(), st.bond, [0; 32], 0),
+        Some((disputer, point)) => (2, Pointed { st: *st, disputer, point }.hash(), 2 * st.bond, disputer, point),
+    }
+}
+
+/// `KpfTCStep.step`: anyone steps the covered account `account` under the call of its shard: every leg leaves at
+/// the call's price. `obj` is the account's object, or (`stood`) a statement of the account's own kinds on it,
+/// disputed or not, that landed at or after the call's time: it is ended, and its bonds go back. The funder adds
+/// the note's least (and has it back where the note is applied), and has what the transaction leaves: the fee.
+#[allow(clippy::too_many_arguments)]
+pub fn call_step<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood: Option<(&Stated, Option<([u8; 32], i64)>)>, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::covered::CallStep)> {
+    let bonds = stood.map(|(st, pointed)| stood_of(st, pointed).2).unwrap_or(0);
+    if let Some((st, _)) = stood {
+        if st.position != account.hash() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) || (obj.daa as i64) < call.s.time {
+            return invalid("the statement is not one of this account's own kinds that landed at or after the call's time: it stands, and is answered and applied as any");
+        }
+    }
+    let v = (obj.value as i64).checked_sub(bonds).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the object holds less than its bonds".into()))?;
+    let over = stood.map(|(st, pointed)| (st.bond, st.claimer, pointed.is_some()));
+    let step = account.call_step_over(&call.s, v, over).ok_or_else(|| Error::Invalid("no step of this account under this call: another shard's, no leg, or a leg of no row of the call".into()))?;
+    Ok((call_step_as(lib, obj, account, stood, call, &step, script, p)?, step))
+}
+
+/// As `call_step`, with the outcome given (a test writes one the rule does not make).
+#[allow(clippy::too_many_arguments)]
+pub fn call_step_as<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood: Option<(&Stated, Option<([u8; 32], i64)>)>, call: &OLive<crate::reserve::Called>, step: &crate::covered::CallStep, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let (form, h, _, dkey, point) = match stood {
+        None => (0, account.hash(), 0, [0; 32], 0),
+        Some((st, pointed)) => stood_of(st, pointed),
+    };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let mut args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs.iter().flat_map(crate::thin::leg_bytes).collect()),
+        bv(step.at.iter().flat_map(|r| sm8(*r as i64)).collect()), bv(account.moving()), iv(call.s.time), bv(call.s.body()), iv(form),
+    ];
+    match stood {
+        Some((st, _)) => args.extend([iv(st.kind), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()), iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held)]),
+        None => args.extend([iv(0), iv(0), bv(vec![0; 32]), bv(vec![0; 32]), iv(0), bv(vec![0; 32]), iv(0), iv(0), iv(0)]),
+    }
+    args.extend([bv(dkey.to_vec()), iv(point)]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, "account", script, "KpfTCStep", "step", args, 0)?;
+    d.contract(call, OWhich::T(SLOT), pinned::kit().object(lib, &call.s.hash()), "go", vec![iv(1), iv(1)], "call", 0);
+    d.out(call.value, hash_spk(lib, &call.s.hash()), Some((0, id)), "call", None);
+    keep(&mut d, script, lid)?;
+    d.out((crate::reserve::NOTE_MIN + step.pay) as u64, hash_spk(lib, &step.note.hash()), Some((0, id)), "note", None);
+    d.fund(p.funds, &p.change_to);
+    // The payments, the last the user's: the disputer's bond, the claimer's, the user. (No output of the fee: what
+    // the transaction leaves is its funder's.)
+    let mut pays: Vec<(i64, [u8; 32], &str)> = vec![];
+    if step.disputer_bond > 0 {
+        pays.push((step.disputer_bond, dkey, "the disputer's bond"));
+    }
+    if let Some((st, _)) = stood.filter(|_| step.claimer_bond > 0) {
+        pays.push((step.claimer_bond, st.claimer, "the claimer's bond"));
+    }
+    if step.user > 0 {
+        pays.push((step.user, account.a_key, "the user"));
+    }
+    for (i, (v, k, what)) in pays.iter().enumerate() {
+        if i == 0 {
+            d.last(*v, k, what, &p.change_to);
+        } else {
+            d.payout(*v, k, what);
+        }
+    }
+    d.finish()
+}
+
+/// `KpfTCallPay.claim`: anyone pays a claim its share of what its called shard holds, once no row of the shard has
+/// a unit. The claim is spent whole.
+pub fn claim_pay(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, i64)> {
+    let (next, paid) = shard.s.claim_paid(&note.s)?;
+    Ok((claim_pay_as(lib, shard, note, next, paid, script, p)?, next, paid))
+}
+
+/// As `claim_pay`, with the outcome given.
+pub fn claim_pay_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, next: crate::reserve::Shard, paid: i64, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let (s, n) = (&shard.s, &note.s);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTCallPay", "claim", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "claim", 0);
+    let value = (shard.value as i64).checked_sub(paid).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the shard's output holds less than is paid".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "the claim's share", &p.change_to);
+    }
+    d.finish()
+}
+
+/// `KpfTCallPay.off`: anyone ends the call of a shard no row of which has a unit and which owes nothing by claims:
+/// the shard not called, and the call spent (what it held returns to the shard's output).
+pub fn call_off(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard)> {
+    let next = shard.s.call_off(&call.s)?;
+    Ok((call_off_as(lib, shard, call, next, script, p)?, next))
+}
+
+/// As `call_off`, with the shard that goes on given.
+pub fn call_off_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, call: &OLive<crate::reserve::Called>, next: crate::reserve::Shard, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let s = &shard.s;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.moving()), iv(call.s.time), bv(crate::committee::blake2b(&call.s.body()).to_vec())];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTCallPay", "off", args, 0)?;
+    d.contract(call, OWhich::T(SLOT), pinned::kit().object(lib, &call.s.hash()), "go", vec![iv(1), iv(1)], "call", 0);
+    d.out(shard.value + call.value, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
+/// `KpfTCallEnter.end`: anyone ends an entry (kind 10, on the account marked), standing or disputed, that landed
+/// at or after the time of the call of its shard: the marked account again, the bonds back.
+#[allow(clippy::too_many_arguments)]
+pub fn call_enter_end<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, marked: &crate::covered::Marked, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    if st.kind != crate::covered::KIND_C_ENTER || st.position != marked.hash() || marked.0.shard != Some(call.s.sid) || (obj.daa as i64) < call.s.time {
+        return invalid("the statement is no entry on this marked account, under this call's shard, that landed at or after the call's time");
+    }
+    let (form, h, bonds, dkey, point) = stood_of(st, pointed);
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(marked.0.fixed_hash().to_vec()), bv(marked.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()),
+        iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held), iv(form), bv(dkey.to_vec()), iv(point), iv(call.s.time), bv(crate::committee::blake2b(&call.s.body()).to_vec()),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated entry", script, "KpfTCallEnter", "end", args, 0)?;
+    d.contract(call, OWhich::T(SLOT), pinned::kit().object(lib, &call.s.hash()), "go", vec![iv(1), iv(1)], "call", 0);
+    d.out(obj.value - bonds as u64, hash_spk(lib, &st.position), Some((0, id)), "marked account", None);
+    keep(&mut d, script, lid)?;
+    d.out(call.value, hash_spk(lib, &call.s.hash()), Some((0, id)), "call", None);
+    d.fund(p.funds, &p.change_to);
+    // (A bond of less than a note's least is not asked: it is the funder's.)
+    if st.bond >= crate::covered::PAY_MIN {
+        match pointed {
+            Some((disputer, _)) => {
+                d.last(st.bond, &disputer, "the disputer's bond", &p.change_to);
+                d.payout(st.bond, &st.claimer, "the claimer's bond");
+            }
+            None => {
+                d.last(st.bond, &st.claimer, "the claimer's bond", &p.change_to);
+            }
+        }
+    }
+    d.finish()
+}
+
+/// `KpfTCallEnd.answer`: the point 0 of a call is answered: whether the shard's equity, each price moved the
+/// tolerance in its favour, is below its lower level, and the outputs are the shard called, the call and the fee.
+#[allow(clippy::too_many_arguments)]
+pub fn call_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    draw_open(obj, shard, dr)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if c.kind != crate::reserve::KIND_CALL {
+        return invalid("the statement is a draw: its end is answered by `shard_end`");
+    }
+    if force.is_none() && shard.call_end_judged(dr, c.t0, c.held).is_none() {
+        return invalid("the shard's rows at these prices are beyond what a script computes: nobody answers this point, and the dispute lapses");
+    }
+    let right = force.unwrap_or_else(|| shard.call_end_right(dr, &c.claimer, &c.outs, c.held, c.t0));
+    if force.is_none() && q.point != 0 && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = shard_args(shard, vec![0; 24]);
+    args.extend(point_args_said(q, dr.said(), 0, rkey, right));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCallEnd", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
 }
 
 fn shard_args(shard: &crate::reserve::Shard, who: Vec<u8>) -> Vec<Arg> {
@@ -2772,6 +2962,9 @@ pub fn shard_end(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::S
     draw_open(obj, shard, dr)?;
     let q = &obj.s;
     let c = &q.st;
+    if c.kind != crate::thin::KIND_DRAW {
+        return invalid("the statement is a call: its end is answered by `call_end`");
+    }
     if force.is_none() && shard.draw_end_judged(dr, &c.claimer, c.t0).is_none() {
         return invalid("the shard's rows at these prices are beyond what a script computes: nobody answers this point, and the dispute lapses");
     }
@@ -2823,6 +3016,8 @@ pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
     let mut args = shard_args(shard, who);
     args.extend(point_args_said(q, dr.said(), at, rkey, right));
     args.push(bv(under.to_vec()));
+    // (Of a draw, or of a call: the statement's kind.)
+    args.push(iv(c.kind));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardPrice", "answer", args, 0)?;
     let cited = match cite {
         Some((copy, cited)) => Some((copy, cite_in(&mut d, lib, copy, cited)?.0)),

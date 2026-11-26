@@ -1,0 +1,127 @@
+pragma silverscript ^0.1.0;
+
+// An entry under a call (docs/ARCHITECTURE-CLEARING.md 14.6). No leg enters a called shard's books; an entry that
+// was stated (kind 10, on the account marked) and landed at or after the call's time (by the time of the output
+// in the chain), standing or disputed, is ended by anyone who shows the call: the marked account again, the
+// bonds back, at nobody's cost (a bond of less than a note's least is not asked: beside the account and the call
+// a block takes no smaller payment, and it is whoever ends it's). The leg is then undone as any that did not
+// enter (KpfTEnterOff). An entry that landed before the call's time stands, as any statement.
+//   end(who, ageb, slotLen, efixed, emoving, t0, arg, outs, bond, claimer, window, late, held, form, dkey, point,
+//       ctime, body)       anyone; form: 1 the statement, 2 disputed; body: the hash of the call's rows and prices.
+contract KpfTCallEnter(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+    int constant POINT_TAG = 11;
+    int constant NOTE_TAG = 12;
+    int constant CALL = 11;
+    int constant KEEPER_AT = 37;
+    // What is less than this is not paid by an output of its own: beside a note and the call a block takes no smaller.
+    int constant PAY_MIN = 20000000;
+    int constant LEFT = 6;
+    int constant REST = 7;
+    int constant CLAIM = 9;
+    int constant FUTURES_TAG = 14;
+    int constant DIR_LONG = 1;
+    int constant DIR_SHORT = 2;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // What a shard's output holds beside what the shard holds for its users: a shard that paid everything out is
+    // still an output a block takes.
+    int constant SHARD_CARRIER = 100000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] efixed, byte[180] emoving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int form, byte[32] dkey, int point, int ctime, byte[32] body) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        int n = int(byte[8](who.slice(8, 16)));
+        require(who.slice(16, 24) == who.slice(8, 16));
+        require(n != j);
+        byte[] rs = slotOf(j, slotLen);
+        byte[] ns = slotOf(n, slotLen);
+        byte[] em = byte[](emoving);
+        // The account marked (the mark after its shard's id), and the call of its shard.
+        require(em.slice(171, 180) == i9(1));
+        byte[32] position = blake2b(p33(efixed) + em);
+        require(blake2b(i9(NOTE_TAG) + em.slice(138, 171) + i9(CALL) + i9(ctime) + p33(body)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        byte[32] c0 = blake2b(i9(CHANGE_TAG) + p33(position) + i9(10) + i9(t0) + p33(arg) + p33(outs) + i9(bond) + p33(claimer) + i9(window) + i9(late) + i9(held));
+        require(form == 1 || form == 2);
+        if (form == 2) {
+            c0 = blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point));
+        }
+        require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(OpTxInputDaaScore(j) >= ctime);
+        byte[32] id = OpInputCovenantId(j);
+        require(OpInputCovenantId(n) == id);
+        require(OpCovInputCount(id) == 2);
+        require(OpCovOutputCount(id) == 2);
+        int c = OpCovOutputIdx(id, 0);
+        int c1 = OpCovOutputIdx(id, 1);
+        int v = tx.inputs[j].value;
+        require(bond > 0);
+        require(v >= form * bond);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= v - form * bond);
+        require(tx.outputs[c1].scriptPubKey == tx.inputs[n].scriptPubKey);
+        require(tx.outputs[c1].value >= tx.inputs[n].value);
+        if (bond >= PAY_MIN) {
+            int m = tx.outputs.length - 1 - 4 * j;
+            require(m - (form - 1) >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(claimer))));
+            require(tx.outputs[m].value >= bond);
+            if (form == 2) {
+                require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+                require(tx.outputs[m - 1].value >= bond);
+            }
+        }
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

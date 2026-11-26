@@ -8474,3 +8474,401 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests     
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
 ```
+
+# Round 54
+
+Scope: F86's fix, and the call at the engine (docs 14.6 with "Fixed where it was written as scripts", and 14.10
+(c)): kind 11 in `KpfTChange`, `KpfTPoint` and `KpfTShardPrice`; `KpfTCallEnd`; a called shard's notes and
+claims in `KpfTLeft` and `KpfTLeftAll`; `KpfTCStep`; `KpfTCallPay`; `KpfTCallEnter`. My files brought along; the
+whole workspace run once. Working tree after 321466f; no src, contract or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **F86 is closed.** One thing of the same kind is left, and is F87.
+- **The call's arithmetic agrees with its model everywhere I pressed it**: the end of a call on 344 calls (44 at
+  the edges asked for), a step on 140 random accounts, a claim's share on 765 cases at the edges of the units.
+  No parting, and no way found to be paid twice, to pay a claim above its share, or to lose a called shard's
+  `owed` or `called`.
+- **Four findings of Medium**, each of them about whether the call gets to its end, not about its sums:
+  - **F87**: a note whose chain of legs nobody can open ends every draw and is cleared by nothing (what is left
+    of F81).
+  - **F88**: an owner keeps its shard from being called, and from every note, by statements of its own, at
+    half a draw's bond a round; the bond is a rate of what the shard holds, so the nearer a call the cheaper
+    (0.079 KAS a round on a shard of 10 KAS).
+  - **F89**: an account whose output holds less than it must pay is stepped by nothing; its leg stays in the
+    books, no row empties, and no claim of the shard is ever paid.
+  - **F95**: under a call a user leaves at the price of its own later statement, unless somebody steps its
+    account within one dispute period; and nobody is paid to (F93).
+- **Five of Low**: F90 (a statement of before the call is stepped over once disputed after it), F91 (the model
+  overflows where the scripts answer; a term that makes a shard uncallable), F92 (a bond under 0.2 KAS is
+  whoever steps), F93 (a step costs whoever makes it 0.11 KAS), F94 (a claim paid before a note of the rest is
+  shown is paid at a share that does not count it).
+- F83 matters more now: see "What is open and left alone".
+- The whole workspace, once: 1,277 passed, 0 failed.
+
+## F86: closed
+
+`t1b_fixed_f86_a_note_gives_its_shard_what_it_holds_and_is_cleared_by_anyone_for_nothing`. 60 notes: of a leg of
+the books, of two legs of the books (`KpfTLeftAll`) and of a leg in no row (`KpfTLeftVoid`), on a shard not
+called and on one called; saying 600 KAS and holding nothing above a note's least, 12 KAS, all 600, or 900;
+saying the largest number, or that less five, and holding nothing or 12 KAS; saying a sompi and holding
+nothing, a sompi, five. Each is cleared by the builder's transaction; the shard holds exactly the lesser of
+what the note says and what its output holds more, in state and in value (`held_for`); whoever clears it pays
+nothing and has the note's least, and what the note held beyond what it says. Refused (54): the shard written
+with what the note says where it holds less, and a sompi short of what the note held for it. Such a note still
+ends a draw while it stands (8 run), and anyone clears it now.
+
+What is still cleared by nothing, or at somebody's cost:
+
+- F87, below.
+- A note of the rest (tag 7) is cleared only by being paid, as far as the shard holds: that is what it is. One
+  written by a statement nobody disputed, of any amount, is paid out of every coin the shard ever holds and ends
+  every draw until then. This is the theft F81's premise always allowed (round 46), not a new lock.
+- 8 bytes that are no number as a script writes one (nothing below zero, `00..80`) in a note's place of what it
+  asks make an object no script opens, `KpfTDrawNote` among them: it ends nothing.
+
+## Findings
+
+### F87 (Medium). A note whose chain nobody opens ends every draw and is cleared by nothing
+
+`KpfTDrawNote` ends a draw by an object whose state is the hash of a note that legs left, and reads of it the
+32 bytes where the chain of its legs stands, a key and an amount. It opens no chain. The three scripts that
+clear such a note are shown its legs, one to six. So a note whose chain is of seven legs, or 32 bytes that are
+the chain of no legs, ends every draw of its shard, half the owner's bond to whoever shows it each time, and is
+applied and spent by nothing.
+
+`t1b_finding_f87_...`: both objects end a draw at the engine; the model clears neither; `KpfTLeft`,
+`KpfTLeftAll` and `KpfTLeftVoid`, each in a transaction it takes for a note it knows, refuse both objects.
+
+The premise is F81's (a statement nobody disputed writes it). Rounds 52 and 53 cleared the notes whose legs can
+be shown; this is the rest. Closing it: `KpfTDrawNote` is shown the legs (one to six) and holds their chain to
+the note, as the clearing scripts do. An object whose chain nobody opens then ends no draw, and is nothing.
+
+### F88 (Medium). An owner keeps its shard under statements of its own
+
+A call is a statement on the shard, and a note is applied to the shard: neither is made while the shard stands
+under another statement. `KpfTChange` states a draw whatever its time and whatever the books say (the end
+judges it). So:
+
+1. the owner states a draw that is not the rule's (the shard is below its levels);
+2. a second key of its own disputes its end;
+3. that key answers it wrong: the disputer's bond back, half the claimer's bond to whoever answered (itself),
+   and the shard again as it was.
+
+Three transactions, each spending the output of the one before. Run:
+`t1b_finding_f88_an_owner_keeps_its_shard_under_statements_of_its_own_at_half_a_small_bond_a_round`: a shard of
+10 KAS at a bond rate of 1 %, short 10 units from 10, the price 12 (a call is due; the model draws nothing).
+The round ends with the same shard, to the sompi, and costs the owner's two keys **7,911,000 sompi**: half the
+draw's bond of 0.1 KAS and three fees. A shard of 1 KAS: a bond of 0.01 KAS.
+
+Why it is a finding now: the bond that prices this is a rate of what the shard HOLDS. A shard is due a call
+when it holds little against what it owes, which is when the round is cheapest. And while it runs, no user's
+note is applied either: nobody leaves with its gain.
+
+What the engine does not say, and I did not run: whether a caller's statement can get between the owner's third
+transaction and its next first one. The owner makes all three and knows the output before anyone; a caller has
+to replace a transaction the nodes saw first. Held off or not, each round costs the owner cents.
+
+The owner's other ways, for the record:
+
+- *Its own key disputing a right call.* Each dispute costs it the call's bond (run: a quarter to the caller, a
+  quarter to whoever answered, the rest to the copy). A call is disputed until its time, its lateness and one
+  period; then it is applied at once. A delay with an end.
+- *A price nobody answers.* The caller's to show: where the committee signs no price for the call's time within
+  the period, the call lapses and the disputer has half the caller's bond (the coordinator's test). The call
+  stands on the committee answering in time; so does every dispute of the form.
+
+Closing it, one way: a statement on a shard that is answered wrong writes the shard's time (as an entry and a
+draw applied do), and `KpfTChange` states no draw before the shard's time. Then a wrong draw buys its owner one
+round, and the time after it is the caller's. A floor under the bond of a statement on a shard, as the call
+has, makes the round cost something where the shard holds nothing.
+
+### F89 (Medium). An account that holds less than it must pay is stepped by nothing, and no claim is paid
+
+`KpfTCStep`: `require(v >= pay)`. `pay` is what the legs lost, up to the coins the account SAYS it has less a
+note's least; `v` is what its output holds. Every script that writes an account writes it holding what it says.
+A statement nobody disputed writes one that says more.
+
+`t1b_finding_f89_...`: an account that says 1,000 KAS and holds 30, long 10 units from 10; the call at 6 (a loss
+of 40). The same account holding what it says is stepped (the control). The one that holds 30 is stepped by no
+transaction: five written (the note holding 40, 30, less; asking 40, 30, nothing; the user paid or not), none
+taken; the model gives none. Its leg stays in the shard's row. `KpfTCallPay.claim` on that called shard with
+the row: refused, by the model and by the script; the call is not ended. A right leaving of its own would pay
+40 KAS out of 30: no transaction holds it. `KpfTAddC` adds to the coins and to the output alike: the gap stays.
+
+So one such account, made before or during the call, stops the payment of every claim of its shard for good.
+The premise is F81's again; what it buys here is larger. Closing it: `if (pay > v) pay = v` (the shard takes
+what is there), in the script and in `call_step_over`. An account is then stepped whatever it says.
+
+### F95 (Medium). Under a call a user leaves at a later price by its own statement
+
+"Every leg leaves at the call's one price for its row, for every account alike." That is so for an account
+that is stepped. An account's own statements go on under a call. A leaving stated after the call's time, at
+the committee's price of its own time, is a statement of the rule's: no point of it is wrong. It is applied
+after one dispute period unless somebody steps the account first; its note is applied to the called shard and
+counted as a claim of what it asks.
+
+`t1b_finding_f95_...`: long 10 units from 10; the call at 12 (the call's price gives a note asking 20 KAS); a
+hundred blocks later the price is 15; the user states its leaving at 15; nobody steps; it is applied; its note
+asks 48.5 KAS; applied to the called shard: a claim of 48.5 KAS, counted. A step over the statement within its
+period is taken, and writes the note of 20 (the answer exists, and is run).
+
+Who loses: every other claim, paid at one share of what is held. Who chooses: every user, each way (one whose
+leg lost less since the call pays the shard less). What it rests on: that somebody steps every account within a
+period of its statement. F93 says who is paid to: nobody.
+
+Closing it wants a decision. The smallest I see: pay the step (F93), so that stepping within a period is
+somebody's trade. Stricter: a statement of kinds 7 to 9 on an account whose shard is called is not applied, by
+being shown the shard; that costs `KpfTChangeSettle` an input it has no need of today.
+
+### F90 (Low). A statement of before the call is stepped over once it is disputed after it
+
+14.6: "A statement that landed before the call's time stands: it is answered and applied as any." `KpfTCStep`
+reads the time of the object it spends. A statement of before the call's time is not stepped over while it
+stands (run). Disputed after the call's time, the object is the dispute, which landed after: the step ends
+both, the bonds back.
+
+`t1b_finding_f90_...`: a take of 10 KAS that landed at 6,400; the call's time 6,500; any key disputes it at
+6,600; the step is taken: the account pays the 20 KAS it lost at the call's price, the take is not applied.
+
+So the sentence holds for the statements nobody touches, and whoever gains by the other outcome picks it for
+the price of a bond it has back. The paper says the same of a statement answered right after the call ("it
+stands again ... is one that landed after"); it does not say it of the dispute. Either the sentence or the
+script: say which.
+
+### F91 (Low). The model overflows where the scripts answer; and a fee that makes a shard uncallable
+
+`t1b_finding_f91_...`:
+
+- `Left::value` adds a note's least to what the note says it holds; `Shard::left` and `Shard::voided` call it.
+  On a note that says the largest number less five they overflow (a panic in this build; a wrong number in one
+  that does not check), where `left_holding` with what the output holds gives the script's answer. Whatever
+  walks the notes of a chain with `left` stops on one such note. (My round 46 test met it.)
+- `Shard::call_bond` multiplies the terms' least keeper's fee by a hundred. On terms whose fee is above a
+  hundredth of the largest number it overflows; `KpfTChange` computes the same product and states no call at
+  all (three bonds tried: none taken). A shard opened with such a fee (922,337,203 KAS and more) is called by
+  nobody. Terms are read before an account is opened under a shard; this is one more thing to read.
+
+### F92 (Low). A bond under the least payment is whoever steps
+
+14.6: "An entry or a statement that a step ends costs nobody a bond." A payment under 0.2 KAS is not asked of
+the transaction, and a bond is a rate of the account's coins: at 10 % every account under 2 KAS, at 1 % every
+account under 20 KAS.
+
+`t1b_finding_f92_...`: an account of 1.5 KAS; a statement by another key, disputed by a third; two bonds of
+0.15 KAS. The step ends both: the claimer has nothing, the disputer nothing, whoever stepped 0.187 KAS. The same
+in `KpfTCallEnter` (an entry on an account of 1 KAS: the bond of 0.1 KAS is whoever ends it's). The user's own
+bond is paid with its coins in one output, so the user has it where the two together reach 0.2 KAS.
+
+Small sums, and a disputer who was right loses its bond to whoever steps, who may be the one it disputed.
+Closing it is a rule to choose and no line to fix: the sentence in the paper said as it is, or the two bonds
+kept for their keys some other way than a small output.
+
+### F93 (Low). A step costs whoever makes it more than its fee
+
+A step has no output of the fee: what the transaction leaves is its funder's. The funder adds the note's
+least, 0.2 KAS, which the fee is capped at.
+
+`t1b_finding_f93_...` (the fee of these terms: 0.1 KAS):
+
+| The account | The user is paid | The step leaves whoever made it |
+|---|---|---|
+| gained 20 KAS | 49.9 KAS | -0.1126 KAS |
+| lost 20 KAS of 50 | 29.9 KAS | -0.1126 KAS |
+| lost all its 5 KAS | nothing | -0.0125 KAS |
+
+The note's least is whoever applies the note's where the note pays the shard or asks nothing; where it asks,
+it stays in the claim and is whoever pays the claim's, after every row is empty. So a step is paid for by two
+later transactions that anyone may make. A user steps its own account to have its coins back; nobody is paid
+to step another's. F95 and F83 are what that costs.
+
+### F94 (Low). A claim paid before a note of the rest is shown is paid at a share that does not count it
+
+A note of the rest written before the call is counted "when it is shown to the called shard". A claim is paid
+at the share of what is counted then.
+
+`t1b_finding_f94_...`, and the whole way run at the engine in `t1b_r54_the_whole_way_of_a_call_...`: a called
+shard of no row that holds 44.9 KAS; a claim of 50 KAS counted; a note of the rest of 20 KAS not yet shown.
+
+| Order | The claim of 50 | The note of 20 |
+|---|---|---|
+| the note shown first | 32.07 KAS (64 %) | 12.83 KAS (64 %) |
+| the claim paid first | 44.9 KAS (90 %) | nothing |
+
+Showing is anyone's at any time of the call, so the note's holder has the whole call to be counted; and a claim
+is paid the moment the last row empties, by whoever empties it. Closing it: count a note of the rest in what
+the shard owes when it is written (the place is there now), so that nothing waits to be shown.
+
+## What held
+
+**The end of a call** (`t1b_r54_the_end_of_a_call_is_the_models_at_the_edges_and_on_random_shards`): 44 calls
+at the edges and 300 on random shards (each as the rule writes it and with one thing changed): the engine takes
+the verdict of the arithmetic written out, and neither where it has none; the model says the same. 53 right,
+287 wrong, 4 with no verdict. The edges: a price at its limit where the shard is long (moved up, held to the
+limit) and above it; a price of a sompi where it is short (moved down to nothing) and no price; gross and no
+net at 174 and 175 KAS against a level of 174.125; the maintenance rate below the tolerance, a tolerance of
+nothing, rates of nothing; a fee of nothing, below nothing, above what is held, a hundredth of the largest
+number; a shard holding the fee, a sompi less, nothing; a time of nothing and of one; a shard called; the
+output holding less beside the shard's coins than a carrier; rows of the largest numbers. A sompi more than
+the fee, something where a draw says its amount, another price in the call than is said, no fee where one is
+due, another held, another claimer: wrong.
+
+**The bond, and who has what** (`t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends`):
+
+| The shard holds (at 1 %) | The call's bond |
+|---|---|
+| nothing | 0.2 KAS |
+| 1 KAS | 0.2 KAS |
+| 100 KAS | 1 KAS |
+| 5,000 KAS | 10 KAS (a hundred fees) |
+
+A statement saying a sompi more or less, or the shard's own bond where it differs, is not stated; no call is
+stated on an account. Applied: the caller has its bond and the fee; the call holds 0.5 KAS. A right call
+disputed at its end: the disputer loses its bond, a quarter each to the caller and to whoever answered. A wrong
+call: the shard again, the disputer's bond back, half the caller's to whoever answered.
+
+What a caller gains or loses by a wrong call: its bond, at most a hundred fees, if anyone disputes within the
+period. If nobody does, every account of the shard is stepped at the prices it said. That is every statement's
+premise; here the stake is capped and the caller is anyone.
+
+**A step** (`t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts`): 140 accounts of one to six legs,
+coins from a note's least to 500 KAS at every edge of the note's least, the fee and the least payment, the
+output holding the coins or 5 KAS more, the account as it stands or under a statement of kind 7, 8 or 9 of its
+user's or another's, standing or disputed. The model, the arithmetic written out and the engine agree on each;
+the user, another claimer and the disputer have to the sompi what the arithmetic says; what is left is whoever
+steps's. A sompi less to the user, a sompi less in the note, the note asking a sompi more: refused (140).
+
+`t1b_r54_what_a_step_under_a_call_takes_and_refuses`, 32 refused: the call of another shard; another time or
+price said of the call; a call that has no row of a leg's market; the call written holding less, or as another;
+the rows the other way, beyond the fourth, below the first, of another market, too few, too many; a leg's entry
+changed, a leg dropped, added, the legs the other way; other coins said; the user's coins to another key; the
+account going on beside the two; forms 1, 2, 3 and -1 on the account as it stands; a statement that landed
+before the call's time (taken at the call's time itself); a statement said to be the account, or disputed where
+it stands; statements of kind 2, 5, 6, 10 and 11; the account marked. The control's note (two legs) is applied
+by `KpfTLeftAll` to the called shard: no row, 16 KAS owed, a claim of 16.
+
+**Whether an account is kept from being stepped.** By a statement stated again and again: no (stepped over,
+whatever it says). By a statement of before the call: it is anyone's to settle, lapse or end as late. By what
+it holds: F89. By an entry on it: `KpfTCallEnter`, then `KpfTEnterOff`; see F83 below. Every step and every
+entry ended spends the one call and writes it again, so the steps of a shard are made one after another; each
+makes one account less.
+
+**Paid twice.** A statement is spent by its settlement or by a step; a note by its applying; a claim by its
+payment, whole (the part of it that the share does not pay is gone, not written again); a note of the rest
+shown to a called shard is spent into its claim. `KpfTLeft.rest` opens no claim and `KpfTCallPay` no note of
+the rest. The call ends where nothing is owed, so no claim outlives it. None found.
+
+**A claim's share** (`t1b_r54_a_claims_share_is_the_models_at_the_edges_...`): 765 cases: owed just below, at
+and above 3e9, 3e12, 3e15, 3e18 sompi and the largest number; held nothing, a sompi, a unit less a sompi, a
+unit, half, owed less a unit, less a sompi, exactly, more; a claim of a sompi, a unit, half, all less a sompi,
+all. The model and the arithmetic agree; no claim is paid above its exact share (128 bits) or above itself; 241
+taken at the engine, 215 with a sompi more refused. The largest shortfall where at least half is held: 3.3
+parts in ten million (the paper says at most 7). On the model, 300 random sets of claims in random orders:
+never more paid than held, and a claim paid later is paid at no lower a share. What rounding leaves is the
+shard's.
+
+**The whole way** (`t1b_r54_the_whole_way_of_a_call_and_what_the_order_of_claims_does`), at the engine: a
+shard of 10 KAS called by a third key; no claim paid and no end while a row has a unit; two accounts stepped,
+the second with the call as the first wrote it again; the note that pays applied (30 KAS in), the note that
+asks applied (nothing paid, 50 KAS owed, a claim); the rows empty and the basis nothing; the owner adds 5 KAS
+(`owed` and `called` stay, the share rises); a note of the rest of before the call shown (counted, a claim);
+the two claims paid 32.07 and 12.83 KAS of the 44.9 held; nothing owed; the call ended, the shard not called
+and its output with the call's coins again.
+
+**An entry under a call** (`t1b_r54_an_entry_under_a_call_is_ended_undone_and_its_leg_taken_out_...`): ended
+standing and disputed, the bonds back; 12 refused (the call's time after the entry's landing; another shard's
+call; another time or body said; forms 0, 2, 3, -1; the marked account a sompi less or without its mark; the
+call less; the bond a sompi short). Then `KpfTEnterOff` undoes the marked account, and the note that the leg
+did not enter is applied by `KpfTLeft` to the CALLED shard: no row, `owed` and `called` as they were.
+
+**A called shard under every script that takes one**
+(`t1b_r54_a_called_shard_keeps_what_it_owes_and_its_call_...`): `KpfTAddC` and `KpfTLeftVoid` keep both (the
+same written without either: refused); `KpfTEnterS` states no entry; a draw and a second call have a wrong
+end; `KpfTDrawNote` ends a draw into the shard as it was. A statement on a called shard has a bond of its rate
+of what it holds AND what it owes (the place is a position's second margin): the model's and `KpfTChange`'s
+agree, and it is no hole.
+
+## Sizes, and what a block takes (item d)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTCallEnd` | 3,622 | new |
+| `KpfTCStep` | 3,173 | new |
+| `KpfTCallPay` | 1,562 | new |
+| `KpfTCallEnter` | 1,013 | new |
+| `KpfTChange` | 1,508 | 1,417 |
+| `KpfTPoint` | 2,588 | 2,588 |
+| `KpfTShardPrice` | 1,772 | 1,752 |
+| `KpfTLeft` | 2,239 | 2,104 |
+| `KpfTLeftAll` | 3,846 | 3,767 |
+| `KpfTLeftVoid` | 1,747 | 1,719 |
+
+`t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transactions`: every transaction below is
+written by its builder and taken.
+
+| Transaction | Bytes | Storage mass (of 500,000) |
+|---|---|---|
+| a call stated; applied | 2,913; 2,735 | |
+| a step, an account of a note's least, one leg | 5,234 | 283,526 |
+| the same, six legs | 5,830 | 283,526 |
+| a step of six legs over a disputed statement, three payments | 6,000 | 93,651 |
+| a note of six legs applied to a called shard, a claim written | 6,438 | 207,169 |
+| a claim of 1 sompi, 1,000 sompi, 0.01 or 0.025 KAS, paid in full | 3,449 to 3,452 | 414,346 |
+| a claim of 0.2 KAS paid in full | 3,453 | 64,349 |
+| the call ended | 3,347 | 43,526 |
+
+No account and no claim that the builders do not step or pay, among these. A step is 5.2 to 6 kB and a note of
+six legs applied 6.4 kB: twice what `kpf-size-budget` calls huge; the paper's own remark on sizes stands.
+
+## What is open and left alone
+
+- **F83** (Low, the undo of an entry on a small account is written by no builder): left alone as asked. Under
+  a call it is on the way to every claim: a marked account that is not undone keeps its leg in the books, and
+  no claim is paid while a row has a unit. The script asks "at least", so a transaction written by hand with
+  larger outputs undoes it. I would not leave it Low once the commands of the call are written.
+- **F85** (Low): as it was.
+
+## Not reached
+
+- A call whose body has a market in two rows: no shard has one (`KpfTEnterS`), and I made none by hand.
+- `KpfTShardPrice` told the kind: the coordinator's test runs it; I ran the bond's flows at the end only.
+- Whether a caller gets a statement in between an owner's rounds (F88): not a matter of the engine.
+- The steps of many accounts in one block (they share the call): said from the outputs, not run.
+- `aobj.rs` (a shard's `owed` read back, 25 and 26): not attacked.
+
+## Findings ledger
+
+| | Severity | State |
+|---|---|---|
+| F87 | Medium | open, new: `t1b_finding_f87_...` |
+| F88 | Medium | open, new: `t1b_finding_f88_...` |
+| F89 | Medium | open, new: `t1b_finding_f89_...` |
+| F95 | Medium | open, new: `t1b_finding_f95_...` |
+| F90, F91, F92, F93, F94 | Low | open, new: `t1b_finding_f90_...` to `f94` |
+| F86 | | fixed, verified |
+| F85, F83 | Low | open, left alone |
+| F61, F41 | | as before |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 161 pass (143 before). Brought along: `owed` and `counted`
+  in my literals; the arithmetic of a note applied (`left_as_the_script54`: what the note holds, and a called
+  shard's claim); round 46's two tests of a called shard (a note that asks is a claim now); round 47's random
+  test; round 53's counts (61 scripts) and sizes. `t1b_finding_f86_...` is `t1b_fixed_f86_...`. New: nine
+  `t1b_r54_...`, and `t1b_finding_f87_...` to `f95`.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass (the table at 61 scripts, 71 entries, 59 `release`).
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 48 pass (a library of 61 scripts).
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,277 passed, 0 failed (138 result lines).
+Nothing failed, mine or not. `thin_draw` 30 of 30, `clearing_cli` 1 of 1, `committee_cli` 13 of 13.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 161 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
+```

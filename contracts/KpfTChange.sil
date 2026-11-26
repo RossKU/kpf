@@ -83,6 +83,10 @@ contract KpfTChange(int init_version) {
     // 7 to 9: a covered account's own (a take, a leaving, a step of a liquidation: KpfTCRow, KpfTCEnd). Kind 10, a
     // leg that enters a covered account, is stated by KpfTEnterS alone; kind 6 is no kind any more.
     int constant KINDS = 9;
+    // A call (kind 11) is stated on a shard by anyone: its bond is the shard's, no more than a hundred times the
+    // terms' least fee of a keeper, and no less than a note's least (a shard that holds nothing is called still).
+    int constant CALL_FEE_AT = 37;
+    int constant CALL_BOND_MIN = 20000000;
 
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));
@@ -100,7 +104,7 @@ contract KpfTChange(int init_version) {
         byte[32] position = blake2b(p33(fixed) + mv);
         require(position == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 1);
-        require(kind <= KINDS);
+        require(kind <= KINDS || kind == 11);
         // A kind is stated on the object it is of: kinds 2 and 3 on an account, shown by its terms and the root of its
         // legs (a kind nobody could answer there would lock the object for nothing). Kind 1 on an account is ended
         // by KpfTKind.
@@ -122,6 +126,11 @@ contract KpfTChange(int init_version) {
         require(iAt(mv, LATE_AT) < 499999999999);
         int pot = iAt(mv, AMARGIN_AT) + iAt(mv, BMARGIN_AT);
         int bond = (pot / BPS) * iAt(mv, BOND_AT) + ((pot % BPS) * iAt(mv, BOND_AT)) / BPS;
+        if (kind == 11) {
+            int cap = 100 * iAt(form, CALL_FEE_AT);
+            if (bond > cap) { bond = cap; }
+            if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
+        }
         require(bond > 0);
         // What is stated and what the position becomes are shown as they are and hashed here: whoever watches reads
         // them on the chain (a statement that could not be checked could only be disputed blind). What is stated has
@@ -137,8 +146,8 @@ contract KpfTChange(int init_version) {
             require(said.length == 32);
             require(mv.length == 138);
         } else {
-            if (kind == 5) {
-                // An amount and a price a row.
+            if (kind == 5 || kind == 11) {
+                // An amount and a price a row; a call says nothing where a draw says its amount.
                 require(said.length == 40);
                 require(shard == 1);
             } else {

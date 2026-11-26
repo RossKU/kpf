@@ -2781,7 +2781,8 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     names.sort();
     names.dedup();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(names.len(), 57, "{names:?}");
+    // (Round 54: 61, with the four of the call.)
+    assert_eq!(names.len(), 61, "{names:?}");
     assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
     for cmd in ["acct-leg", "acct-out"] {
         let (ok, out, err) = s.h.run(&[cmd, "--account", "nothing.json"]);
@@ -2812,5 +2813,5 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     // The clearing party ends the user's account of no leg: the coins are the user's.
     let d = s.h.build(&exec, &["acct-end", "--account", &account, "--script", &end_s, "--side", "b"]);
     assert_eq!(paid(&d, &me), 20 * KAS, "the user's 20 KAS, whoever ended it");
-    println!("T1b R53 the command line: a library of 57 scripts and none of the seven; acct-leg and acct-out are no commands; {refused} commands of the old form refused on a covered account; the clearing party ends a user's account of no leg and the user is paid its 20 KAS");
+    println!("T1b R53 the command line: a library of 61 scripts and none of the seven; acct-leg and acct-out are no commands; {refused} commands of the old form refused on a covered account; the clearing party ends a user's account of no leg and the user is paid its 20 KAS");
 }

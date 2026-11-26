@@ -387,6 +387,86 @@ impl Account {
 
 // ---------------------------------------------------------------- an entry (kind 10; docs 14.3)
 
+/// What is less than this is not paid by an output of its own under a call (`KpfTCStep`, `KpfTCallEnter`): beside
+/// a note and the call a block takes no smaller payment. It is whoever steps's.
+pub const PAY_MIN: i64 = NOTE_MIN;
+
+/// What a step under a call makes of a covered account (`KpfTCStep`; `docs/ARCHITECTURE-CLEARING.md` 14.6): the
+/// call's row of each leg; what the legs gained or lost at the call's prices; what the account pays the shard for
+/// it (out of its coins, a note's least staying); the terms' fee of whoever steps (no output: what the
+/// transaction leaves is its funder's); what the user is paid (with the bond of a statement it stated, where the
+/// step ends one); the bonds of a statement another stated and of its disputer; and the note that the legs left
+/// (what it asks is the gain, or below zero what was paid). A payment of less than [`PAY_MIN`] is nothing here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallStep {
+    pub at: Vec<usize>,
+    pub gain: i64,
+    pub pay: i64,
+    pub fee: i64,
+    pub user: i64,
+    pub claimer_bond: i64,
+    pub disputer_bond: i64,
+    pub note: Left,
+}
+
+impl Account {
+    /// `KpfTCStep`: this covered account, whose output holds `v` (the bonds of a statement on it apart), stepped
+    /// under the call `call` of its shard. `None`: no step of it under this call (another shard's; no leg; a leg
+    /// of no row of the call; a sum that does not fit).
+    pub fn call_step(&self, call: &crate::reserve::Called, v: i64) -> Option<CallStep> {
+        self.call_step_over(call, v, None)
+    }
+
+    /// As `call_step`, over a statement that is ended: (its bond, its claimer, whether it is disputed).
+    pub fn call_step_over(&self, call: &crate::reserve::Called, v: i64, stood: Option<(i64, [u8; 32], bool)>) -> Option<CallStep> {
+        let sid = self.shard.filter(|s| *s == call.sid)?;
+        if self.legs.is_empty() || self.legs.len() > C_LEGS_MAX || self.a_min_counter != self.legs.len() as i64 {
+            return None;
+        }
+        let (mut gain, mut at) = (0i64, vec![]);
+        for l in &self.legs {
+            if (l.dir != LONG && l.dir != SHORT) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 {
+                return None;
+            }
+            let head = crate::reserve::Head { market: crate::reserve::futures_market(&l.market), committee: l.committee, scale: l.scale, price_max: l.price_max };
+            let r = call.heads.iter().position(|h| *h == head)?;
+            let p = call.prices[r];
+            if p < 0 {
+                return None;
+            }
+            let (wp, we) = (worth(l.size, l.scale, p)?, worth(l.size, l.scale, l.entry)?);
+            gain = if l.dir == LONG { sub(add(gain, wp)?, we)? } else { sub(add(gain, we)?, wp)? };
+            at.push(r);
+        }
+        let room = sub(self.a_margin, NOTE_MIN)?.max(0);
+        let (pay, asked) = if gain < 0 {
+            let pay = sub(0, gain)?.min(room);
+            (pay, sub(0, pay)?)
+        } else {
+            (0, gain)
+        };
+        if v < pay {
+            return None;
+        }
+        let rest = v - pay;
+        let fee = self.t.keeper_fee_min.clamp(0, NOTE_MIN).min(rest);
+        let mut user = rest - fee;
+        let (mut cb, mut db) = (0, 0);
+        if let Some((bond, claimer, disputed)) = stood {
+            if claimer == self.a_key {
+                user = add(user, bond)?;
+            } else {
+                cb = bond;
+            }
+            if disputed {
+                db = bond;
+            }
+        }
+        let least = |x: i64| if x < PAY_MIN { 0 } else { x };
+        Some(CallStep { at, gain, pay, fee, user: least(user), claimer_bond: least(cb), disputer_bond: least(db), note: Left { sid, legs: self.legs.clone(), key: self.a_key, asked } })
+    }
+}
+
 /// A leg enters a covered account by a statement of its user and of its shard's owner, stated with the shard.
 pub const KIND_C_ENTER: i64 = 10;
 /// The mark of an account under an entry that is not settled: a push more at the end of its moving part (180

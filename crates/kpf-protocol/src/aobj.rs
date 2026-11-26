@@ -188,10 +188,10 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
         *row = ShardRow { head: head_of(r)?, net: r.int()?, gross: r.int()? };
     }
     let (owner, none, v, sid) = moving_of(r, 171)?;
-    if none != [0; 32] || v[1] != 0 || v[3] != t.late_daa {
-        return Err(bad("a shard has no second key and no second margin"));
+    if none != [0; 32] || v[3] != t.late_daa {
+        return Err(bad("a shard has no second key"));
     }
-    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7] })
+    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1] })
 }
 
 fn host_bytes(h: &Host) -> Vec<u8> {
@@ -247,7 +247,7 @@ impl AObj {
             AObj::Account(a) => if a.shard.is_some() { "covered account" } else { "account" },
             AObj::Shard(_) => "shard",
             AObj::Left(_) => "note that legs left",
-            AObj::Rest(_) => "note of the rest",
+            AObj::Rest(n) => if n.counted { "claim" } else { "note of the rest" },
             AObj::Stated { on: Host::Shard(_), .. } => "stated draw",
             AObj::Stated { .. } => "statement",
             AObj::Pointed { on: Host::Shard(_), .. } => "disputed draw",
@@ -272,7 +272,7 @@ impl AObj {
             AObj::Account(a) => [vec![20], a.terms(), vec![a.legs.len() as u8], a.legs.iter().flat_map(leg_bytes).collect(), a.moving()].concat(),
             AObj::Shard(s) => [vec![21], s.terms(), s.rows_bytes(), s.moving()].concat(),
             AObj::Left(n) => [vec![22], n.sid.to_vec(), vec![n.legs.len() as u8], n.legs.iter().flat_map(leg_bytes).collect(), n.key.to_vec(), i9(n.asked)].concat(),
-            AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
+            AObj::Rest(n) => [vec![if n.counted { 26 } else { 25 }], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
             AObj::Stated { on, st, said } => [vec![23], stated_bytes(on, st, said)].concat(),
             AObj::Pointed { on, q, said } => [vec![24], stated_bytes(on, &q.st, said), q.disputer.to_vec(), i9(q.point)].concat(),
         }
@@ -300,7 +300,7 @@ impl AObj {
                 }
                 AObj::Left(Left { sid, legs, key: r.key()?, asked: r.int()? })
             }
-            25 => AObj::Rest(Rest { sid: r.key()?, key: r.key()?, amount: r.int()? }),
+            25 | 26 => AObj::Rest(Rest { sid: r.key()?, key: r.key()?, amount: r.int()?, counted: *kind == 26 }),
             23 => {
                 let (on, st, said) = stated_of(&mut r)?;
                 AObj::Stated { on, st, said }

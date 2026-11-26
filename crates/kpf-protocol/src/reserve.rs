@@ -110,17 +110,19 @@ pub struct Shard {
     pub basis: i64,
     /// Whether it is called (where a position has what B asks of A): nothing, or the time of the call.
     pub called: i64,
+    /// What it owes by claims (where a position has side B's margin): nothing while it is not called.
+    pub owed: i64,
 }
 
 impl Shard {
     /// An account with this shard's terms and moving part and no leg: what the bytes are taken from.
     fn shell(&self) -> Account {
-        Account { t: self.t, legs: vec![], a_key: self.owner, b_key: [0; 32], a_margin: self.held, b_margin: 0, expiry: self.expiry, dispute_daa: self.dispute_daa, bond_bps: self.bond_bps, a_min_counter: self.basis, b_min_counter: self.called, shard: Some(self.sid) }
+        Account { t: self.t, legs: vec![], a_key: self.owner, b_key: [0; 32], a_margin: self.held, b_margin: self.owed, expiry: self.expiry, dispute_daa: self.dispute_daa, bond_bps: self.bond_bps, a_min_counter: self.basis, b_min_counter: self.called, shard: Some(self.sid) }
     }
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0 }
+        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0 }
     }
 
     pub fn terms(&self) -> Vec<u8> {
@@ -210,22 +212,37 @@ impl Left {
     }
 }
 
-/// What a note that legs left asked and the shard did not hold: paid as far as the shard holds, later.
+/// A claim on a called shard: counted in what the shard owes by claims, and paid at one share (docs 14.6).
+pub const NOTE_CLAIM: i64 = 9;
+
+/// What a note that legs left asked and the shard did not hold: paid as far as the shard holds, later. `counted`:
+/// it is a claim, written by a called shard, which counts it in what it owes by claims.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rest {
     pub sid: [u8; 32],
     pub key: [u8; 32],
     pub amount: i64,
+    pub counted: bool,
 }
 
 impl Rest {
     pub fn hash(&self) -> [u8; 32] {
-        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_REST), p33(&self.key), i9(self.amount)].concat())
+        blake2b(&[i9(12), p33(&self.sid), i9(if self.counted { NOTE_CLAIM } else { NOTE_REST }), p33(&self.key), i9(self.amount)].concat())
     }
 
     pub fn value(&self) -> i64 {
         NOTE_MIN
     }
+}
+
+/// What a shard takes of a note that asks `asked` and whose output holds `holds`: nothing where it asks nothing or
+/// something; else what the output holds above a note's least, and no more than the note says it holds.
+pub fn held_for(asked: i64, holds: i64) -> i64 {
+    if asked >= 0 {
+        return 0;
+    }
+    let more = holds.saturating_sub(NOTE_MIN).max(0);
+    if asked > -more { -asked } else { more }
 }
 
 impl Shard {
@@ -294,15 +311,19 @@ impl Shard {
     /// to what the shard holds. Also the row of each leg. Refused where a leg is in no row, or where the shard is
     /// called and something is asked.
     pub fn left(&self, n: &Left) -> Result<(Shard, Vec<usize>, i64, Option<Rest>)> {
+        self.left_holding(n, n.value())
+    }
+
+    /// As `left`, of a note whose output holds `holds`: where the note says it holds what an account paid, the
+    /// shard takes what the output holds above a note's least, and no more than the note says (a note is not
+    /// taken at its word: a wrong statement nobody disputed writes one that says anything. Review 53, F86).
+    pub fn left_holding(&self, n: &Left, holds: i64) -> Result<(Shard, Vec<usize>, i64, Option<Rest>)> {
         let no = |why: &str| Err(Error::Invalid(format!("the note that legs left is not applied: {why}")));
         if n.sid != self.sid {
             return no("it is to another shard");
         }
-        if n.legs.is_empty() || n.legs.len() > 6 || n.asked == i64::MIN {
+        if n.legs.is_empty() || n.legs.len() > 6 {
             return no("it is of one to six legs");
-        }
-        if self.called != 0 && n.asked > 0 {
-            return no("the shard is called: what is asked waits, and is paid its share");
         }
         let beyond = || Error::Invalid("the books are beyond what is counted".into());
         if self.gone(n) {
@@ -327,12 +348,17 @@ impl Shard {
         }
         if n.asked < 0 {
             // (What the account paid for the legs, which the note holds.)
-            s.held = s.held.checked_sub(n.asked).ok_or_else(beyond)?;
+            s.held = s.held.checked_add(held_for(n.asked, holds)).ok_or_else(beyond)?;
             return Ok((s, at, 0, None));
+        }
+        if self.called != 0 {
+            // (Called: nothing is paid, and what is asked is a claim, counted in what the shard owes by claims.)
+            s.owed = s.owed.checked_add(n.asked).ok_or_else(beyond)?;
+            return Ok((s, at, 0, (n.asked > 0).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked, counted: true })));
         }
         let pay = n.asked.min(s.held);
         s.held -= pay;
-        Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+        Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay, counted: false })))
     }
 
     /// `KpfTLeftVoid`: the first leg of a note that is no leg of these books (no futures leg; no row of its
@@ -354,23 +380,71 @@ impl Shard {
     /// `KpfTLeftVoid`: the shard after a note of a leg that is no leg of its books is spent: as it is, but that it
     /// holds what the note held for it (asked below zero: what an account paid. Review 52, F84).
     pub fn voided(&self, n: &Left) -> Result<Shard> {
-        if n.sid != self.sid || n.legs.is_empty() || n.legs.len() > 6 || n.asked == i64::MIN || !self.gone(n) {
+        self.voided_holding(n, n.value())
+    }
+
+    /// As `voided`, of a note whose output holds `holds` (as `left_holding`).
+    pub fn voided_holding(&self, n: &Left, holds: i64) -> Result<Shard> {
+        if n.sid != self.sid || n.legs.is_empty() || n.legs.len() > 6 || !self.gone(n) {
             return Err(Error::Invalid("a note is spent so where it is to this shard, of one to six legs, and one of them is no leg of the books".into()));
         }
-        let held = self.held.checked_add((-n.asked).max(0)).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
+        let held = self.held.checked_add(held_for(n.asked, holds)).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
         Ok(Shard { held, ..*self })
     }
 
     /// `KpfTLeft.rest`: a note of the rest is paid as far as the shard holds.
     pub fn rest_paid(&self, r: &Rest) -> Result<(Shard, i64, Option<Rest>)> {
-        if r.sid != self.sid || r.amount <= 0 || self.called != 0 {
-            return Err(Error::Invalid("the note of the rest is to this shard, of something, and paid while it is not called".into()));
+        if r.sid != self.sid || r.amount <= 0 || r.counted {
+            return Err(Error::Invalid("the note of the rest is to this shard and of something (a claim is paid its share by the call's own scripts)".into()));
+        }
+        if self.called != 0 {
+            // (Called: nothing is paid; the note is counted and goes on as a claim.)
+            let owed = self.owed.checked_add(r.amount).ok_or_else(|| Error::Invalid("the books are beyond what is counted".into()))?;
+            return Ok((Shard { owed, ..*self }, 0, Some(Rest { counted: true, ..*r })));
         }
         let pay = r.amount.min(self.held);
         if pay <= 0 {
             return Err(Error::Invalid("the shard holds nothing to pay it with".into()));
         }
         Ok((Shard { held: self.held - pay, ..*self }, pay, (pay < r.amount).then_some(Rest { amount: r.amount - pay, ..*r })))
+    }
+}
+
+/// A call of a shard, stated by anyone (`docs/ARCHITECTURE-CLEARING.md` 14.6): what it says is a draw's bytes with
+/// nothing where the amount is.
+pub const KIND_CALL: i64 = 11;
+/// The call's tag among the objects under a shard's id.
+pub const NOTE_CALL: i64 = 11;
+/// A call's bond is no more than so many of the terms' least fee of a keeper.
+pub const CALL_BOND_FEES: i64 = 100;
+/// What a call holds, out of its shard's carrier.
+pub const CALL_HOLD: i64 = SHARD_CARRIER / 2;
+
+/// The call of a shard: an object of its own under the shard's id, written where a call is applied. Every step
+/// under the call is shown it: the rows' names as they stood, and the price of each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Called {
+    pub sid: [u8; 32],
+    pub time: i64,
+    pub heads: [Head; SHARD_ROWS],
+    pub prices: [i64; SHARD_ROWS],
+}
+
+impl Called {
+    /// The rows' names (84 bytes each) and the prices (8 each): 368 bytes.
+    pub fn body(&self) -> Vec<u8> {
+        [self.heads.iter().flat_map(|h| h.bytes()).collect::<Vec<u8>>(), self.prices.iter().flat_map(|p| sm8(*p)).collect()].concat()
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_CALL), i9(self.time), p33(&blake2b(&self.body()))].concat())
+    }
+
+    /// What the call's output holds: half of what the shard's output held beside what the shard holds (an output
+    /// under a covenant weighs four times a plain one in a block, and a step writes the call again beside a
+    /// note: at a note's least the two were four fifths of a block).
+    pub fn value(&self) -> i64 {
+        CALL_HOLD
     }
 }
 
@@ -569,6 +643,126 @@ impl Shard {
             return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero, or it is stated before the time the shard says ({})", self.held, self.requirement(&p), self.expiry)));
         }
         Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_DRAW, t0, arg: d.arg(), outs, bond: self.bond(), claimer: self.owner, held }, d))
+    }
+
+    /// The bond of a call: the shard's, no more than a hundred times the terms' least fee of a keeper, and no less
+    /// than a note's least (`KpfTChange`: a shard that holds nothing is called still, and a large one by anyone).
+    pub fn call_bond(&self) -> i64 {
+        self.bond().min(CALL_BOND_FEES * self.t.keeper_fee_min).max(NOTE_MIN)
+    }
+
+    /// `KpfTCallEnd`, step by step, before the outputs are looked at: whether a call at the prices `d` says (and
+    /// nothing where a draw says its amount), stated at `t0` on the shard whose output held `held`, is within the
+    /// rule; and what the caller is paid out of what the shard holds. `None` where the script computes no verdict
+    /// (a sum or a product beyond 64 bits). The prices are each moved the tolerance in the shard's favour: up
+    /// where its side is long in the row, down where it is short or has no net unit.
+    pub fn call_end_judged(&self, d: &Draw, t0: i64, held: i64) -> Option<(bool, i64)> {
+        let mut ok = d.amount == 0 && t0 > 0;
+        let g = self.t.g_bps;
+        let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
+        for (row, p) in self.rows.iter().zip(&d.prices) {
+            if row.head.market == [0; 32] {
+                continue;
+            }
+            let (net, gross) = (row.net.checked_abs()?, row.gross.checked_abs()?);
+            let pm = row.head.price_max;
+            if *p <= 0 || *p > pm || row.head.scale <= 0 {
+                ok = false;
+            }
+            if ok {
+                let down = p.checked_mul(BPS - g)? / BPS;
+                let q = if row.net > 0 { (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(pm) } else { down };
+                let w = worth(net, row.head.scale, q)?;
+                wn = wn.checked_add(w)?;
+                sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
+                wg = wg.checked_add(worth(gross, row.head.scale, q)?)?;
+            }
+        }
+        let need = need_of(wn, wg, &self.t, false)?;
+        let with = self.held.checked_add(sn)?;
+        let equity = with.checked_sub(self.basis)?;
+        if with == i64::MIN || equity == i64::MIN {
+            return None;
+        }
+        // (The fee whole, or none: a part of it is no payable amount.)
+        let fee = self.t.keeper_fee_min.max(0);
+        let pay = if self.held < fee { 0 } else { fee };
+        let left = held.checked_sub(pay)?.checked_sub(CALL_HOLD)?;
+        Some((ok && self.called == 0 && equity < need && left >= CALL_HOLD, pay))
+    }
+
+    /// Whether a call is due at the prices `p`: what `call_end_judged` computes, for whoever watches.
+    pub fn call_due(&self, p: &[i64; SHARD_ROWS]) -> bool {
+        self.call_end_judged(&Draw { amount: 0, prices: *p }, 1, i64::MAX / 2).is_some_and(|(ok, _)| ok)
+    }
+
+    /// The shard called at `t0`, having paid `pay`; and the call, at the prices `p`.
+    pub fn called_at(&self, p: &[i64; SHARD_ROWS], t0: i64, pay: i64) -> (Shard, Called) {
+        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head), prices: *p })
+    }
+
+    /// The outputs of a call that is the rule's: the shard called, the call, and the fee to the caller.
+    pub fn call_outs(&self, d: &Draw, claimer: &[u8; 32], t0: i64, held: i64) -> Option<Outs> {
+        let (ok, pay) = self.call_end_judged(d, t0, held)?;
+        if !ok {
+            return None;
+        }
+        let (next, call) = self.called_at(&d.prices, t0, pay);
+        let mut v = vec![(Out { key: false, to: next.hash(), value: held - pay - CALL_HOLD }, false), (Out { key: false, to: call.hash(), value: call.value() }, true)];
+        if pay > 0 {
+            v.push((Out { key: true, to: *claimer, value: pay }, false));
+        }
+        Outs::with_notes(&v)
+    }
+
+    /// `KpfTCallEnd`: whether the end of a call stated by `claimer` is right for this shard, whose output held
+    /// `held` when it was stated.
+    pub fn call_end_right(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64) -> bool {
+        self.call_outs(d, claimer, t0, held).is_some_and(|o| o == *outs)
+    }
+
+    /// The first point of a stated call that is wrong at the committee's prices `c` (one a row): 0 the end, r the
+    /// price of row r. `None`: the call is the rule's.
+    pub fn call_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+        if !self.call_end_right(d, claimer, outs, held, t0) {
+            return Some(0);
+        }
+        (1..=SHARD_ROWS).find(|r| !self.draw_price_right(d, *r, c[*r - 1])).map(|r| r as i64)
+    }
+
+    /// The statement of a call at the prices `p` by `claimer` (anyone), on a shard whose output holds `held`.
+    /// Refused where the shard is not below its lower level at those prices.
+    pub fn call(&self, p: [i64; SHARD_ROWS], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, Draw)> {
+        let d = Draw { amount: 0, prices: p };
+        let outs = self.call_outs(&d, &claimer, t0, held).ok_or_else(|| Error::Invalid("no call is due at these prices: the shard's equity, each price moved the tolerance in its favour, is at its lower level or above; or the shard is called; or a row that has a market has no price".into()))?;
+        Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_CALL, t0, arg: d.arg(), outs, bond: self.call_bond(), claimer, held }, d))
+    }
+
+    /// `KpfTCallPay.claim`: a claim is paid its share, once no row has a unit: the amount times what the shard
+    /// holds over what it owes by claims, rounded down, and no more than the amount. Above 3,000,000,000 sompi
+    /// owed both are counted in a larger unit (what is owed rounded up, what is held down), so that no product
+    /// is beyond a script's numbers. The shard after, and what is paid.
+    pub fn claim_paid(&self, r: &Rest) -> Result<(Shard, i64)> {
+        if r.sid != self.sid || !r.counted || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || r.amount <= 0 || r.amount > self.owed || self.held < 0 {
+            return Err(Error::Invalid("a claim is paid by its shard, called, once no row of it has a unit, and is of no more than the shard owes by claims".into()));
+        }
+        let pay = if self.held >= self.owed {
+            r.amount
+        } else {
+            let u = [(3_000_000_000_000_000_000i64, 1_000_000_000_000i64), (3_000_000_000_000_000, 1_000_000_000), (3_000_000_000_000, 1_000_000), (3_000_000_000, 1_000)].iter().find(|(at, _)| self.owed >= *at).map(|(_, u)| *u).unwrap_or(1);
+            let (h, o) = (self.held / u, (self.owed - 1) / u + 1);
+            (r.amount / o) * h + (r.amount % o) * h / o
+        };
+        Ok((Shard { held: self.held - pay, owed: self.owed - r.amount, ..*self }, pay))
+    }
+
+    /// `KpfTCallPay.off`: the call ends where no row has a unit and nothing is owed by claims: the shard not
+    /// called.
+    pub fn call_off(&self, call: &Called) -> Result<Shard> {
+        if call.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.owed != 0 {
+            return Err(Error::Invalid("a call ends where its shard is called, no row of it has a unit and nothing is owed by claims".into()));
+        }
+        Ok(Shard { called: 0, ..*self })
     }
 
     /// The form a statement on the shard shows: its terms and the hash of its rows.

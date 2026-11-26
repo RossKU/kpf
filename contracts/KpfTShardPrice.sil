@@ -114,8 +114,10 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] under) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] under, int kind) {
         require(version == 1);
+        // (A row's price of a draw, or of a call: both say a price a row after eight bytes.)
+        require(kind == 5 || kind == 11);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
         require(who.slice(16, 24) == who.slice(8, 16));
@@ -125,7 +127,7 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         byte[] rw = byte[](rows);
         byte[] sd = byte[](said);
         byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv);
-        byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(5) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
+        byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
         // it is counted from its time by it.)

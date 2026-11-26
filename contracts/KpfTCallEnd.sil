@@ -1,0 +1,231 @@
+pragma silverscript ^0.1.0;
+
+// A call (kind 11 of KpfTChange) is stated on a shard by anyone: 40 bytes, nothing where a draw says its amount
+// and a price a row. It is within the rule when each row that has a market has a price above zero and within the
+// market's limit, the shard is not called, and at those prices, each moved the tolerance in the shard's favour (up
+// where its side is long in the row, down where it is short or has no net unit), its equity (what it holds, and
+// what its net units are worth, less what its legs were entered at) is below its requirement at its lower level:
+// the maintenance rate less the tolerance of the worth of every row's net units, and the rate on the gross (half
+// the maintenance rate less three times the tolerance) of the worth of every row's gross units. Its bond is the
+// shard's, no more than a hundred times the terms' least fee of a keeper and no less than a note's least
+// (KpfTChange). A dispute names one point:
+//   point 0        the end: the rule above, and the outputs: KpfTCallEnd computes it over the four rows
+//   point r, 1..4  the price of row r is within the tolerance of the committee's (KpfTShardPrice, one citation; a
+//                  row with no market, and a point beyond the fourth, are answered right)
+// A point nobody answers ends the call at the caller's cost (KpfTPoint.lapse): its prices are the caller's to show.
+// Applied (KpfTChangeSettle), it writes: the shard called (the call's time where a position has what B asks of A),
+// holding the terms' least fee of a keeper less, which the caller has (where the shard holds that much: a fee that
+// is paid in part is no payable amount); and the call, an object of its own under the shard's id, which holds
+// half of what the shard's output holds beside what the shard holds (0.5 KAS: it returns when the call ends; an
+// output under a covenant weighs four times a plain one, and a step writes the call again beside a note):
+//   the hash of (the notes' tag, the shard's id, 11, the call's time, the hash of (the four rows' names, 84 bytes
+//   each, and the four prices stated, 8 bytes each)).
+// No note that is not applied ends a call (as one ends a draw): whoever owns the shard writes notes at will, and
+// keeps its shard's notes applied.
+//
+// KpfTCallEnd: the answer of the point 0 of a call.
+//   answer(who, ageb, slotLen, terms, rows, moving, t0, said, outs, bond, claimer, window, late, held, dkey, point,
+//          at, rkey, verdict)                                                                         anyone.
+contract KpfTCallEnd(int init_version) {
+    int version = init_version;
+
+    int constant BPS = 10000;
+    int constant MMR_AT = 10;
+    int constant G_AT = 19;
+    int constant LIQFEE_AT = 28;
+    int constant KEEPER_AT = 37;
+    // What the call holds: half of what a shard's output holds beside what the shard holds.
+    int constant CALL_HOLD = 50000000;
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+    int constant POINT_TAG = 11;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // The lateness of a statement that stands again after a point of it was answered right: it was held to its time
+    // when it was disputed, and is not held to it again.
+    int constant LATE_AGAIN = 499999999999;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // The answer of a point. The point is right (1), by anyone's answer: the statement stands again (its dispute
+    // period begins again; another point of it may be disputed until the last time to dispute; it is not held to
+    // its time again), and the disputer's bond is lost: a quarter to the claimer (the last output), a quarter to
+    // whoever answered (the one before), half to this script's copy (a claimer that answers its own other key's
+    // dispute loses half a bond a round: docs 14.1).
+    // The point is wrong (0): the position again, the disputer's bond back (the output before the last) and half of
+    // the claimer's to whoever answered (the last). The other half of the bond lost stays in this script's copy.
+    function ends(int j, byte[] rs, int slotLen, int verdict, byte[32] c0, byte[32] position, int bond, byte[32] claimer, byte[32] dkey, byte[32] rkey) {
+        require(verdict == 0 || verdict == 1);
+        require(bond > 0);
+        int v = tx.inputs[j].value;
+        require(v >= bond + bond);
+        int half = bond / 2;
+        int kept = bond - half;
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        int m = tx.outputs.length - 1 - 4 * j;
+        if (verdict == 1) {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond);
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
+            if (bond / 4 >= 5000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
+                require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+                require(tx.outputs[m - 1].value >= half);
+            }
+            rkey = claimer;
+        } else {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond - bond);
+            require(m - 1 >= tx.inputs.length);
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m - 1].value >= bond);
+        }
+        if (half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= half);
+        }
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + kept);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[171] moving, int t0, byte[40] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[] tb = byte[](terms);
+        byte[] rw = byte[](rows);
+        byte[] sd = byte[](said);
+        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv);
+        byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(11) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
+        byte[32] c0 = blake2b(pre + i9(late) + i9(held));
+        // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
+        // it is counted from its time by it.)
+        int again = late;
+        if (late < LATE_AGAIN) { again = LATE_AGAIN + late; }
+        byte[32] c1 = blake2b(pre + i9(again) + i9(held));
+        require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(at == point || verdict == 0);
+        require(at == 0);
+        int ok = 1;
+        // (A call says nothing where a draw says its amount; and its time is what the shard is called by.)
+        if (int(byte[8](sd.slice(0, 8))) != 0) { ok = 0; }
+        if (t0 <= 0) { ok = 0; }
+        int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
+        // The worth of the rows' net and gross units at the prices stated, each moved the tolerance in the shard's
+        // favour; and what side B's net units are worth there (above zero where it is long, below where it is
+        // short).
+        int wn = 0;
+        int wg = 0;
+        int sn = 0;
+        byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        for (r, 0, 4, 4) {
+            byte[] row = rw.slice(102 * r, 102 * r + 102);
+            if (row.slice(0, 33) != none) {
+                int p = int(byte[8](sd.slice(8 + 8 * r, 16 + 8 * r)));
+                int sc = int(byte[8](row.slice(67, 75)));
+                int pm = int(byte[8](row.slice(76, 84)));
+                int net = int(byte[8](row.slice(85, 93)));
+                int gross = int(byte[8](row.slice(94, 102)));
+                int short = 0;
+                if (net < 0) {
+                    net = 0 - net;
+                    short = 1;
+                }
+                if (gross < 0) { gross = 0 - gross; }
+                if (p <= 0) { ok = 0; }
+                if (p > pm) { ok = 0; }
+                if (sc <= 0) { ok = 0; }
+                if (ok == 1) {
+                    int q = (p * (BPS - g)) / BPS;
+                    if (short == 0 && net > 0) {
+                        q = (p * (BPS + g) + BPS - 1) / BPS;
+                        if (q > pm) { q = pm; }
+                    }
+                    int w = (net / sc) * q + (net % sc) * (q / sc) + ((net % sc) * (q % sc)) / sc;
+                    wn = wn + w;
+                    if (short == 1) { sn = sn - w; } else { sn = sn + w; }
+                    wg = wg + (gross / sc) * q + (gross % sc) * (q / sc) + ((gross % sc) * (q % sc)) / sc;
+                }
+            }
+        }
+        // The requirement at its lower level: the maintenance rate less the tolerance of the net's worth, and the
+        // rate on the gross of the gross's.
+        int mmr = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8)));
+        int rn = mmr - g;
+        if (rn < 0) { rn = 0; }
+        int rg = (mmr - 3 * g) / 2;
+        if (rg < 0) { rg = 0; }
+        int need = (wn / BPS) * rn + ((wn % BPS) * rn + BPS - 1) / BPS + (wg / BPS) * rg + ((wg % BPS) * rg + BPS - 1) / BPS;
+        // A shard is called where its equity is below that, and is not called twice.
+        int hd = int(byte[8](mv.slice(67, 75)));
+        if (int(byte[8](mv.slice(130, 138))) != 0) { ok = 0; }
+        if (hd + sn - int(byte[8](mv.slice(121, 129))) >= need) { ok = 0; }
+        // The caller has the terms' least fee of a keeper out of what the shard holds, where it holds that much.
+        int pay = int(byte[8](tb.slice(KEEPER_AT, KEEPER_AT + 8)));
+        if (pay < 0) { pay = 0; }
+        if (hd < pay) { pay = 0; }
+        // The call holds half the shard's carrier, out of what the shard's output holds.
+        if (held - pay - CALL_HOLD < CALL_HOLD) { ok = 0; }
+        if (ok == 1) {
+            byte[] heads = rw.slice(0, 84) + rw.slice(102, 186) + rw.slice(204, 288) + rw.slice(306, 390);
+            byte[32] call = blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(11) + i9(t0) + p33(blake2b(heads + sd.slice(8, 40))));
+            byte[] due2 = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((hd - pay) as byte[8]) + mv.slice(75, 130) + byte[](t0 as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - CALL_HOLD) as byte[8]) + byte[](0x02) + byte[](call) + byte[](CALL_HOLD as byte[8]);
+            if (pay > 0) {
+                due2 = due2 + byte[](0x01) + byte[](claimer) + byte[](pay as byte[8]);
+            }
+            if (blake2b(due2) != outs) { ok = 0; }
+        }
+        require(ok == verdict);
+        ends(j, rs, slotLen, verdict, c1, position, bond, claimer, dkey, rkey);
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

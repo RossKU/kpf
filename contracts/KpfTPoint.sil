@@ -104,7 +104,7 @@ contract KpfTPoint(int init_version) {
         byte[32] c0 = changeHash(position, kind, t0, arg, outs, bond, claimer, window, late, held);
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(kind >= 2);
-        require(kind <= 10);
+        require(kind <= 11);
         // (Kind 6, a leg that entered by the old form, is no kind any more.)
         require(kind != 6);
         require(point >= 0);
