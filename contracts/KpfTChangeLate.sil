@@ -1,8 +1,10 @@
 pragma silverscript ^0.1.0;
 
 // KpfTChangeLate: a stated change that landed before the time it prices at, or more than the position's lateness
-// after it, ends (KpfTChange): the position again, and the bond to whoever ends it. (A statement is of a time: one
-// that waits for the price to turn before it lands is not a statement of now.)
+// after it, ends (KpfTChange): the position again; half of the bond to whoever ends it, and half stays in this
+// script's copy. (A statement is of a time: one that waits for the price to turn before it lands is not a
+// statement of now. And the bond is not whoever ends it's whole: a claimer that stated a time ahead and ended it
+// by a key of its own had the object out of everybody's hands for two fees. Review 58, F105.)
 //   late(who, ageb, slotLen, position, kind, t0, arg, outs, bond, claimer, window, late, ender)    anyone.
 contract KpfTChangeLate(int init_version) {
     int version = init_version;
@@ -75,12 +77,20 @@ contract KpfTChangeLate(int init_version) {
         require(bond > 0);
         require(v >= bond);
         becomes(j, rs, slotLen, position, v - bond);
-        int m = tx.outputs.length - 1 - 4 * j;
-        require(m >= tx.inputs.length);
-        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(ender))));
-        require(tx.outputs[m].value >= bond);
+        int half = bond / 2;
+        if (half > 0) {
+            int m = tx.outputs.length - 1 - 4 * j;
+            require(m >= tx.inputs.length);
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(ender))));
+            require(tx.outputs[m].value >= half);
+        }
         require(int(ageb) >= 0);
-        goesOn();
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + bond - half);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
     // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named

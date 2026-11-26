@@ -216,7 +216,7 @@ fn xk(k: &Keypair) -> [u8; 32] {
     k.x_only_public_key().0.serialize()
 }
 fn fund(key: [u8; 32], n: u8, kas: i64) -> KeyUtxo {
-    KeyUtxo { outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([n; 32]), index: 0 }, amount: (kas * KAS1) as u64, daa: 0, key }
+    KeyUtxo { outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([n; 32]), index: 0 }, amount: (kas * KAS1) as u64, daa: 6_500, key }
 }
 fn signed(what: &str, b: &OBuilt, keys: &KeySet) -> OSigned {
     let sg = b.sign(keys).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -9208,7 +9208,8 @@ fn enter_by_hand52(w: &OW, acct: &OLive<Account>, m: &Marked, prices: &[i64], sh
     let mut next = booked_by_hand51(&shard.s, &l, r);
     // (Round 58: the shard's time is written as the entry's own; it was the later of the two.)
     next.expiry = t0.wrapping_add(life);
-    let f = [fund(xk(&w.a), 33, 1_000)];
+    // (Round 59: a coin that landed at the entry's time, or at the tests' where that is later.)
+    let f = [coin58(xk(&w.a), 33, t0.max(6_500) as u64)];
     (c_enter_state_as(&w.lib, acct, shard, &w.script("KpfTEnterS"), seed, &st, &said, &next, w.payer(&w.a, &f)), st, said, next)
 }
 #[allow(clippy::type_complexity)]
@@ -10190,7 +10191,7 @@ fn t1b_fixed_f74_a_covered_account_has_nothing_of_a_second_partys_and_nothing_wr
 fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63, "(57, the four of the call, and the two of section 15)");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64, "(57, the four of the call, the two of section 15, and the split of 16.2)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10215,7 +10216,7 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     // alone, where it answers a take of kind 2.)
     // (Round 54: KpfTCallEnd and KpfTCallPay read a shard's call and basis; KpfTCStep an account's count of legs.)
     // (Round 56, F85 taken out: KpfTStepEnd takes 138 bytes alone, and is no reader of a covered account's places.)
-    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCStep", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
+    assert_eq!(readers, vec!["KpfTCEnd", "KpfTCSplit", "KpfTCStep", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
 }
 
 /// Rounds 45 and 47, F68 (High), closed by the removal: a leg is in a shard's rows and in its basis by one
@@ -10500,7 +10501,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Round 54: KpfTChange has the call's kind and bond, 1,508 from 1,417; KpfTLeftVoid what a note holds, 1,747 from 1,719.)
     // (Round 55: KpfTChange has the floor of a draw's bond, 1,543; KpfTDrawNote is shown the legs, 1,393.)
     // (Round 56: the ages of an addition and of a draw; the deposit note out of KpfTAcctEnd; what a shard owes in KpfTDrawNote.)
-    assert_eq!(sizes, vec![("KpfTChange", 1571), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1583), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 618), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1406), ("KpfTLeftVoid", 1747)]);
 }
 
 // ================================================================================================================
@@ -11577,7 +11578,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R54 sizes of the scripts: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let mut rows = vec![];
     let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
@@ -11615,7 +11616,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3239), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1571), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 3245), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1583), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12215,8 +12216,8 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1406), ("KpfTDrawEntry", 1181), ("KpfTChange", 1571), ("KpfTCStep", 3239), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1406), ("KpfTDrawEntry", 1181), ("KpfTChange", 1583), ("KpfTCStep", 3245), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -12636,7 +12637,7 @@ fn t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scr
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTPass", "KpfTJoinC", "KpfTAddC", "KpfTChange", "KpfTDrawNote", "KpfTLeft", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTAcctEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R56 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let fa = [fund(xk(&w.a), 44, 1_000)];
     let legs: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
@@ -13006,9 +13007,9 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1571, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2293, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 618, 528), ("KpfTChange", 1583, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2323, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13034,38 +13035,10 @@ fn told58(b: &OBuilt, i: usize) -> i64 {
     }
 }
 
-/// A statement on an object of this world that is out of its time, ended by `KpfTChangeLate` (the builders have
-/// this for a position's statement only): built for a position's, then made the statement's. The bond goes to
-/// `ender`, who funds it with the coin `n`.
+/// A statement on an object of this world that is out of its time, ended by `KpfTChangeLate` (round 59: the
+/// builder's own): half the bond goes to `ender`, who funds it with the coin `n`.
 fn stated_late58(w: &OW, obj: &OLive<Stated>, ender: &Keypair, n: u8) -> OBuilt {
-    let x = Cross { t: w.terms(), legs: [w.fut(0, 10, LONG, P10), XLeg::none()], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 40 * KAS1, b_margin: 60 * KAS1, expiry: 6_000 + w.markets[0].p.term };
-    let position = Position { x, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0 };
-    position.check().unwrap();
-    let c = position.take(Take { side: SIDE_A, a: [P12, 0], amount: 0 }, T0, x.floor()).unwrap();
-    let dummy = OLive { s: c, value: x.floor() as u64 + c.bond as u64, id: Some(Hash::from_bytes([0x71; 32])), op: op(77), daa: (T0 + x.t.late_daa + 1) as u64 };
-    let f = [fund(xk(ender), n, 1_000)];
-    let (mut b, _) = change_late(&w.lib, &dummy, &w.script("KpfTChangeLate"), xk(ender), w.payer(ender, &f)).unwrap();
-    let st = &obj.s;
-    b.tx.inputs[0].previous_outpoint = obj.op;
-    b.entries[0].amount = obj.value;
-    b.entries[0].block_daa_score = obj.daa;
-    b.entries[0].covenant_id = obj.id;
-    object_made(&mut b, &w.lib, 0, &st.hash());
-    let args = args_of(&mut b, 1);
-    args[3] = bytes_arg(&st.position);
-    args[4] = int_arg(st.kind);
-    args[5] = int_arg(st.t0);
-    args[6] = bytes_arg(&st.arg);
-    args[7] = bytes_arg(&st.outs.hash());
-    args[8] = int_arg(st.bond);
-    args[9] = bytes_arg(&st.claimer);
-    args[10] = int_arg(st.window);
-    args[11] = int_arg(st.late);
-    args[12] = int_arg(st.held);
-    b.tx.outputs[0] = TransactionOutput { value: obj.value - st.bond as u64, script_public_key: hash_spk(&w.lib, &st.position), covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: obj.id.expect("an id") }) };
-    let n = b.tx.outputs.len();
-    b.tx.outputs[n - 1].value = st.bond as u64;
-    b
+    kpf_protocol::thin_build::stated_late(&w.lib, obj, &w.script("KpfTChangeLate"), xk(ender), w.payer(ender, &[fund(xk(ender), n, 1_000)])).unwrap()
 }
 
 /// Round 57, F104 (Medium), fixed in round 58; and what closes F98 for an account now. A covered account says,
@@ -13239,7 +13212,8 @@ fn t1b_fixed_f103_an_entry_is_a_lateness_after_the_last_by_its_time_and_a_join_s
     let late = w.terms().late_daa;
     let leg = w.fut(0, 10, LONG, P10);
     let small = XLeg { size: leg.size / 100, ..leg };
-    let (fa, fb, ff, fw, fw2, fw3) = ([fund(xk(&w.a), 33, 1_000)], [fund(xk(&w.b), 56, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.w), 31, 1_000)], [fund(xk(&w.w), 32, 1_000)]);
+    // (Round 59: an entry shows an input that landed at its time: the user's coin of these entries landed at 7,000.)
+    let (fa, fb, ff, fw, fw2, fw3) = ([coin58(xk(&w.a), 33, 7_000)], [fund(xk(&w.b), 56, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.w), 31, 1_000)], [fund(xk(&w.w), 32, 1_000)]);
     let sid = sid52(&w);
     let shard = shard52(&w, &[small], 3 * KAS1 / 2);
     let acct = cov52(&w, &[], 20 * KAS1);
@@ -13321,136 +13295,452 @@ fn t1b_fixed_f103_an_entry_is_a_lateness_after_the_last_by_its_time_and_a_join_s
     assert!(a.1 && b.1 && c.1, "(the join's wait is left; where this fails it is gone)");
 }
 
-/// Round 58, F105 (Medium). "Where no age can be asked the bond is the price" (docs 15.8) holds where somebody
-/// else ends the statement. A statement that is out of its time (it landed before the time it says, or more than
-/// a lateness after it) is neither applied nor disputed: `KpfTChangeLate` ends it, the object again as it was,
-/// and gives its WHOLE bond to the key whoever ends it names. `KpfTChange` and `KpfTEnterS` hold a statement's
-/// time to nothing (below 500,000,000,000), and ask no age. So a claimer states a time ahead of the chain, and
-/// its own key ends the statement in the next block and has the bond back: the round is two transactions and
-/// costs two fees, on an object of any size, and the floors of round 57 are no price.
-///  - **An account, by anyone**: a step of the year after (6,500 + 1,000), by a key that is not the account's:
-///    not applied and not disputed (the builders; and at the engine with the landing put in); ended by that key,
-///    which has its 0.2 KAS back; the account as it was, and the next such statement is stated on it at once.
-///    The same with a time long past.
-///  - **A shard, by anyone**: a call of a time ahead (a bond of 0.2 KAS and more), ended by its own key.
-///  - **A shard, by its owner**: a draw of a time ahead (a bond of 1 KAS), ended by its own key.
-///  - **A shard, by its owner: entries of times ahead** (15.10: "each costs it a bond and an account"). Three
-///    accounts of its own (both keys the owner's): entries of 6,500, 6,600 and 6,700 are stated in three blocks
-///    in a row, each on the shard the one before wrote. The last, out of its time, is ended by the owner's key
-///    (the bond back), the marked account undone by it (the keeper's fee back), and the account is as it was
-///    less nothing but fees. The shard then says 6,900: an entry of the chain's own time (6,504) is refused,
-///    and of every time below 6,800. One block of this is one lateness in which the shard takes no entry.
-///  - One entry of the last time (499,999,999,999): the shard takes no entry and gives no draw after it, ever
-///    (no later time is a statement's).
-/// Passes while the claimer has its bond back.
-#[test]
-fn t1b_finding_f105_a_statement_out_of_its_time_is_ended_by_its_own_claimers_key_for_two_fees() {
-    let w = ow();
-    let leg = w.fut(0, 10, LONG, P10);
-    let small = XLeg { size: leg.size / 100, ..leg };
-    let ahead = T0 + 1_000;
-    let change = w.script("KpfTChange");
-    // (The cost of the round to the claimer's keys, the object again as it was, a statement of the same kind
-    // stated on that output at once.)
-    let mut rows: Vec<(String, i64, i64, bool)> = vec![];
-    let mut neither = true;
-    // (Whether the end is taken where the statement's output has no landing yet: the largest number as its score.)
-    let mut unlanded = vec![];
-    // An account, by a key that is not its own: a time ahead, and a time long past.
-    let mut acct = cov47(&w, &[small], 20 * KAS1, 0);
-    acct.s.bond_bps = 100;
-    let x = acct.s.clone();
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
-    for (what, t0) in [("a step of a time ahead, by a third key", ahead), ("a step of a time long past, by a third key", 6_000)] {
-        let st = Stated { t0, ..stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 20 * KAS1 }]).unwrap(), 20 * KAS1, xk(&w.w)) };
-        let f1 = [fund(xk(&w.w), 30, 1_000)];
-        let third = only_keys(&[&w.w]);
-        let sb = account_state(&w.lib, &acct, &change, &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
-        assert_eq!(sb.tx.inputs[0].sequence, 0);
-        let s1 = signed(what, &sb, &third);
-        let live = nth(&s1, 0, st, 6_510);
-        // Not applied, not disputed.
-        let fw = [fund(xk(&w.w), 31, 1_000)];
-        assert!(stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &fw)).is_err() && point_dispute(&w.lib, &live, &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.w, &fw)).is_err(), "the builders");
-        let twin = OLive { daa: t0 as u64, ..live.clone() };
-        let settle = stated_settle(&w.lib, &twin, &w.script("KpfTChangeSettle"), w.payer(&w.w, &fw)).unwrap();
-        let dispute = point_dispute(&w.lib, &twin, &w.script("KpfTPoint"), xk(&w.f), 0, w.payer(&w.w, &fw)).unwrap().0;
-        neither &= taken30(&settle, &w.keys) && taken30(&dispute, &w.keys) && !taken30(&landed50(&settle, 6_510), &w.keys) && !taken30(&landed50(&dispute, 6_510), &w.keys);
-        // Ended by its own key.
-        let lb = stated_late58(&w, &live, &w.w, 32);
-        unlanded.push(taken30(&landed58(&lb, 0, u64::MAX), &third));
-        let l1 = signed("ended as out of its time by the claimer's own key", &lb, &third);
-        let back = l1.tx.outputs[0].value == acct.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &x.hash());
-        let again = account_state(&w.lib, &nth(&l1, 0, x.clone(), 6_511), &change, &st, &said.said(), w.payer(&w.w, &f1)).unwrap();
-        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(&w.w)]), back && again.tx.inputs[0].sequence == 0 && taken30(&again, &third)));
-    }
-    // A shard, by a third key: a call of a time ahead.
-    let shard = shard_with47(&w, &[small], 100 * KAS1, 0);
-    let state = |st: &Stated, d: &Draw, by: &Keypair, n: u8| state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), n, 1_000)])).unwrap();
-    let (cst, cd) = call_by_hand54(&shard, [P10, 0, 0, 0], [P10, 0, 0, 0], w.terms().keeper_fee_min, 0, ahead, xk(&w.w)).unwrap();
-    let (dst, dd) = draw_by_hand45(&shard, KAS1, [P10, 0, 0, 0], xk(&w.b)).unwrap();
-    let dst = Stated { t0: ahead, ..dst };
-    for (what, st, d, by) in [("a call of a time ahead, by a third key", cst, cd, &w.w), ("a draw of a time ahead, by the owner", dst, dd, &w.b)] {
-        let own = only_keys(&[by]);
-        let s1 = signed(what, &state(&st, &d, by, 30), &own);
-        let l1 = signed("ended as out of its time by the claimer's own key", &stated_late58(&w, &nth(&s1, 0, st, 6_510), by, 32), &own);
-        let back = l1.tx.outputs[0].value == shard.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &shard.s.hash());
-        let again = state_raw(&w.lib, &nth(&l1, 0, shard.s, 6_511), &shard.s.fixed_hash(), &shard.s.moving(), &st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), 30, 1_000)])).unwrap();
-        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(by)]), back && again.tx.inputs[0].sequence == 0 && taken30(&again, &own)));
-    }
-    // The owner's entries of times ahead: three in three blocks.
-    let owners = only_keys(&[&w.b, &w.f]);
-    let enter = w.script("KpfTEnterS");
-    let mut on = nth_shard58(&shard52(&w, &[], 500 * KAS1), 6_500);
-    let mut last = None;
-    let mut entry_sgs = vec![];
-    for i in 0..3u8 {
-        let mut own = cov52(&w, &[], 20 * KAS1);
-        (own.s.a_key, own.op) = (xk(&w.f), op(120 + i));
-        let t0 = T0 + 100 * i as i64;
-        let (eb, est, _, marked, _, next) = c_enter_state(&w.lib, &own, &on, &enter, SEED52, small, 0, &[], t0, w.payer(&w.f, &[fund(xk(&w.f), 60 + i, 1_000)])).unwrap_or_else(|e| panic!("the owner's entry {i} of the time {t0}: {e}"));
-        assert_eq!((eb.tx.inputs[0].sequence, eb.tx.inputs[second_at55(&eb)].sequence, next.expiry), (0, 0, t0 + 200));
-        let es = signed(&format!("the owner's entry {i}, of the time {t0}, landing at {}", 6_501 + i as u64), &eb, &owners);
-        on = nth(&es, 2, next, 6_501 + i as u64);
-        last = Some((nth(&es, 0, est, 6_501 + i as u64), marked, own));
-        entry_sgs.push(es);
-    }
-    let (entry, marked, own) = last.unwrap();
-    assert!(!entry.s.in_time(entry.daa) && entry.s.t0 == 6_700 && on.s.expiry == 6_900);
-    let l1 = signed("the entry of a time ahead, ended by the owner's key", &stated_late58(&w, &entry, &w.f, 70), &owners);
-    assert_eq!((l1.tx.outputs[0].value, &l1.tx.outputs[0].script_public_key), (own.value, &hash_spk(&w.lib, &marked.hash())), "the marked account, holding what the account held");
-    let (ob, undone, _) = enter_off(&w.lib, &nth(&l1, 0, marked.clone(), 6_504), &w.script("KpfTEnterOff"), w.payer(&w.f, &[fund(xk(&w.f), 71, 1_000)])).unwrap();
-    let o1 = signed("the marked account undone by the owner's key", &ob, &owners);
-    let cycle = spent57(&[&entry_sgs[2], &l1, &o1], &[xk(&w.b), xk(&w.f)]) + (own.s.a_margin - undone.a_margin);
-    assert_eq!(own.s.a_margin - undone.a_margin, w.terms().keeper_fee_min, "the account less the keeper's fee, which its own key has");
-    // What the shard then takes.
-    let user = cov52(&w, &[], 20 * KAS1);
-    let fa = [fund(xk(&w.a), 33, 1_000)];
-    let honest: Vec<(i64, bool)> = [6_504i64, 6_799, 6_800].iter().map(|t0| (*t0, c_enter_state(&w.lib, &user, &on, &enter, SEED52, small, 0, &[], *t0, w.payer(&w.a, &fa)).is_ok_and(|e| taken30(&e.0, &w.keys)))).collect();
-    assert_eq!(honest, vec![(6_504, false), (6_799, false), (6_800, true)]);
-    // The last time.
-    let far = shard52(&w, &[], 500 * KAS1).s.entered(&small, 0, 499_999_999_999).unwrap();
-    let never = far.entered(&small, 0, 499_999_999_999).is_err() && far.draw_end_judged(&Draw { amount: KAS1, prices: [P10, 0, 0, 0] }, &xk(&w.b), 499_999_999_999) == Some(false);
-    println!("T1b R58 F105: a statement out of its time is neither applied nor disputed ({neither}); ended by its own claimer's key (what, the bond, what the round of two transactions costs the claimer, the object as it was and the same stated on it at once) {rows:?}; the owner's entries of 6,500, 6,600 and 6,700 land in three blocks in a row, and the last, ended and undone by its own keys, costs it {cycle} sompi (a note's least of it is in the note that the leg did not enter, and comes back where the note is applied); with the largest number as the landing of the statement's output the end is taken: {unlanded:?}; the shard then says {} and takes an entry of (its time, taken) {honest:?}; after an entry of the last time a shard takes no entry and gives no draw ({never})", on.s.expiry);
-    if rows.iter().all(|r| r.2 >= r.1 / 2) {
-        println!("F105 is closed: a statement out of its time costs its claimer half its bond or more, whoever ends it");
-        return;
-    }
-    assert!(neither && never && rows.iter().all(|r| r.3 && r.2 < 3_000_000) && cycle < NOTE_MIN + 4_000_000);
-    println!("T1b R58 F105 OPEN: an account or a shard is landed again at will for {} sompi a round by a statement of a time ahead that its own claimer ends; an owner's entries of times ahead cost it {cycle} sompi each", rows[0].2);
-}
-
-/// The live shard `s`, as landed at `daa`.
-fn nth_shard58(s: &OLive<Shard>, daa: u64) -> OLive<Shard> {
-    OLive { daa, ..s.clone() }
-}
-
 /// Round 58, item 6: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
 #[test]
 fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 63);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 618), ("KpfTPass", 602), ("KpfTJoinC", 1625), ("KpfTEnterS", 2293), ("KpfTOpenC", 684)]);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 618), ("KpfTPass", 602), ("KpfTJoinC", 1625), ("KpfTEnterS", 2323), ("KpfTOpenC", 684)]);
+}
+
+// ================================================================================================================
+// Round 59. (A) What closes round 58's F105: an end of a statement out of its time that keeps half the bond, and an
+// entry that shows an input that landed at its time. (B) Section 16.2 as built: one account made two (kind 12).
+
+/// Round 58, F105 (Medium), fixed in round 59. `KpfTChangeLate` gives half the bond of a statement that is out of
+/// its time to the key whoever ends it names (an output only where half is above nothing), and its own copy keeps
+/// the other half beside its fee. So the round of round 58 (a time ahead, or long past, stated and ended by the
+/// claimer's own key) costs half the bond and two fees, and where another key ends it the claimer has lost the
+/// whole bond and that key has half.
+///  - A step of a time ahead and of a time long past by a third key (a bond of 0.2 KAS), a call of a time ahead
+///    by a third key and a draw of a time ahead by the owner (1 KAS each): stated, ended by the claimer's own
+///    key, the object as it was. The cost is half the bond and the fees.
+///  - The same step ended by another key: the claimer has lost its bond, the other key has half less its fee.
+///  - A sompi off: the ender's output, the copy's output, the object's: refused each.
+///  - Bonds of 1, 2, 3 and 20,000,001 sompi (statements made by hand): ended; of a bond of 1 there is no output
+///    for the ender, and the copy keeps the sompi; the copy holding a sompi less, or the ender half less one, is
+///    refused.
+///  - A statement in its time is not ended: of a time 6,500, landed at 6,500, 6,550, 6,600: refused; landed at
+///    6,499 or 6,601 (a block beyond the lateness): ended, and its claimer has lost the bond.
+#[test]
+fn t1b_fixed_f105_a_statement_out_of_its_time_costs_half_its_bond_whoever_ends_it() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let small = XLeg { size: leg.size / 100, ..leg };
+    let ahead = T0 + 1_000;
+    let change = w.script("KpfTChange");
+    let mut refused = 0;
+    // (What, the bond, what the round costs the claimer where its own key ends it, the object as it was.)
+    let mut rows: Vec<(String, i64, i64, bool)> = vec![];
+    let mut acct = cov47(&w, &[small], 20 * KAS1, 0);
+    acct.s.bond_bps = 100;
+    let x = acct.s.clone();
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+    let step = stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 20 * KAS1 }]).unwrap(), 20 * KAS1, xk(&w.w));
+    let third = only_keys(&[&w.w]);
+    let mut by_another = vec![];
+    for (what, t0) in [("a step of a time ahead, by a third key", ahead), ("a step of a time long past, by a third key", 6_000)] {
+        let st = Stated { t0, ..step };
+        let s1 = signed(what, &account_state(&w.lib, &acct, &change, &st, &said.said(), w.payer(&w.w, &[fund(xk(&w.w), 30, 1_000)])).unwrap(), &third);
+        let live = nth(&s1, 0, st, 6_510);
+        let lb = stated_late58(&w, &live, &w.w, 32);
+        let l1 = signed("ended as out of its time by the claimer's own key", &lb, &third);
+        let back = l1.tx.outputs[0].value == acct.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &x.hash());
+        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(&w.w)]), back));
+        // By another key.
+        let o1 = signed("ended by another key", &stated_late58(&w, &live, &w.f, 72), &only_keys(&[&w.f]));
+        by_another.push((spent57(&[&s1], &[xk(&w.w)]) - s1.fee as i64 - 200_000, paid(&o1, &xk(&w.f)) - 1_000 * KAS1));
+        // A sompi off.
+        let n = lb.tx.outputs.len();
+        for (which, i) in [("the ender's half", n - 1), ("the copy's half", 1), ("the object", 0)] {
+            let mut t = lb.clone();
+            t.tx.outputs[i].value -= 1;
+            assert!(!taken30(&t, &w.keys), "F105: {what}, ended with {which} a sompi short");
+            refused += 1;
+        }
+        assert_eq!((lb.tx.outputs[n - 1].value, lb.tx.outputs[1].value), ((st.bond / 2) as u64, lb.entries[1].amount + 200_000 + (st.bond - st.bond / 2) as u64), "half to the ender, half and the fee to the copy");
+    }
+    // A shard: a call by a third key, a draw by the owner.
+    let shard = shard_with47(&w, &[small], 100 * KAS1, 0);
+    let (cst, cd) = call_by_hand54(&shard, [P10, 0, 0, 0], [P10, 0, 0, 0], w.terms().keeper_fee_min, 0, ahead, xk(&w.w)).unwrap();
+    let (dst, dd) = draw_by_hand45(&shard, KAS1, [P10, 0, 0, 0], xk(&w.b)).unwrap();
+    let dst = Stated { t0: ahead, ..dst };
+    for (what, st, d, by) in [("a call of a time ahead, by a third key", cst, cd, &w.w), ("a draw of a time ahead, by the owner", dst, dd, &w.b)] {
+        let own = only_keys(&[by]);
+        let sb = state_raw(&w.lib, &shard, &shard.s.fixed_hash(), &shard.s.moving(), &st, &d.said(), shard.s.form(), &change, w.payer(by, &[fund(xk(by), 30, 1_000)])).unwrap();
+        let s1 = signed(what, &sb, &own);
+        let l1 = signed("ended as out of its time by the claimer's own key", &stated_late58(&w, &nth(&s1, 0, st, 6_510), by, 32), &own);
+        let back = l1.tx.outputs[0].value == shard.value && l1.tx.outputs[0].script_public_key == hash_spk(&w.lib, &shard.s.hash());
+        rows.push((what.to_string(), st.bond, spent57(&[&s1, &l1], &[xk(by)]), back));
+    }
+    // Small and odd bonds, by hand.
+    let late = w.script("KpfTChangeLate");
+    let ff = [fund(xk(&w.f), 72, 1_000)];
+    let mut odd = vec![];
+    for bond in [1i64, 2, 3, 20_000_001] {
+        let st = Stated { bond, t0: ahead, ..step };
+        let live = OLive { s: st, value: acct.value + bond as u64, id: acct.id, op: op(94), daa: 6_510 };
+        let lb = kpf_protocol::thin_build::stated_late(&w.lib, &live, &late, xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+        let (half, n) = (bond / 2, lb.tx.outputs.len());
+        assert!(taken30(&lb, &w.keys) && lb.tx.outputs[0].value == acct.value && lb.tx.outputs[1].value == lb.entries[1].amount + 200_000 + (bond - half) as u64, "a bond of {bond}");
+        let mut t = lb.clone();
+        t.tx.outputs[1].value -= 1;
+        assert!(!taken30(&t, &w.keys), "F105: a bond of {bond}, the copy a sompi short");
+        refused += 1;
+        if half > 0 {
+            let mut t = lb.clone();
+            t.tx.outputs[n - 1].value = half as u64 - 1;
+            assert!(!taken30(&t, &w.keys), "F105: a bond of {bond}, the ender half less one");
+            refused += 1;
+        }
+        odd.push((bond, half, bond - half));
+    }
+    // In its time: not ended.
+    let at = |daa: u64| OLive { s: step, value: acct.value + step.bond as u64, id: acct.id, op: op(94), daa };
+    let end = |daa: u64| kpf_protocol::thin_build::stated_late(&w.lib, &at(daa), &late, xk(&w.f), w.payer(&w.f, &ff));
+    assert!(end(6_500).is_err() && end(6_600).is_err() && end(6_499).is_ok_and(|b| taken30(&b, &w.keys)), "the builder");
+    let lb = end(6_601).unwrap();
+    assert!(taken30(&lb, &w.keys), "a statement that landed a block beyond its lateness is ended");
+    for daa in [6_500u64, 6_550, 6_600] {
+        assert!(!taken30(&landed58(&lb, 0, daa), &w.keys), "F105: a statement that landed at {daa}, in its time, is ended");
+        refused += 1;
+    }
+    let unlanded = taken30(&landed58(&lb, 0, u64::MAX), &w.keys);
+    println!("T1b R59 F105: (what, the bond, what the round costs the claimer where its own key ends it, the object as it was) {rows:?}; ended by another key (what the claimer lost beside its fee, what the other key has) {by_another:?}; (a bond, the ender's half, the copy's) {odd:?}; {refused} transactions refused; a statement in its time is not ended, a block beyond its lateness it is; with no landing of the statement's output the end is taken: {unlanded}");
+    assert!(rows.iter().all(|r| r.3 && r.2 >= r.1 / 2 && r.2 < r.1 / 2 + 3_000_000), "F105 is open: the round costs less than half the bond: {rows:?}");
+    assert!(by_another.iter().all(|r| r.0 == step.bond && r.1 > 0 && r.1 < step.bond / 2));
+    println!("T1b R59 F105 is closed: a statement out of its time costs its claimer half its bond and two fees where its own key ends it, and the whole bond where another does");
+}
+
+/// Round 59, (A) item 3: `KpfTEnterS` is shown an input `f` that landed at or after the entry's time.
+///  - An entry of 6,500 funded by a coin that landed at 6,500: f is the coin (input 3); taken; the coin a block
+///    older: refused. f the shard (input 2), the account (0), the script's own copy (1): each refused where it
+///    landed at 6,499 and taken at 6,500. f beyond the inputs, below nothing: refused. The builder's three
+///    choices: the coin; with an old coin, the shard that landed at the time; then the account; else it refuses.
+///  - **No entry is of a time ahead**: with the youngest thing in the chain landed at 6,500, entries of 6,501,
+///    6,600 and 499,999,999,999 are refused (the builder; and the transaction built as if a coin had landed at
+///    that time, with the coin's true landing put in).
+///  - **What an owner still does: a row of entries of times BEHIND the chain.** A shard that says nothing (or
+///    whose last entry is long ago), the chain at 6,500: the owner's entries of 6,200, 6,300, 6,400 and 6,500 on
+///    four accounts of its own are stated in four blocks in a row, each on the shard the one before wrote. Three
+///    are out of their time as they land. One of them ended and undone by the owner's own keys costs it half its
+///    bond and the fees. Meanwhile the shard says 6,700 and has the four legs in its row.
+///  - **An entry sent late** (docs 14.3: the user signs last and lands it; review 49, R5). A user's entry of
+///    6,500, signed by both, sent by the owner so that it lands at 6,601: out of its time. The owner ends it and
+///    has half the user's bond; undoes it and has the keeper's fee out of the user's coins.
+#[test]
+fn t1b_r59_an_entry_shows_an_input_that_landed_at_its_time_and_what_an_owner_still_does() {
+    let w = ow();
+    let leg = w.fut(0, 10, LONG, P10);
+    let small = XLeg { size: leg.size / 100, ..leg };
+    let enter = w.script("KpfTEnterS");
+    let shard = shard52(&w, &[], 500 * KAS1);
+    let acct = cov52(&w, &[], 20 * KAS1);
+    let coin = |daa: u64| [coin58(xk(&w.a), 33, daa)];
+    let refused = std::cell::Cell::new(0);
+    let no = |what: &str, t: &OBuilt| {
+        assert!(!taken30(t, &w.keys), "F105: an entry, {what}");
+        refused.set(refused.get() + 1);
+    };
+    // (Arguments of KpfTEnterS.state: 9 the time, 12 f.)
+    let (eb, est, _, marked, _, _) = c_enter_state(&w.lib, &acct, &shard, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &coin(6_500))).unwrap();
+    assert_eq!((told58(&eb, 12), second_at55(&eb), eb.tx.inputs[0].sequence), (3, 2, 0));
+    assert!(taken30(&eb, &w.keys) && taken30(&landed58(&eb, 3, 6_501), &w.keys));
+    no("the coin a block older than its time", &landed58(&eb, 3, 6_499));
+    let n = eb.tx.inputs.len() as i64;
+    for f in [n, -1, i64::MAX] {
+        no(&format!("f said {f}"), &with_arg(&eb, 12, int_arg(f)));
+    }
+    for (f, what) in [(2usize, "the shard"), (0, "the account"), (1, "the script's copy")] {
+        let t = with_arg(&eb, 12, int_arg(f as i64));
+        no(&format!("f {what}, which landed a block before its time"), &landed58(&t, f, 6_499));
+        assert!(taken30(&landed58(&t, f, 6_500), &w.keys), "an entry, f {what}, which landed at its time");
+    }
+    let unlanded = taken30(&landed58(&eb, 3, u64::MAX), &w.keys);
+    let at = |s: &OLive<Shard>, a: &OLive<Account>| c_enter_state(&w.lib, a, s, &enter, SEED52, small, 0, &[], T0, w.payer(&w.a, &coin(0))).map(|e| told58(&e.0, 12));
+    let (s_now, a_now) = (OLive { daa: 6_500, ..shard.clone() }, OLive { daa: 6_500, ..acct.clone() });
+    assert_eq!((at(&s_now, &acct).ok(), at(&shard, &a_now).ok(), at(&shard, &acct).ok()), (Some(2), Some(0), None), "the builder's choices");
+    // No entry of a time ahead.
+    for t0 in [6_501i64, 6_600, 499_999_999_999] {
+        assert!(c_enter_state(&w.lib, &acct, &shard, &enter, SEED52, small, 0, &[], t0, w.payer(&w.a, &coin(6_500))).is_err(), "the builder states an entry of {t0} with the chain at 6,500");
+        let (hb, _, _, _) = enter_by_hand52(&w, &acct, &mark51(&acct.s, small, 0), &[P10], &shard, 0, t0, SEED52);
+        let hb = hb.unwrap();
+        assert!(told58(&hb, 12) == 3 && taken30(&hb, &w.keys), "(control) as if a coin had landed at {t0}");
+        no(&format!("of the time {t0}, the coin landed at 6,500"), &landed58(&hb, 3, 6_500));
+    }
+    // A row of entries of times behind the chain.
+    let owners = only_keys(&[&w.b, &w.f]);
+    let mut on = shard.clone();
+    let mut made = vec![];
+    for i in 0..4u8 {
+        let mut own = cov52(&w, &[], 20 * KAS1);
+        (own.s.a_key, own.op) = (xk(&w.f), op(120 + i));
+        let t0 = 6_200 + 100 * i as i64;
+        let (b, st, _, m, _, next) = c_enter_state(&w.lib, &own, &on, &enter, SEED52, small, 0, &[], t0, w.payer(&w.f, &[coin58(xk(&w.f), 60 + i, 6_500)])).unwrap_or_else(|e| panic!("the owner's entry of {t0}: {e}"));
+        assert_eq!((b.tx.inputs[0].sequence, b.tx.inputs[2].sequence), (0, 0));
+        let sg = signed(&format!("the owner's entry of the time {t0}, landing at {}", 6_501 + i as u64), &b, &owners);
+        on = nth(&sg, 2, next, 6_501 + i as u64);
+        made.push((nth(&sg, 0, st, 6_501 + i as u64), m, own, sg));
+    }
+    let in_time: Vec<bool> = made.iter().map(|e| e.0.s.in_time(e.0.daa)).collect();
+    assert_eq!((in_time, on.s.expiry, on.s.rows[0].gross), (vec![false, false, false, true], 6_700, 4 * small.size), "four entries in four blocks: three out of their time; the shard's time and its row");
+    let (stale, m0, own0, sg0) = &made[0];
+    let l0 = signed("the entry of 6,200 ended by the owner's key", &stated_late58(&w, stale, &w.f, 70), &owners);
+    let (ob, undone, _) = enter_off(&w.lib, &nth(&l0, 0, m0.clone(), 6_506), &w.script("KpfTEnterOff"), w.payer(&w.f, &[fund(xk(&w.f), 71, 1_000)])).unwrap();
+    let o0 = signed("and undone by it", &ob, &owners);
+    let stale_cost = spent57(&[sg0, &l0, &o0], &[xk(&w.b), xk(&w.f)]) + (own0.s.a_margin - undone.a_margin) - NOTE_MIN;
+    assert!(stale_cost >= stale.s.bond / 2 && stale_cost < stale.s.bond / 2 + 4_000_000, "an entry of a time behind costs its owner half its bond and the fees: {stale_cost}");
+    // An entry sent late (what 14.3's order of signing is for).
+    let es = signed("a user's entry of 6,500, signed by both", &eb, &w.keys);
+    let late_entry = nth(&es, 0, est, 6_601);
+    assert!(!late_entry.s.in_time(6_601) && late_entry.s.in_time(6_600));
+    let only_b = only_keys(&[&w.b]);
+    let l1 = signed("landed at 6,601 and ended by the owner", &stated_late58(&w, &late_entry, &w.b, 56), &only_b);
+    let (ub, user_after, _) = enter_off(&w.lib, &nth(&l1, 0, marked.clone(), 6_602), &w.script("KpfTEnterOff"), w.payer(&w.b, &[fund(xk(&w.b), 57, 1_000)])).unwrap();
+    let u1 = signed("and undone by the owner", &ub, &only_b);
+    let owner_has = NOTE_MIN - spent57(&[&l1, &u1], &[xk(&w.b)]);
+    let user_lost = est.bond + (acct.s.a_margin - user_after.a_margin);
+    let big = cov52(&w, &[], 1_000 * KAS1).s.c_bond();
+    println!("T1b R59 the entry's f: an entry shows an input that landed at or after its time (a coin, the shard, the account or the script's copy), {} transactions refused; with no landing of the coin the entry is taken: {unlanded}; no entry of a time ahead of the chain; four entries of 6,200 to 6,500 by an owner land in four blocks in a row (in their time: [false, false, false, true]), the shard then says {} and has {} units of them in its row; one of the three, ended and undone by its own keys, costs the owner {stale_cost} sompi. An entry sent late (14.3's order): a user's entry sent to land at 6,601: the user has lost {user_lost} sompi (its bond of {} and the keeper's fee), and the owner that ended and undid it has {owner_has} beside the note's least it put in the note; on an account of 1,000 KAS at 10 % the bond is {big}", refused.get(), on.s.expiry, on.s.rows[0].gross, est.bond);
+    assert!(user_lost == est.bond + w.terms().keeper_fee_min && owner_has > est.bond / 2 && owner_has < est.bond / 2 + w.terms().keeper_fee_min);
+}
+
+use kpf_protocol::covered::KIND_C_SPLIT;
+
+/// A split of `x` (holding `held`) written by hand whatever the rule says: the two accounts as `KpfTCSplit` would
+/// write them of this statement (the one that stays without leg `k`, the new one of leg `k` alone).
+fn split_by_hand59(x: &Account, s: &CSaid, k: usize, held: i64, claimer: [u8; 32], t0: i64) -> Option<(Stated, Account, Account)> {
+    let leg = *x.legs.get(k)?;
+    let when = t0 + 2 * (x.t.late_daa + 2 * x.dispute_daa);
+    let legs: Vec<XLeg> = x.legs.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, l)| *l).collect();
+    let stays = Account { legs, a_margin: x.a_margin.checked_sub(s.amount)?, a_min_counter: x.a_min_counter - 1, b_min_counter: when, ..x.clone() };
+    let new = Account { legs: vec![leg], a_margin: s.amount, a_min_counter: 1, b_min_counter: when, ..x.clone() };
+    let outs = Outs::with_notes(&[(Out { key: false, to: stays.hash(), value: held.checked_sub(s.amount)? }, false), (Out { key: false, to: new.hash(), value: s.amount }, true)])?;
+    Some((Stated { t0, ..stated57(x, KIND_C_SPLIT, s, outs, held, claimer) }, stays, new))
+}
+
+/// What the engine takes of the answer of the end of a split: (right, wrong).
+fn split_end_taken59(w: &OW, acct: &OLive<Account>, st: &Stated, s: &CSaid) -> (bool, bool) {
+    let q = w.pointed(&OLive { daa: (st.t0 + 10) as u64, ..w.stated(acct, st, &s.said()) }, 0);
+    let take = |v: bool| {
+        let f = [fund(xk(&w.w), 33, 1_000)];
+        c_end(&w.lib, &q, &acct.s, s, &w.script("KpfTCSplit"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    };
+    (take(true), take(false))
+}
+
+/// Round 59, (B) item 4: `KpfTCSplit` against the model on random accounts. Two to six legs of four markets, long
+/// and short, entered around 10; prices around 10; the leg named anywhere (and, some cases, none, or one beyond
+/// the last); coins at the least the two tests ask together, a sompi under, a sompi over, 5 KAS over; the amount
+/// at each edge of each test (the least the new account stands by; the most that leaves the other standing; a
+/// sompi inside and outside each), nothing, everything; the claimer the user, or another key; the account's time
+/// at or after the statement's. The statement is written by hand with the two accounts the script would write,
+/// stated (`KpfTChange`, kind 12), disputed at its end, and answered: the engine takes the model's verdict and
+/// not the other, every case. Then, on a case that is right: the same statement with either output a sompi more
+/// or less, the two outputs the other way round, the new account without its flag: each has a wrong end.
+#[test]
+fn t1b_r59_the_end_of_a_split_is_the_models_on_random_accounts() {
+    let w = ow();
+    let mut r = Rng(0x5159_0001);
+    let up = w.terms().mmr_bps + w.terms().g_bps;
+    let rate_up = |v: i64| (v / 10_000) * up + ((v % 10_000) * up + 9_999) / 10_000;
+    let (mut right, mut wrong, mut at_edges) = (0, 0, 0);
+    let mut kept = None;
+    for case in 0..72 {
+        let n = r.range(2, 7) as usize;
+        let legs: Vec<XLeg> = (0..n).map(|_| {
+            let i = r.range(0, 4) as usize;
+            XLeg { size: r.range(1, 40) * w.markets[i].p.scale / 4, entry: P10 * r.range(80, 121) / 100, ..w.fut(i, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) }
+        }).collect();
+        let prices: Vec<i64> = (0..n).map(|_| P10 * r.range(85, 116) / 100).collect();
+        let skip = r.range(1, n as i64 + 1);
+        let probe = cov47(&w, &legs, 0, 0).s;
+        let rows = probe.c_trace(&prices, skip).expect("a trace");
+        let last = rows.last().unwrap().clone();
+        let need_new = NOTE_MIN + rate_up(last.wa - last.wb) + (-last.eb).max(0);
+        let need_stay = NOTE_MIN + rate_up(last.wb) + last.ea;
+        let coins = need_new + need_stay + [0i64, 0, 0, -1, 1, 5 * KAS1, 5 * KAS1][r.range(0, 7) as usize];
+        let amount = match r.range(0, 9) {
+            0 => need_new - 1,
+            1 | 2 => need_new,
+            3 => need_new + 1,
+            4 => coins - need_stay - 1,
+            5 | 6 => coins - need_stay,
+            7 => coins - need_stay + 1,
+            _ => [0, coins, coins + 1, r.range(1, coins)][r.range(0, 4) as usize],
+        };
+        let mut acct = cov47(&w, &legs, coins, 0);
+        // (What the output holds: the coins, or 3 KAS more.)
+        let held = coins + if r.range(0, 5) == 0 { 3 * KAS1 } else { 0 };
+        acct.value = held as u64;
+        if r.range(0, 10) == 0 {
+            acct.s.b_min_counter = T0 + r.range(0, 2);
+        }
+        let x = &acct.s;
+        let said_skip = match r.range(0, 12) { 0 => 0, 1 => n as i64 + 1, _ => skip };
+        let s = CSaid { amount, skip: said_skip, lc: kpf_protocol::covered::chain_of_one(&legs[skip as usize - 1]), rows };
+        let claimer = if r.range(0, 10) == 0 { xk(&w.w) } else { xk(&w.a) };
+        let Some((st, _, _)) = split_by_hand59(x, &s, skip as usize - 1, held, claimer, T0) else { continue };
+        let model = x.c_end_judged(KIND_C_SPLIT, &s, &st.claimer, &st.outs, held, T0);
+        let engine = split_end_taken59(&w, &acct, &st, &s);
+        assert_eq!(engine, verdicts(model), "case {case}: {n} legs, leg {skip} (said {said_skip}), coins {coins}, amount {amount}, the two tests ask {need_new} and {need_stay}");
+        let honest = claimer == x.a_key && said_skip == skip && T0 >= x.b_min_counter;
+        if honest {
+            assert_eq!(model, Some(amount >= need_new && coins - amount >= need_stay && amount > 0 && amount <= coins), "case {case}: the model against the two tests written out");
+            at_edges += (amount == need_new || coins - amount == need_stay) as usize;
+        }
+        if model == Some(true) {
+            right += 1;
+            kept = kept.or(Some((acct.clone(), s.clone(), skip as usize - 1, held)));
+        } else {
+            wrong += 1;
+        }
+    }
+    assert!(right >= 15 && wrong >= 20 && at_edges >= 12, "{right} {wrong} {at_edges}");
+    // A sompi of either output, and the outputs otherwise.
+    let (acct, s, k, held) = kept.unwrap();
+    let x = &acct.s;
+    let (st, stays, new) = split_by_hand59(x, &s, k, held, x.a_key, T0).unwrap();
+    assert_eq!(split_end_taken59(&w, &acct, &st, &s), (true, false), "(control)");
+    let (o0, o1) = (Out { key: false, to: stays.hash(), value: held - s.amount }, Out { key: false, to: new.hash(), value: s.amount });
+    let mut mutated = 0;
+    for (what, v) in [
+        ("the account that stays holding a sompi less", vec![(Out { value: o0.value - 1, ..o0 }, false), (o1, true)]),
+        ("the account that stays holding a sompi more", vec![(Out { value: o0.value + 1, ..o0 }, false), (o1, true)]),
+        ("the new account holding a sompi less", vec![(o0, false), (Out { value: o1.value - 1, ..o1 }, true)]),
+        ("the new account holding a sompi more", vec![(o0, false), (Out { value: o1.value + 1, ..o1 }, true)]),
+        ("the two the other way round", vec![(o1, false), (o0, true)]),
+        ("the account that stays alone", vec![(o0, false)]),
+        ("the new account with a coin of the other's", vec![(Out { to: Account { a_margin: stays.a_margin - 1, ..stays.clone() }.hash(), ..o0 }, false), (Out { to: Account { a_margin: new.a_margin + 1, ..new.clone() }.hash(), ..o1 }, true)]),
+        ("the new account with the count of the old", vec![(o0, false), (Out { to: Account { a_min_counter: x.a_min_counter, ..new.clone() }.hash(), ..o1 }, true)]),
+        ("the new account with no time", vec![(o0, false), (Out { to: Account { b_min_counter: 0, ..new.clone() }.hash(), ..o1 }, true)]),
+        ("the new account with another user's key", vec![(o0, false), (Out { to: Account { a_key: xk(&w.w), ..new.clone() }.hash(), ..o1 }, true)]),
+    ] {
+        let Some(outs) = Outs::with_notes(&v) else { continue };
+        let wrong_st = Stated { outs, ..st };
+        assert_eq!(x.c_end_judged(KIND_C_SPLIT, &s, &wrong_st.claimer, &wrong_st.outs, held, T0), Some(false), "the model: {what}");
+        assert_eq!(split_end_taken59(&w, &acct, &wrong_st, &s), (false, true), "a split with {what}");
+        mutated += 1;
+    }
+    println!("T1b R59 the end of a split: 72 random cases less those no output could say: {right} right and {wrong} wrong by the model, {at_edges} at an edge of a test; the engine takes the model's verdict and not the other in each; {mutated} statements with the outputs written otherwise have a wrong end");
+}
+
+/// Round 59, (B) items 5 and 6: what a split does, and the life of the two accounts.
+/// An account of 60 KAS, long 10 units of one market and short 10 of another from 10, its time 0; the short
+/// leaves for an account of its own with 25 KAS, at prices of 10.
+///  - Stated by the user (`KpfTChange`, kind 12, a bond of the account's), applied after its dispute period: the
+///    account that stays (the long, 35 KAS, one leg counted) and the new one (the short, 25 KAS, one leg), both
+///    saying the time 6,900 and the same time for what is done at will; no third output under the id (no note);
+///    the shard is no input. Stated by another key, or before the account's time: the model refuses (the random
+///    test runs their wrong ends).
+///  - **The chain said for the new account.** The same statement saying another chain than the leg's (32 bytes
+///    of 9): its END is answered right (the end opens no leg), and the row of the leg that leaves, disputed, is
+///    answered wrong (`KpfTCRow` holds the chain to the leg). An account of that chain is of no legs anybody can
+///    show: no script takes it.
+///  - **The new account's life**: handed over (the taker's key, and its time for what is done at will);
+///    joined to another account of its user's; its user's leaving stated at its time (6,900) and not before;
+///    stepped under a call (the call's step, the note its user's). The account that stays: stepped under a call.
+///  - **Under a call**: a split stated at or after the call's time is ended by the call's step (its bond back);
+///    one stated before it is not (the builder), and is applied as any.
+///  - **What a split before a call does** (the model's steps at the call's prices, 12 and 14 for both markets):
+///    what the user has back and asks, the one account against the two.
+#[test]
+fn t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts() {
+    let w = ow();
+    let late = w.terms().late_daa;
+    let (long, short) = (w.fut(0, 10, LONG, P10), w.fut(1, 10, SHORT, P10));
+    let acct = cov47(&w, &[long, short], 60 * KAS1, 0);
+    let x = acct.s.clone();
+    let change = w.script("KpfTChange");
+    let fa = [fund(xk(&w.a), 33, 1_000)];
+    let fa2 = [fund(xk(&w.a), 34, 1_000)];
+    let (sb, st, said, o) = c_state(&w.lib, &acct, &change, KIND_C_SPLIT, 25 * KAS1, 2, &[P10, P10], T0, xk(&w.a), w.payer(&w.a, &fa)).unwrap();
+    let (stays, new) = (o.after.clone().unwrap(), o.split.clone().unwrap());
+    assert!(o.note.is_none() && st.bond == x.c_bond() && sb.plans.iter().filter(|p| p.name().starts_with("KpfSlot")).count() == 1, "no note, the account's bond, and the account the only object shown");
+    let s1 = signed("a split stated", &sb, &only_keys(&[&w.a]));
+    let ab = stated_settle(&w.lib, &nth(&s1, 0, st, 6_510), &w.script("KpfTChangeSettle"), w.payer(&w.a, &fa2)).unwrap();
+    let a1 = signed("a split applied", &ab, &w.keys);
+    let (i0, i1) = (out_at47(&a1, &hash_spk(&w.lib, &stays.hash())), out_at47(&a1, &hash_spk(&w.lib, &new.hash())));
+    let under_id = a1.tx.outputs.iter().filter(|o| o.covenant.as_ref().is_some_and(|c| Some(c.covenant_id) == acct.id)).count();
+    assert_eq!((a1.tx.outputs[i0].value, a1.tx.outputs[i1].value, under_id), (35 * KAS1 as u64, 25 * KAS1 as u64, 2));
+    assert_eq!((stays.legs.clone(), stays.a_margin, stays.a_min_counter, stays.b_min_counter, stays.expiry), (vec![long], 35 * KAS1, 1, 6_900, x.expiry));
+    assert_eq!((new.legs.clone(), new.a_margin, new.a_min_counter, new.b_min_counter, new.expiry, new.a_key, new.b_key, new.shard), (vec![short], 25 * KAS1, 1, 6_900, x.expiry, x.a_key, x.b_key, x.shard));
+    assert!(x.c_state(KIND_C_SPLIT, 25 * KAS1, 2, &[P10, P10], T0, 60 * KAS1, xk(&w.w)).is_err() && Account { b_min_counter: T0 + 1, ..x.clone() }.c_state(KIND_C_SPLIT, 25 * KAS1, 2, &[P10, P10], T0, 60 * KAS1, xk(&w.a)).is_err());
+    // Another chain said for the new account.
+    let bent = CSaid { lc: [9; 32], ..said.clone() };
+    let when = 6_900;
+    let outs = Outs::with_notes(&[(Out { key: false, to: stays.hash(), value: 35 * KAS1 }, false), (Out { key: false, to: x.c_next(25 * KAS1, &bent.lc, 1, when), value: 25 * KAS1 }, true)]).unwrap();
+    let bst = Stated { outs, ..stated57(&x, KIND_C_SPLIT, &bent, outs, 60 * KAS1, xk(&w.a)) };
+    let end_says = split_end_taken59(&w, &acct, &bst, &bent);
+    let stated_bent = OLive { daa: 6_510, ..w.stated(&acct, &bst, &bent.said()) };
+    // (The row of the second leg is the point 3; the chain before it is the first leg's.)
+    let row_says = c_row_taken47(&w, &w.pointed(&stated_bent, 3), &bent, 3, &kpf_protocol::covered::chain_of_one(&long), &short);
+    let honest_row = c_row_taken47(&w, &w.pointed(&OLive { daa: 6_510, ..w.stated(&acct, &st, &said.said()) }, 3), &said, 3, &kpf_protocol::covered::chain_of_one(&long), &short);
+    assert_eq!((end_says, row_says, honest_row), ((true, false), (false, true), (true, false)), "another chain said for the new account: the end, the row of the leg, and the row of the honest statement");
+    // The new account's life.
+    let new_live = nth(&a1, i1, new.clone(), 6_700);
+    let stays_live = nth(&a1, i0, stays.clone(), 6_700);
+    let fw = [coin58(xk(&w.w), 46, 6_700)];
+    let (pb, passed) = account_pass(&w.lib, &new_live, &w.script("KpfTPass"), xk(&w.w), 2 * KAS1, w.payer(&w.w, &fw)).unwrap();
+    assert!(taken30(&pb, &w.keys) && passed.a_key == xk(&w.w) && passed.expiry == 6_700 + late, "the new account handed over");
+    let shard = shard_with47(&w, &[long, short], 100 * KAS1, 0);
+    let other = OLive { op: op(88), ..cov47(&w, &[w.fut(2, 3, LONG, P10)], 12 * KAS1, 0) };
+    let (jb, joined) = account_join(&w.lib, &new_live, &other, &shard, &w.script("KpfTJoinC"), w.payer(&w.a, &fa)).unwrap();
+    assert!(taken30(&jb, &w.keys) && joined.legs.len() == 2 && joined.a_margin == 37 * KAS1 && joined.b_min_counter == 6_900, "the new account joined to another: a leg moved");
+    let leaving = |t0: i64| c_state(&w.lib, &new_live, &change, KIND_C_LEAVE, 0, ALL, &[P10], t0, xk(&w.a), w.payer(&w.a, &fa));
+    assert!(leaving(6_899).is_err() && leaving(6_900).is_ok_and(|l| taken30(&l.0, &w.keys)), "the new account's leaving, at its time and not before");
+    let call = call54(&w, [P10 * 12 / 10, P10 * 12 / 10, P10, P10], T0);
+    let fb = [fund(xk(&w.b), 56, 1_000)];
+    let mut stepped = vec![];
+    for (what, live) in [("the new account", &new_live), ("the account that stays", &stays_live)] {
+        let (cb, step) = call_step(&w.lib, live, &live.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.b, &fb)).unwrap();
+        assert!(taken30(&cb, &w.keys) && step.note.key == x.a_key, "{what} stepped under a call");
+        stepped.push((what, step.gain, step.pay, step.user, step.note.asked));
+    }
+    // Under a call: a split of the call's time or after is ended by a step.
+    let standing = OLive { daa: 6_510, ..w.stated(&acct, &st, &said.said()) };
+    let (eb, ended) = call_step(&w.lib, &standing, &x, Some((&st, None)), &call, &w.script("KpfTCStep"), w.payer(&w.b, &fb)).unwrap();
+    let es = signed("a split under a call, ended by the call's step", &eb, &w.keys);
+    // (The claimer is the user: its bond is paid with its coins, in one output.)
+    assert!(ended.claimer_bond == 0 && paid(&es, &x.a_key) == ended.user && ended.user >= st.bond, "the split's bond back, with what the step pays its user");
+    assert!(call_step(&w.lib, &standing, &x, Some((&st, None)), &call54(&w, [P10; 4], 6_511), &w.script("KpfTCStep"), w.payer(&w.b, &fb)).is_err(), "a split stated before the call's time is ended by a step");
+    // What a split before a call does, by the model.
+    let mut before_a_call = vec![];
+    for price in [P10 * 12 / 10, P10 * 14 / 10] {
+        let call = call54(&w, [price, price, P10, P10], T0).s;
+        let one = x.call_step_over(&call, 60 * KAS1, None).unwrap();
+        let (a, b) = (stays.call_step_over(&call, 35 * KAS1, None).unwrap(), new.call_step_over(&call, 25 * KAS1, None).unwrap());
+        before_a_call.push((price / (P10 / 10), (one.user, one.note.asked), (a.user + b.user, a.note.asked.max(0) + b.note.asked.max(0), a.pay + b.pay)));
+    }
+    // At both edges, and then at a price within the tolerance of the one stated: is the new account a step's?
+    let mut edge = vec![];
+    for units in [10i64, 10_000] {
+        let (l, sh) = (w.fut(0, units, LONG, P10), w.fut(1, units, SHORT, P10));
+        let rows = cov47(&w, &[l, sh], 0, 0).s.c_trace(&[P10, P10], 2).unwrap();
+        let last = rows.last().unwrap().clone();
+        let up = w.terms().mmr_bps + w.terms().g_bps;
+        let need = |v: i64| NOTE_MIN + (v / 10_000) * up + ((v % 10_000) * up + 9_999) / 10_000;
+        let (need_new, need_stay) = (need(last.wa - last.wb), need(last.wb));
+        let big = cov47(&w, &[l, sh], need_new + need_stay, 0).s;
+        let (_, _, o) = big.c_state(KIND_C_SPLIT, need_new, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).expect("a split at both edges");
+        assert!(big.c_state(KIND_C_SPLIT, need_new - 1, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).is_err() && big.c_state(KIND_C_SPLIT, need_new + 1, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).is_err());
+        let alone = o.split.unwrap();
+        let g = P10 * w.terms().g_bps / 10_000;
+        let step = |price: i64| alone.c_state(KIND_C_STEP, 0, 1, &[price], 6_900, need_new, xk(&w.w)).is_ok();
+        edge.push((units, need_new, step(P10), step(P10 + g), step(P10 + g + g / 10), step(P10 + 2 * g)));
+    }
+    println!("T1b R59 a split at both edges (units, the coins of the new account, a step of it is the rule's at the price stated, at the tolerance, a tenth beyond, at twice the tolerance): {edge:?}");
+    println!("T1b R59 a split: an account of 60 KAS made two of 35 and 25 KAS, no note, the shard not shown, both saying the time 6,900; with another chain said for the new account the end is answered right and the row of the leg wrong; the new account is handed over, joined, left at its time and stepped under a call, and the one that stays is stepped (what, gain, paid, the user has, asked) {stepped:?}; a split of the call's time is ended by the call's step with its bond back; before a call (the price in tenths, the one account: (the user has, asks); the two: (the user has, asks, pays)) {before_a_call:?}");
+}
+
+/// Round 59, item 7: the scripts that changed, in bytes, and what they were (the manifest of the commit before).
+#[test]
+fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
+    let kit = kpf_protocol::thin_artifacts::kit();
+    let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
+    println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 64);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1583), ("KpfTCRow", 2245), ("KpfTStepPrice", 1693), ("KpfTCStep", 3245), ("KpfTPoint", 2588), ("KpfTCSplit", 2251)]);
 }

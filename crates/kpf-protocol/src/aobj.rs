@@ -16,7 +16,7 @@
 use crate::committee::blake2b;
 use crate::cross::{XLeg, XTerms};
 use crate::error::{Error, Result};
-use crate::covered::{CSaid, KIND_C_STEP, KIND_C_TAKE};
+use crate::covered::CSaid;
 use crate::reserve::{Draw, Head, Left, Rest, Shard, ShardRow, SHARD_CARRIER, SHARD_ROWS};
 use crate::state::int8;
 use crate::thin::{leg_bytes, ATake, Account, Outs, Pointed, Stated, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_TAKE, KIND_DRAW};
@@ -74,6 +74,7 @@ pub fn outcome(on: &Host, st: &Stated, said: &[u8]) -> Vec<AObj> {
             if let Some(Some(o)) = x.c_end(st.kind, &s, &st.claimer, st.held, st.t0) {
                 v.extend(o.after.map(AObj::Account));
                 v.extend(o.note.map(AObj::Left));
+                v.extend(o.split.map(AObj::Account));
             }
         }
         Host::Account(x) => {
@@ -220,7 +221,7 @@ fn stated_of(r: &mut Rd) -> Result<(Host, Stated, Vec<u8>)> {
     let of_kind = match (&on, kind) {
         (Host::Shard(_), KIND_DRAW) => Draw::read(&said).is_some(),
         (Host::Account(x), KIND_ACCOUNT_TAKE..=KIND_ACCOUNT_LEAVE) => x.shard.is_none() && ATake::read(&said).is_some(),
-        (Host::Account(x), KIND_C_TAKE..=KIND_C_STEP) => x.shard.is_some() && CSaid::read(&said).is_some(),
+        (Host::Account(x), k) if crate::covered::c_kind(k) => x.shard.is_some() && CSaid::read(&said).is_some(),
         _ => false,
     };
     if !of_kind {

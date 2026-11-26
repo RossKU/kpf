@@ -149,7 +149,8 @@ contract KpfTCRow(int init_version) {
         int n = rows.length / 112;
         require(rows.length == 112 * n);
         require(kind >= 7);
-        require(kind <= 10);
+        // (12, a split: its rows are a leaving's of one leg.)
+        require(kind <= 10 || kind == 12);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(at >= 1);

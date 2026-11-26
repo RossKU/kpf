@@ -10361,3 +10361,359 @@ No test failed in either, so there is no name to give. The default is the 600 of
 held the old numbers, all brought along) and one more test of mine (176 to 177). Of mine in both:
 `auditT1_builders` 177, `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 32,
 `committee_cli` 13, `clearing_cli` 1.
+
+# Round 59
+
+Scope: (A) at the engine, what closes round 58's F105 (`KpfTChangeLate` keeps half a bond; `KpfTEnterS` is
+shown an input that landed at the entry's time); (B) at the engine, section 16.2 as built (one account made
+two, kind 12, `KpfTCSplit`); (C) on paper, sections 16.3 to 16.5 and the table of 16.1 (nothing of 16.3 to 16.5
+is built). My files brought along; the workspace run twice. Working tree after 94f8564; no src, contract,
+`Cargo.toml` or `kpf-out` file touched; no commit.
+
+## Headline
+
+- **F105 is closed.** A statement out of its time costs its claimer half its bond and two fees where its own
+  key ends it (0.1145 KAS on a bond of 0.2 KAS; 0.5144 KAS on a bond of a KAS), and the whole bond where
+  another key does. No entry is of a time ahead of the chain.
+- **What an owner still does to its shard's time is a row of entries of times BEHIND the chain**: on a shard
+  whose time is behind, entries a lateness apart by what they say land in consecutive blocks (run: four in
+  four blocks). Each that is out of its time costs the owner half its bond and the fees (0.1245 KAS at the
+  floor). 15.12's "a lateness apart by the chain's clock" holds only once the shard's time has caught up with
+  the chain. Priced, as an addition and a draw are: no finding.
+- **The split holds what 16.2 says.** On 72 random accounts the engine takes the model's verdict on the end and
+  no other; 10 ways of writing the two outputs otherwise have a wrong end; I found no way through it. It
+  changes no book, leaves neither account for a step at a price within the tolerance (run at both edges), and
+  takes no coin past a take's test. The chain said for the new account is held by the leg's row alone (the end
+  answers right with any chain): enough in the way of statements, and the paper should say which point a
+  watcher answers.
+- **No finding at the engine this round.** One known thing run with its numbers: an entry that lands a block
+  beyond its lateness costs its user the bond, and the owner that ends and undoes it has half of it and the
+  keeper's fee (14.3's order of signing, review 49's R5, is what holds it; it was the whole bond before).
+- **On paper, eleven things (N12 to N22)**, three of them to decide before 16.3 is built: a mark's note must be
+  applied whatever its row holds by then (N13); the band is taken at every mark and need not be (N12); a mark
+  is the winner's alone, so a flat book pays its winners out of the owner's coins while the losers stay (N15).
+  16.1's table has three rows to correct (N22).
+- The workspace: by default 607 passed, 0 failed in 60 targets (3 min 37 s); with the three features 1,301 passed, 0
+  failed in 138 targets (16 min 44 s).
+
+# Part A: what closes F105
+
+### `KpfTChangeLate`: half to whoever ends it, half to the copy
+
+`t1b_fixed_f105_a_statement_out_of_its_time_costs_half_its_bond_whoever_ends_it` (it replaces the finding's
+test; 16 transactions refused).
+
+| The statement, out of its time | By | Its bond | The round, ended by its own key |
+|---|---|---|---|
+| a step of an account, time 7,500 (the chain at 6,510) | a key that is not the account's | 0.2 KAS | 0.1145 KAS |
+| a step of an account, time 6,000 | the same | 0.2 KAS | 0.1145 KAS |
+| a call of a shard of 100 KAS, time 7,500 | a third key | 1 KAS | 0.5144 KAS |
+| a draw of that shard, time 7,500 | its owner | 1 KAS | 0.5144 KAS |
+| an entry of a time behind (below) | the owner, both keys | 2 KAS | 1.0245 KAS, with its undoing |
+
+- The object is again as it was each time. Ended by ANOTHER key: the claimer has lost its whole bond (0.2 KAS
+  beside its fee), and that key has half less its fee (0.0938 KAS).
+- A sompi off: the ender's output, the copy's output (what it held, the fee, and the other half), the
+  object's: refused each. The ender's output is half exactly and the copy's the rest.
+- Bonds of 1, 2, 3 and 20,000,001 sompi (statements made by hand on an account): ended. Of a bond of 1 the
+  ender has nothing and no output is asked; the copy keeps the sompi. Of an odd bond the copy keeps the larger
+  half. The copy a sompi short, or the ender half less one: refused.
+- **In its time, not ended**: a statement of the time 6,500 that landed at 6,500, 6,550 or 6,600 is refused
+  (the builder and the engine); at 6,499 or 6,601 it is ended.
+- With no landing of the statement's output (the number a node gives an output in its mempool) the end is
+  refused: it is sent when the statement is in a block, as before.
+
+**Is the half lost where it should not be?** A statement that says the truth and lands a block beyond its
+lateness (run: 6,601 for 6,500) is ended like any, and its claimer has lost the bond: half where it ends its own.
+That was the whole bond before this round, to whoever was first. What makes an honest statement late: its
+claimer's own sending, a miner, or, for an entry, the other signer (below). A statement whose object another
+key's statement took meanwhile does not land late, it does not land. A statement that stands again after a
+right answer is not held to its time (round 50). So nothing new is lost; what a tool should do is end its own
+late statement itself.
+
+### The entry's `f`
+
+`t1b_r59_an_entry_shows_an_input_that_landed_at_its_time_and_what_an_owner_still_does` (10 refused).
+
+- An entry of 6,500 funded by a coin that landed at 6,500: the builder shows the coin (input 3); taken; the
+  coin a block older: refused. Shown the shard (input 2), the account (0) or the script's own copy (1): refused
+  where that landed at 6,499 and taken at 6,500. `f` beyond the inputs, below nothing, the largest number:
+  refused. The builder's three choices in their order (the coin; with an old coin the shard that landed at the
+  time; then the account; else it refuses). A coin with no landing: refused.
+- **No entry of a time ahead**: with nothing in the chain younger than 6,500, entries of 6,501, 6,600 and
+  499,999,999,999 are refused by the builder; and the transactions built as if a coin had landed at those
+  times (taken, the control) are refused with the coin's landing at 6,500. The row of entries of round 58 and
+  the entry of the last time are gone.
+- **A row of entries of times behind the chain.** A shard that says nothing, the chain at 6,500: the owner's
+  entries of 6,200, 6,300, 6,400 and 6,500 on four accounts of its own are stated in four blocks in a row
+  (6,501 to 6,504), each at no age on the shard the one before wrote. The first three are out of their time as
+  they land; the fourth is in it. The shard then says 6,700 (not ahead of the chain by more than a statement's
+  life) and has the four legs in its row. One of the three, ended and undone by the owner's own keys, costs it
+  1.0245 KAS: half its bond of 2 KAS and the fees (0.1245 KAS at a bond of the floor). How many: the chain's
+  time less the shard's, in latenesses. A shard opened saying nothing on a chain whose score is in the hundreds
+  of millions has that many. It is a price a block like the addition's (0.2 KAS that stay) and the draw's
+  (0.53 KAS a round); I do not call it a finding. A shard opened saying the time of its opening would have none
+  of it.
+- **An entry of a time far behind**: it is stated; out of its time; anybody ends it (half its bond to them,
+  half to the copy; its user has lost the bond); the marked account is undone by anybody (the keeper's fee);
+  the note takes the leg out. Meanwhile the shard's time is the entry's and its lateness and two periods (so
+  behind the chain or within a statement's life of it), and the leg is in its row and its number.
+- **An entry sent late.** A user's entry of 6,500 with a bond of 2 KAS, signed by both and landed at 6,601 by
+  the owner: the owner ends it and undoes it. The user has lost 2.1 KAS (the bond and the keeper's fee); the
+  owner has 1.087 KAS. On an account of 1,000 KAS at 10 % the bond is 100 KAS. 14.3 says the user signs last
+  and lands it (review 49, R5): that order is the only thing between a user and this, and it is a tool's.
+
+# Part B: one account made two (16.2, `KpfTCSplit`)
+
+### The end against the model (item 4)
+
+`t1b_r59_the_end_of_a_split_is_the_models_on_random_accounts`. 72 accounts of two to six legs of four markets,
+long and short, entered between 8 and 12; prices between 8.5 and 11.5; the leg named anywhere (in some cases
+none, or one beyond the last); coins at what the two tests ask together, a sompi under, a sompi over, 5 KAS
+over; the amount at each edge of each test and a sompi inside and outside, nothing, everything, more; the
+claimer the user or another key; the account's time at the statement's or a block after; the output holding the
+coins or 3 KAS more. Each statement is written by hand with the two accounts the script would write, stated by
+`KpfTChange` as kind 12, disputed at its end and answered both ways. **The engine takes the model's verdict and
+not the other in every case** (17 right, 55 wrong; 21 at an edge of a test), and for a statement by the user
+at the leg it names the model is the two tests written out. On a right case, 10 statements with the outputs
+written otherwise have a wrong end: either account a sompi more or less in what it holds; the two the other
+way round; the account that stays alone; a coin moved from one to the other; the new account with the count of
+the old, with no time, with another user's key.
+
+### What a split must not do (item 5)
+
+`t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts`. An account of 60 KAS, long 10 units of one
+market and short 10 of another, the short leaving with 25 KAS.
+
+- **The books.** The statement shows one object, the account; applied, there are two outputs under the id and
+  no note: 35 KAS with the long, 25 KAS with the short, each one leg counted, each saying the time 6,900 and
+  the account's time for what is done at will. Not showing the shard is right in every case I could make: the
+  leg is the same leg (its market, units, way and entry), so its row and what the legs were entered at are as
+  they were, and when it leaves the new account its note says the same leg the books have.
+- **Neither account is left for a step.** At both edges (the new account with exactly what its test asks, the
+  other with exactly its own), with legs of 10 and of 10,000 units: a step of the new account is not the
+  rule's at the price stated, at the tolerance against it, or a tenth beyond; it is at twice the tolerance. A
+  sompi less or more in the amount: no statement. The two tests ask together a note's least more than a take's
+  test on the one account, and count no gain: a split is no way to an account a step takes, and an account a
+  step would take passes neither.
+- **No coin past a take's test.** What the two accounts must keep is what the one had to keep and a note's
+  least; a join back asks nothing and gives the one account again. Nothing leaves by a split.
+- **By the user alone, at or after the account's time**: the model refuses another key and a time before; the
+  random test runs both as wrong ends.
+- **The chain said for the new account.** The same statement saying 32 bytes of 9 where the leg's chain is: its
+  END is answered right (and not wrong); the row of the leg that leaves, disputed, is answered wrong (and the
+  honest statement's row right). So what holds the chain is `KpfTCRow` at that one point. Not answered, it
+  would make an account of a chain nobody can show: no script takes it, its coins and its leg are in nobody's
+  reach, and the leg stays in the shard's books for good. That is a statement's way (a wrong sum in a row is
+  no different) and I do not call it a finding; the paper should say that a watcher of a split answers the row
+  of the leg that leaves, since the end says nothing of it.
+- **An account no script takes?** Not an honest one: the new account is handed over (the taker's key, its time
+  written), joined to another of its user's (a leg moved: 37 KAS, two legs, the later time), left by its
+  user's statement at 6,900 and not at 6,899, and stepped under a call; the account that stays is stepped
+  under a call.
+
+### Under a call (item 6)
+
+- A split stated at or after the call's time is ended by the call's step, its bond back with what the step pays
+  its user; one stated before the call's time is not (the builder), and is applied as any.
+- **Is anything gained by splitting before a call?** By the model's steps, both markets called at 12 and at 14
+  (the long gains 20 and 40 KAS, the short loses them):
+
+  | Called at | One account: has back, asks | Two accounts: have back, ask, paid by the one that lost |
+  |---|---|---|
+  | 12 | 59.7 KAS, nothing | 39.4 KAS, 20 KAS, 20 KAS |
+  | 14 | 59.7 KAS, nothing | 34.7 KAS, 40 KAS, 24.8 KAS |
+
+  At 12 the user has changed coins for a claim at the call's share: it lost by splitting. At 14 the account of
+  the short has 25 KAS for a loss of 40: 15.2 KAS of it is nobody's to pay, and the user's claim is 40: it gains
+  where the share is above 0.62, out of the other claims. That is two accounts where one was: what a user has
+  by holding its legs in two accounts from the start (two hand-overs). Nothing a split adds; it is what "one
+  risk number" is worth to the shard, and a user gives it up by a statement the owner does not sign.
+
+# Part C: on paper
+
+Numbered on from round 55's N1 to N11. A decision is asked for each.
+
+### 16.3, a mark
+
+- **N12. The band at a mark is taken every time, and need not be taken at all.** A leaving takes the band
+  because the price stated may be the tolerance off in the user's favour. At a mark the same price becomes the
+  leg's entry: a price 0.5 % too high pays the user 0.5 % of the leg's worth too much now and exactly that much
+  less when it leaves. What is at risk is that sum until then, and the test of the end already holds the
+  tolerance of what all legs are worth. As written ("beyond the band") a user that marks ten times has paid
+  5 % of the leg's worth in bands. And a leg that gained less than the band: is it marked for nothing asked
+  (its gain then goes to the shard) or not marked? *Decide: no band at a mark (the test holds it), or say it
+  is the price of a mark; and refuse a mark of a gain within the band if the band stays.*
+- **N13. The note of a mark must be applied whatever its row holds by then.** "It changes no row" is right for
+  the units. The note says the leg as it was; the account goes on with the leg at its new entry, and may
+  leave before the mark's note is applied. The two notes add up in either order (what the legs were entered
+  at is one number: the leaving's note takes out the worth at the new entry, the mark's moves it by the
+  difference). But a script that asks the row to hold the leg's units when the mark's note is applied has no
+  row to ask after the leaving's note, and `KpfTLeftVoid` (a note of a leg in no row) must not take a mark's
+  note, which is owed coins. *Decide: the applying of a mark's note reads no units of a row, and no script
+  voids it.*
+- **N14. By how much the number moves.** Not "the units times the difference of the two entries" computed
+  once, but the leg's worth at the new entry less its worth at the old, each as `KpfTEnterS` counts a worth:
+  else what the legs were entered at is a sompi off a mark after the last unit has left (round 55's N7 again).
+- **N15. A mark is the winner's alone.** Two users, long and short the same units; the price rises 20 %. The
+  books are flat and the equity is what it was. The long marks: 20 % of the leg's worth leaves what the shard
+  holds. The short's loss stays in its account until it leaves or is stepped, and a step is the rule's only
+  below its maintenance. So an owner pays its winners' gains out of its own coins for as long as its losers
+  stay, on a book that carries no risk; where it cannot, the winner has a note of the rest. It is so today
+  when a winner leaves; a mark makes it the daily case, and the owner signs nothing. *Decide: a mark of a leg
+  that LOST may be stated by anyone (the account pays, the test is the same), so that losses come in as gains
+  go out; or say that a shard holds its winners' gains in coins.*
+- **N16. The equity between the statement and the note** is as 16.3 says: the books count the old entry and
+  have not paid, and the two cancel but for the band (and exactly, with N12). **Under a draw**: the note ends
+  a draw, as said. **Under a call**: the note of a mark that asks is a claim like a leaving's (counted in what
+  the shard owes, paid at one share), and the account, stepped at the call's price from its new entry, claims
+  the rest: together what the leg gained from its old entry. A mark stated before the call's time at a price
+  after it is F95's case, no worse. **Where the shard cannot pay**: the gain is then a note of the rest and no
+  longer in the leg; under a call it is paid at the same share either way.
+- **N17. Is a mark a way round a rule?** The entry's rule: no, no unit enters; but say that a mark is its
+  user's statement, at or after the account's time, and writes it (16.3 does not). A step: a mark of a leg
+  that lost pays the loss out of the coins and the test then asks the take's level, so an account a step would
+  take passes no mark. A take: a mark takes a gain as a take takes coins, and the test counts the other legs'
+  losses alone and no gain: right.
+- **N18. Whether to build it.** Yes, after N12, N13 and N15 are decided. The way by the stock (the account
+  handed in and one at today's price handed back) asks the owner's leave, two hand-overs and their times; the
+  goal's row says "usable", which is the user's own doing. What a take counting gains as coins would do instead
+  (coins out against a gain not yet paid) leaves an account with nothing to pay a turn of the price with: the
+  mark is the right form.
+
+### 16.4, options under a shard
+
+- **N19. A row a strike is sound for what a shard is counted to owe, with three things unsaid.** (a) What a row
+  is worth moves no faster than the same units of futures (an option's worth exercised changes by at most the
+  price's change), so "the whole of its underlying" holds a shard as a futures row holds it, no better and no
+  worse; nothing holds a shard "at any price". (b) Worth exercised counts an option out of the money at
+  nothing: a shard that sold calls counts the premiums as gained the day it sold them, and may draw them. That
+  is the rule as written; say it. (c) An option ends. A covered account has no expiry any more (the place is
+  the time for what is done at will since round 58), and a row's worth after the option's end is at the price
+  of that end, not today's. Where is the expiry (in the market's name, and then a row is a series), and who
+  takes an ended option out at which price? *Decide before anything else of 16.4.*
+- **N20. The holder's margin and the premium.** A holder of an option cannot lose more than it was entered at:
+  asked "the whole of its underlying" it is asked several times its risk (4b asks a holder no maintenance at
+  all). The premium is what the two agree, as a futures leg's entry is today (`KpfTEnterS` asks only that an
+  entry is above nothing and at most the market's limit; 14's cut: no gate at an entry). It is the same
+  question as there, not a new one: an entry far from the price is a gift out of the shard to whoever enters,
+  and a call then shares what is held between that claim and the honest ones. *Decide: the holder's
+  requirement is the lesser of the underlying's and what the option was entered at.*
+- **N21. Four rows.** A market's futures row and three strikes, a call and a put each a row: one shard holds
+  one strike of each kind beside its hedge. It is of use as "a shard a series", which gives up the goal's own
+  row for options (one bond behind many accounts) and the account that holds two strikes. A smaller first form
+  that would hold the goal's row as it is written ("Options"): leave options where they are (an account no
+  shard covers, 4b) and say so in 16.1; or, under a shard, only options the USERS write and the shard holds
+  (covered by the user's margin of the whole underlying): the shard cannot lose by such a row more than it
+  was entered at, so the row asks no requirement and no new arithmetic in the call beyond its worth. Options
+  the shard writes wait for more rows. *Decide: not next, as 16.4 says; and which of the two is the first
+  form.*
+
+### 16.5, spot
+
+- **N22 (first half). A token leg against section 14.** In a trace it is a row whose worth counts FOR the user
+  (the amount at the price less the discount) and that gains and loses nothing; in the two tests of a take and
+  of a split it is coins that are not coins. What section 10 did not have to say and 14 does: (a) **a step**
+  pays the shard in coins through a note; an account whose margin is tokens has no coins to pay with, so a step
+  must sell: whoever steps pays the coins and takes tokens out of the vault at the price less the discount,
+  and that is a script on the vault in the step's transaction. (b) **A call's step** (`KpfTCStep`) reads the
+  call's four rows and steps "every leg at the call's price"; a leg of no row of the call is no step today
+  (the model's `call_step_over`), so an account that holds a token leg is stepped by nobody under a call
+  unless the step passes a token leg by and the tokens go back to the user. (c) The six legs: a token leg is
+  one of them. (d) **The vault**: one an account, or it must say whose tokens it holds; what moves tokens out:
+  the user's statement (a take's test with the token's price), a step's sale, an account's end. (e) **A price
+  of the token** by the committee, and a discount that is more than the tolerance (a token that halves in a
+  dispute period is the shard's loss, through an account that no longer covers its legs).
+- "A spot purchase and a futures sale in one transaction": an entry already says the coins its user adds; the
+  tokens it adds, in the same statement, is that row. The purchase itself is another protocol's input.
+- **What a token of the test bed's own would show**: the vault's scripts and who moves tokens; the size and
+  the mass of a transaction that carries the account's script, the vault's and the token's; the tests and a
+  step with a token row. **What it would not**: whether a real token's own script lets its outputs stand where
+  this library's scripts ask theirs (each asks its copy at its input's place and a payout at a place counted
+  from the end); the fees and the indexer of a real token; a price anybody signs for it.
+
+### 16.1, the table
+
+- **N22 (second half). Three rows.** (a) "A leg moves between accounts: no" is stale: 16.7 built it. It holds
+  by a split and a join: a dispute period for the first and, for the second, the join's wait, which is left
+  (round 58: on a shard where three things land a lateness, one join in seven latenesses). (b) "Touched only
+  at its default: an entry touches it; a hand-over, a take, a leaving and a step do not": a leaving and a step
+  each write a note that is applied to the shard one transaction later, and a join shows the shard. What does
+  not touch it is a hand-over, a take, a split and the statements themselves. (c) "A clearing party takes the
+  user's side at once": at once where the account's time for what is done at will has come; within a lateness
+  of its last such change otherwise (F106).
+- The other rows are as marked. "Gains are usable: margin for another position" holds for a step's standing
+  and for an entry (run by your test); a take counts no gain, which is the row below it.
+
+## Notes on the paper
+
+- 15.12: "an owner's entries of its own are a lateness apart by the chain's clock": apart by what they say; by
+  the chain's clock only when the shard's time is not behind it (Part A).
+- 16.2 could say which point holds the new account's chain (Part B).
+- `KpfTChangeLate` keeps a `goesOn` that nothing calls.
+
+## Sizes (item 7)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTChangeLate` | 725 | 708 |
+| `KpfTEnterS` | 2,323 | 2,293 |
+| `KpfTChange` | 1,583 | 1,571 |
+| `KpfTCRow` | 2,245 | 2,239 |
+| `KpfTStepPrice` | 1,693 | 1,687 |
+| `KpfTCStep` | 3,245 | 3,239 |
+| `KpfTPoint` | 2,588 | 2,588 |
+| `KpfTCSplit` | 2,251 | new |
+
+`t1b_r59_the_sizes_of_the_scripts_that_changed`; 64 scripts. A split is stated in 3,181 bytes and applied in
+2,643 (yours, and mine).
+
+## Not reached
+
+- A mempool (as round 58): who is first at the end of a statement out of its time.
+- The command line for kind 12, for the end's half and for the entry's `f` (the CLI's tests pass; no command
+  run by hand); `aobj`'s reading back of kind 12.
+- A split on an account no shard covers (the model refuses; no engine run), and a split's rows and prices
+  disputed beyond the one row of the leg (they are `KpfTCRow`'s and `KpfTStepPrice`'s as a leaving's are).
+- Part C is reasoning on the paper; no model was written for 16.3 to 16.5.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F105 | Medium | fixed (round 59), verified; a row of entries of times behind the chain is priced at half a bond each |
+| F106 | Low | said in the paper (15.1's list); the tool is not built |
+| F103, the join's wait | Medium | left by 15.10 |
+| F95 | Medium | open by decision |
+| F102 | Low | left for an account no shard covers |
+| F97, F99 | Low | left, said in the paper |
+| N12 to N22 | paper | to decide; N12, N13 and N15 before 16.3 is built, N19 before 16.4 |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 181 tests (was 177). Brought along: the coins of my tests
+  land at 6,500; `enter_by_hand52` funds an entry with a coin of its time; the count of 64 scripts and the
+  sizes in seven tests; `stated_late58` is the builder's `stated_late`; the test of F103 funds its entries with
+  a coin of 7,000; `t1b_fixed_f78_...` (`KpfTCSplit` reads the count and the time). Gone: the test of F105 as a
+  finding. New: `split_by_hand59`, `split_end_taken59`, and `t1b_fixed_f105_...`,
+  `t1b_r59_an_entry_shows_an_input_...`, `t1b_r59_the_end_of_a_split_is_the_models_on_random_accounts`,
+  `t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts`, `t1b_r59_the_sizes_of_the_scripts_that_changed`.
+- `crates/kpf-tests/tests/auditT1_tests.rs` (55): 64 scripts with `KpfTCSplit`; `KpfTChangeLate` reads the fee
+  a third time; 74 entries and 62 `release`.
+- `crates/kpf-cli/tests/auditT1_cli.rs` (48): a library of 64 scripts.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs` (11): unchanged.
+
+## The workspace, twice (item 7)
+
+One cargo command after the other, two jobs.
+
+| Run | Command | Targets | Passed | Failed | Wall time | Of it, tests |
+|---|---|---|---|---|---|---|
+| default | `cargo test --workspace --no-fail-fast --jobs 2` | 60 | 607 | 0 | 217 s | 120 s |
+| with the features | the same with `--features kpf-tests/legacy,kpf-cli/legacy,kpf-protocol/legacy` | 138 | 1,301 | 0 | 1,004 s | 833 s |
+
+No test failed in either, so there is no name to give. The default is round 58's 601, your two more in
+`thin_draw` (32 to 34) and four more of mine (177 to 181). Of mine in both: `auditT1_builders` 181,
+`auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 34, `committee_cli` 13,
+`clearing_cli` 1. After the two runs I changed three lines of words in one test of mine (a comment and what it
+prints) and ran `auditT1_builders` again alone: 181 passed.

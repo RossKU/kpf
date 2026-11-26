@@ -37,6 +37,13 @@ pub const KIND_C_TAKE: i64 = 7;
 pub const KIND_C_LEAVE: i64 = 8;
 /// A step of the liquidation of a covered account's user.
 pub const KIND_C_STEP: i64 = 9;
+/// One covered account made two: a leg leaves it for an account of its own (`docs/ARCHITECTURE-CLEARING.md` 16.2).
+pub const KIND_C_SPLIT: i64 = 12;
+
+/// Whether a kind is one of a covered account's own that `KpfTChange` states (7 to 9, and 12).
+pub fn c_kind(kind: i64) -> bool {
+    (KIND_C_TAKE..=KIND_C_STEP).contains(&kind) || kind == KIND_C_SPLIT
+}
 /// In the place of the leg that leaves: every leg.
 pub const ALL: i64 = -1;
 /// The most legs a covered account has (what one transaction steps under a call, and one note takes out).
@@ -160,6 +167,8 @@ pub struct COutcome {
     pub fee: i64,
     /// The note to the shard that legs left.
     pub note: Option<Left>,
+    /// The account of the leg that left for an account of its own (a split).
+    pub split: Option<Account>,
     pub outs: Outs,
 }
 
@@ -201,6 +210,9 @@ impl Account {
     /// sums. `None`: the script takes neither verdict (a sum does not fit). `Some(None)`: the statement is not the
     /// rule's. Else what the account becomes and the outputs that say so.
     pub fn c_end(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<COutcome>> {
+        if kind == KIND_C_SPLIT {
+            return self.c_split_end(s, claimer, held, t0);
+        }
         let Some(sid) = self.shard else { return Some(None) };
         let n = s.rows.len() as i64;
         // (An account of no leg takes a take, stated with no row.)
@@ -227,7 +239,7 @@ impl Account {
         if kind != KIND_C_STEP && t0 < quiet {
             return Some(None);
         }
-        let out = |v: Vec<(Out, bool)>, after: Option<Account>, paid: i64, fee: i64, note: Option<Left>| Outs::with_notes(&v).map(|outs| COutcome { after, paid, fee, note, outs });
+        let out = |v: Vec<(Out, bool)>, after: Option<Account>, paid: i64, fee: i64, note: Option<Left>| Outs::with_notes(&v).map(|outs| COutcome { after, paid, fee, note, split: None, outs });
         if kind == KIND_C_TAKE {
             if s.skip != 0 || *claimer != self.a_key || s.amount <= 0 {
                 return Some(None);
@@ -326,6 +338,51 @@ impl Account {
             return Some(None);
         }
         Some(out(v, outcome.0, outcome.1, fee, outcome.2))
+    }
+
+    /// `KpfTCSplit`: what the end of a split makes of this account holding `held`: leg `s.skip` leaves it for an
+    /// account of its own with `s.amount` of the coins. Each of the two stands by itself at the prices stated,
+    /// every leg counted as badly as it can be: the one that stays by the test of a take with what stays; the new
+    /// one by its own leg. No note: the shard's books are as they were. `None`, `Some(None)`: as `c_end`.
+    pub fn c_split_end(&self, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<COutcome>> {
+        if self.shard.is_none() {
+            return Some(None);
+        }
+        let n = s.rows.len() as i64;
+        let zero = Row::ZERO;
+        // (A leg of two or more: the last leg of an account does not leave it for another.)
+        let mut ok = n >= 2;
+        let row = if ok { s.rows.last().unwrap_or(&zero) } else { &zero };
+        let (w, ws, ls, gl) = (row.wa, row.wb, row.ea, row.eb);
+        ok = ok && row.g == self.legs_root() && w >= 0 && ws >= 0 && ws <= w && ls >= 0 && self.b_margin == 0;
+        let coins = self.a_margin;
+        let up = add(self.t.mmr_bps, self.t.g_bps)?;
+        let (count, quiet) = (self.a_min_counter, self.b_min_counter);
+        let when = add(t0, ck(add(self.t.late_daa, ck(self.dispute_daa.checked_mul(2))?)?.checked_mul(2))?)?;
+        ok = ok && *claimer == self.a_key && t0 >= quiet && s.skip >= 1 && s.skip <= n && s.amount > 0 && s.amount <= coins;
+        if !ok {
+            return Some(None);
+        }
+        let wl = sub(w, ws)?;
+        if sub(sub(coins, s.amount)?, NOTE_MIN)? < add(rate_up(ws, up)?, ls)? {
+            return Some(None);
+        }
+        let lost = if gl < 0 { sub(0, gl)? } else { 0 };
+        if sub(s.amount, NOTE_MIN)? < add(rate_up(wl, up)?, lost)? {
+            return Some(None);
+        }
+        let k = s.skip as usize - 1;
+        let Some(leg) = self.legs.get(k).copied() else { return Some(None) };
+        let left = sub(coins, s.amount)?;
+        let legs: Vec<XLeg> = self.legs.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, l)| *l).collect();
+        let stays = Account { legs, a_margin: left, a_min_counter: sub(count, 1)?, b_min_counter: when, ..self.clone() };
+        let new = Account { legs: vec![leg], a_margin: s.amount, a_min_counter: 1, b_min_counter: when, ..self.clone() };
+        // (The two are named by the chains the statement says: its rows hold those to the legs.)
+        let v = vec![
+            (Out { key: false, to: self.c_next(left, &row.h, sub(count, 1)?, when), value: sub(held, s.amount)? }, false),
+            (Out { key: false, to: self.c_next(s.amount, &s.lc, 1, when), value: s.amount }, true),
+        ];
+        Some(Outs::with_notes(&v).map(|outs| COutcome { after: Some(stays), paid: 0, fee: 0, note: None, split: Some(new), outs }))
     }
 
     /// `KpfTCEnd`'s verdict on the end of a statement with the outputs `outs` (`None`: neither).

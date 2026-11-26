@@ -355,7 +355,8 @@ fn a_statement_is_answered_at_once_and_one_out_of_its_time_only_ends() {
     assert_eq!(again, position.s);
     let s = signed("statement ended as late", &b, &w.keys);
     let n = s.tx.outputs.len();
-    assert_eq!((s.tx.outputs[0].value, s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), (position.value, 10 * KAS1 as u64, &p2pk_spk(&xk(&w.w))));
+    // (Half of the bond of 10 KAS to whoever ends it; the other half stays in the script's copy: review 58, F105.)
+    assert_eq!((s.tx.outputs[0].value, s.tx.outputs[n - 1].value, &s.tx.outputs[n - 1].script_public_key), (position.value, 5 * KAS1 as u64, &p2pk_spk(&xk(&w.w))));
     // One in time is not ended as late.
     assert!(change_late(&w.lib, &in_time, &w.script("KpfTChangeLate"), xk(&w.w), w.payer(&w.w, &f)).is_err());
     let mut t = b.clone();

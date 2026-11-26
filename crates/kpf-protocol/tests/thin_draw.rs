@@ -32,7 +32,8 @@ fn op(n: u8) -> TransactionOutpoint {
     TransactionOutpoint { transaction_id: TransactionId::from_bytes([n; 32]), index: 0 }
 }
 fn fund(key: [u8; 32], n: u8) -> KeyUtxo {
-    KeyUtxo { outpoint: op(n), amount: 1_000 * KAS1 as u64, daa: 0, key }
+    // (A coin that landed at the tests' time: an entry of that time, and what is done at will, show one.)
+    KeyUtxo { outpoint: op(n), amount: 1_000 * KAS1 as u64, daa: T0 as u64, key }
 }
 fn accepted(b: &OBuilt, keys: &KeySet) -> bool {
     match b.sign(keys) {
@@ -801,10 +802,10 @@ fn acct_stated(w: &World, acct: &OLive<Account>, st: &Stated, said: &[u8]) -> OL
 fn end_answered(w: &World, what: &str, acct: &OLive<Account>, live: &OLive<Stated>, s: &CSaid, want: bool) {
     let f = [fund(xk(&w.w), 35)];
     let q = w.pointed(live, 0);
-    let (b, right) = c_end(&w.lib, &q, &acct.s, s, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = c_end(&w.lib, &q, &acct.s, s, &w.script(if live.s.kind == 12 { "KpfTCSplit" } else { "KpfTCEnd" }), xk(&w.f), w.payer(&w.w, &f), None).unwrap();
     assert_eq!(right, want, "{what}");
     signed(&format!("{what}: the end answered {}", if right { "right" } else { "wrong" }), &b, &w.keys);
-    let (b, _) = c_end(&w.lib, &q, &acct.s, s, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.w, &f), Some(!want)).unwrap();
+    let (b, _) = c_end(&w.lib, &q, &acct.s, s, &w.script(if live.s.kind == 12 { "KpfTCSplit" } else { "KpfTCEnd" }), xk(&w.f), w.payer(&w.w, &f), Some(!want)).unwrap();
     assert!(!accepted(&b, &w.keys), "{what}: the other verdict is taken");
 }
 
@@ -2315,7 +2316,7 @@ fn an_account_changes_hands_and_two_of_one_user_become_one() {
     // Handed on at once it is not: the taker's coin landed before the time the account now says. With a coin that
     // landed at that time, it is; and an addition waits the same way.
     let handed = OLive { s: mine.clone(), daa: 6_150, ..a1.clone() };
-    let old_coin = [fund(xk(&w.w), 38)];
+    let old_coin = [KeyUtxo { daa: 0, ..fund(xk(&w.w), 38) }];
     assert!(account_pass(&w.lib, &handed, &w.script("KpfTPass"), xk(&w.w), 0, w.payer(&w.w, &old_coin)).is_err());
     assert!(account_add(&w.lib, &handed, &w.script("KpfTAddC"), SIDE_A, KAS1, w.payer(&w.f, &old_coin)).is_err());
     let new_coin = [KeyUtxo { daa: mine.expiry as u64, ..fund(xk(&w.w), 39) }];
@@ -2379,5 +2380,122 @@ fn an_account_changes_hands_and_two_of_one_user_become_one() {
     let (b, six) = account_join(&w.lib, &four, &two, &shard, &join, w.payer(&w.w, &fw)).unwrap();
     signed("four legs and two joined: six", &b, &w.keys);
     assert_eq!((six.legs.len(), six.a_min_counter), (6, 6));
+}
+
+/// Review 58, F105. A statement out of its time is ended by anyone for half its bond, and the other half stays in
+/// the script's copy: its own claimer has no round for two fees. And an entry's time is not ahead of the chain:
+/// the transaction shows an input that landed at or after it.
+#[test]
+fn a_statement_out_of_its_time_costs_half_its_bond_and_an_entry_is_not_of_a_time_ahead() {
+    let w = world();
+    let base = seeded(&w);
+    let leg = fleg(&w, 0, 10, LONG, P10);
+    let shard = OLive { s: base.s.booked(&leg).unwrap(), ..base.clone() };
+    let acct = cov(&w, &shard, &[leg], 20 * KAS1);
+    let ff = [fund(xk(&w.f), 36)];
+    // A take of a time ahead (7,500; it lands at 6,510): nothing applies or disputes it; anyone ends it.
+    let (st, said, _) = acct.s.c_state(KIND_C_TAKE, KAS1, 0, &[P10], 7_500, acct.value as i64, xk(&w.w)).unwrap();
+    let live = acct_stated(&w, &acct, &st, &said.said());
+    assert!(!st.in_time(live.daa));
+    assert!(stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.f, &ff)).is_err() || !accepted(&stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.f, &ff)).unwrap(), &w.keys));
+    let late = w.script("KpfTChangeLate");
+    let b = stated_late(&w.lib, &live, &late, xk(&w.f), w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a statement of a time ahead, ended", &b, &w.keys);
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (acct.value, &hash_spk(&w.lib, &acct.s.hash())), "the account again");
+    assert!(pays(&sg, &xk(&w.f), st.bond / 2) && !pays(&sg, &xk(&w.f), st.bond), "half the bond to whoever ends it");
+    // (The whole bond to whoever ends it, the copy keeping none of it: refused.)
+    let mut t = b.clone();
+    t.tx.outputs[1].value -= (st.bond - st.bond / 2) as u64;
+    let n = t.tx.outputs.len();
+    t.tx.outputs[n - 1].value += (st.bond - st.bond / 2) as u64;
+    assert!(!accepted(&t, &w.keys), "the whole bond to whoever ends a statement out of its time");
+    // One that landed in time is not ended so.
+    let (st2, said2, _) = acct.s.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, acct.value as i64, xk(&w.w)).unwrap();
+    let live2 = acct_stated(&w, &acct, &st2, &said2.said());
+    assert!(stated_late(&w.lib, &live2, &late, xk(&w.f), w.payer(&w.f, &ff)).is_err());
+
+    // An entry of a time ahead of every input of its transaction is not stated.
+    let user = cov(&w, &base, &[], 20 * KAS1);
+    let fw = [fund(xk(&w.w), 37)];
+    let enter = w.script("KpfTEnterS");
+    assert!(c_enter_state(&w.lib, &user, &base, &enter, SEED, leg, 5 * KAS1, &[], T0 + 1, w.payer(&w.w, &fw)).is_err(), "the funder's coin landed a block before the entry's time");
+    let (b, ..) = c_enter_state(&w.lib, &user, &base, &enter, SEED, leg, 5 * KAS1, &[], T0, w.payer(&w.w, &fw)).unwrap();
+    assert!(accepted(&b, &w.keys));
+    // (The same transaction, the coin shown a block older than the entry's time: refused at the engine.)
+    let mut t = b.clone();
+    for e in t.entries.iter_mut().skip(3).take(1) {
+        e.block_daa_score = T0 as u64 - 1;
+    }
+    assert!(!accepted(&t, &w.keys), "an entry of a time ahead of the input it shows");
+}
+
+// ---------------------------------------------------------------- one account made two (docs 16.2)
+
+/// A leg leaves a covered account for an account of its own, by its user's statement: each of the two stands by
+/// itself at the prices stated, no note is written and the shard is not shown. The new account is then joined to
+/// another, or handed over: a leg moves between accounts, and a part of an account is sold.
+#[test]
+fn a_leg_leaves_an_account_for_one_of_its_own_and_each_of_the_two_stands() {
+    use kpf_protocol::covered::KIND_C_SPLIT;
+    let w = world();
+    let base = seeded(&w);
+    let legs = two_legs(&w);
+    let shard = OLive { s: base.s.booked(&legs[0]).unwrap().booked(&legs[1]).unwrap(), ..base.clone() };
+    let acct = cov(&w, &shard, &legs, 40 * KAS1);
+    let a = [P10, P10];
+    // The short of 5 units of market 1 (worth 50 KAS) leaves with 10 KAS: 30 stay with the long of 10 (worth 100).
+    let (live, said, o, sg) = c_applied(&w, "a leg leaves for an account of its own", &acct, KIND_C_SPLIT, 10 * KAS1, 2, &a, &w.w);
+    let (stays, new) = (o.after.clone().unwrap(), o.split.clone().unwrap());
+    assert_eq!((o.note.clone(), o.paid, o.fee), (None, 0, 0), "no note: the books are as they were");
+    assert_eq!((stays.legs.clone(), stays.a_margin, stays.a_min_counter), (vec![legs[0]], 30 * KAS1, 1));
+    assert_eq!((new.legs.clone(), new.a_margin, new.a_min_counter, new.a_key, new.shard), (vec![legs[1]], 10 * KAS1, 1, acct.s.a_key, acct.s.shard));
+    assert_eq!((stays.b_min_counter, new.b_min_counter), (live.s.t0 + 2 * (acct.s.t.late_daa + 2 * acct.s.dispute_daa), stays.b_min_counter), "both say the time a statement of the user's writes");
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (30 * KAS1 as u64, &hash_spk(&w.lib, &stays.hash())));
+    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &new.hash())).1, 10 * KAS1 as u64, "the new account, under the same id");
+    assert!(stays.c_check().is_ok() && new.c_check().is_ok());
+    // Its end is answered right; and the ends that are not the rule's, wrong.
+    end_answered(&w, "a split", &acct, &live, &said, true);
+    let up = acct.s.t.mmr_bps + acct.s.t.g_bps;
+    let need = |worth: i64| NOTE_MIN + (worth * up + 9_999) / 10_000;
+    let lie = |what: &str, amount: i64, skip: i64, claimer: [u8; 32], t0: i64, want: bool| {
+        let rows = acct.s.c_trace(&a, skip.max(1)).unwrap();
+        let lc = kpf_protocol::covered::chain_of_one(&acct.s.legs[(skip.max(1) - 1) as usize]);
+        let s = CSaid { amount, skip, lc, rows };
+        let judged = acct.s.c_end(KIND_C_SPLIT, &s, &claimer, acct.value as i64, t0).unwrap();
+        assert_eq!(judged.is_some(), want, "{what}: the model");
+        // (Stated with the outputs of the rule where it has any; else with those of the split above.)
+        let outs = judged.map(|o| o.outs).unwrap_or(o.outs);
+        let st = Stated { position: acct.s.hash(), window: acct.s.dispute_daa, late: acct.s.t.late_daa, kind: KIND_C_SPLIT, t0, arg: s.arg(), outs, bond: acct.s.c_bond(), claimer, held: acct.value as i64 };
+        let live = acct_stated(&w, &acct, &st, &s.said());
+        end_answered(&w, what, &acct, &live, &s, want);
+    };
+    lie("the least the new account stands by", need(50 * KAS1), 2, xk(&w.w), T0, true);
+    lie("a sompi less than the new account stands by", need(50 * KAS1) - 1, 2, xk(&w.w), T0, false);
+    lie("the most that leaves the account that stays standing", 40 * KAS1 - need(100 * KAS1), 2, xk(&w.w), T0, true);
+    lie("a sompi more than leaves the account that stays standing", 40 * KAS1 - need(100 * KAS1) + 1, 2, xk(&w.w), T0, false);
+    lie("by another key than the user's", 10 * KAS1, 2, xk(&w.f), T0, false);
+    lie("no leg named", 10 * KAS1, 0, xk(&w.w), T0, false);
+    lie("nothing with the leg", 0, 2, xk(&w.w), T0, false);
+    // An account of one leg is not made two.
+    let one = cov(&w, &shard, &legs[..1], 40 * KAS1);
+    assert!(one.s.c_state(KIND_C_SPLIT, 10 * KAS1, 1, &[P10], T0, one.value as i64, xk(&w.w)).is_err());
+    // A leg that lost carries what it lost: at 12 the short of 5 has lost 10 KAS, and stands alone with 13.5 more.
+    let up12 = [P10, P10 * 12 / 10];
+    let least = NOTE_MIN + (60 * KAS1 * up + 9_999) / 10_000 + 10 * KAS1;
+    assert!(acct.s.c_state(KIND_C_SPLIT, least, 2, &up12, T0, acct.value as i64, xk(&w.w)).is_ok());
+    assert!(acct.s.c_state(KIND_C_SPLIT, least - 1, 2, &up12, T0, acct.value as i64, xk(&w.w)).is_err());
+
+    // The new account is joined to another of its user's (a leg moved), or handed over (a part sold).
+    let new_live = OLive { s: new.clone(), value: 10 * KAS1 as u64, id: acct.id, op: op(86), daa: 6_700 };
+    let other = OLive { op: op(87), ..cov(&w, &shard, &[fleg(&w, 2, 3, LONG, P10)], 20 * KAS1) };
+    let shard2 = OLive { s: shard.s.booked(&fleg(&w, 2, 3, LONG, P10)).unwrap(), ..shard.clone() };
+    let fw = [fund(xk(&w.w), 37)];
+    let (b, moved) = account_join(&w.lib, &other, &new_live, &shard2, &w.script("KpfTJoinC"), w.payer(&w.w, &fw)).unwrap();
+    signed("the leg joined to another account: it moved", &b, &w.keys);
+    assert_eq!((moved.legs.clone(), moved.a_margin, moved.b_min_counter), (vec![fleg(&w, 2, 3, LONG, P10), legs[1]], 30 * KAS1, new.b_min_counter));
+    let ff = [fund(xk(&w.f), 36)];
+    let (b, sold) = account_pass(&w.lib, &new_live, &w.script("KpfTPass"), xk(&w.f), 0, w.payer(&w.f, &ff)).unwrap();
+    signed("the leg's account handed over: a part sold", &b, &w.keys);
+    assert_eq!((sold.a_key, sold.legs.clone()), (xk(&w.f), vec![legs[1]]));
 }
 

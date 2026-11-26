@@ -2782,7 +2782,8 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     names.dedup();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
     // (Round 54: 61, with the four of the call; round 56: 63, with the two of section 15.)
-    assert_eq!(names.len(), 63, "{names:?}");
+    // (Round 59: 64, with the split of 16.2.)
+    assert_eq!(names.len(), 64, "{names:?}");
     assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
     for cmd in ["acct-leg", "acct-out"] {
         let (ok, out, err) = s.h.run(&[cmd, "--account", "nothing.json"]);

@@ -1735,7 +1735,7 @@ pub fn change_lapse(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, 
 }
 
 /// `KpfTChangeLate`: `ender` ends a statement that landed before its time or more than the position's lateness
-/// after it: the position again, the bond to `ender`.
+/// after it: the position again, half the bond to `ender`, half in the script's copy (review 58, F105).
 pub fn change_late(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, ender: [u8; 32], p: Payer) -> Result<(OBuilt, Position)> {
     let c = &change.s;
     if c.disputer.is_some() || c.in_time(change.daa) {
@@ -1745,11 +1745,36 @@ pub fn change_late(lib: &[u8; 32], change: &OLive<Change>, script: &LibScript, e
     let mut args = change_head(0, c, false);
     args.push(bv(ender.to_vec()));
     let (id, lid) = enter(&mut d, lib, change, TObj::Change(*c), script, "KpfTChangeLate", "late", args, 0)?;
+    let half = c.bond / 2;
     d.out(change.value - c.bond as u64, object_spk(lib, &TObj::Position(c.position)), Some((0, id)), "position", None);
-    keep(&mut d, script, lid)?;
+    keep_with(&mut d, script, lid, c.bond - half)?;
     d.fund(p.funds, &p.change_to);
-    d.last(c.bond, &ender, "the bond, to who ended the statement", &p.change_to);
+    if half > 0 {
+        d.last(half, &ender, "half the bond, to who ended the statement", &p.change_to);
+    }
     Ok((d.finish()?, c.position))
+}
+
+/// `KpfTChangeLate` on a statement of an account or of a shard (`Stated`): anyone ends one that landed before the
+/// time it says, or more than its lateness after: the object again, half the bond to `ender`, half in the
+/// script's copy.
+pub fn stated_late(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, ender: [u8; 32], p: Payer) -> Result<OBuilt> {
+    let c = &obj.s;
+    if c.in_time(obj.daa) {
+        return invalid("the statement landed in time: it is applied, disputed or answered, not ended as late");
+    }
+    let half = c.bond / 2;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = stated_head(0, c, false);
+    args.push(bv(ender.to_vec()));
+    let (id, lid) = enter_hash(&mut d, lib, obj, &c.hash(), "statement", script, "KpfTChangeLate", "late", args, 0)?;
+    d.out(obj.value - c.bond as u64, hash_spk(lib, &c.position), Some((0, id)), "object", None);
+    keep_with(&mut d, script, lid, c.bond - half)?;
+    d.fund(p.funds, &p.change_to);
+    if half > 0 {
+        d.last(half, &ender, "half the bond, to who ended the statement", &p.change_to);
+    }
+    d.finish()
 }
 
 /// `KpfTTake.answer`: a stated take is answered by the committee's prices for its time, read in citations (`cites`: a copy
@@ -1853,7 +1878,7 @@ fn stated_head(age: u64, c: &Stated, outs_whole: bool) -> Vec<Arg> {
 pub fn account_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, st: &Stated, said: &[u8], p: Payer) -> Result<OBuilt> {
     let a = &account.s;
     // (A covered account's own kinds have a bond of a note's least at the least: review 56, F100.)
-    let bond = if (crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) { a.c_bond() } else { a.bond() };
+    let bond = if crate::covered::c_kind(st.kind) { a.c_bond() } else { a.bond() };
     if st.position != a.hash() || st.bond != bond || st.window != a.dispute_daa || st.late != a.t.late_daa {
         return invalid("the statement is not one on this account (its hash, its bond, its dispute period or its lateness)");
     }
@@ -1968,7 +1993,7 @@ pub fn stated_settle(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, p:
 /// the price of row i), with a bond as large as the claimer's.
 pub fn point_dispute(lib: &[u8; 32], obj: &OLive<Stated>, script: &LibScript, disputer: [u8; 32], point: i64, p: Payer) -> Result<(OBuilt, Pointed)> {
     let c = &obj.s;
-    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::reserve::KIND_CALL).contains(&c.kind) || point < 0 {
+    if !c.in_time(obj.daa) || !(crate::thin::KIND_ACCOUNT_TAKE..=crate::covered::KIND_C_SPLIT).contains(&c.kind) || point < 0 {
         return invalid("the statement is not one on an account that landed in time, or the point is below zero");
     }
     if (obj.daa as i64) >= c.last_dispute() {
@@ -2368,7 +2393,7 @@ pub fn c_state(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, kin
 
 fn c_open(obj: &OLive<Pointed>, s: &crate::covered::CSaid) -> Result<()> {
     let c = &obj.s.st;
-    if c.arg != s.arg() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&c.kind) {
+    if c.arg != s.arg() || !crate::covered::c_kind(c.kind) {
         return invalid("the statement is not the one given, or is none of a covered account's own");
     }
     Ok(())
@@ -2458,9 +2483,14 @@ pub fn c_end(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s: &crate:
         return invalid("a point other than the one disputed is answered only where it is wrong");
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
+    // (The end of a split has a script of its own, which is told no kind.)
+    let split = c.kind == crate::covered::KIND_C_SPLIT;
+    let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving())];
+    if !split {
+        args.push(iv(c.kind));
+    }
     args.extend(point_args_said(q, s.said(), 0, rkey, right));
-    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCEnd", "answer", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, if split { "KpfTCSplit" } else { "KpfTCEnd" }, "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
 }
@@ -2496,9 +2526,20 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     }
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    // (An input that landed at or after the entry's time: the funder's first coin (input 3), the shard (2) or the
+    // account (0). Review 58, F105.)
+    let f = if p.funds.first().is_some_and(|c| c.daa as i64 >= st.t0) {
+        3
+    } else if shard.daa as i64 >= st.t0 {
+        2
+    } else if account.daa as i64 >= st.t0 {
+        0
+    } else {
+        return invalid("an entry's time is not ahead of the chain: fund with a coin that landed at or after it");
+    };
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
-        bv(seed.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
+        bv(seed.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
     let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
     d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
@@ -2864,7 +2905,7 @@ fn stood_of(st: &Stated, pointed: Option<([u8; 32], i64)>) -> (i64, [u8; 32], i6
 pub fn call_step<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood: Option<(&Stated, Option<([u8; 32], i64)>)>, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::covered::CallStep)> {
     let bonds = stood.map(|(st, pointed)| stood_of(st, pointed).2).unwrap_or(0);
     if let Some((st, _)) = stood {
-        if st.position != account.hash() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) || !after_call(st, stood.is_some_and(|(_, q)| q.is_some()), obj.daa, call.s.time) {
+        if st.position != account.hash() || !crate::covered::c_kind(st.kind) || !after_call(st, stood.is_some_and(|(_, q)| q.is_some()), obj.daa, call.s.time) {
             return invalid("the statement is not one of this account's own kinds of the call's time or after: it stands, and is answered and applied as any");
         }
     }

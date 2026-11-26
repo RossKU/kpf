@@ -305,8 +305,8 @@ pub fn change_lapse_cmd(a: &Args) -> R<()> {
     done(a, "change-lapse", &b, &keys, net, &mut node, &l.lib, &[Made::Obj(0, TObj::Position(again)), Made::Script(1, "KpfTChangeDispute")])
 }
 
-/// `change-late`: the funder ends a statement that landed outside the position's lateness of its time, and has its
-/// bond.
+/// `change-late`: the funder ends a statement that landed outside the position's lateness of its time, and has
+/// half its bond (the other half stays in the script's copy).
 pub fn change_late_cmd(a: &Args) -> R<()> {
     only(a, &["change", "script"])?;
     let net = network(a)?;
@@ -315,7 +315,7 @@ pub fn change_late_cmd(a: &Args) -> R<()> {
     let s = script_of(a, &l.lib, "KpfTChangeLate", &mut node, net)?;
     let (fk, keys, fu) = funding(a, net, &mut node)?;
     let (b, again) = tb::change_late(&l.lib, &live(&l, c, true)?, &s, fk, Payer { funds: &fu, change_to: fk, rate: rate(a)? }).map_err(e)?;
-    println!("ended as late: the position again; the bond of {} KAS to the funder", fmt_kas(c.bond as i128));
+    println!("ended as late: the position again; half the bond, {} KAS, to the funder", fmt_kas((c.bond / 2) as i128));
     done(a, "change-late", &b, &keys, net, &mut node, &l.lib, &[Made::Obj(0, TObj::Position(again)), Made::Script(1, "KpfTChangeLate")])
 }
 
