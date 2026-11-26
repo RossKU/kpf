@@ -2996,7 +2996,10 @@ asked is what it can lose by a move of the rate, legs of one underlying counted 
 - **Within a time T of its day an option is counted in the two sums only where it adds to what is asked** (N68):
   what it would lose at each end, never what it would gain. T is a term: twice the longest a statement lives and
   the time between two visits; no option enters within T of its day either. A hedge so stops counting while
-  both legs still stand, and a step that takes the group takes it at its net.
+  both legs still stand, and a step that takes the group takes it at its net. (With the owner's own account
+  the shard's own requirement jumps at the day and the shard is called: its users are paid. The play is a
+  user's against the clearing party, and the rule is the clearing party's: in the model, 955 paths of 1,000
+  without it.)
 - **A group** is consecutive legs of one underlying. A leg whose underlying differs from the row before's closes
   the group: R grows by the larger of nothing, what D-down lost and what D-up lost. Rows of one underlying say
   one price, or the row is wrong.
@@ -3137,10 +3140,17 @@ change when a claim is paid and grows by every coin that reaches the shard.
 
 ### 17.8 The order
 
-1. **The model, no script** (begun: `research_options.rs`). The option leg with the premium beside it; the two
-   sums with the two lines, the time before a day, and the account that stays tested as it stays, every leg
-   tried out of every random account; option rows; and in numbers the owners of N43 to N48 and of N65 to N68.
-   Then the same in `covered.rs` and `reserve.rs`. Review of the model.
+1. **The model, no script** (`research_options.rs`, eight tests). The option leg with the premium beside it;
+   the two sums with the two lines and the time before a day; the account that stays tested as it stays; and
+   **a shard over time**: users with the accounts options are held as, an owner with accounts of its own keys
+   who knows the next price (a leg of any size the way it goes; a hedge that ends by the clock, its own or a
+   user's; options of any premium; a take and a draw of all the rules give, the draw again after the price
+   moved and before anybody steps an account), a day that falls between two visits, and whoever watches once a
+   tick. On 15,000 paths (five sets of plays, ticks of 0.5 %, 2 % and 4 %) **no user is left unpaid and no
+   account leaves the shard unpaid**. Without a leg's time (as the form that is built) users are unpaid on 443
+   paths of 1,000; without the day's rule the shard is unpaid by a user on 955. Not in it yet: a step of some
+   legs and a leaving of one (whole accounts leave), the tolerance of a stated price, the tree. Review of the
+   model; then the same in `covered.rs` and `reserve.rs` with the leg as it will stay.
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
    nothing; under a call a leg younger than T asks nothing (17.9, F116); the two bounds of a stated price
    rounded inward.

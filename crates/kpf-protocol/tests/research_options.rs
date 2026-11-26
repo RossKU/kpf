@@ -405,3 +405,392 @@ fn a_leg_entered_and_called_is_a_claim_of_nothing_by_its_time_and_not_by_a_band(
     // (Had the price fallen, the owner's account pays its own shard.)
     assert!(claim(&own, fair - fair / 100, true) < 0);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// A shard over time (17.3 to 17.9 together): users with accounts of futures and options, an owner with accounts of
+// its own keys who knows the next price, and whoever watches acting once a tick. As `research_solvency.rs` did for
+// section 12, with what section 17 adds: premiums as coins, what is asked netted, a day, and a leg's time.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Ticks. A leg younger than this at a call asks nothing where it gained; an option within it of its day gives no
+/// credit, and none enters within it of its day.
+const T: i64 = 2;
+/// The rate on the gross of a shard's books: at its upper level and at its lower.
+const GROSS_UP: i64 = 225;
+const GROSS_LO: i64 = 125;
+
+#[derive(Clone, Copy, Debug)]
+struct Rules {
+    /// 17.9: a leg younger than T under a call asks nothing where it gained.
+    young: bool,
+    /// 17.4 (N68): an option within T of its day gives no credit.
+    near: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    leg: Leg,
+    entered: i64,
+    /// An option's day; nothing for a futures leg.
+    day: i64,
+}
+
+#[derive(Clone, Debug)]
+struct Party {
+    own: bool,
+    coins: i64,
+    legs: Vec<Held>,
+}
+
+impl Party {
+    fn legs_at(&self, now: i64, rules: Rules) -> Vec<Leg> {
+        self.legs.iter().map(|h| Leg { near: rules.near && h.leg.option() && h.day - now <= T, ..h.leg }).collect()
+    }
+    fn premiums(&self) -> i64 {
+        self.legs.iter().map(|h| h.leg.premium_all()).sum()
+    }
+    fn gained(&self, p: i64) -> i64 {
+        self.legs.iter().map(|h| h.leg.gained(p)).sum()
+    }
+    fn asked(&self, p: i64, r: i64, now: i64, rules: Rules) -> i64 {
+        asked_group(&self.legs_at(now, rules), p, r) + self.premiums()
+    }
+    fn due(&self, p: i64, now: i64, rules: Rules) -> bool {
+        !self.legs.is_empty() && self.coins + self.gained(p) < self.asked(p, LO, now, rules)
+    }
+}
+
+fn mirror(l: &Leg) -> Leg {
+    let kind = match l.kind {
+        Long => Short,
+        Short => Long,
+        CallHeld => CallWritten,
+        CallWritten => CallHeld,
+        PutHeld => PutWritten,
+        PutWritten => PutHeld,
+    };
+    Leg { kind, ..*l }
+}
+
+#[derive(Clone, Debug)]
+struct Shard {
+    rules: Rules,
+    now: i64,
+    held: i64,
+    parties: Vec<Party>,
+    /// What users were owed and not paid.
+    short: i64,
+    /// What accounts owed the shard and could not pay: users', and the owner's own.
+    unpaid: i64,
+    unpaid_own: i64,
+    /// What the owner's accounts and draws took out, less what it put in.
+    owner_took: i64,
+    called: bool,
+}
+
+impl Shard {
+    fn equity(&self, p: i64) -> i64 {
+        self.held - self.parties.iter().map(|a| a.gained(p)).sum::<i64>()
+    }
+    /// What the books are asked: the two sums over the clearing side's legs (every held option counted as worth
+    /// nothing), and a rate on the gross.
+    fn requirement(&self, p: i64, r: i64, gross: i64) -> i64 {
+        let side: Vec<Leg> = self.parties.iter().flat_map(|a| a.legs_at(self.now, self.rules)).map(|l| mirror(&l)).collect();
+        let units: i64 = side.iter().map(|l| l.units).sum();
+        asked_flat(&side, p, r) + rate_up(units * p, gross)
+    }
+    fn is_paid(&mut self, i: usize, owed: i64) {
+        let a = &mut self.parties[i];
+        let paid = owed.min(a.coins);
+        a.coins -= paid;
+        self.held += paid;
+        if a.own {
+            self.unpaid_own += owed - paid;
+        } else {
+            self.unpaid += owed - paid;
+        }
+    }
+    /// An account with no leg left: its coins are its user's.
+    fn close(&mut self, i: usize) {
+        let a = self.parties.remove(i);
+        if a.own {
+            self.owner_took += a.coins;
+        }
+    }
+    /// A leg enters, the premium of a written option paid in by the owner; the account has what an entry asks and
+    /// `more` beside. No gate.
+    fn enter(&mut self, own: bool, legs: Vec<Held>, p: i64, more: i64) {
+        let mut a = Party { own, coins: 0, legs };
+        a.coins = a.asked(p, UP, self.now, self.rules) + more;
+        let written: i64 = a.legs.iter().filter(|h| h.leg.option() && !h.leg.held()).map(|h| h.leg.premium_all()).sum();
+        // (The owner's pocket: every coin of an account of its own, and the premiums it pays its users.)
+        self.owner_took -= if own { a.coins } else { written };
+        self.parties.push(a);
+    }
+    /// A user's step, or its own leaving of an account of futures: every leg leaves at the price. What all gained
+    /// is asked of the shard less the band of the futures legs; what all lost the coins pay, and in a step the
+    /// premiums of what it holds and the larger of the premium and the loss of what it wrote.
+    fn leave(&mut self, i: usize, p: i64, step: bool) {
+        let a = self.parties[i].clone();
+        let gain = a.gained(p);
+        let mut owed = (-gain).max(0);
+        if step {
+            for h in a.legs.iter().filter(|h| h.leg.option()) {
+                let lost = (-h.leg.gained(p)).max(0);
+                owed += if h.leg.held() { h.leg.premium_all() } else { (h.leg.premium_all() - lost).max(0) };
+            }
+        }
+        let band: i64 = a.legs.iter().filter(|h| !h.leg.option()).map(|h| rate_up(h.leg.units * p, 2 * G)).sum();
+        self.parties[i].legs.clear();
+        self.pays_into(i, (gain - band).max(0));
+        self.is_paid(i, owed);
+        self.close(i);
+    }
+    /// What the shard pays an account stays in it as coins (17.5: a gain is no coin of its user's while legs stay).
+    fn pays_into(&mut self, i: usize, asked: i64) {
+        let paid = asked.min(self.held);
+        self.held -= paid;
+        self.parties[i].coins += paid;
+        if !self.parties[i].own {
+            self.short += asked - paid;
+        }
+    }
+    /// The day's transaction: an option whose day has come leaves at the price. What it gained, less its premium
+    /// where the user holds it, is paid into the account; what it lost and the premium the coins pay.
+    fn days(&mut self, p: i64) {
+        for i in 0..self.parties.len() {
+            let ended: Vec<Held> = self.parties[i].legs.iter().filter(|h| h.leg.option() && h.day <= self.now).copied().collect();
+            self.parties[i].legs.retain(|h| !(h.leg.option() && h.day <= self.now));
+            for h in ended {
+                let net = h.leg.gained(p) - if h.leg.held() { h.leg.premium_all() } else { 0 };
+                if net >= 0 {
+                    self.pays_into(i, net);
+                } else {
+                    self.is_paid(i, -net);
+                }
+            }
+        }
+        let mut i = 0;
+        while i < self.parties.len() {
+            if self.parties[i].legs.is_empty() {
+                self.close(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    /// A take: all the rule gives (the coins at what is asked at the entry's rate, the premiums, and what each leg
+    /// lost counted alone).
+    fn take(&mut self, i: usize, p: i64) {
+        let a = &self.parties[i];
+        let alone: i64 = a.legs.iter().map(|h| (-h.leg.gained(p)).max(0)).sum();
+        let amount = (a.coins - a.asked(p, UP, self.now, self.rules) - alone).max(0);
+        self.parties[i].coins -= amount;
+        if self.parties[i].own {
+            self.owner_took += amount;
+        }
+    }
+    /// The owner pays in what the upper level asks.
+    fn top_up(&mut self, p: i64) {
+        let lacks = (self.requirement(p, UP, GROSS_UP) - self.equity(p)).max(0);
+        self.held += lacks;
+        self.owner_took -= lacks;
+    }
+    /// The owner draws all the rule gives it.
+    fn draw(&mut self, p: i64) {
+        let amount = (self.equity(p) - self.requirement(p, UP, GROSS_UP)).min(self.held).max(0);
+        self.held -= amount;
+        self.owner_took += amount;
+    }
+    /// What whoever watches does at the price, once a tick: a step of every account that
+    /// is due; and a call of a shard below its lower level.
+    fn watch(&mut self, p: i64) {
+        let mut i = 0;
+        while i < self.parties.len() {
+            if self.parties[i].due(p, self.now, self.rules) {
+                self.leave(i, p, true);
+            } else {
+                i += 1;
+            }
+        }
+        if self.equity(p) < self.requirement(p, LO, GROSS_LO) {
+            self.call(p);
+        }
+    }
+    /// A call: every leg leaves at the price; no premium moves and no band is taken. The accounts that lost pay
+    /// first; the claims are paid at one share of what the shard then holds.
+    fn call(&mut self, p: i64) {
+        self.called = true;
+        let mut claims = vec![];
+        for i in 0..self.parties.len() {
+            let a = &self.parties[i];
+            let net: i64 = a.legs.iter().map(|h| {
+                let g = h.leg.gained(p);
+                if self.rules.young && self.now - h.entered < T { g.min(0) } else { g }
+            }).sum();
+            if net < 0 {
+                self.is_paid(i, -net);
+            } else {
+                claims.push((a.own, net));
+            }
+        }
+        let (held, owed) = (self.held, claims.iter().map(|c| c.1).sum::<i64>());
+        for (own, claim) in claims {
+            let paid = part(claim, held, owed);
+            self.held -= paid;
+            if own {
+                self.owner_took += paid;
+            } else {
+                self.short += claim - paid;
+            }
+        }
+        // (What is left of the accounts and of the shard is their owners'.)
+        for a in std::mem::take(&mut self.parties) {
+            if a.own {
+                self.owner_took += a.coins;
+            }
+        }
+        self.owner_took += self.held;
+        self.held = 0;
+    }
+}
+
+/// One run: users enter the accounts options are held as; the owner, who knows the next price, enters accounts of
+/// its own (a leg of any size the way the price goes; a hedge that ends by the clock; options of any premium),
+/// takes and draws all the rules give; the price moves by up to `tick` bps a tick. `plays`: which of the owner's
+/// three plays it makes (a bit each); with a fourth bit the second play is a user's.
+fn run(seed: u64, tick: i64, rules: Rules, plays: u32) -> Shard {
+    let mut r = Rng(seed | 1);
+    let mut w = Shard { rules, now: 0, held: 5_000_000, parties: vec![], short: 0, unpaid: 0, unpaid_own: 0, owner_took: -5_000_000, called: false };
+    let mut p = 100_000i64;
+    for now in 0..60 {
+        w.now = now;
+        let next = p + p / BPS * (r.below(2 * tick + 1) - tick);
+        let fut = |kind, units| Held { leg: Leg { kind, units, strike: 0, entry: p, premium: 0, near: false }, entered: now, day: 0 };
+        let opt = |kind, units, strike: i64, premium: i64, day| Held { leg: Leg { kind, units, strike: strike.max(1), entry: p, premium, near: false }, entered: now, day };
+        // Users come: what options are held as, a day some ticks ahead.
+        if r.below(2) == 0 {
+            let (n, day) = (1 + r.below(40), now + T + 1 + r.below(6));
+            let (near, far, prem) = (p - p / 50 + r.below(p / 25 + 1), p + p / 10, p / 100 + r.below(p / 50));
+            let legs = match r.below(7) {
+                0 => vec![fut(if r.below(2) == 0 { Long } else { Short }, n)],
+                1 => vec![opt(if r.below(2) == 0 { CallHeld } else { PutHeld }, n, near, prem, day)],
+                2 => vec![fut(Long, n), opt(CallWritten, n, far, prem / 2, day)],
+                3 => vec![fut(Short, n), opt(PutWritten, n, p - p / 10, prem / 2, day)],
+                4 => vec![opt(CallHeld, n, near, prem, day), opt(PutHeld, n, near, prem, day)],
+                5 => vec![opt(CallHeld, n, near, prem, day), opt(CallWritten, n, far, prem / 3, day)],
+                _ => vec![fut(Long, n), opt(PutHeld, n, p - p / 30, prem, day)],
+            };
+            let more = r.below(p / 20 + 1) * n / 10;
+            w.enter(false, legs, p, more);
+            // (No gate is computed at an entry: an owner that signs a user's leg in keeps its shard at its level, or
+            // is called at the next visit. It pays in what the upper level asks with the leg.)
+            w.top_up(p);
+        }
+        // A user's account of futures alone leaves at times, where it has not lost more than it holds.
+        if r.below(5) == 0 && !w.parties.is_empty() {
+            let i = r.below(w.parties.len() as i64) as usize;
+            let a = &w.parties[i];
+            if !a.own && a.legs.iter().all(|h| !h.leg.option()) && a.coins + a.gained(p) >= 0 {
+                w.leave(i, p, false);
+            }
+        }
+        // The owner. Out of the futures accounts that would lose; a take from every account of its own.
+        let up = next > p;
+        let mut i = 0;
+        while i < w.parties.len() {
+            let a = &w.parties[i];
+            let loses = a.own && a.legs.len() == 1 && !a.legs[0].leg.option() && (a.legs[0].leg.kind == Long) != up && a.coins + a.gained(p) >= 0;
+            if loses {
+                w.leave(i, p, false);
+            } else {
+                if w.parties[i].own {
+                    w.take(i, p);
+                }
+                i += 1;
+            }
+        }
+        let play = r.below(4);
+        match if play < 3 && plays >> play & 1 == 0 { 3 } else { play } {
+            // A leg of any size the way the price goes.
+            0 => w.enter(true, vec![fut(if up { Long } else { Short }, 500 + r.below(20_000))], p, 0),
+            // A hedge that ends by the clock: a long and as many deep puts, or a short and deep calls.
+            1 => {
+                let (n, day) = (500 + r.below(5_000), now + T + 1);
+                // (The day comes before the visit after next: the leg that stays moves a tick alone, the way the
+                // owner cannot know yet. It takes either way.)
+                let legs = if r.below(2) == 0 { vec![fut(Long, n), opt(PutHeld, n, p + p / 2, 1, day)] } else { vec![fut(Short, n), opt(CallHeld, n, p / 2, 1, day)] };
+                // (With the fourth bit it is a user's play, against the clearing party.)
+                let own = plays >> 3 & 1 == 0;
+                w.enter(own, legs, p, 0);
+                if !own {
+                    w.top_up(p);
+                }
+            }
+            // Options of any premium, held or written, the way the price goes.
+            2 => {
+                let kind = [if up { CallHeld } else { PutHeld }, if up { PutWritten } else { CallWritten }][r.below(2) as usize];
+                w.enter(true, vec![opt(kind, 100 + r.below(5_000), p, r.below(1_000_000), now + T + 1 + r.below(3))], p, 0);
+            }
+            _ => {}
+        }
+        w.draw(p);
+        // The price moves. A day falls between two visits: an option whose day has come is of the price before,
+        // and what stays in its account has moved without it. The owner is faster than whoever watches: it sends
+        // the day's transactions and draws again, on the books as they are before any account is stepped.
+        let before = p;
+        p = next;
+        w.now = now + 1;
+        w.days(before);
+        w.draw(p);
+        w.watch(p);
+        if w.called {
+            return w;
+        }
+    }
+    // The end: a call at the last price.
+    w.call(p);
+    w
+}
+
+#[test]
+fn a_shard_of_options_pays_its_users_whatever_its_owner_does() {
+    let rules = Rules { young: true, near: true };
+    for plays in [0b0111, 0b0110, 0b0010, 0b1010, 0b0000] {
+        for tick in [50, 200, 400] {
+            let (mut took, mut calls, mut ticks) = (0i64, 0, 0i64);
+            for seed in 1..=1_000u64 {
+                let w = run(seed * 7_919 + tick as u64, tick, rules, plays);
+                assert_eq!(w.short, 0, "plays {plays:04b}, ticks of {tick} bps, seed {seed}: users were owed {} and not paid", w.short);
+                assert_eq!((w.unpaid, w.unpaid_own), (0, 0), "plays {plays:04b}, ticks of {tick} bps, seed {seed}: an account did not pay the shard");
+                took += w.owner_took;
+                calls += (w.now < 60) as i64;
+                ticks += w.now;
+            }
+            println!("plays {plays:04b}, ticks of {tick} bps: no user unpaid on 1,000 paths of {} ticks ({calls} ended by a call before the last tick); the owner took {} a path", ticks / 1_000, took / 1_000);
+        }
+    }
+}
+
+#[test]
+fn without_the_legs_time_users_are_unpaid_and_without_the_days_rule_the_shard_is() {
+    // The owner's leg of any size, as the form that is built has it (17.9): its users are left unpaid.
+    let (mut short, mut paths) = (0i64, 0);
+    for seed in 1..=1_000u64 {
+        let w = run(seed * 7_919 + 200, 200, Rules { young: false, near: true }, 0b0001);
+        short += w.short;
+        paths += (w.short > 0) as i64;
+    }
+    println!("without a leg's time: users unpaid on {paths} of 1,000 paths, {} a path", short / 1_000);
+    assert!(paths > 100);
+
+    // A user's hedge that ends by the clock (N68): the account cannot pay what the leg that stays lost.
+    let (mut unpaid, mut paths) = (0i64, 0);
+    for seed in 1..=1_000u64 {
+        let w = run(seed * 7_919 + 200, 200, Rules { young: true, near: false }, 0b1010);
+        unpaid += w.unpaid;
+        paths += (w.unpaid > 0) as i64;
+    }
+    println!("without the day's rule: the shard unpaid by its users on {paths} of 1,000 paths, {} a path", unpaid / 1_000);
+    assert!(paths > 100);
+}
