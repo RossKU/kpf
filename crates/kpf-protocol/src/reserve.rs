@@ -905,3 +905,349 @@ impl Shard {
     }
 }
 
+// ---------------------------------------------------------------- a draw and a call as traces (docs 17.8b)
+
+/// Eight bytes as a script reads a number: the magnitude, and the top bit its sign.
+fn num8(b: &[u8]) -> i64 {
+    let mut x: [u8; 8] = b.try_into().expect("eight bytes");
+    let below = x[7] & 0x80 != 0;
+    x[7] &= 0x7f;
+    let m = i64::from_le_bytes(x);
+    if below { -m } else { m }
+}
+
+/// A price of the list a draw and a call say (docs 17.8b), 56 bytes: a market (the name its row has in the books:
+/// the plain market's once the books are a tree), its price's limit, a day (nothing: the price now) and the price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Priced {
+    pub market: [u8; 32],
+    pub limit: i64,
+    pub day: i64,
+    pub price: i64,
+}
+
+impl Priced {
+    pub fn bytes(&self) -> Vec<u8> {
+        [self.market.to_vec(), sm8(self.limit).to_vec(), sm8(self.day).to_vec(), sm8(self.price).to_vec()].concat()
+    }
+
+    /// What the list is ordered by: the market's 32 bytes as four numbers of 8 bytes, then the day.
+    pub fn numbers(&self) -> [i64; 5] {
+        let m = |i: usize| num8(&self.market[8 * i..8 * i + 8]);
+        [m(0), m(1), m(2), m(3), self.day]
+    }
+
+    pub fn below(&self, o: &Priced) -> bool {
+        self.numbers() < o.numbers()
+    }
+}
+
+/// A row of a draw's or a call's trace, 40 bytes: the row's place in the books, the place of its price in the
+/// list, and the three sums up to and with it: what the net units are worth, what the gross units are worth, and
+/// what the clearing side's net units are worth signed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TraceRow {
+    pub place: i64,
+    pub at: i64,
+    pub wn: i64,
+    pub wg: i64,
+    pub sn: i64,
+}
+
+/// What a draw (kind 5) and a call (kind 11) say (docs 17.8b): an amount (a call's is nothing), the list of prices
+/// in order, and a row of the trace a row of the books. `e` and `n` are the two counts as they are written (the
+/// list's and the rows' lengths, where the statement is well made).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Traced {
+    pub amount: i64,
+    pub e: i64,
+    pub list: Vec<Priced>,
+    pub n: i64,
+    pub rows: Vec<TraceRow>,
+}
+
+impl Traced {
+    /// The list's bytes: what a call's object holds.
+    pub fn list_bytes(&self) -> Vec<u8> {
+        self.list.iter().flat_map(|p| p.bytes()).collect()
+    }
+
+    /// 184 bytes and 56 a price.
+    pub fn said(&self) -> Vec<u8> {
+        let rows: Vec<u8> = self.rows.iter().flat_map(|r| [r.place, r.at, r.wn, r.wg, r.sn].into_iter().flat_map(sm8).collect::<Vec<u8>>()).collect();
+        [sm8(self.amount).to_vec(), sm8(self.e).to_vec(), self.list_bytes(), sm8(self.n).to_vec(), rows].concat()
+    }
+
+    pub fn arg(&self) -> [u8; 32] {
+        blake2b(&self.said())
+    }
+
+    /// What is said read back, where its length is a trace's (the counts are read as they are written).
+    pub fn read(said: &[u8]) -> Option<Traced> {
+        if said.len() < 184 || (said.len() - 184) % 56 != 0 || (said.len() - 184) / 56 > SHARD_ROWS {
+            return None;
+        }
+        let e = (said.len() - 184) / 56;
+        let n = |at: usize| num8(&said[at..at + 8]);
+        let list = (0..e).map(|i| 16 + 56 * i).map(|a| Priced { market: said[a..a + 32].try_into().expect("32 bytes"), limit: n(a + 32), day: n(a + 40), price: n(a + 48) }).collect();
+        let at = 16 + 56 * e;
+        let rows = (0..SHARD_ROWS).map(|i| at + 8 + 40 * i).map(|a| TraceRow { place: n(a), at: n(a + 8), wn: n(a + 16), wg: n(a + 24), sn: n(a + 32) }).collect();
+        Some(Traced { amount: n(0), e: n(8), list, n: n(at), rows })
+    }
+}
+
+impl Shard {
+    /// The price a row is counted at: the price said for a draw; for a call the price moved the tolerance in the
+    /// shard's favour (up where its side is long in the row and no more than the limit, down otherwise).
+    fn counted_at(&self, row: &ShardRow, p: i64, call: bool) -> Option<i64> {
+        if !call {
+            return Some(p);
+        }
+        let g = self.t.g_bps;
+        let down = p.checked_mul(BPS - g)? / BPS;
+        Some(if row.net > 0 { (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(row.head.price_max) } else { down })
+    }
+
+    /// The trace of a draw or a call at the prices `d` gives, one a row (docs 17.8b): the list of the rows' prices
+    /// in order, and a row of the trace a row of the books. A row with no market, and a row whose price is not
+    /// one (nothing, or beyond its limit), adds nothing: the second is answered wrong at its point. `None` where
+    /// a worth or a sum is beyond 64 bits: nobody states such a trace.
+    pub fn traced(&self, d: &Draw, call: bool) -> Option<Traced> {
+        let mut list: Vec<Priced> = self.rows.iter().zip(&d.prices).filter(|(r, _)| r.head.market != [0; 32]).map(|(r, p)| Priced { market: r.head.market, limit: r.head.price_max, day: 0, price: *p }).collect();
+        list.sort_by_key(|p| p.numbers());
+        let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
+        let mut rows = vec![];
+        for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate() {
+            let mut at = 0;
+            if row.head.market != [0; 32] {
+                at = list.iter().position(|x| x.market == row.head.market && x.limit == row.head.price_max)? as i64;
+                if *p > 0 && *p <= row.head.price_max && row.head.scale > 0 {
+                    let q = self.counted_at(row, *p, call)?;
+                    let w = worth(row.net.checked_abs()?, row.head.scale, q)?;
+                    wn = wn.checked_add(w)?;
+                    sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
+                    wg = wg.checked_add(worth(row.gross.checked_abs()?, row.head.scale, q)?)?;
+                }
+            }
+            rows.push(TraceRow { place: i as i64, at, wn, wg, sn });
+        }
+        Some(Traced { amount: d.amount, e: list.len() as i64, list, n: SHARD_ROWS as i64, rows })
+    }
+
+    /// `KpfTShardRow`: whether the row `at` (1 to 4) of a trace is right for these books. `None` where the script
+    /// computes no verdict (a worth or a sum beyond 64 bits).
+    pub fn trace_row_judged(&self, t: &Traced, at: usize, call: bool) -> Option<bool> {
+        let (Some(row), Some(cur)) = (self.rows.get(at.wrapping_sub(1)), t.rows.get(at.wrapping_sub(1))) else { return Some(false) };
+        let prev = if at >= 2 { t.rows[at - 2] } else { TraceRow { place: 0, at: 0, wn: 0, wg: 0, sn: 0 } };
+        let ok = cur.place == at as i64 - 1;
+        if row.head.market == [0; 32] {
+            return Some(ok && (cur.wn, cur.wg, cur.sn) == (prev.wn, prev.wg, prev.sn));
+        }
+        if cur.at < 0 || cur.at >= t.list.len() as i64 {
+            return Some(false);
+        }
+        let en = t.list[cur.at as usize];
+        let (p, sc, pm) = (en.price, row.head.scale, row.head.price_max);
+        if !ok || en.market != row.head.market || en.limit != pm || en.day != 0 || p <= 0 || p > pm || sc <= 0 {
+            return Some(false);
+        }
+        let q = self.counted_at(row, p, call)?;
+        let (w, v) = (worth(row.net.checked_abs()?, sc, q)?, worth(row.gross.checked_abs()?, sc, q)?);
+        let sn = if row.net < 0 { prev.sn.checked_sub(w)? } else { prev.sn.checked_add(w)? };
+        Some(cur.wn == prev.wn.checked_add(w)? && cur.wg == prev.wg.checked_add(v)? && cur.sn == sn)
+    }
+
+    /// `KpfTShardPrice`: whether the price `e` (from 1) of a trace's list is right: in its order after the one
+    /// before it, of no day, and within the tolerance of the committee's `c`. One beyond the list is of nothing:
+    /// right. (Where the order or the day is wrong, no price is cited.)
+    pub fn trace_price_right(&self, t: &Traced, e: usize, c: i64) -> bool {
+        let Some(en) = t.list.get(e.wrapping_sub(1)) else { return true };
+        if (e >= 2 && !t.list[e - 2].below(en)) || en.day != 0 {
+            return false;
+        }
+        let (a, g) = (en.price, self.t.g_bps);
+        let p = c.min(en.limit);
+        a > 0 && a >= p * (BPS - g) / BPS && a <= ((p * (BPS + g) + BPS - 1) / BPS).min(en.limit)
+    }
+
+    /// The last row's sums, and whether the counts written are the trace's.
+    fn trace_sums(t: &Traced) -> (bool, i64, i64, i64) {
+        let made = t.e == t.list.len() as i64 && t.n == SHARD_ROWS as i64 && t.rows.len() == SHARD_ROWS;
+        t.rows.last().map_or((false, 0, 0, 0), |r| (made, r.wn, r.wg, r.sn))
+    }
+
+    /// `KpfTShardEnd`, of a trace: whether the end of a draw is within the rule, by the last row's sums and no row
+    /// read. `None` where the script computes no verdict.
+    pub fn draw_trace_end_judged(&self, t: &Traced, claimer: &[u8; 32], t0: i64) -> Option<bool> {
+        let (made, wn, wg, sn) = Shard::trace_sums(t);
+        let ok = made && *claimer == self.owner && t.amount > 0;
+        let need = need_of(wn, wg, &self.t, true)?;
+        let has = self.held.checked_sub(t.amount)?;
+        let equity = has.checked_add(sn)?.checked_sub(self.basis)?;
+        if has == i64::MIN || equity == i64::MIN || has.checked_add(sn)? == i64::MIN {
+            return None;
+        }
+        self.draw_time(t0)?;
+        Some(ok && has >= 0 && self.called == 0 && equity >= need && t0 >= self.expiry)
+    }
+
+    /// `KpfTCallEnd`, of a trace: whether a call is the rule's, by the last row's sums, and what the caller is
+    /// paid. `None` where the script computes no verdict.
+    pub fn call_trace_end_judged(&self, t: &Traced, t0: i64, held: i64) -> Option<(bool, i64)> {
+        let (made, wn, wg, sn) = Shard::trace_sums(t);
+        let ok = made && t.amount == 0 && t0 > 0;
+        let need = need_of(wn, wg, &self.t, false)?;
+        let with = self.held.checked_add(sn)?;
+        let equity = with.checked_sub(self.basis)?;
+        if with == i64::MIN || equity == i64::MIN {
+            return None;
+        }
+        let fee = self.t.keeper_fee_min.max(0);
+        let pay = if self.held < fee { 0 } else { fee };
+        let left = held.checked_sub(pay)?.checked_sub(CALL_HOLD)?;
+        Some((ok && self.called == 0 && equity < need && left >= CALL_HOLD, pay))
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: i64) -> i64 {
+            (self.next() % n as u64) as i64
+        }
+    }
+
+    fn terms() -> XTerms {
+        XTerms { term: 0, mmr_bps: 500, g_bps: 50, liq_fee_bps: 50, keeper_fee_min: 10_000_000, carrier: 0, idle_daa: 0, grace_daa: 0, late_daa: 100, quiet_daa: 0 }
+    }
+
+    fn shard(r: &mut Rng) -> Shard {
+        let mut s = Shard::opened(terms(), [7; 32], 0, 0, 50, 1_000, [9; 32]);
+        for i in 0..SHARD_ROWS {
+            if r.below(4) == 0 {
+                continue;
+            }
+            // (Names whose numbers have a sign, and equal first numbers.)
+            let mut market = [0u8; 32];
+            market[0] = r.below(3) as u8;
+            market[7] = if r.below(2) == 0 { 0x80 } else { 0 };
+            market[20] = 1 + i as u8;
+            let huge = r.below(40) == 0;
+            let gross = if huge { i64::MAX / 3 } else { 1 + r.below(1_000_000_000_000) };
+            let net = (r.below(2 * gross.min(1 << 40) + 1) - gross.min(1 << 40)).clamp(-gross, gross);
+            s.rows[i] = ShardRow { head: Head { market, committee: [3; 32], scale: 100_000_000, price_max: 1_000_000_000_000 }, net, gross };
+        }
+        s.held = r.below(1_000_000_000_000);
+        s.basis = r.below(2_000_000_000_000) - 1_000_000_000_000;
+        s.expiry = r.below(3) * 5_000;
+        if r.below(20) == 0 {
+            s.called = 6_000;
+        }
+        s
+    }
+
+    /// 17.8b's claim: a trace of the three sums, judged a row at a time and at its end, gives the verdict the end
+    /// gives today over the four rows. And a trace with any number moved is wrong at its own point.
+    #[test]
+    fn a_trace_judged_a_row_at_a_time_is_the_verdict_of_the_end_over_the_rows() {
+        let mut r = Rng(0x17_08b);
+        let (mut right, mut wrong, mut none, mut lies) = (0, 0, 0, 0);
+        for _ in 0..40_000 {
+            let s = shard(&mut r);
+            let mut prices = [0i64; SHARD_ROWS];
+            for (p, row) in prices.iter_mut().zip(&s.rows) {
+                *p = match r.below(12) {
+                    0 => 0,
+                    1 => row.head.price_max + 1,
+                    _ => 1 + r.below(3_000_000_000),
+                };
+            }
+            let claimer = if r.below(10) == 0 { [8; 32] } else { s.owner };
+            let t0 = r.below(12_000);
+            for call in [false, true] {
+                let d = Draw { amount: if call { (r.below(10) == 0) as i64 } else { r.below(s.held.max(1) + 5) }, prices };
+                let old = if call { s.call_end_judged(&d, t0, s.held + 300_000_000).map(|x| x.0) } else { s.draw_end_judged(&d, &claimer, t0) };
+                let Some(t) = s.traced(&d, call) else {
+                    // (Or judged wrong, where a row before the one that does not fit had no price: the loop over
+                    // the rows stopped there. A trace's row is answered by itself.)
+                    assert_ne!(old, Some(true), "what nobody can state, the end did not judge right");
+                    none += 1;
+                    continue;
+                };
+                assert_eq!(Traced::read(&t.said()).as_ref(), Some(&t));
+                assert_eq!(t.said().len(), 184 + 56 * t.list.len());
+                assert!(t.list.windows(2).all(|w| w[0].below(&w[1])), "the list in order, no market twice");
+                let rows: Vec<Option<bool>> = (1..=SHARD_ROWS).map(|at| s.trace_row_judged(&t, at, call)).collect();
+                let end = if call { s.call_trace_end_judged(&t, t0, s.held + 300_000_000).map(|x| x.0) } else { s.draw_trace_end_judged(&t, &claimer, t0) };
+                let all = rows.iter().all(|x| *x == Some(true)) && end == Some(true);
+                let any_wrong = rows.contains(&Some(false)) || end == Some(false);
+                match old {
+                    Some(true) => {
+                        assert!(all, "right by the end over the rows: every row and the end right");
+                        right += 1;
+                    }
+                    Some(false) => {
+                        assert!(any_wrong, "wrong by the end over the rows: a row or the end wrong");
+                        wrong += 1;
+                    }
+                    None => {
+                        assert!(!all, "no verdict by the end over the rows: not all right by the trace");
+                        none += 1;
+                    }
+                }
+                assert_eq!(all, old == Some(true));
+                if !all {
+                    continue;
+                }
+                // Any number of a right trace moved is wrong at its own point (and the list's order at a price's).
+                for i in 0..SHARD_ROWS {
+                    for f in 0..5 {
+                        let mut lie = t.clone();
+                        let x = &mut lie.rows[i];
+                        *[&mut x.place, &mut x.at, &mut x.wn, &mut x.wg, &mut x.sn][f] += 1;
+                        let empty = s.rows[i].head.market == [0; 32];
+                        // (An empty row's place of a price is read by nothing; a row's place of a price moved
+                        // names another entry or none.)
+                        let judged = s.trace_row_judged(&lie, i + 1, call);
+                        if f == 1 && empty {
+                            assert_eq!(judged, Some(true));
+                        } else {
+                            assert_eq!(judged, Some(false), "row {i}, number {f}");
+                        }
+                        lies += 1;
+                    }
+                }
+                for (e, written) in [(t.e + 1, t.n), (t.e, t.n + 1), (t.e, t.n - 1)] {
+                    let lie = Traced { e, n: written, ..t.clone() };
+                    let end = if call { s.call_trace_end_judged(&lie, t0, s.held + 300_000_000).map(|x| x.0) } else { s.draw_trace_end_judged(&lie, &claimer, t0) };
+                    assert_eq!(end, Some(false), "a count written that is not the trace's");
+                }
+                if t.list.len() >= 2 {
+                    let mut lie = t.clone();
+                    lie.list.swap(0, 1);
+                    assert!(!s.trace_price_right(&lie, 2, lie.list[1].price), "the list out of its order");
+                    let twice = Traced { list: vec![t.list[0], t.list[0]], ..t.clone() };
+                    assert!(!s.trace_price_right(&twice, 2, t.list[0].price), "a market twice");
+                }
+                for (e, en) in t.list.iter().enumerate() {
+                    assert!(s.trace_price_right(&t, e + 1, en.price));
+                    assert!(!s.trace_price_right(&t, e + 1, en.price * 2 + 1_000));
+                    let dated = Traced { list: t.list.iter().map(|x| Priced { day: 9, ..*x }).collect(), ..t.clone() };
+                    assert!(!s.trace_price_right(&dated, e + 1, en.price), "a day, before the day is built");
+                }
+                assert!(s.trace_price_right(&t, t.list.len() + 1, 1), "a point beyond the list is of nothing");
+            }
+        }
+        println!("{right} right, {wrong} wrong, {none} of no verdict; {lies} numbers moved, each wrong at its row");
+        assert!(right > 2_000 && wrong > 2_000 && none > 100);
+    }
+}
