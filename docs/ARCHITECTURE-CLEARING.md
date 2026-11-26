@@ -2720,3 +2720,39 @@ failed. `KpfTOwed` is 1,154 bytes, `KpfTCStep` 4,001 (it was 3,257), `KpfTCEnd` 
 | said | where the coins are gone a step has no fee: the shard's owner is who has a reason to step | so |
 | N40 | a claim paid at a share is closed, and the call's end gives what is left to the owner | said as it is in 16.19: whoever waits shares what comes late |
 
+### 16.21 After review 64 (27 November 2026; at the engine, my tests; the reviewer's are round 65)
+
+- **F112: what a leg that gained asks is set against what its account owes.** In a step (`KpfTCEnd`, one leg and
+  every leg) and in the call's step (`KpfTCStep`): of what the legs ask of the shard, as much as the account owes
+  is not asked, and the account owes that much less. Nothing is paid to a user's key while its account owes.
+- **F113: an account that goes on from the call's step keeps a KAS.** `KpfTCStep`, on an account that holds token
+  legs: a KAS of its coins is no coin to pay with (it owes that much more) and no fee is taken out of it; its
+  output holds a KAS at the least, which whoever steps puts in where the account had less (an account of a
+  note's least alone). The three outputs under the id are then the call (half a KAS), the note and a KAS.
+
+Run: a long that gained 15 KAS stepped off an account that owes 200: its note asks nothing, the account owes
+that much less (the band apart), nothing to the user's key; an account that owes 2 is no step's. Under a call
+at 12 an account that owed 7 and whose leg gained 20: the note asks 13, the account owes nothing; one that owed
+50 owes 30 and its note asks nothing. An account of a long, 10 tokens and 5 KAS at a call's price of 8: 3.8
+paid, the account on with a KAS and its tokens, owing 16.2; one of a note's least alone: nothing paid, a KAS put
+in, 20 owed.
+
+### 16.22 Review 65
+
+At the engine: F112 is closed (an account that owes 60 and whose long gained 15: the note asks nothing and the
+account owes 46.15; under a call at 11.5 an account that owes 20 keeps on owing 5, one of the long alone ends
+with its note asking nothing, one that owed 6 asks 9). F113 is closed for the account: it holds a KAS in every
+case, and a step that pays the shard something weighs 133,533 (it was 291,533). The default workspace: 627
+tests, 203 seconds; none failed. `KpfTCEnd` is 3,832 bytes, `KpfTCStep` 4,113.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| F113, what is left (low) | a call's step that pays the shard nothing writes its note with a note's least alone: 323,526 of the 500,000 a block takes (it was 483,526); with a statement's bonds paid out beside, not measured | left: one such step a block. Whoever steps may hold the note to more (an output holds at least what the script says) |
+| F114 (medium) | what an account pays after the last claim of a called shard was shown goes to the owner, not to the claims: a shard of 100 KAS against claims of 200, an account that owes 60: every claim paid a half and spent; the 60 that come later are the owner's by the call's end. Before accounts that owe, nothing came late to a called shard | **open.** A claim paid at a share and not spent, the rest staying owed, pays whoever is first more than whoever is second (what is held and what is owed no longer fall together), so it is no fix. The fix is a share of all that was ever held: a claim is paid up to its part of what the shard has paid and holds, which needs one number more in a called shard (what it has paid). It is built with the call as section 17 rewrites it; until then a claim's holder that sees accounts owing its shard waits (16.19), and the last to wait gains nothing by it |
+
+Not reached by the review, of what round 64 left: the call's step on random accounts and a called shard brought
+whole to its end with accounts that hold tokens; the fees a step may say; an owing account at the ends of the
+other kinds (by reasoning there is no way to one: a statement stands on the account as it was, and an account
+comes to owe only by an end or a call's step, each of which writes a new account); sales on random accounts; a
+payment racing a sale.
+

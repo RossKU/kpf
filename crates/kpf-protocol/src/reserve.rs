@@ -243,6 +243,10 @@ impl MarkNote {
     }
 }
 
+/// What an account that goes on from a call's step keeps of its coins, and its output holds at the least: a KAS
+/// (review 64, F113).
+pub const OWING_KEEP: i64 = 100_000_000;
+
 /// The note that holds what was paid of what a covered account owes its shard (`KpfTOwed`; docs 16.18).
 pub const NOTE_OWED: i64 = 15;
 

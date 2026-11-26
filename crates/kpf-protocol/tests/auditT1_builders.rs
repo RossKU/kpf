@@ -11617,7 +11617,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 4001), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 3622), ("KpfTCStep", 4113), ("KpfTCallPay", 1562), ("KpfTCallEnter", 1051), ("KpfTChange", 1728), ("KpfTPoint", 2588), ("KpfTShardPrice", 1772), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTLeftVoid", 1747)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12218,7 +12218,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4001), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1700), ("KpfTDrawEntry", 1181), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTCallEnter", 1051), ("KpfTCallPay", 1562), ("KpfTLeft", 2212), ("KpfTLeftAll", 3825), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -13745,7 +13745,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1825), ("KpfTCStep", 4001), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2323), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTStepPrice", 1825), ("KpfTCStep", 4113), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
 // ================================================================================================================
@@ -14114,7 +14114,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
-    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2547), ("KpfTChange", 1728), ("KpfTCStep", 4001), ("KpfTStepPrice", 1825), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1154), ("KpfTCRow", 2547), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTStepPrice", 1825), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -14473,7 +14473,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
-    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3726), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1825), ("KpfTChange", 1728), ("KpfTCStep", 4001), ("KpfTEnterS", 2323), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1825), ("KpfTChange", 1728), ("KpfTCStep", 4113), ("KpfTEnterS", 2323), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -14606,5 +14606,71 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 68);
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 4001), ("KpfTCEnd", 3726), ("KpfTCTok", 3492), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 4113), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1728), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+}
+
+// ================================================================================================================
+// Round 65. What closes round 64's F112 (a gain set against what the account owes) and F113 (what the account
+// that a call's step leaves holds).
+
+/// Round 64, F112 and F113, fixed in round 65.
+///  - **F112, a step of one leg.** An account that owes 60 KAS, with 2 KAS of coins, a long of 10 units that
+///    gained (the price 11.5) and a token leg: the step of the long that the model allows writes a note that asks
+///    nothing or an account that owes nothing (what the leg asks is set against what is owed, as far as either
+///    goes), and it is answered right and not wrong at the engine.
+///  - **F112, the call's step.** The same legs under a call at 11.5 (a call's step takes no band: the long asks
+///    15 KAS): with the token leg, the note asks nothing and the account goes on owing 5 KAS; with no token leg
+///    the account ends and its note asks nothing; owing 6 KAS, the note asks 9 KAS. Each taken at the engine.
+///  - **F113.** The call's step on an account that holds a token leg and whose long lost 20 KAS, with 0.2, 1.19,
+///    1.2 and 5 KAS of coins, and with 5 KAS owing 2 already: what is paid, what the account that goes on has and
+///    owes, what its output holds (a KAS or more), what whoever steps has after it (below nothing: what it put
+///    in), and the storage mass.
+#[test]
+fn t1b_fixed_f112_f113_a_gain_is_set_against_what_is_owed_and_the_account_that_goes_on_holds_a_kas() {
+    let w = ow();
+    let (long, tok) = (w.fut(0, 10, LONG, P10), tok62(&w, 1, w.fut(1, 5, LONG, P10).size, 3_000, 0xa1));
+    let up = P10 * 115 / 100;
+    // F112: a step of one leg that gained, on an account that owes.
+    let mut owing = cov47(&w, &[long, tok], 2 * KAS1, 60 * KAS1);
+    owing.value = 2 * KAS1 as u64;
+    let one = owing.s.c_state(KIND_C_STEP, 0, 1, &[up, P10], T0, 2 * KAS1, xk(&w.w)).ok().map(|(st, s, o)| {
+        let (asked, after) = (o.note.as_ref().map(|n| n.asked).unwrap_or(0), o.after.clone().expect("the account goes on"));
+        assert!(asked >= 0 && after.b_margin < 60 * KAS1 && (asked == 0 || after.b_margin == 0), "F112 is open: a leg that gained asks {asked} of the shard while its account still owes {}", after.b_margin);
+        assert_eq!(end_taken60(&w, &owing, &st, &s, "KpfTCEnd"), (true, false), "the step of a leg that gained, on an account that owes");
+        (asked, after.b_margin)
+    });
+    // F112: the call's step.
+    let call_up = call54(&w, [up, P10, P10, P10], T0);
+    let fb = [fund(xk(&w.b), 56, 1_000)];
+    let mut under_call = vec![];
+    for (legs, owes) in [(vec![long, tok], 20 * KAS1), (vec![long], 20 * KAS1), (vec![long], 6 * KAS1)] {
+        let mut a = cov47(&w, &legs, 5 * KAS1, owes);
+        (a.value, a.daa) = (5 * KAS1 as u64, 6_600);
+        let (b, step) = call_step(&w.lib, &a, &a.s, None, &call_up, &w.script("KpfTCStep"), w.payer(&w.b, &fb)).unwrap();
+        assert!(taken30(&b, &w.keys));
+        let owes_after = step.after.as_ref().map(|x| x.b_margin);
+        let want = (15 * KAS1 - owes).max(0);
+        assert_eq!((step.note.asked, owes_after), (want, if legs.len() == 2 { Some((owes - 15 * KAS1).max(0)) } else { None }), "F112 is open: under a call a long that gained 15 KAS, on an account that owes {owes}");
+        under_call.push((legs.len(), owes, step.note.asked, owes_after));
+    }
+    // F113: what the account that goes on holds, and what the transaction weighs.
+    let call_down = call54(&w, [P10 * 8 / 10, P10, P10, P10], T0);
+    let mut stepped = vec![];
+    for (coins, owes) in [(NOTE_MIN, 0), (119 * KAS1 / 100, 0), (12 * KAS1 / 10, 0), (5 * KAS1, 0), (5 * KAS1, 2 * KAS1)] {
+        let mut a = cov47(&w, &[long, tok], coins, owes);
+        (a.value, a.daa) = (coins as u64, 6_600);
+        let (b, step) = call_step(&w.lib, &a, &a.s, None, &call_down, &w.script("KpfTCStep"), w.payer(&w.b, &fb)).unwrap();
+        let sg = signed(&format!("the call's step on an account of {coins} coins that holds a token leg"), &b, &w.keys);
+        let after = step.after.clone().expect("the account goes on");
+        let a_at = out_at47(&sg, &hash_spk(&w.lib, &after.hash()));
+        let held = sg.tx.outputs[a_at].value as i64;
+        assert!(held >= KAS1 && held >= after.a_margin && after.b_margin == owes + 20 * KAS1 - step.pay, "F113 is open: the account that goes on holds {held}");
+        let mut less = b.clone();
+        less.tx.outputs[a_at].value = KAS1 as u64 - 1;
+        assert!(held > KAS1 || !taken30(&less, &w.keys), "F113 is open: the account that goes on holding a sompi under a KAS");
+        stepped.push((coins, owes, step.pay, step.fee, after.a_margin, after.b_margin, held, paid(&sg, &xk(&w.b)) - 1_000 * KAS1, sg.mass.storage));
+    }
+    println!("T1b R65 F112: a step of a long that gained on an account that owes 60 KAS (the note asks, the account then owes): {one:?}; under a call at 11.5 (legs, owed, the note asks, owed after): {under_call:?}. F113: the call's step with a token leg (coins, owed, paid, the fee, coins after, owed after, the account's output, what whoever steps has after it, storage mass): {stepped:?}");
+    // (Where nothing is paid the note holds a note's least alone, and that output is 200,000 of what is left.)
+    assert!(one.is_some() && stepped.iter().all(|s| s.8 < 330_000 && (s.2 == 0 || s.8 < 150_000)), "F112 or F113 is open: {one:?} {stepped:?}");
 }

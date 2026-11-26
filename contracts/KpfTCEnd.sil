@@ -235,6 +235,7 @@ contract KpfTCEnd(int init_version) {
             }
             int fee = 0;
             int owing = 0;
+            int setoff = 0;
             int wl = 0;
             int liq = int(byte[8](tb.slice(LIQFEE_AT, LIQFEE_AT + 8)));
             if (ok == 1) {
@@ -296,6 +297,8 @@ contract KpfTCEnd(int init_version) {
                     } else {
                         asked = gain - ((w / BPS) * g2 + ((w % BPS) * g2 + BPS - 1) / BPS);
                         if (asked < 0) { asked = 0; }
+                        // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
+                        if (asked > owes) { asked = asked - owes; } else { asked = 0; }
                     }
                     if (fee > room - pay) { fee = room - pay; }
                     due = byte[](0x01) + mv.slice(1, 33) + byte[]((held - pay - fee) as byte[8]);
@@ -310,11 +313,17 @@ contract KpfTCEnd(int init_version) {
                     } else {
                         asked = gl - ((wl / BPS) * g2 + ((wl % BPS) * g2 + BPS - 1) / BPS);
                         if (asked < 0) { asked = 0; }
+                        // (What the account owes its shard is set against what the leg asks of it: the account
+                        // owes that much less. Review 64, F112.)
+                        setoff = asked;
+                        if (setoff > owes) { setoff = owes; }
+                        asked = asked - setoff;
                     }
                     // An account that holds tokens and whose coins do not pay the leg: the coins pay what they can
                     // of what it lost, then of the fee, and the account owes the rest. It writes the account's
                     // time: a sale of what it holds is stated at or after it.
                     int more = 0;
+                    more = 0 - setoff;
                     int room1 = m;
                     if (room1 < 0) { room1 = 0; }
                     if (owing == 1) {

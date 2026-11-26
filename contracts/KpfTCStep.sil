@@ -170,6 +170,9 @@ contract KpfTCStep(int init_version) {
         }
         // What the account lost, out of its coins as far as they go, a note's least staying; the fee; the rest.
         int room = int(byte[8](mv.slice(67, 75))) - NOTE_MIN;
+        // (An account that holds token legs goes on: it keeps a KAS of its coins back, and owes that much more,
+        // so that its output is one a block takes beside the call and the note. Review 64, F113.)
+        if (nt > 0) { room = room - 100000000; }
         if (room < 0) { room = 0; }
         int pay = 0;
         int asked = gain;
@@ -192,6 +195,12 @@ contract KpfTCStep(int init_version) {
         int fee = int(byte[8](tb.slice(KEEPER_AT, KEEPER_AT + 8)));
         if (fee < 0) { fee = 0; }
         if (fee > NOTE_MIN) { fee = NOTE_MIN; }
+        if (nt > 0) {
+            // (No fee out of the KAS kept back.)
+            int spare = rest - 100000000;
+            if (spare < 0) { spare = 0; }
+            if (fee > spare) { fee = spare; }
+        }
         if (fee > rest) { fee = rest; }
         int user = rest - fee;
         // The bonds of a statement that is ended: the claimer's with the user's coins where the user stated it.
@@ -206,8 +215,15 @@ contract KpfTCStep(int init_version) {
         // that makes it owe writes its time: a sale of what it holds is stated at or after it.
         int owes = int(byte[8](mv.slice(76, 84)));
         require(owes >= 0);
+        // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
+        int setoff = 0;
+        if (asked > 0) {
+            setoff = asked;
+            if (setoff > owes) { setoff = owes; }
+            asked = asked - setoff;
+        }
         if (nt > 0) {
-            int more = 0;
+            int more = 0 - setoff;
             if (gain < 0) { more = 0 - gain - pay; }
             int qt = int(byte[8](mv.slice(130, 138)));
             if (more > 0) {
@@ -216,7 +232,7 @@ contract KpfTCStep(int init_version) {
             }
             int stay = user;
             int lowest = stay;
-            if (lowest < NOTE_MIN) { lowest = NOTE_MIN; }
+            if (lowest < 100000000) { lowest = 100000000; }
             int c2 = OpCovOutputIdx(id, 2);
             require(tx.outputs[c2].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(gt))) + mv.slice(0, 67) + byte[](stay as byte[8]) + mv.slice(75, 76) + byte[]((owes + more) as byte[8]) + mv.slice(84, 121) + byte[](nt as byte[8]) + mv.slice(129, 130) + byte[](qt as byte[8]) + mv.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c2].value >= lowest);

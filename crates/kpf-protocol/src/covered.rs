@@ -497,6 +497,7 @@ impl Account {
         }
         let g2 = add(g, g)?;
         let (mut pay, mut asked);
+        let mut setoff = 0;
         let v;
         let outcome;
         if all {
@@ -507,6 +508,8 @@ impl Account {
                 asked = sub(0, pay)?;
             } else {
                 asked = sub(gain, rate_up(w, g2)?)?.max(0);
+                // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
+                asked = sub(asked, asked.min(owes))?;
             }
             fee = fee.min(sub(room, pay)?);
             let paid = sub(sub(held, pay)?, fee)?;
@@ -525,11 +528,14 @@ impl Account {
                 asked = gl;
             } else {
                 asked = sub(gl, rate_up(wl, g2)?)?.max(0);
+                // (And the account owes that much less.)
+                setoff = asked.min(owes);
+                asked = sub(asked, setoff)?;
             }
             // An account that holds tokens and whose coins do not pay the leg: the coins pay what they can of what
             // it lost, then of the fee, and the account owes the rest. It writes the account's time.
             let room1 = m.max(0);
-            let (mut more, mut when) = (0, when);
+            let (mut more, mut when) = (sub(0, setoff)?, when);
             if owing {
                 more = pay;
                 pay = pay.min(room1);
@@ -898,7 +904,9 @@ impl Account {
             gain = if l.dir == LONG { sub(add(gain, wp)?, we)? } else { sub(add(gain, we)?, wp)? };
             at.push(r);
         }
-        let room = sub(self.a_margin, NOTE_MIN)?.max(0);
+        // (An account that holds token legs goes on: it keeps a KAS of its coins back. Review 64, F113.)
+        let keep = if tokens.is_empty() { 0 } else { crate::reserve::OWING_KEEP };
+        let room = sub(sub(self.a_margin, NOTE_MIN)?, keep)?.max(0);
         let (pay, asked) = if gain < 0 {
             let pay = sub(0, gain)?.min(room);
             (pay, sub(0, pay)?)
@@ -914,7 +922,7 @@ impl Account {
         // nothing, but where the output holds less. Review 54, F93.)
         let rest = v - pay;
         let rest = rest - NOTE_MIN.min(rest);
-        let fee = self.t.keeper_fee_min.clamp(0, NOTE_MIN).min(rest);
+        let fee = self.t.keeper_fee_min.clamp(0, NOTE_MIN).min(rest).min(if keep > 0 { (rest - keep).max(0) } else { rest });
         let mut user = rest - fee;
         let (mut cb, mut db) = (0, 0);
         if let Some((bond, claimer, disputed)) = stood {
@@ -927,13 +935,16 @@ impl Account {
                 db = bond;
             }
         }
+        // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
+        let setoff = asked.max(0).min(self.b_margin);
+        let asked = sub(asked, setoff)?;
         let least = |x: i64| if x < PAY_MIN { 0 } else { x };
         // An account that holds token legs goes on with them: what is left of its coins stays in it, and what its
         // futures legs lost beyond what the coins paid, it owes its shard.
         let after = if tokens.is_empty() {
             None
         } else {
-            let more = if gain < 0 { sub(sub(0, gain)?, pay)? } else { 0 };
+            let more = if gain < 0 { sub(sub(0, gain)?, pay)? } else { sub(0, setoff)? };
             let quiet = if more > 0 { self.b_min_counter.max(add(add(landed, self.t.late_daa)?, self.dispute_daa)?) } else { self.b_min_counter };
             Some(Account { a_margin: user, b_margin: add(self.b_margin, more)?, a_min_counter: tokens.len() as i64, b_min_counter: quiet, legs: tokens, ..self.clone() })
         };

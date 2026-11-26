@@ -3108,17 +3108,18 @@ fn the_calls_step_takes_the_futures_legs_and_leaves_the_account_with_its_tokens_
     let (called, call) = called_objs(&shard, [P10 * 8 / 10, 0, 0, 0], 6_600);
     let step_s = w.script("KpfTCStep");
 
-    // An account of the long, 10 tokens and 5 KAS: the coins pay 4.8 (a note's least is the note's), and the
-    // account goes on with its tokens, owing 15.2. It says the time of its landing, a lateness and a dispute period.
+    // An account of the long, 10 tokens and 5 KAS: a KAS stays in it and a note's least is the note's, so the coins
+    // pay 3.8, and the account goes on with its tokens and that KAS, owing 16.2. It says the time of its landing, a
+    // lateness and a dispute period.
     let poor = cov(&w, &shard, &[long, tok], 5 * KAS1);
     let (b, st) = call_step(&w.lib, &poor, &poor.s, None, &call, &step_s, w.payer(&w.f, &ff)).unwrap();
     let sg = signed("the call's step on an account that holds tokens and whose coins do not pay", &b, &w.keys);
     let next = st.after.clone().unwrap();
-    let paid = 5 * KAS1 - NOTE_MIN;
-    assert_eq!((st.gain, st.pay, st.user, st.note.legs.clone(), st.note.asked), (-20 * KAS1, paid, 0, vec![long], -paid));
-    assert_eq!((next.legs.clone(), next.a_margin, next.b_margin, next.a_min_counter), (vec![tok], 0, 20 * KAS1 - paid, 1));
+    let paid = 5 * KAS1 - NOTE_MIN - KAS1;
+    assert_eq!((st.gain, st.pay, st.user, st.fee, st.note.legs.clone(), st.note.asked), (-20 * KAS1, paid, 0, 0, vec![long], -paid));
+    assert_eq!((next.legs.clone(), next.a_margin, next.b_margin, next.a_min_counter), (vec![tok], KAS1, 20 * KAS1 - paid, 1));
     assert_eq!(next.b_min_counter, poor.daa as i64 + poor.s.t.late_daa + poor.s.dispute_daa);
-    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &next.hash())).1, NOTE_MIN as u64, "the account that goes on holds a note's least, put in by whoever steps");
+    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &next.hash())).1, KAS1 as u64, "the account that goes on holds the KAS it kept");
     assert_eq!(out_of(&sg, &hash_spk(&w.lib, &st.note.hash())).1, (NOTE_MIN + paid) as u64);
     assert!(next.c_check().is_ok() && next.owes_nothing().is_err());
     // (Its note is of the futures leg alone, and the called shard applies it.)
@@ -3130,9 +3131,15 @@ fn the_calls_step_takes_the_futures_legs_and_leaves_the_account_with_its_tokens_
     assert_eq!((after_note.held, after_note.rows[0].gross, rest), (called.s.held + paid, 0, None));
     // What is written otherwise is refused: the account owing a sompi less, with a sompi of coins, not going on
     // at all, or the note naming the token leg too.
+    // (One of a note's least alone: nothing is paid, whoever steps puts the KAS in, and the account owes all.)
+    let least = cov(&w, &shard, &[long, tok], NOTE_MIN);
+    let (b, sl) = call_step(&w.lib, &least, &least.s, None, &call, &step_s, w.payer(&w.f, &ff)).unwrap();
+    let sgl = signed("the call's step on an account of a note's least that holds tokens", &b, &w.keys);
+    let nl = sl.after.clone().unwrap();
+    assert_eq!((sl.pay, nl.a_margin, nl.b_margin, out_of(&sgl, &hash_spk(&w.lib, &nl.hash())).1), (0, 0, 20 * KAS1, KAS1 as u64));
     for (what, lie) in [
         ("owing a sompi less", kpf_protocol::covered::CallStep { after: Some(Account { b_margin: next.b_margin - 1, ..next.clone() }), ..st.clone() }),
-        ("said to hold a sompi of coins", kpf_protocol::covered::CallStep { after: Some(Account { a_margin: 1, ..next.clone() }), ..st.clone() }),
+        ("said to hold a sompi more of coins", kpf_protocol::covered::CallStep { after: Some(Account { a_margin: KAS1 + 1, ..next.clone() }), ..st.clone() }),
         ("at the time it had", kpf_protocol::covered::CallStep { after: Some(Account { b_min_counter: poor.s.b_min_counter, ..next.clone() }), ..st.clone() }),
         ("not going on", kpf_protocol::covered::CallStep { after: None, ..st.clone() }),
         ("its note naming the token leg", kpf_protocol::covered::CallStep { note: Left { legs: vec![long, tok], ..st.note.clone() }, ..st.clone() }),
@@ -3156,4 +3163,47 @@ fn the_calls_step_takes_the_futures_legs_and_leaves_the_account_with_its_tokens_
     let (b, st) = call_step(&w.lib, &owed_before, &owed_before.s, None, &call, &step_s, w.payer(&w.f, &ff)).unwrap();
     signed("the call's step on an account that owed already", &b, &w.keys);
     assert_eq!(st.after.unwrap().b_margin, 7 * KAS1 + 20 * KAS1 - paid);
+    // What its legs gained is set against what it owes (review 64, F112): at a call's price of 12 the long gained
+    // 20 KAS; the account owed 7; the note asks 13 and the account owes nothing.
+    let (_, call12) = called_objs(&shard, [P10 * 12 / 10, 0, 0, 0], 6_600);
+    let (b, st) = call_step(&w.lib, &owed_before, &owed_before.s, None, &call12, &step_s, w.payer(&w.f, &ff)).unwrap();
+    signed("the call's step on an account that owes and whose leg gained", &b, &w.keys);
+    assert_eq!((st.gain, st.note.asked, st.after.clone().unwrap().b_margin, st.after.unwrap().b_min_counter), (20 * KAS1, 13 * KAS1, 0, owed_before.s.b_min_counter));
+    let more = OLive { s: Account { b_margin: 50 * KAS1, ..poor.s.clone() }, ..poor.clone() };
+    let (_, st) = call_step(&w.lib, &more, &more.s, None, &call12, &step_s, w.payer(&w.f, &ff)).unwrap();
+    assert_eq!((st.note.asked, st.after.unwrap().b_margin), (0, 30 * KAS1));
+}
+
+/// Review 64, F112. A leg that gained, stepped off an account that owes its shard: what it asks is set against
+/// what the account owes, and nothing is paid to the user's key while the account owes.
+#[test]
+fn what_a_leg_that_gained_asks_is_set_against_what_its_account_owes() {
+    let w = world();
+    let base = seeded(&w);
+    let (long, tok) = (fleg(&w, 0, 10, LONG, P10), tleg(&w, 1, 10));
+    let shard = OLive { s: base.s.booked(&long).unwrap(), ..base.clone() };
+    let whole = cov(&w, &shard, &[long, tok], 5 * KAS1);
+    let g2 = 2 * whole.s.t.g_bps;
+    let fee = 115 * KAS1 / 10_000 * whole.s.t.liq_fee_bps;
+    // At 11.5 the long of 10 units from 10 has gained 15 KAS: less the band of 115, it asks so much.
+    let a = [P10 * 115 / 100, P10];
+    let asks = 15 * KAS1 - (115 * KAS1 * g2 + 9_999) / 10_000;
+    assert!(asks > 0);
+    // The account owes 200: below its level whatever the long gained and the tokens count. The long is stepped:
+    // its note asks nothing, and the account owes that much less.
+    let ower = OLive { s: Account { b_margin: 200 * KAS1, ..whole.s.clone() }, ..whole.clone() };
+    let (live, said, o, sg) = c_applied(&w, "a step of a leg that gained, on an account that owes", &ower, KIND_C_STEP, 0, 1, &a, &w.f);
+    let after = o.after.clone().unwrap();
+    assert_eq!((o.note.clone().unwrap().asked, after.b_margin, after.a_margin, after.legs.clone(), o.fee), (0, 200 * KAS1 - asks, 5 * KAS1 - fee, vec![tok], fee));
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), ((5 * KAS1 - fee) as u64, &hash_spk(&w.lib, &after.hash())));
+    assert!(!pays(&sg, &xk(&w.w), asks), "nothing to the user's key");
+    end_answered(&w, "a gain set against what is owed", &ower, &live, &said, true);
+    // (An account that owes little is no step's: it stands.)
+    let little = OLive { s: Account { b_margin: 2 * KAS1, ..whole.s.clone() }, ..whole.clone() };
+    let rows = little.s.c_trace(&a, 1).unwrap();
+    let s = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), rows };
+    assert_eq!(little.s.c_end(KIND_C_STEP, &CSaid { amount: fee, ..s }, &xk(&w.f), little.value as i64, T0), Some(None));
+    let some = OLive { s: Account { b_margin: 100 * KAS1 + 5 * KAS1, ..whole.s.clone() }, ..whole.clone() };
+    let (_, _, o) = some.s.c_state(KIND_C_STEP, 0, 1, &a, T0, some.value as i64, xk(&w.f)).unwrap();
+    assert_eq!((o.note.unwrap().asked, o.after.unwrap().b_margin), (0, 105 * KAS1 - asks));
 }

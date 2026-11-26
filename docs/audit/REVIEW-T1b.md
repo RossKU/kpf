@@ -11949,3 +11949,144 @@ One cargo command after the other, two jobs.
 
 No test failed in either, so there is no name to give. Of mine in both: `auditT1_builders` 193,
 `auditT1_solvency` 11, `auditT1_tests` 55, `auditT1_cli` 48; `thin_draw` 40.
+
+# Round 65
+
+Scope, at the engine: what closes round 64's F112 (a gain set against what the account owes) and F113 (what
+the account that a call's step leaves holds); and, of round 64's list, what I got to. My file brought along;
+the default workspace run once (nothing of mine is behind the feature). Working tree after 83b2e00; no src,
+contract, `Cargo.toml` or `kpf-out` file touched; no commit. **Of item 2 (a to e) I reached none**: the round
+is the two fixes, the arithmetic asked of N40, and one finding from it. It is said again under "Not reached".
+
+For step 5: nothing found in the call's step or in the ticket changes what a vault must hold or check. What
+stands from before: the vault says the id its account lives under (a ticket and the note of what is owed are
+under it); `KpfTAddSpot` asks that the account owes nothing; and an output of a note's least weighs 200,000 by
+itself (below), so a vault and a custody want a KAS or more each.
+
+## Headline
+
+- **F112 is closed.** A leg that gained, stepped off an account that owes, asks nothing of the shard while the
+  account owes; under a call the same, with and without a token leg.
+- **F113 is closed for the account and not for the note.** The account that goes on holds a KAS. Where the
+  step pays the shard something the transaction weighs 133,533 (it was 291,533). Where it pays nothing the
+  note holds a note's least alone and the transaction weighs 323,526 (it was 483,526): two thirds of a block.
+- **F114 (Medium), from N40 as built: coins that reach a called shard after its last claim are its owner's.**
+  A claim paid at a share is spent whole; `off` leaves what is held to the owner. With accounts that owe, coins
+  that come late are the usual case.
+- The default workspace: 627 passed, 0 failed in 60 targets (203 s).
+
+## F112: closed
+
+`t1b_fixed_f112_f113_a_gain_is_set_against_what_is_owed_and_the_account_that_goes_on_holds_a_kas`.
+
+- **A step of one leg.** An account that owes 60 KAS, with 2 KAS of coins, a long of 10 units at 11.5 (it
+  gained 15 KAS) and a token leg: the step of the long that the model allows writes a note that asks nothing
+  and an account that then owes 46.15 KAS (the long asked 13.85 KAS after the band, all of it set off); stated, disputed at its end and answered: right taken, wrong not.
+- **The call's step**, the call at 11.5 (the long asks 15 KAS; a call's step takes no band), 5 KAS of coins:
+
+  | Legs | Owed | The note asks | Owed after |
+  |---|---|---|---|
+  | the long and a token leg | 20 KAS | nothing | 5 KAS (the account goes on) |
+  | the long | 20 KAS | nothing | the account ends |
+  | the long | 6 KAS | 9 KAS | the account ends |
+
+  Each taken at the engine, and the numbers are the model's.
+
+Not run: the step of every leg of an account that owes and holds no token (outside a call); what is asked or
+owed a sompi off, written by hand.
+
+## F113: closed for the account; the note is what weighs now
+
+The call's step on an account that holds a token leg and whose long lost 20 KAS at the call's price:
+
+| Coins | Owed before | Paid | Coins after | Owed after | The account's output | Whoever steps puts in | Storage mass |
+|---|---|---|---|---|---|---|---|
+| 0.2 KAS | 0 | 0 | 0 | 20 KAS | 1 KAS | 1.0148 KAS | 323,526 |
+| 1.19 KAS | 0 | 0 | 0.99 KAS | 20 KAS | 1 KAS | 0.0248 KAS | 323,526 |
+| 1.2 KAS | 0 | 0 | 1 KAS | 20 KAS | 1 KAS | 0.0148 KAS | 323,526 |
+| 5 KAS | 0 | 3.8 KAS | 1 KAS | 16.2 KAS | 1 KAS | 0.0148 KAS | 133,533 |
+| 5 KAS | 2 KAS | 3.8 KAS | 1 KAS | 18.2 KAS | 1 KAS | 0.0148 KAS | 133,533 |
+
+- The account that goes on holds a KAS in each; written holding a sompi less it is refused. Whoever steps
+  puts in what is missing to a KAS (1 KAS and its costs for an account of a note's least; a hundredth for one
+  of 1.19 KAS; nothing but its costs from 1.2 KAS up). The fee is nothing in all five (the coins are gone).
+- Where nothing is paid, the note to the shard holds a note's least and nothing else: 0.2 KAS, which is 200,000
+  of the 323,526. A block takes it, and one more like it does not fit beside it.
+
+What is left of F113 (Low): a note that holds only its least. Either a step that pays nothing writes its note
+with a KAS as well (whoever steps has it back when the note is applied, as it has the least today), or it is
+said that such a step is one a block.
+
+Not run: a statement's bonds paid out beside (a statement of the user's or of another's ended by the step).
+
+## N40 as built, and F114
+
+Your reading: a claim paid at a share is spent whole; `off` leaves what is held to the owner; a holder that
+waits shares what comes late among those who waited.
+
+- **The arithmetic.** A claim of a is paid a x held / owed, rounded down. After it the shard holds
+  held - a x held / owed and owes owed - a: the two in the same proportion as before, so the share of those
+  who wait is as it was; rounding down leaves the sompi with those who wait. Right. (I did not run it; it is
+  one division, and round 54 ran the shares.)
+- **What follows from it.** Coins that come late raise the share of whoever has not claimed yet, at nobody's
+  cost but those who claimed before. So nobody wants to be first, and whoever is last has the most. And once
+  the last claim is spent the shard owes nothing: what comes after is the owner's by `off`.
+
+### F114 (Medium). What an account pays after the last claim goes to the owner, not to the claims
+
+A called shard holds 100 KAS against claims of 200 KAS. The call's step left an account owing 60 KAS, with
+tokens. Every claim is paid at a half and spent. A day later the tokens are sold and 60 KAS reach the shard by
+the note of what was paid. The shard owes nothing; `off` gives the 60 KAS to its owner. The claimants are 100
+KAS short and the owner, whose shard failed them, has 60 KAS of what its users' accounts owed them. Before
+tokens, nothing came late to a called shard; with accounts that owe it is the usual case.
+
+The least change I see: a claim paid at a share below one is not spent whole. What was not paid is written as
+a note of the rest (the form exists) and stays counted in what the shard owes; `off` asks that the shard owes
+nothing, as today. Coins that come late are then shared among the rests at the share of that time, by the
+same line; a least payment keeps it from being claimed a sompi at a time. Nobody gains by waiting, and the
+owner has what is left only when every claim is whole.
+
+## Sizes
+
+`KpfTCEnd` 3,832 bytes (it was 3,726); `KpfTCStep` 4,113 (it was 4,001); 68 scripts.
+
+## Not reached
+
+All of item 2:
+- a. The call's step on random accounts against the model; its note applied by `KpfTLeft` and `KpfTLeftAll`
+  to the called shard; a whole called shard brought to its end and a payment's note applied after `off`.
+- b. The fees a step may say; the account a step writes with what it owes, its time or its coins off.
+- c. An account that owes at the ends of kinds 7, 8, 12, 13 and 14; `KpfTEnterS`, `KpfTAcctEnd`, `KpfTOpenC`
+  at the engine; a hand-over and a join written past the builder. (On your question: I see no way to such an
+  end. A statement stands on the account as it was when it was stated, and nothing changes an account under
+  a statement; an account comes to owe only by the end of a step or by the call's step, each of which writes a
+  new account. So those ends see an account that owes only through an object made by hand. Reasoning, not
+  run.)
+- d. Sales on random accounts with several token legs; a sale standing when the call's step comes, and one
+  stated after it.
+- e. A payment racing a sale; a note that holds more than it says; a shard called off.
+And of item 1: the every-leg step outside a call for F112; a sompi off in what is asked and owed; bonds paid
+out beside the call's step for F113.
+
+## Findings ledger
+
+| Finding | Severity | State |
+|---|---|---|
+| F112 | Medium | fixed (round 65), verified for a step of one leg and for the call's step |
+| F113 | Medium | fixed for the account that goes on; Low left: a note of a note's least alone weighs 200,000 |
+| F114 | Medium | open, new: coins that reach a called shard after its last claim are the owner's |
+| F111 | Low | priced (round 64) |
+| F103 (the join's wait), F95 | Medium | left by decision |
+
+## Files changed and counts
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 194 tests (was 193). Brought along: `KpfTCEnd` and
+  `KpfTCStep` in six tests of sizes. New:
+  `t1b_fixed_f112_f113_a_gain_is_set_against_what_is_owed_and_the_account_that_goes_on_holds_a_kas`.
+- The three other files of mine: unchanged (11, 55, 48).
+
+## The workspace, once
+
+`cargo test --workspace --no-fail-fast --jobs 2`: 60 targets, 627 passed, 0 failed, 203 s. No test failed, so
+there is no name to give. Of mine: `auditT1_builders` 194, `auditT1_solvency` 11, `auditT1_tests` 55,
+`auditT1_cli` 48; `thin_draw` 41.

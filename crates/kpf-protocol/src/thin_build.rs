@@ -3063,10 +3063,10 @@ pub fn call_step_as<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood:
     d.out(call.value, hash_spk(lib, &call.s.hash()), Some((0, id)), "call", None);
     keep(&mut d, script, lid)?;
     d.out((crate::reserve::NOTE_MIN + step.pay) as u64, hash_spk(lib, &step.note.hash()), Some((0, id)), "note", None);
-    // (An account that holds token legs goes on with them: it holds its coins, and a note's least at the least,
-    // which whoever steps puts in where the coins are less.)
+    // (An account that holds token legs goes on with them: it holds its coins, and a KAS at the least, which
+    // whoever steps puts in where the coins are less.)
     if let Some(next) = &step.after {
-        d.out(next.a_margin.max(crate::reserve::NOTE_MIN) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
+        d.out(next.a_margin.max(crate::reserve::OWING_KEEP) as u64, hash_spk(lib, &next.hash()), Some((0, id)), "account", None);
     }
     d.fund(p.funds, &p.change_to);
     // The payments, the last the user's: the disputer's bond, the claimer's, the user. (No output of the fee: what
