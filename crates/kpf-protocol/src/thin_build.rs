@@ -2468,8 +2468,8 @@ pub fn c_price_seeded(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s
         return invalid("the point is not a price's, or the account is not the one the statement is on");
     }
     let (l, n) = (&account.legs[i - 1], &cite.1.note);
-    // (A token leg names its vault where a futures leg has its committee: its committee is its shard's.)
-    let committee = if l.dir == crate::covered::DIR_SPOT { account.shard == Some(crate::reserve::shard_sid(&price_seed, &n.committee, &account.terms(), &account.moving()[93..120])) } else { n.committee == l.committee };
+    // (A covered account's leg does not say its committee: it is its shard's, whose id the seed opens. 17.2.)
+    let committee = account.shard == Some(crate::reserve::shard_sid(&price_seed, &n.committee, &account.terms(), &account.moving()[93..120]));
     if !committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
         return invalid("the citation is not of the leg's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
     }
@@ -2573,9 +2573,11 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     } else {
         return invalid("an entry's time is not ahead of the chain: fund with a coin that landed at or after it");
     };
+    // (The shard's committee, shown: the head of the row the leg is counted in, in the shard after.)
+    let Some(row) = usize::try_from(said.r).ok().and_then(|r| next.rows.get(r)) else { return invalid("the entry names no row of the shard") };
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.moving()),
-        bv(seed.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
+        bv(seed.to_vec()), bv(row.head.committee.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
     let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
     d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
@@ -2632,7 +2634,7 @@ pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEn
 /// `KpfTStepPrice.answer` on a price of an entry's trace (the point 2i), with the committee's price for the leg's
 /// market at the statement's time, in a citation. The last row's is the price of the leg that enters.
 #[allow(clippy::too_many_arguments)]
-pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::covered::Marked, s: &crate::covered::CEnterSaid, script: &LibScript, cite: (&LibScript, &Cited), rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::covered::Marked, s: &crate::covered::CEnterSaid, script: &LibScript, cite: (&LibScript, &Cited), price_seed: [u8; 32], rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
     c_enter_open(obj, s, Some(marked))?;
     let (q, account) = (&obj.s, &marked.0);
     let c = &q.st;
@@ -2642,8 +2644,9 @@ pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::cover
         return invalid("the point is not a price's");
     }
     let (l, n) = (&account.legs[i - 1], &cite.1.note);
-    if n.committee != l.committee || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
-        return invalid("the citation is not of the leg's committee and market and the statement's time, or the committee's spread leaves the tolerance no margin");
+    // (The committee is the shard's, whose id the seed opens: 17.2.)
+    if account.shard != Some(crate::reserve::shard_sid(&price_seed, &n.committee, &account.terms(), &marked.moving()[93..120])) || n.market != l.market || n.t0 != c.t0 || n.spread_bps * 4 > account.t.g_bps {
+        return invalid("the citation is not of the shard's committee, the leg's market and the statement's time, or the committee's spread leaves the tolerance no margin");
     }
     let prev = crate::reserve::Left::chain(&account.legs[..i - 1]);
     let before_g = if i >= 2 { s.rows[i - 2].g } else { [0; 32] };
@@ -2654,7 +2657,7 @@ pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::cover
     args.extend(point_args_said(q, s.said(), at, rkey, right));
     args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(l))]);
     // (The seed of the shard's id: read where the leg is a token leg, whose committee is its shard's.)
-    args.push(bv(vec![0u8; 32]));
+    args.push(bv(price_seed.to_vec()));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTStepPrice", "answer", args, 0)?;
     let (at, _) = cite_in(&mut d, lib, cite.0, cite.1)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, Some((cite.0, at)), p)?;

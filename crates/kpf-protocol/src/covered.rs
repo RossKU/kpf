@@ -157,6 +157,31 @@ fn rate_down(w: i64, r: i64) -> Option<i64> {
     add(ck((w / BPS).checked_mul(r))?, ck((w % BPS).checked_mul(r))? / BPS)
 }
 
+/// What a covered account's leg says where a leg of an account no shard covers has its committee (docs 17.2):
+/// the time it entered, and an option's day, strike and premium a unit (nothing, for a futures leg). Its committee
+/// is its shard's, shown apart wherever a price of it is answered. (A token leg names its vault there.)
+pub fn leg_more(time: i64, day: i64, strike: i64, premium: i64) -> [u8; 32] {
+    let mut b = [0u8; 32];
+    for (i, x) in [time, day, strike, premium].iter().enumerate() {
+        b[8 * i..8 * i + 8].copy_from_slice(&sm8(*x));
+    }
+    b
+}
+
+/// The time a covered account's leg entered, as a script reads the eight bytes.
+pub fn leg_time(l: &XLeg) -> i64 {
+    let mut b: [u8; 8] = l.committee[..8].try_into().expect("eight bytes");
+    let below = b[7] & 0x80 != 0;
+    b[7] &= 0x7f;
+    let m = i64::from_le_bytes(b);
+    if below { -m } else { m }
+}
+
+/// The leg as it stands in a covered account it entered at `t0`.
+pub fn leg_entered(l: &XLeg, t0: i64) -> XLeg {
+    XLeg { committee: leg_more(t0, 0, 0, 0), ..*l }
+}
+
 /// A row of a covered account's trace. It has a position's row's bytes, and these sums over the legs up to it at
 /// the prices stated: `gain`, what all gained or lost; `wa`, what all are worth; `wb`, what the legs that stay are
 /// worth; `ea`, what the legs that stay have lost, each counted alone; `eb`, what the legs that leave gained or
@@ -953,6 +978,11 @@ impl Account {
             return None;
         }
         let (mut gain, mut at) = (0i64, vec![]);
+        // (17.9: a leg that entered less than T before the call's time, T twice a lateness and a dispute period,
+        // is young. The young legs of an account are counted together: nothing where they gained, paid where
+        // they lost.)
+        let mut young = 0i64;
+        let ywin = ck(2i64.checked_mul(add(self.t.late_daa, self.dispute_daa)?))?;
         let tokens: Vec<XLeg> = self.legs.iter().filter(|l| l.dir == DIR_SPOT).copied().collect();
         let futures: Vec<XLeg> = self.legs.iter().filter(|l| l.dir != DIR_SPOT).copied().collect();
         if futures.is_empty() || self.b_margin < 0 {
@@ -968,15 +998,24 @@ impl Account {
             if (l.dir != LONG && l.dir != SHORT) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 {
                 return None;
             }
-            let head = crate::reserve::Head { market: crate::reserve::futures_market(&l.market), committee: l.committee, scale: l.scale, price_max: l.price_max };
-            let r = call.heads.iter().position(|h| *h == head)?;
+            // (The row of the leg's market: its name, its scale and its price's limit.)
+            let name = crate::reserve::futures_market(&l.market);
+            let r = call.heads.iter().position(|h| h.market == name && h.scale == l.scale && h.price_max == l.price_max)?;
             let p = call.prices[r];
             if p < 0 {
                 return None;
             }
             let (wp, we) = (worth(l.size, l.scale, p)?, worth(l.size, l.scale, l.entry)?);
-            gain = if l.dir == LONG { sub(add(gain, wp)?, we)? } else { sub(add(gain, we)?, wp)? };
+            let d = if l.dir == LONG { sub(wp, we)? } else { sub(we, wp)? };
+            if leg_time(l) > sub(call.time, ywin)? {
+                young = add(young, d)?;
+            } else {
+                gain = add(gain, d)?;
+            }
             at.push(r);
+        }
+        if young < 0 {
+            gain = add(gain, young)?;
         }
         // (An account that holds token legs goes on: it keeps a KAS of its coins back. Review 64, F113.)
         let keep = if tokens.is_empty() { 0 } else { crate::reserve::OWING_KEEP };
@@ -1200,6 +1239,8 @@ impl Account {
     pub fn c_enter(&self, leg: XLeg, more: i64, r: i64, a: &[i64], t0: i64, held: i64) -> Result<(Stated, CEnterSaid, Marked, Account)> {
         self.c_check()?;
         self.owes_nothing()?;
+        // (The leg as it stands in the account: it says the time it entered where it had its committee. 17.2.)
+        let leg = leg_entered(&leg, t0);
         let no = |why: &str| Error::Invalid(format!("no entry into this covered account: {why}"));
         if a.len() != self.legs.len() || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
             return Err(no("it is stated with one price a leg the account has, within its market's limit"));

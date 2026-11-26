@@ -201,9 +201,10 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(tx.inputs[u].scriptPubKey == byte[](CITE_SPK));
         require(OpInputCovenantId(u) == OpInputCovenantId(this.activeInputIndex));
         require(OpTxInputScriptSigSubstr(u, 0, 1) == byte[](0x20));
-        if (int(byte[8](lg.slice(94, 102))) == 7) {
-            // (A token leg: its committee is its shard's, whose id is the hash of a seed, the committee, the terms
-            // and the periods; the citation is of that committee and of the leg's market.)
+        if (kind >= 7) {
+            // (A leg of a covered account: its committee is its shard's, whose id is the hash of a seed, the
+            // committee, the terms and the periods; the citation is of that committee and of the leg's market.
+            // The leg's second push says the time it entered, or names a token leg's vault: docs 17.2.)
             require(mv.length >= 171);
             require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + OpTxInputScriptSigSubstr(u, 34, 66) + byte[](terms) + mv.slice(93, 120))));
             require(OpTxInputScriptSigSubstr(u, 66, 99) == lg.slice(0, 33));

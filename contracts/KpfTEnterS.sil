@@ -112,7 +112,7 @@ contract KpfTEnterS(int init_version) {
     int constant MARGIN_MAX = 1152921504606846975;
     int constant LEGS_MAX = 6;
 
-    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[408] rows, byte[171] smoving, byte[32] seed, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
+    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[408] rows, byte[171] smoving, byte[32] seed, byte[32] cmt, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -175,7 +175,11 @@ contract KpfTEnterS(int init_version) {
         // The leg is of the shard's committee: the shard's id is the hash of its opening, of its committee, and of
         // the terms and periods of every account under it (a leg of another committee in the books would be a
         // row nobody but its maker prices: review 51, F80).
-        require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + lg.slice(34, 66) + tb + mv.slice(93, 120))));
+        // (The committee is shown, and held so. The leg's second push says the time it entered, which is the
+        // statement's, and a day, a strike and a premium of nothing: a futures leg. Docs 17.2.)
+        require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + byte[](cmt) + tb + mv.slice(93, 120))));
+        require(t0 >= 0);
+        require(lg.slice(34, 66) == byte[](t0 as byte[8]) + z8 + z8 + z8);
         int sc = iAt(lg, 67);
         int pm = iAt(lg, 76);
         int size = iAt(lg, 85);
@@ -194,7 +198,7 @@ contract KpfTEnterS(int init_version) {
         require(r >= 0);
         require(r <= 3);
         byte[] name = byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33)));
-        byte[] head = name + lg.slice(33, 84);
+        byte[] head = name + byte[](0x20) + byte[](cmt) + lg.slice(66, 84);
         byte[] row = rw.slice(102 * r, 102 * r + 102);
         if (row.slice(0, 84) != head) {
             require(row == byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + z8 + byte[](0x08) + z8 + byte[](0x08) + z8 + byte[](0x08) + z8);

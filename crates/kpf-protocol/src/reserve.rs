@@ -55,6 +55,12 @@ impl Head {
     pub fn bytes(&self) -> Vec<u8> {
         [p33(&self.market), p33(&self.committee), i9(self.scale), i9(self.price_max)].concat()
     }
+
+    /// The row of the same market: its name, its scale and its price's limit. (A covered account's leg does not
+    /// say its committee: every row of a shard is of the shard's one. Docs 17.2.)
+    pub fn same_row(&self, o: &Head) -> bool {
+        (self.market, self.scale, self.price_max) == (o.market, o.scale, o.price_max)
+    }
 }
 
 /// A shard's id: the hash of its opening (`seed`, the hash of its anchor's outpoint), of the one committee whose
@@ -391,7 +397,7 @@ impl Shard {
         let mut at = vec![];
         for l in &n.legs {
             let (head, units, basis) = Shard::book_of(l)?;
-            let Some(r) = s.rows.iter().position(|row| row.head == head) else { return no("a leg is in no row of the shard") };
+            let Some(r) = s.rows.iter().position(|row| row.head.same_row(&head)) else { return no("a leg is in no row of the shard") };
             let row = &mut s.rows[r];
             if row.gross < l.size {
                 return no("a row has fewer units than the leg");
@@ -422,8 +428,8 @@ impl Shard {
     pub fn gone_at(&self, n: &Left) -> Option<usize> {
         n.legs.iter().position(|l| {
             let Ok((head, _, _)) = Shard::book_of(l) else { return true };
-            let Some(row) = self.rows.iter().find(|row| row.head == head) else { return true };
-            let units: i64 = n.legs.iter().filter(|x| crate::thin::leg_bytes(x)[..84] == crate::thin::leg_bytes(l)[..84] && x.size > 0).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
+            let Some(row) = self.rows.iter().find(|row| row.head.same_row(&head)) else { return true };
+            let units: i64 = n.legs.iter().filter(|x| (x.market, x.scale, x.price_max) == (l.market, l.scale, l.price_max) && x.size > 0).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
             row.gross < units
         })
     }

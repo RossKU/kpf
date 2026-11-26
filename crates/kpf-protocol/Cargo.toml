@@ -87,6 +87,10 @@ name = "auditT2_vault"
 path = "tests/auditT2_vault.rs"
 
 [[test]]
+name = "auditT3_legtime"
+path = "tests/auditT3_legtime.rs"
+
+[[test]]
 name = "bond_model"
 path = "tests/bond_model.rs"
 required-features = ["legacy"]

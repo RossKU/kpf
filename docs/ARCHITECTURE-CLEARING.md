@@ -2955,9 +2955,8 @@ what a futures leg says it says: what it is (a call or a put; held or written by
 **day** (a time: the option is of that time's price and of no other), and its **premium a unit**. Its entry is
 the market's price where it entered. **Every leg of a covered account, futures as well, says the time it
 entered** (17.9): the time of the statement by which it entered; a split, a join, a hand-over and a mark carry
-it with the leg. The four numbers are 32 bytes; where they lie in the leg's bytes is decided once, in the model,
-for every kind of leg (`KpfTEnterS` holds a leg's 32 bytes of a committee into the shard's id today: if they
-lie there, the committee is shown apart, as it is for a token leg's vault).
+it with the leg. The four numbers are 32 bytes, and lie where a leg of an account no shard covers has its committee: a shard
+has one committee, in its id, and it is shown apart wherever a price is answered (17.9, built for futures legs).
 
 - What it is worth exercised at a price: for a call the price less the strike, or nothing; for a put the strike
   less the price, or nothing; by its units.
@@ -3148,6 +3147,13 @@ statement holds the trace by its root and the prices written.
 Sizes, estimated and not measured (N58): a draw stated about 3.8 kB at any count of rows; a row answered about
 5 kB; today's draw is 3.2 kB.
 
+**Two classes of claim (review T3, L1 and L4).** A claim is of the first class, or of the second: what the young
+legs of an account gained (at a call's step, where today it is nothing; at a leaving or a mark stated after the
+call's time), less the band of those legs. The second class is paid after every claim of the first is paid
+whole, of what is left, at one share among themselves. An owner that brings a call about to be rid of what its
+newest users gained is not rid of it; and a leg of its own, young, takes nothing from a claim of the first
+class, and from the second only what the price moved beyond the band while the call was due.
+
 **What a called shard has paid (F114, N60).** The shard, called, has: H, what it holds; C, what it owes by
 claims, which does not fall when a claim is paid; D, what it has paid to claims. T is H and D: it does not
 change when a claim is paid and grows by every coin that reaches the shard.
@@ -3191,7 +3197,7 @@ change when a claim is paid and grows by every coin that reaches the shard.
 futures; sums in the tree's inner nodes; a depth above six; a leg that cancels another of its series; the
 deterrent of 17.3.
 
-### 17.9 Of the form that is built: a leg entered, and a call (F116, high, open)
+### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
 gained is paid at one share. An entry's price is held to the committee's only within the tolerance, a call's
@@ -3236,5 +3242,51 @@ tool signs no edge). With the owner's own keys it is the owner taking from its s
 that the entries make due and by the rule above at that call; where nobody calls for T it is open, as a draw
 nobody disputes is.
 
-It is built with the leg as it will stay (17.8, step 2), and is open until then: no shard of the form that is
-built is to hold a stranger's coins before it.
+**Built** (17.8, step 2; under review):
+
+- **The leg.** A covered account's leg is 111 bytes as before. Its second push, where a leg of an account no
+  shard covers has its committee, is four numbers of 8 bytes: the time it entered, and a day, a strike and a
+  premium a unit, nothing for a futures leg (a token leg names its vault there, as before). `leg_more`,
+  `leg_time`, `leg_entered` in `covered.rs`.
+- **The committee is shown apart.** A shard has one committee, in its id (the hash of a seed, the committee, the
+  terms and the periods). `KpfTEnterS` is shown it (one argument more), holds it into the id, writes it in the
+  head of the row, and holds the leg's second push to the statement's time and three numbers of nothing.
+  `KpfTStepPrice` opens the id by the seed for every leg of a covered account (kinds 7 and above), as it did
+  for a token leg: whoever answers a price of a covered account shows the seed of its shard (`c_price_seeded`;
+  `c_enter_price` takes it).
+- **A leg's row** in a shard and in a call is found by its market's name, its scale and its price's limit
+  (`KpfTCStep`, `KpfTLeft`, `KpfTLeftAll`, `KpfTLeftVoid`; `Head::same_row`).
+- **The call's step** (`KpfTCStep`, `call_step_at`) sums the legs that entered after the call's time less T
+  apart, and adds that sum only where it is below nothing.
+- At the engine (`under_a_call_the_young_legs_of_an_account_ask_nothing`): a long that entered T before the
+  call asks its 30 KAS and one that entered a block later asks nothing, as does one that says a time after the
+  call's; a young short pays; a long and a short entered together, young, nothing either way; an old gain and a
+  young loss set off; an old loss paid beside a young gain of nothing; a note that asks a young leg's gain and
+  a step that lets a young loss off are refused; an entry writes the statement's time whatever the leg given
+  said, and one whose leg says an earlier time, a committee, a day or a premium is refused.
+- A leg that entered before this form says, where its time is, the first bytes of a committee's id: young or
+  old as those bytes fall. There is none on a chain that matters.
+
+**Review T3** (`docs/audit/REVIEW-T3-legtime.md`; its tests `auditT3_legtime.rs`, twelve; the tests of review T1
+brought along: 27 of them failed by the change, every one as it was meant to, none a regression; the default
+workspace 668 tests, none failed). **F116 as found is closed at the engine, at the step**: a shard of 19.9 KAS,
+an honest claim of 15 KAS, an owner's long that gained 3,000 KAS: the honest claim is paid 15 where the owner's
+leg entered a block before the call's time, and 0.099 where it entered T before. Held under attack: the time
+is written by `KpfTEnterS` alone and is the statement's; a join, a hand-over, a mark and a split carry it, and
+written otherwise each is refused or answered wrong; no leg makes its account one that cannot be stepped (the
+largest time, the largest below nothing, bytes of 0xff); an account has its shard's periods; F80 stays closed
+(another committee shown; the shard's shown and another's head written; a row of another committee made by
+hand); the model and the engine agree on 180 random accounts of young and old legs. `KpfTCStep` is 4,829 bytes
+(4,113), a step of one leg 6,890 (6,174), of six 7,538; an entry stated 4,902 (4,825).
+
+| Finding | What it is | Decided |
+|---|---|---|
+| L1 (medium) | the rule is in the call's step alone. A young leg whose account nobody steps leaves by its user's own statement after the call (F95's way, open by decision), and its note is a claim at one share: entered at 6,201, a call of time 6,500 at 12; its step asks nothing; its leaving stated at 6,601 at 15 asks 48.5 KAS of the called shard. A mark's note is counted the same way (read) | **the rule goes where a claim is counted**: with the claims of 17.7 (step 4): a claim is of two classes |
+| L4 (medium; N79 at the engine) | "an owner does not gain by bringing it about" does not hold: a shard of 20 KAS, a user long 5 units, 100 blocks old, that gained 15 KAS; the owner signs in a long of 1,000 units of its own and the call is due at once; both legs are young, both steps ask nothing, the call ends, the shard is open again and owes nothing: the user has its coins and nothing of the 15. Had its leg been older than T it had been paid whole | **what the young legs of an account gained is a claim of the second class**: paid after the others, of what is left, less the band (17.7). Not nothing |
+| L2 (low) | a leg's time is up to a lateness before its landing: old 200 blocks after it landed, not 300 | said as it is: T counts from the time said |
+| L3 (low) | a call's time is within a lateness before its landing, at the caller's choice: an honest user is sure of its gain a lateness and T after its entry (400 blocks with these terms) | said as it is, beside 14.7's lines |
+
+Rests also on: the committee answers a call's disputed price within a dispute period (a call that lapses twice
+ages a leg past T); every false statement on an account is disputed (an entry whose account says a time of
+nothing is taken where it is stated, answered wrong at its end, and stands where nobody disputes). **Not built
+yet:** the two bounds of a stated price rounded inward.

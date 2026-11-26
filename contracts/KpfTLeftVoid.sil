@@ -114,7 +114,7 @@ contract KpfTLeftVoid(int init_version) {
         require(k >= 0);
         require(k * 111 < legs.length);
         byte[] lk = legs.slice(k * 111, k * 111 + 111);
-        byte[] head = byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lk.slice(0, 33))) + lk.slice(33, 84);
+        byte[] head = byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lk.slice(0, 33)));
         // The chain of the legs; and how many units the note's legs of the named leg's row are, together.
         byte[32] lh = byte[32](z32);
         int units = 0;
@@ -122,7 +122,7 @@ contract KpfTLeftVoid(int init_version) {
             if (i * 111 < legs.length) {
                 byte[] lg = legs.slice(i * 111, i * 111 + 111);
                 lh = blake2b(byte[](lh) + lg);
-                if (lg.slice(0, 84) == lk.slice(0, 84)) {
+                if (lg.slice(0, 33) == lk.slice(0, 33) && lg.slice(66, 84) == lk.slice(66, 84)) {
                     int sz = int(byte[8](lg.slice(85, 93)));
                     if (sz > 0) { units = units + sz; }
                 }
@@ -139,7 +139,7 @@ contract KpfTLeftVoid(int init_version) {
         if (int(byte[8](lk.slice(103, 111))) <= 0) { gone = 1; }
         int found = 0;
         for (r, 0, 4, 4) {
-            if (rw.slice(102 * r, 102 * r + 84) == head) {
+            if (rw.slice(102 * r, 102 * r + 33) == head && rw.slice(102 * r + 66, 102 * r + 84) == lk.slice(66, 84)) {
                 found = 1;
                 if (int(byte[8](rw.slice(102 * r + 94, 102 * r + 102))) < units) { gone = 1; }
             }

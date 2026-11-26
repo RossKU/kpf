@@ -100,6 +100,8 @@ contract KpfTCStep(int init_version) {
         require(at.length == 8 * count);
         byte[32] g = byte[32](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
         int gain = 0;
+        int ygain = 0;
+        int ywin = 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111))));
         // (The futures legs' chain, which the note names; the token legs' chain, which the account goes on with;
         // and how many token legs: docs 16.18.)
         byte[32] gf = g;
@@ -119,7 +121,10 @@ contract KpfTCStep(int init_version) {
                 int r = int(byte[8](at.slice(8 * i, 8 * i + 8)));
                 require(r >= 0);
                 require(r <= 3);
-                require(cb.slice(84 * r, 84 * r + 84) == byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33))) + lg.slice(33, 84));
+                // (The row of the leg's market: its name, its scale and its price's limit. The leg's second push
+                // is no committee's: it says the time the leg entered. Docs 17.2.)
+                require(cb.slice(84 * r, 84 * r + 33) == byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33))));
+                require(cb.slice(84 * r + 66, 84 * r + 84) == lg.slice(66, 84));
                 int p = int(byte[8](cb.slice(336 + 8 * r, 344 + 8 * r)));
                 int sc = int(byte[8](lg.slice(67, 75)));
                 int size = int(byte[8](lg.slice(85, 93)));
@@ -131,10 +136,16 @@ contract KpfTCStep(int init_version) {
                 require(p >= 0);
                 int wp = (size / sc) * p + (size % sc) * (p / sc) + ((size % sc) * (p % sc)) / sc;
                 int we = (size / sc) * e + (size % sc) * (e / sc) + ((size % sc) * (e % sc)) / sc;
-                if (dir == DIR_LONG) { gain = gain + wp - we; } else { gain = gain + we - wp; }
+                int dl = wp - we;
+                if (dir != DIR_LONG) { dl = we - wp; }
+                // (A leg that entered less than T before the call's time, T twice a lateness and a dispute
+                // period, is young: the young legs of an account are counted together. Docs 17.9.)
+                if (int(byte[8](lg.slice(34, 42))) > ctime - ywin) { ygain = ygain + dl; } else { gain = gain + dl; }
                 }
             }
         }
+        // (The young legs together: nothing where they gained, paid where they lost.)
+        if (ygain < 0) { gain = gain + ygain; }
         // (A futures leg at the least: an account of token legs alone has nothing in the call's rows.)
         require(nt < count);
         byte[32] acct = blake2b(p33(blake2b(tb + p33(g))) + mv);
