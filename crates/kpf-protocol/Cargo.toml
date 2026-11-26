@@ -143,6 +143,10 @@ name = "research_reserve_objects"
 path = "tests/research_reserve_objects.rs"
 
 [[test]]
+name = "research_options"
+path = "tests/research_options.rs"
+
+[[test]]
 name = "research_solvency"
 path = "tests/research_solvency.rs"
 

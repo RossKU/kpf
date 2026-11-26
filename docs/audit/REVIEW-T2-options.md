@@ -690,3 +690,371 @@ the escrow, the written price of a day, the ordered leaves.
 - What is said to a user of a call that ends its options (N48), and the deterrent.
 - How an option is sold before its day (N61).
 - N56's last paragraph, at the engine, by the other reviewer: it is of the built form.
+
+# Second round
+
+27 November 2026. The second writing of section 17 (17.1 to 17.9), on paper. Nothing was run. Read for this
+round, beside the section: `KpfTCStep` (the step, lines 84 to 273), `KpfTCallEnd` (the head and the answer to
+line 209), `KpfTEnterS` (the stating, lines 100 to 200), the tolerance's lines of `KpfTStepPrice` and
+`KpfTShardPrice`, `call_step_at` in `covered.rs`, and again `KpfTCEnd`'s ends. Findings N65 to N77. Numbers
+with the terms of the first round (5 %, 0.5 %).
+
+## Verdict of the second round
+
+**Step 1 (the model, no script) can start.** The second writing took the five decisions whole and nothing of
+N43 to N46 is left in it: I worked the four cases of a premium again and found no state in which a premium is
+counted twice, and no way to one early (N70). What I found this round is of three kinds:
+
+- **What netting brings with it, which the first round's rule did not say** (mine as much as the author's): a
+  leg taken out of a group leaves the rest asked nothing (N65); a hedge ends by the clock (N68); my rule for a
+  held option has a cliff (N69).
+- **The day as the author wrote it**: the gain of an ended leg paid to the key is S2 again (N66), and "in no
+  statement until it has left" makes an account nobody can step and a shard nobody can call for as long as a
+  day's price is not written (N67).
+- **17.9, the built form.** By reading it holds (N76). A band under a call does not close it: it leaves a short
+  0.005 % of its worth and does nothing about the move between the entry and the call, which with no bound on
+  a leg's size is the larger part.
+
+Five rules to put into the model before its first test, each a line: N65's "stands after", N66 and N67's "an
+ended leg is passed at its day's price and leaves when the account stands without it", N68's "no credit within
+a time of its day", N69's two lines, and N76's time in the leg. None needs a script decided.
+
+## Findings
+
+### N65 (High). A leg taken out of a group leaves the rest asked nothing
+
+With R in the place of the rate on W, two legs that set one another off are asked nothing. Every way one of
+them leaves alone must then ask the account again. Two do not.
+
+*A leg that lost leaves by its user's statement.* Its end asks only that the coins pay what it lost (`KpfTCEnd`,
+lines 247 to 249). Today that is safe: without the leg the account is asked less. With R it is asked more.
+
+*Scenario.* A long and a short of 10,000 units of one market, both from 100, on 10,100 KAS: asked nothing. The
+price goes to 101. The user states that the short leaves: it lost 10,000, the coins pay. What stays: a long
+worth 1,010,000 on 100 KAS of coins and 10,000 of gain: a standing of 10,100, where a step is due below 45,450
+and an entry is asked 55,550. Up 1 %: 10,100 gained. Down 1 %: nothing left; beyond that the shard is unpaid.
+An entry of that long alone would have cost five and a half times the coins.
+
+*A step of one leg.* "A step names legs as today": the leg named lost, and is the account's largest or the
+account stands after. An account of that pair and a third leg that lost is due for a step; whoever steps names
+the short of the pair (it lost, it is the largest). The pair is broken, the account is asked 45,450 more than
+before, and is then stepped whole for the fee of everything. The stepper chose the step that made it worse.
+
+*Recommendation.* One rule for every statement that takes a leg out and leaves others (a leaving of one leg
+that gained or lost, a split's two accounts, a step of one leg): **the account that stays is tested as it
+stays.** For the user's own statements: at the level of an entry (the coins and what the legs that stay gained
+at least R of those and their premiums). For a step: it is right only where what the account lacks is less
+after it than before it; else every leg leaves. Whether a step names a leg or a whole group is then decided by
+that test and needs no rule of its own. The model's random accounts should try every leg out of every account.
+
+### N66 (High). An ended leg's gain paid to the key is S2 through the day
+
+17.5: "What it gained exercised is asked of the shard by a note": a note pays the user's key. The transaction
+has no trace and tests nothing of the legs that stay.
+
+*Scenario.* A long of 10 units from 100 and a put held, strike 100, premium 3, on 85 KAS. The price falls to
+80: the long lost 200, the put gained 200; the account stands (nothing net, and the premium). The day comes at
+80. The put leaves: 200, less its band, to the user's key; 30 of premium from the coins. What stays: a long
+that lost 200 on 55 KAS. The shard has paid 200 out and is owed 200 by an account of 55. This is S2 (review
+44) with a day in place of a statement, and at an owner's own keys it is of any size.
+
+*Recommendation.* An ended leg that lost always leaves (the coins pay; what they do not pay the account owes:
+16.18's number). **An ended leg that gained leaves by the day's transaction only where the account passes the
+test of a leaving without it** (the coins at R, the premiums and what each leg that stays lost alone). Else it
+stays, at its day's price, as a gain that counts for the account's standing and is no coin, and leaves when
+the test passes or with every leg. That needs N67's change: an account must be able to go on with such a leg.
+
+### N67 (High). An account with an ended leg is in no statement: nobody steps it, and nobody calls its shard
+
+"A row that names or passes a leg whose day is at or before the statement's time is wrong. The account does
+nothing else until its ended legs have left." A step is a statement whose trace passes every leg. So between
+a leg's day and the day's transaction no step is right; the transaction needs the note; the note needs the
+committee's signature of that time.
+
+*Scenario.* A long of 10,000 units from 100 on 55,550 KAS, and one call held of one unit, premium 0.01, whose
+day is now. After the day the price falls 4 %: the account lost 40,000 and a step is due. No step can be
+stated until someone has the committee's price of the day and has written it. A further 2 % in that time and
+the shard is unpaid 4,450. Where the committee does not sign that time, it is for the whole of the fallback's
+wait. It costs the user 0.01 KAS, and it is with N66 the reason the rule cannot stand: a leg that must leave
+first, and cannot leave safely, stops the account.
+
+The same on the shard: a call's trace says an ended row "at the day's price, and that point is answered by the
+day's note". Until the note exists that point is answered by nobody and ends the call at the caller's cost. An
+owner's shard cannot be called from each day until that day's price is written.
+
+*Recommendation.* **A leg whose day has passed is passed by a row at its day's price**, and adds what it gained
+or lost there and nothing to the two sums. That price is answered by the day's note, or, where none is written
+yet, by a citation of the committee's price at the day (the signature the note would be written from). Nothing
+is frozen. The day's transaction is then the cheap way out (N66), not a gate. For a shard's row of an ended
+day whose price nobody has written: the leaf holds what that row's legs were entered at (8 bytes more a leaf,
+their sum still the one number), and such a row is counted at that in a call's trace until the price is
+written. It is what the fallback pays, so the two agree.
+
+### N68 (High). A hedge ends by the clock
+
+Netting is right up to an option's day and wrong after it, and no transaction stands between.
+
+*Scenario.* A long of 10,000 units at 100 and 10,000 puts held at strike 150, whose day is tomorrow. The two
+sums are nothing: the account is asked the premium (say 1,000) and holds a million of futures. At the day the
+put is a number that no longer moves. The long is asked 55,550 from that second, the account has 1,000, and
+every tick down from there is the shard's. A take stated a second before the day and applied after it leaves
+the same account by a statement that was right.
+
+*Recommendation.* **Within a time T of its day an option is counted in the two sums only where it adds to
+what is asked** (what it would lose at each end, never what it would gain). T is a term: twice the longest a
+statement lives and the time between two visits. The account is then asked the long whole while both legs
+still stand, and a step that takes the group takes it at its net. The same T as "no entry within a statement's
+life of the day" should be: one number.
+
+For a shard's requirement the same jump comes at each day (a row of an ended day sets nothing off). Count it
+the same way, or say that an owner tops its shard up before a day.
+
+### N69 (Medium; High for a user near a strike). The rule for a held option has a cliff, and it is mine
+
+"Where its strike is inside, the worse of the two ends in both sums." It is sound. It is also a line that gives
+a held option no credit at all from the moment its strike is within the rate of the price.
+
+*Scenario.* A short of 10 units and a call held at strike 96, ten units: above 96 the account is flat. At a
+price of 102 the strike is outside the range (L is 96.39): asked nothing. At 101.5 (L is 95.92) it is inside:
+the call is counted as losing all it is worth at both ends, 55; with the short's 55.8 the account is asked
+110.8, eleven per cent of what it holds, and at the lower rate is due for a step. Nothing it can lose changed.
+
+*Recommendation.* A held option is never worth less than either of two lines: nothing, and the price less its
+strike (for a put: the strike less the price). **Where its strike is inside, it is counted along one of the
+two, at both ends; the row says which** (a bit), and is right with either. Whoever states picks the one that
+asks less. Above: along the second line the call is the short's exact opposite at both ends, and the account is
+asked nothing at 101.5 as at 102. At a strike outside the range the two rules are the same, so nothing jumps.
+The reasoning of 17.4 stands as written (a line below a held option, the rest bends downward, the least is at
+an end). The model's test "at every strike between" is the right one for it.
+
+### N70 (Medium). The premium in each test, the four cases, and a thing of mine to take back
+
+*Each inequality.* m is the coins less a note's least; P the premiums of the options that stay, held and
+written alike.
+
+| Test | As written | A held option's premium | A written option's premium |
+|---|---|---|---|
+| an entry | m + G >= R + P | the user's own coins stand for it, beside R | the owner's coins are in m and in P: they cancel. The user's own coins meet R |
+| a step is due | m + G + TK - owed < R (lower rate) + P | due while the coins still hold it: it is paid whole but in a gap | cancels: the step is due exactly where the user's own coins fall short. Not earlier |
+| a take; a leaving of a leg that gained | m - amount >= R + P + LS | cannot leave | cannot leave |
+
+No premium is counted twice: in every test it is on the side of what is asked, so the coins that stand for it
+stand for nothing else. Asking a written option's premium the same way is right and neutral. The one way the
+coins of a premium pay another leg's loss by the rule is the leaving of a leg that lost (no test after): N65
+closes it. In a gap beyond the rate they can pay a loss in a step; that is the gap any margin has.
+
+*Checked with a holder in the money:* a call at strike 100 entered at 110, premium 2, ten units, 80.5 KAS: a
+step is due from about 108.8, where the coins pay the 12 lost and the 20 of premium whole.
+
+*The four cases* (a call at strike 110, ten units, premium 2: 20 KAS; a long of ten units from 100 beside it):
+
+| | What moves | Who gains by it | Can it bring it about |
+|---|---|---|---|
+| The user holds; its step | the option leaves at what it is worth exercised; the 20 to the shard, after the losses | the owner: the premium now and not at the day, and an option it wrote is gone | only by a price at the tolerance's edge, as any step today |
+| The user wrote; its step | the shard has the larger of 20 and what the option lost | the owner: its 20 back for an option that has lost its price. The price falls: the long loses, the call is worth nothing, the step is due: the two come together | see below |
+| The user holds; a call | nothing of the premium; what it gained exercised is a claim | the owner, by what the option was worth beyond its exercise | yes, at will (N48: said in 17.3) |
+| The user wrote; a call | nothing; the 20 stay; what it lost exercised the coins pay | the user; the owner loses the premium it paid and the option | the user cannot |
+
+*An owner that writes to itself or buys from itself:* its own coins on both sides; nothing in the books. What
+its legs gain exercised is a claim as a futures leg's: that is 17.9 and not the premium.
+
+*The second case, with numbers.* Own coins 55, the 20 beside them. At 98.8 the long has lost 12: 63 against
+44.5 and 20: a step is due. Whoever steps names the call (it is worth nothing, it lost nothing): the shard is
+paid 20. The account: 43 against 44.5: still due. The step took the user's premium and changed nothing of what
+the account lacks. By N65's rule (a step is right where the account lacks less after) that step is wrong, and
+the long is what a step names. Take N65 and this is closed.
+
+*To take back.* The first round said a premium a user was paid might stand as margin for its other legs ("I
+think it is safe with the escrow"). It is not. One user, two accounts: A wrote an option and holds 1,000 of
+premium and a long; B holds the same short. The price falls: A's loss is paid to the shard out of the premium,
+B is paid the same by the shard, A is stepped with nothing left. The premium has left through B. 17.3's line
+("not margin for its other legs in the first form") should lose "in the first form".
+
+### N71 (Medium). A held option in a step; "every leg" before the day
+
+- A held option cannot lose more than what it is worth exercised above its entry and its premium, and the
+  coins stand for the premium. Section 4b had: a holder that keeps nothing else is liquidated by nobody. Under
+  17.4 a step of every leg ends it at what it is worth exercised, and its holder loses what it was worth
+  beyond: the first row of N70's table. *Recommendation:* a step of every leg takes the legs that are not held
+  options; a held option goes on with the account where the coins left hold its premium (as an account goes on
+  with its token legs: 16.18), and leaves only where they do not.
+- A user's leaving of every leg (kind 8, -1) ends the account. With an option in it that is an exercise before
+  the day, which 17.5 forbids. Say that it is wrong while the account has an option, as it is while it has
+  tokens.
+
+### N72 (Medium). The fallback, and who gains by a committee that says nothing
+
+"Where no price of a day was written by a time the terms say after it, an ended leg leaves at its entry, and
+its premium returns to whoever paid it." Silence then pays whoever is out of the money: the writer of an option
+that ended in the money owes nothing (a call written at 100, the day at 130, ten units: 300 not owed), and the
+holder of one that ended worth nothing has its premium back. One party to every option under a shard is the
+owner, and the committee is the one the owner named in its shard's id. A committee can also sign a false
+price; but that is a signature anyone holds against it, and silence is nothing anyone holds.
+
+*Recommendation.* Keep the fallback: the other way is coins locked for good. Make its time long (days, not
+dispute periods), since with N67's change nothing waits on it but the leg itself. Say it to a user beside
+14.7's lines: a committee that does not sign a day's price returns every option of that day to its entry. And
+if the committee's own design has a cost for a member that does not answer, this is where it is wanted.
+
+### N73 (Medium). The shard's side of a day
+
+- *"A draw is not stated over a row of an ended day that has a unit."* A user cannot keep the owner from
+  drawing: the owner sends the day's transaction for each account itself and has the keeper's fee back. It
+  costs two transactions an account that held an option of that day (the transaction, and its note applied,
+  one after another on the shard's one output): a thousand accounts, two thousand transactions before the next
+  draw. With the day's price written a draw's trace can say such a row exactly. *Recommendation:* a draw is
+  stated over a row of an ended day at its written price, and not over one whose price is not written.
+- *An account the day's transaction cannot take:* one under a statement stated before the day (it waits for a
+  statement's life at most), and one that owes (say that the transaction takes it).
+- *A call:* N67.
+- *The rate on the gross of an option row:* as today it is of the units' worth as futures, 1.75 % of the
+  underlying on each side of a book set off, where the options' own price may be 1 %. It was sized for a side
+  that leaves; before its day an option leaves only in a step. A number to set in the model.
+
+### N74 (Medium). The leaf and the trace: what a script still needs said
+
+- *The head.* A leaf at the first place with the least key and no row, never taken out and not counted. The
+  tree is then never empty, the leaf before a new row always exists, and the same two paths serve.
+- *The two paths of a new row* are of one tree that changes between them: the leaf before is shown against the
+  root as it is; the empty leaf against the root computed with the leaf before rewritten.
+- *A trace's first row* is tied to the head: its answer is shown the head's leaf. The last names none. The
+  statement says how many rows its trace has, so that the end is shown the last one.
+- *The order of keys.* A script compares numbers of 8 bytes, not strings of 32. Any order serves that is whole
+  and the same in every script: the market's 32 bytes as four numbers compared in turn, then the day, what it
+  is, the strike. The market first is what puts an underlying's rows next to one another.
+- *The key is more than the market.* A row today is named by its market, committee, scale and price limit
+  (`KpfTCStep` line 122 holds a leg to all 84 bytes): its units are worth nothing certain without the scale.
+  The scale and the limit stay in the key, after the market. "One underlying" for the one-price rule and for
+  the groups is the market alone.
+- *The call's object* needs no tree of prices of its own: it holds the trace's root, and a step shows the
+  trace's row of each leg's key by a path. That the prices are one an underlying is already the trace's.
+- *What each leaf holds beside its row:* what its legs were entered at (N67).
+- *Rows of one underlying with different days:* live ones are counted together in the two sums (they move with
+  one price); an ended one adds its worth at its day's price to the equity and nothing to the sums; one within
+  T of its day, N68.
+- *When claims begin:* 17.7 gives the time; say with it "and the count of rows is nothing", as 14.6 does.
+
+### N75 (Medium). The row of an account: more than three sums, and four things said
+
+- *Three sums are not all.* Beside D-down, D-up and R the ends need: the premiums of the legs that stay (they
+  can be added into R as each option's row is passed); what the legs that leave pay as premium (a held one its
+  premium; a written one, in a step, what the larger of its premium and its loss is above its loss); and for a
+  split, what the leg that leaves is asked alone. Count them in the model; a row is nearer 160 bytes than 144.
+- *The band stays of W,* the worth of what leaves, each leg whole. R is no base for it: a pair that sets off
+  has an R of nothing and two edges.
+- *The fee of a step,* "what is asked for the legs named": for a group that sets off that is nothing, and
+  nobody steps it. Keep the worth of the legs named, as today.
+- *An entry that says its place.* It costs 8 bytes and nothing else, if it is done as a leaving is done in
+  reverse: the trace's rows are in the new order, the first chain passes the new leg by, the second takes it
+  in its place, and the end holds the first to the account's root and writes the second. The marked account
+  keeps the leg at the end of its chain (so that `KpfTEnterOff` is as it is), and the order is written when the
+  entry is applied.
+- *A middle leg that leaves* puts the legs on each side of it next to one another: if they are of one
+  underlying they are one group from then on, which asks less and is sound. A hedge is never parted silently,
+  given N65: every trace is of the legs that stay. The transactions that have no trace: the call's step (all
+  leave), an entry undone (the account is what it was before), and the day's transaction (an ended leg adds
+  nothing to the sums, so the rest is asked the same with it or without: the change came with the clock: N68).
+- *A join* is sound: two accounts that each stood are asked no more as one. *A mark* keeps its test (the other
+  legs' losses each alone), so a mark of the leg that gained in a pair needs the coins of the one that lost.
+  *Token legs and an account that owes:* nothing changes.
+
+### N76 (High; of the built form; by reading, not run). 17.9 holds, and a band under a call is not enough
+
+*What the scripts say.*
+
+- A step under a call asks what the legs gained, whole: `KpfTCStep` line 178, `int asked = gain`, where the
+  gain is the worth at the call's price less the worth at the entry (lines 132 to 134). Nothing is taken off
+  but what the account owes (lines 219 to 224). `call_step_at` in `covered.rs` (lines 984 to 988) is the same.
+- The call's test moves each price the tolerance in the shard's favour (`KpfTCallEnd`, lines 175 to 178). The
+  call's object holds the prices as they were stated (lines 206 to 207), and the steps use those.
+- A stated price is right from the committee's less the tolerance rounded down to the committee's and the
+  tolerance rounded up (`KpfTShardPrice` 173 to 176, `KpfTStepPrice` 224 to 229): the two bounds are rounded
+  outward. The tolerance is the terms', one number for a shard and its accounts.
+- An entry's price is the leg's entry (`KpfTCRow` 196 to 201) and is held to the committee's only if someone
+  disputes it. `KpfTEnterS` holds the leg to its numbers' bounds and to nothing of what the shard holds.
+- Anyone states a call, for a bond of the shard's rate, 0.2 KAS at the least, and has the bond and a keeper's
+  least fee back.
+
+So the first round's numbers stand by the rule: a long of 10,000 units entered at 102.485, a call at 103.515,
+10,300 KAS claimed at one share, an honest 350 paid 33.
+
+*Is the band enough, exactly?* With the committee at c both times, and the band as kind 8's end has it (twice
+the tolerance of the worth at the price of the leaving, rounded up):
+
+- A long: gained 2gc a unit, and up to two steps of the price by the rounding; the band is 2g of c(1 + g). It
+  is left 2 steps less 2g²c: nothing where a price has 40,000 steps or more (at 0.5 %), and something below.
+- **A short: gained 2gc; the band is 2g of c(1 - g), the lower price. It is left 2g²c: 0.005 % of its worth,
+  51 KAS on that leg.** Small, but it is not nothing, and it is so at every leaving today as well.
+- The exact band, either way: the tolerance over one less the tolerance, of the leg's worth at its entry and
+  of its worth at the price, each rounded up; and the two bounds of a stated price rounded inward.
+
+*And the band is the smaller part.* It takes back the two edges. It does nothing about what the price moves
+between the entry and the call. The leg's size has no bound, the books take it at once, the shard is far below
+its lower level from that transaction, and until someone calls the owner holds a bet that pays one way: the
+price up 0.1 %, the leg claims 1,030 KAS beyond its band and the honest 350 are paid 254; up 1 %, 33 again;
+down, the account pays its own shard and the owner has it back when the call ends.
+
+*What a band under a call costs.* Every leg that gained, of every honest user, 1 % of its worth (a long of
+1,000 KAS up 2 %: 9.8 of its 20), paid at a call it did not choose; and what a called shard keeps is its
+owner's when the call ends. An owner whose shard is whole and whose users are up has a reason to be called
+that it does not have today.
+
+*Recommendation, one.* **A leg says the time it entered, and under a call a leg that entered less than T
+before the call's time asks nothing where it gained and pays what it lost.** T is 14.4's bound (a lateness, two
+dispute periods, the time between two visits), a term of the shard. No band under a call, as today.
+
+- The time is held where the entry is stated (`KpfTEnterS` has the statement's time). A split, a join, a
+  hand-over and a mark carry the leg's bytes and its time with them. Under a shard the leg's 32 bytes of a
+  committee can hold it (the committee is the shard's, shown apart, as it is for a token leg's vault), beside
+  the strike, the day and the premium: the leg stays 111 bytes.
+- The round trip: the leg that took the shard below its level is younger than T at any call that whoever
+  watches states in time. It gained 10,300: it asks nothing. The honest 350 are paid whole. Had the price
+  fallen, it pays. Worth nothing or less, exactly, with no arithmetic of edges.
+- A leg older than T entered while the shard, with it, was not called for T: it was within what the
+  requirement carries, and its two edges are what the lower level's "the tolerance in the shard's favour" and
+  the upper level's "the tolerance more" already count.
+- What it costs an honest user: one that entered within T of a call has no gain of those minutes. Nothing
+  else. It is to be said beside 14.7's lines.
+- It rests on what everything rests on: that whoever watches calls a shard within T of the transaction that
+  took it below its level.
+
+*The same round trip with no call.* One path takes no band: **the leaving of a leg that lost** (`KpfTCEnd`:
+what it lost at the price stated, whole). A long in one account and a short in another, each entered at its
+edge, the price then moved by more than the band: the one that gained is paid what the committee's prices
+give, less 2g² of its worth; the one that lost pays that less 2g. The pair has 2g less 2g² of the notional,
+0.995 %, a round. Against an honest owner it does not exist: the owner signs every entry and its tool signs no
+edge (14.7); what is left is the leaving's edge, the tolerance once, which the band of the one that gained
+pays for. With the owner's own keys on both accounts it is the owner taking 1 % of any size from its shard by
+notes that are paid as they come: no draw's rule, and held only by the call that the entries make due. The
+rule above closes that at a call; where nobody calls for T it is open, as a draw nobody disputes is.
+
+The other paths: a mark leaves the band in the leg; a step of a leg that gained takes it (`KpfTCEnd` line 314,
+for kinds 8 and 9 alike); a leaving of every leg takes it of W. 17.5's transaction at a day's written price
+takes "only the entry's part": right, the written price has no edge; write the entry's part as what the option
+is worth exercised at its entry moved by the tolerance over one less the tolerance, not by the tolerance.
+
+### N77 (Low). Where the second writing is against itself or what is built
+
+- 17.4, "a step names legs as today", against netting: N65.
+- 17.5, the gain "asked of the shard by a note", against S2: N66. "In no statement", against a step: N67.
+- 17.4, "a row grows by three sums": N75.
+- 17.9, "makes the round trip worth nothing": not for a short, and not the move: N76.
+- 17.3, "in the first form": N70.
+- 17.8's step 2 says every test of today passes on the tree; step 5 changes what a futures account is asked
+  (the last row of 17.4's table), so the tests of amounts change there. Say it at step 5.
+- `KpfTEnterS` holds a leg's 32 bytes of a committee into the shard's id (line 174, review 51's F80). An option
+  leg that keeps its strike, day and premium there is shown the committee apart. A line in 17.2.
+- 17.6 keeps "the rate on the gross as today" and 17.7 one price an underlying; with N74's key the gross of
+  two rows of one market and different scales is of two rows: as today.
+
+## What must still be decided before step 1's first test
+
+1. N65: the account that stays is tested as it stays; a step is right where the account lacks less after.
+2. N66 and N67: an ended leg is passed at its day's price; it leaves by the transaction where it lost, and
+   where it gained only if the account stands without it; nothing is frozen.
+3. N68: no credit within T of its day (one T, with "no entry").
+4. N69: the two lines for a held option.
+5. N76: the time in the leg; a leg younger than T under a call. And the two bounds rounded inward.
+
+To be found in the model, not decided before it: the sums a row needs (N75); the rate on the gross of an
+option row (N73); the fallback's time (N72); whether a held option goes on through a step of every leg (N71).
