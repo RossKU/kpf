@@ -393,8 +393,8 @@ pub const PAY_MIN: i64 = NOTE_MIN;
 
 /// What a step under a call makes of a covered account (`KpfTCStep`; `docs/ARCHITECTURE-CLEARING.md` 14.6): the
 /// call's row of each leg; what the legs gained or lost at the call's prices; what the account pays the shard for
-/// it (out of its coins, a note's least staying); the terms' fee of whoever steps (no output: what the
-/// transaction leaves is its funder's); what the user is paid (with the bond of a statement it stated, where the
+/// it (out of its coins, a note's least staying, which is then the note's own least); the terms' fee of whoever
+/// steps (no output: what the transaction leaves is its funder's); what the user is paid (with the bond of a statement it stated, where the
 /// step ends one); the bonds of a statement another stated and of its disputer; and the note that the legs left
 /// (what it asks is the gain, or below zero what was paid). A payment of less than [`PAY_MIN`] is nothing here.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,10 +445,15 @@ impl Account {
         } else {
             (0, gain)
         };
-        if v < pay {
+        // (An output that holds less than its account says pays what it holds: review 54, F89.)
+        let (pay, asked) = if pay > v { (v, sub(0, v)?) } else { (pay, asked) };
+        if v < 0 {
             return None;
         }
+        // (The note's least is the account's own, the one that stays in it while it has a leg: whoever steps adds
+        // nothing, but where the output holds less. Review 54, F93.)
         let rest = v - pay;
+        let rest = rest - NOTE_MIN.min(rest);
         let fee = self.t.keeper_fee_min.clamp(0, NOTE_MIN).min(rest);
         let mut user = rest - fee;
         let (mut cb, mut db) = (0, 0);

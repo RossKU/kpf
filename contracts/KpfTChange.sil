@@ -127,8 +127,16 @@ contract KpfTChange(int init_version) {
         int pot = iAt(mv, AMARGIN_AT) + iAt(mv, BMARGIN_AT);
         int bond = (pot / BPS) * iAt(mv, BOND_AT) + ((pot % BPS) * iAt(mv, BOND_AT)) / BPS;
         if (kind == 11) {
-            int cap = 100 * iAt(form, CALL_FEE_AT);
-            if (bond > cap) { bond = cap; }
+            // (The cap where it is a number: terms of a fee beyond anything cap nothing. Review 54, F91.)
+            if (iAt(form, CALL_FEE_AT) <= 92233720368547758) {
+                int cap = 100 * iAt(form, CALL_FEE_AT);
+                if (bond > cap) { bond = cap; }
+            }
+        }
+        // (A statement on a shard has a bond of a note's least at the least: a draw that is not the rule's,
+        // disputed and answered wrong by its owner's other key, gives the shard back for half a bond, and keeps
+        // it from a call and from every note meanwhile. Review 54, F88.)
+        if (kind == 5 || kind == 11) {
             if (bond < CALL_BOND_MIN) { bond = CALL_BOND_MIN; }
         }
         require(bond > 0);

@@ -32,11 +32,11 @@ pragma silverscript ^0.1.0;
 //   blake2b(push8(12) + push(sid) + push8(7) + push(the user's key) + push8(the rest))
 // or, below zero, what the note holds is added to what the shard holds. (Applied a leg at a time, the books
 // between two legs were neither those before nor those after: review 48, F76.)
-// While the shard is called nothing is paid by this script: what a note asks is counted in what the shard owes by
-// claims (one number, where a position has side B's margin), and goes on as a claim, which the call's own scripts
-// pay at one share (docs 14.6):
-//   blake2b(push8(12) + push(sid) + push8(9) + push(the user's key) + push8(the amount))
-// A note of the rest that is shown to a called shard is counted and goes on as a claim the same way.
+// What the shard does not pay it owes: the rest is counted in what the shard owes (one number, where a position has
+// side B's margin) when the note of the rest is written, and uncounted as the note is paid. While the shard is
+// called nothing is paid by this script: all that is asked is the note of the rest, counted, and the call's own
+// script pays every such note at one share once no row has a unit (docs 14.6; counted when written, so that a
+// note written before a call has its share whenever it is shown: review 54, F94).
 // KpfTLeftVoid: a note of legs one of which is no leg of the shard's books (no futures leg; no row of its market;
 // or its market's row has fewer units than the note's legs of it) is applied by nothing. The scripts of legs write
 // no such note, but a statement nobody disputed could, and it would end every draw for good (review 51, F81).
@@ -52,7 +52,6 @@ contract KpfTLeftVoid(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant CLAIM = 9;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;

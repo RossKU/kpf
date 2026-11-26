@@ -18,7 +18,9 @@ pragma silverscript ^0.1.0;
 // account without the leg, unmarked, a leg fewer counted, the coins added staying; and the note that the leg did
 // not enter (a note that a leg left, asking nothing, of a kind of its own: 8), a note's least in it: applied to
 // the shard, it takes the leg out of its row and out of what the legs were entered at.
-//   off(who, ageb, slotLen, terms, root, leg, moving, rkey)      anyone; `root`: the chain before the leg.
+//   off(who, ageb, slotLen, terms, root, leg, moving)      anyone; `root`: the chain before the leg. (The fee is no
+//   output: the account holds it less, and what the transaction leaves is whoever undoes it's. Beside the
+//   account and the note a block takes no small payment: review 51, F83.)
 contract KpfTEnterOff(int init_version) {
     int version = init_version;
 
@@ -105,7 +107,7 @@ contract KpfTEnterOff(int init_version) {
     int constant UNENTERED = 8;
     int constant KEEPER_AT = 37;
 
-    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[111] leg, byte[180] moving, byte[32] rkey) {
+    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[111] leg, byte[180] moving) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -132,12 +134,6 @@ contract KpfTEnterOff(int init_version) {
         int c1 = OpCovOutputIdx(id, 1);
         require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(UNENTERED) + p33(blake2b(z32 + lg)) + mv.slice(0, 33) + i9(0))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c1].value >= NOTE_MIN);
-        if (fee > 0) {
-            int m = tx.outputs.length - 1 - 4 * j;
-            require(m >= tx.inputs.length);
-            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
-            require(tx.outputs[m].value >= fee);
-        }
         goesOn();
     }
 

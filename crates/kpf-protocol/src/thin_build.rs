@@ -2598,19 +2598,18 @@ pub fn c_enter_end(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::covered
 /// `KpfTEnterOff.off`: an entry that ended left the marked account; anyone undoes it. Output 0 the account
 /// without the leg, output 2 the note that the leg did not enter; the terms' least fee of a keeper, out of the
 /// account's coins, to `rkey`.
-pub fn enter_off(lib: &[u8; 32], obj: &OLive<crate::covered::Marked>, script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<(OBuilt, Account, crate::covered::Unentered)> {
+pub fn enter_off(lib: &[u8; 32], obj: &OLive<crate::covered::Marked>, script: &LibScript, p: Payer) -> Result<(OBuilt, Account, crate::covered::Unentered)> {
     let m = &obj.s;
     let ((leg, before), (after, fee, note)) = m.leg().zip(m.undone()).ok_or_else(|| Error::Invalid("the marked account has no leg to undo, or its coins are beyond what is counted".into()))?;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(m.0.terms()), bv(before.to_vec()), bv(crate::thin::leg_bytes(&leg)), bv(m.moving()), bv(rkey.to_vec())];
+    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(m.0.terms()), bv(before.to_vec()), bv(crate::thin::leg_bytes(&leg)), bv(m.moving())];
     let (id, lid) = enter_hash(&mut d, lib, obj, &m.hash(), "marked account", script, "KpfTEnterOff", "off", args, 0)?;
     d.out(obj.value - fee as u64, hash_spk(lib, &after.hash()), Some((0, id)), "account", None);
     keep(&mut d, script, lid)?;
     d.out(note.value() as u64, hash_spk(lib, &note.hash()), Some((0, id)), "note", None);
+    // (No output of the fee: the account holds it less, and what the transaction leaves is its funder's. Beside the
+    // account and the note a block takes no small payment: review 51, F83.)
     d.fund(p.funds, &p.change_to);
-    if fee > 0 {
-        d.last(fee, &rkey, "the keeper's fee", &p.change_to);
-    }
     Ok((d.finish()?, after, note))
 }
 
@@ -2772,6 +2771,14 @@ pub fn shard_call(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
     Ok((state_raw(lib, shard, &s.fixed_hash(), &s.moving(), &st, &d.said(), s.form(), script, p)?, st, d))
 }
 
+/// Whether a statement is of a call's time or after, as `KpfTCStep` and `KpfTCallEnter` read it: its own time is at
+/// or after the call's; or it stands as it was stated (not disputed, and not standing again) and landed at or
+/// after it. (A statement that stands again, or is disputed, is an object no older than the answer or the
+/// dispute: it is held to its own time. Review 54, F90.)
+pub fn after_call(st: &Stated, disputed: bool, landed: u64, call_time: i64) -> bool {
+    st.t0 >= call_time || (!disputed && st.late < crate::thin::LATE_AGAIN && landed as i64 >= call_time)
+}
+
 /// What a statement on an object is shown as, standing or disputed: (the form, the hash of the object's state, the
 /// bonds it holds, the disputer's key, the point).
 fn stood_of(st: &Stated, pointed: Option<([u8; 32], i64)>) -> (i64, [u8; 32], i64, [u8; 32], i64) {
@@ -2789,8 +2796,8 @@ fn stood_of(st: &Stated, pointed: Option<([u8; 32], i64)>) -> (i64, [u8; 32], i6
 pub fn call_step<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood: Option<(&Stated, Option<([u8; 32], i64)>)>, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::covered::CallStep)> {
     let bonds = stood.map(|(st, pointed)| stood_of(st, pointed).2).unwrap_or(0);
     if let Some((st, _)) = stood {
-        if st.position != account.hash() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) || (obj.daa as i64) < call.s.time {
-            return invalid("the statement is not one of this account's own kinds that landed at or after the call's time: it stands, and is answered and applied as any");
+        if st.position != account.hash() || !(crate::covered::KIND_C_TAKE..=crate::covered::KIND_C_STEP).contains(&st.kind) || !after_call(st, stood.is_some_and(|(_, q)| q.is_some()), obj.daa, call.s.time) {
+            return invalid("the statement is not one of this account's own kinds of the call's time or after: it stands, and is answered and applied as any");
         }
     }
     let v = (obj.value as i64).checked_sub(bonds).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the object holds less than its bonds".into()))?;
@@ -2895,8 +2902,8 @@ pub fn call_off_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, call: &
 /// at or after the time of the call of its shard: the marked account again, the bonds back.
 #[allow(clippy::too_many_arguments)]
 pub fn call_enter_end<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, marked: &crate::covered::Marked, call: &OLive<crate::reserve::Called>, script: &LibScript, p: Payer) -> Result<OBuilt> {
-    if st.kind != crate::covered::KIND_C_ENTER || st.position != marked.hash() || marked.0.shard != Some(call.s.sid) || (obj.daa as i64) < call.s.time {
-        return invalid("the statement is no entry on this marked account, under this call's shard, that landed at or after the call's time");
+    if st.kind != crate::covered::KIND_C_ENTER || st.position != marked.hash() || marked.0.shard != Some(call.s.sid) || !after_call(st, pointed.is_some(), obj.daa, call.s.time) {
+        return invalid("the statement is no entry on this marked account, under this call's shard, of the call's time or after");
     }
     let (form, h, bonds, dkey, point) = stood_of(st, pointed);
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
@@ -3034,9 +3041,9 @@ pub fn draw_note_left<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: O
     if n.sid != shard.sid {
         return invalid("the note is to another shard");
     }
-    // (The chain of the legs stands where a market's name would: 33 bytes, and nothing after.)
-    let head = [&[0x20][..], &crate::reserve::Left::chain(&n.legs), &[0u8; 51]].concat();
-    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_LEFT, head, 0, 0, n.key, n.asked), script, rkey, p)
+    // (The legs are shown, and their chain is the note's: review 54, F87.)
+    let legs: Vec<u8> = n.legs.iter().flat_map(crate::thin::leg_bytes).collect();
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_LEFT, legs, n.key, n.asked), script, rkey, p)
 }
 
 /// As `draw_note`, by a note of the rest.
@@ -3046,7 +3053,7 @@ pub fn draw_note_rest<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: O
     if n.sid != shard.sid {
         return invalid("the note is to another shard");
     }
-    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_REST, vec![0u8; 84], 0, 0, n.key, n.amount), script, rkey, p)
+    draw_note_of(lib, obj, st, pointed, shard, note, n.hash(), (crate::reserve::NOTE_REST, vec![], n.key, n.amount), script, rkey, p)
 }
 
 /// An entry of a shard that ended and is not undone, as `KpfTDrawEntry` is shown it: the marked account it left,
@@ -3065,11 +3072,15 @@ pub fn draw_entry<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Optio
     if st.kind != crate::thin::KIND_DRAW || st.position != shard.hash() {
         return invalid("the statement is not a draw on this shard");
     }
-    // (The form; the marked account's fixed part and moving part; the leg's chain; a key; what the object's state
-    // is the hash of; its value.)
-    let (form, sid, efixed, emoving, e, ekey, nhash, value): (i64, [u8; 32], [u8; 32], Vec<u8>, [u8; 32], [u8; 32], [u8; 32], u64) = match &pending {
-        Pending::Marked(m) => (0, m.s.0.shard.unwrap_or([0; 32]), m.s.0.fixed_hash(), m.s.moving(), [0; 32], [0; 32], m.s.hash(), m.value),
-        Pending::Note(n) => (3, n.s.sid, [0; 32], vec![0; 180], crate::covered::chain_of_one(&n.s.leg), n.s.key, n.s.hash(), n.value),
+    // (The form; the marked account's terms, the chain before its last leg and its moving part; the leg, of the
+    // account or of the note; a key; what the object's state is the hash of; its value. What is shown is opened:
+    // review 54, F87.)
+    let (form, sid, eterms, eroot, emoving, eleg, ekey, nhash, value): (i64, [u8; 32], Vec<u8>, [u8; 32], Vec<u8>, Vec<u8>, [u8; 32], [u8; 32], u64) = match &pending {
+        Pending::Marked(m) => {
+            let (leg, before) = m.s.leg().ok_or_else(|| Error::Invalid("the marked account has no leg".into()))?;
+            (0, m.s.0.shard.unwrap_or([0; 32]), m.s.0.terms(), before, m.s.moving(), crate::thin::leg_bytes(&leg), [0; 32], m.s.hash(), m.value)
+        }
+        Pending::Note(n) => (3, n.s.sid, vec![0; 90], [0; 32], vec![0; 180], crate::thin::leg_bytes(&n.s.leg), n.s.key, n.s.hash(), n.value),
     };
     if sid != shard.sid {
         return invalid("what is shown is no entry of this shard that ended and is not undone");
@@ -3085,7 +3096,7 @@ pub fn draw_entry<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Optio
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.fixed_hash().to_vec()), bv(shard.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()),
         iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held), iv(pointed.is_some() as i64), bv(pointed.map(|x| x.0).unwrap_or([0; 32]).to_vec()), iv(pointed.map(|x| x.1).unwrap_or(0)),
-        iv(form), bv(efixed.to_vec()), bv(emoving), bv(e.to_vec()), bv(ekey.to_vec()), bv(rkey.to_vec()),
+        iv(form), bv(eterms), bv(eroot.to_vec()), bv(emoving), bv(eleg), bv(ekey.to_vec()), bv(rkey.to_vec()),
     ];
     let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated draw", script, "KpfTDrawEntry", "end", args, 0)?;
     match &pending {
@@ -3107,7 +3118,7 @@ pub fn draw_entry<T>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Optio
 /// `KpfTDrawNote.end` with the note given by its hash and by what the script is shown of it (its kind, the 84 bytes
 /// where a market stands, two numbers, a key, an amount).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn draw_note_of<T, N>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<N>, nhash: [u8; 32], shown: (i64, Vec<u8>, i64, i64, [u8; 32], i64), script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
+fn draw_note_of<T, N>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Option<([u8; 32], i64)>, shard: &crate::reserve::Shard, note: &OLive<N>, nhash: [u8; 32], shown: (i64, Vec<u8>, [u8; 32], i64), script: &LibScript, rkey: [u8; 32], p: Payer) -> Result<OBuilt> {
     if st.kind != crate::thin::KIND_DRAW || st.position != shard.hash() {
         return invalid("the statement is not a draw on this shard");
     }
@@ -3125,7 +3136,7 @@ fn draw_note_of<T, N>(lib: &[u8; 32], obj: &OLive<T>, st: &Stated, pointed: Opti
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(shard.fixed_hash().to_vec()), bv(shard.moving()), iv(st.t0), bv(st.arg.to_vec()), bv(st.outs.hash().to_vec()),
         iv(st.bond), bv(st.claimer.to_vec()), iv(st.window), iv(st.late), iv(st.held), iv(pointed.is_some() as i64), bv(pointed.map(|x| x.0).unwrap_or([0; 32]).to_vec()), iv(pointed.map(|x| x.1).unwrap_or(0)),
-        iv(shown.0), bv(shown.1), iv(shown.2), iv(shown.3), bv(shown.4.to_vec()), iv(shown.5), bv(rkey.to_vec()),
+        iv(shown.0), bv(shown.1), bv(shown.2.to_vec()), iv(shown.3), bv(rkey.to_vec()),
     ];
     let (id, lid) = enter_hash(&mut d, lib, obj, &h, "stated draw", script, "KpfTDrawNote", "end", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);

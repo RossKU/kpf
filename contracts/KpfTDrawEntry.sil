@@ -22,8 +22,10 @@ pragma silverscript ^0.1.0;
 // it is settled or ended.) The shard again; the claimer's bond is lost, half to whoever shows it, half in this
 // script's copy; a disputer has its bond back.
 //   end(who, ageb, slotLen, fixed, moving, t0, arg, outs, bond, claimer, window, late, held, disputed, dkey, point,
-//       form, efixed, emoving, e, ekey, rkey)                                                        anyone.
-//   e: the chain of the leg, for form 3 (efixed and emoving are then not read).
+//       form, eterms, eroot, emoving, eleg, ekey, rkey)                                              anyone.
+//   What is shown is opened: the marked account's terms, the chain before its last leg and that leg (form 0), or
+//   the leg of the note (form 3; the others are then not read). An object nobody opens would be undone or applied
+//   by nothing, and would end every draw: review 54, F87.
 contract KpfTDrawEntry(int init_version) {
     int version = init_version;
 
@@ -59,7 +61,7 @@ contract KpfTDrawEntry(int init_version) {
         return rs;
     }
 
-    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int disputed, byte[32] dkey, int point, int form, byte[32] efixed, byte[180] emoving, byte[32] e, byte[32] ekey, byte[32] rkey) {
+    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int disputed, byte[32] dkey, int point, int form, byte[90] eterms, byte[32] eroot, byte[180] emoving, byte[111] eleg, byte[32] ekey, byte[32] rkey) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -81,12 +83,12 @@ contract KpfTDrawEntry(int init_version) {
         require(form == 0 || form == 3);
         if (form == 3) {
             // A note that a leg did not enter, to this shard.
-            require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(8) + p33(e) + p33(ekey) + i9(0)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+            require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(8) + p33(blake2b(byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](eleg))) + p33(ekey) + i9(0)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         } else {
             // A marked account under this shard.
             require(em.slice(138, 171) == mv.slice(138, 171));
             require(em.slice(171, 180) == i9(1));
-            require(blake2b(p33(efixed) + em) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+            require(blake2b(p33(blake2b(byte[](eterms) + p33(blake2b(byte[](eroot) + byte[](eleg))))) + em) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         }
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);

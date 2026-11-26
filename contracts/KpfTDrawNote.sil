@@ -22,7 +22,9 @@ pragma silverscript ^0.1.0;
 // enters by the owner's own signature, and a leg's leaving and what is owed are written by a statement that waited
 // its dispute period.
 //   end(who, ageb, slotLen, fixed, moving, t0, arg, outs, bond, claimer, window, late, held, disputed, dkey, point,
-//       kind, head, net, gross, key, amount, rkey)                                                    anyone.
+//       kind, legs, key, amount, rkey)                                                                anyone.
+// (The legs of a note that legs left are shown, one to six, and their chain is the note's: a note whose chain
+// nobody opens would be applied by nothing, and would end every draw. Review 54, F87.)
 contract KpfTDrawNote(int init_version) {
     int version = init_version;
 
@@ -58,7 +60,7 @@ contract KpfTDrawNote(int init_version) {
         return rs;
     }
 
-    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int disputed, byte[32] dkey, int point, int kind, byte[84] head, int net, int gross, byte[32] key, int amount, byte[32] rkey) {
+    entry end(byte[24] who, byte[8] ageb, int slotLen, byte[32] fixed, byte[171] moving, int t0, byte[32] arg, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, int disputed, byte[32] dkey, int point, int kind, byte[] legs, byte[32] key, int amount, byte[32] rkey) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -84,8 +86,19 @@ contract KpfTDrawNote(int init_version) {
             // books have legs that are gone, and what they lost reads as the shard's. Or a note of the rest (kind
             // 7): what the shard owes and its books do not say.
             if (kind == 6) {
-                require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(6) + byte[](head).slice(0, 33) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+                int k = legs.length / 111;
+                require(k >= 1);
+                require(k <= 6);
+                require(legs.length == 111 * k);
+                byte[32] g = byte[32](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
+                for (i, 0, 6, 6) {
+                    if (i < k) {
+                        g = blake2b(byte[](g) + legs.slice(111 * i, 111 * i + 111));
+                    }
+                }
+                require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(6) + p33(g) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
             } else {
+                require(legs.length == 0);
                 require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(7) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
             }
         } else {

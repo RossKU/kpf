@@ -8872,3 +8872,544 @@ CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests     
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed
 CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed
 ```
+
+# Round 55
+
+Scope, two parts. (A) At the engine: what closes round 54's findings (F87, F88 in part, F89, F90, F91, F93,
+F94, F83), with my files brought along and the whole workspace run once. (B) On paper: section 15 of
+`docs/ARCHITECTURE-CLEARING.md`, "In and out with no wait: an account changes hands" (nothing of it is built).
+Working tree after df4a046; no src, contract or `kpf-out` file touched; no commit.
+
+## Headline
+
+- (A) **F87, F89, F90, F91, F93, F94 and F83 are closed**, each test saying so. **F88 is closed in part**, as
+  the paper says: a round costs 0.129 KAS on a small shard where it cost 0.079.
+- (A) **Four findings at the engine.**
+  - **F98 (Medium)**: `KpfTAddC` asks nothing of how long an object has stood. A sompi added in every block
+    keeps an account from being stepped and a shard from being called and from every note: no statement, no
+    bond, 0.0067 KAS a time. It is a twentieth of F88's round, and it is the same door section 15 opens wider
+    (N1).
+  - **F96 (Medium)**: a note of the rest that is not counted in what its shard owes ends every draw and is paid
+    by nothing. F94's fix turned what was a theft into a lock.
+  - **F97 (Low)**: what F90's rule leaves of F95: a statement of the block before the call's time that its own
+    user's key disputes is not stepped.
+  - **F99 (Low)**: the undo of an entry costs whoever makes it the note's least (0.107 KAS with the fee, 0.207
+    without), as a step did before F93.
+- (B) **Eleven things on paper, N1 to N11.** Two I would not build section 15 without deciding: **N1 (High)**,
+  a hand-over or a join lands the account again at will, so an account passed between two keys of its user is
+  never stepped; and **N2 (High)**, what a taker must check is not "what the shard holds against its
+  requirement". With N3 (a join under a call sets a loss off at par against a claim paid at a share) and N4
+  (the claim "the shard is never worse" is wrong by the band).
+- The whole workspace, once: 1,282 passed, 0 failed (one test of mine added after it: below).
+
+# Part A: at the engine
+
+## Fixed and verified
+
+### F87: closed
+
+`t1b_fixed_f87_what_ends_a_draw_is_opened_and_an_object_nobody_opens_ends_none`. A note of one leg and of six, a
+note of the rest, a marked account and the note that its leg did not enter end a draw (the controls). Refused
+(15): a note of seven legs; an object whose chain is 32 bytes of no legs, shown one leg, none, 111 bytes of
+anything, two legs; a note shown with the legs of another, with none, with a leg cut short; a note of the rest
+shown with legs; an object of 180 bytes with the mark whose fixed part nobody opens; the marked account shown
+with another leg, another chain before it, other terms; the note that a leg did not enter shown with another
+leg.
+
+Asked: is there still an object that ends a draw and that nothing clears?
+
+- *A marked account whose opened form is right but whose leg is in no row.* It ends a draw while it stands; it
+  is undone by `KpfTEnterOff`; its note is spent by `KpfTLeftVoid`. Round 52's test of that whole way
+  (`t1b_fixed_f81_...`) runs with the scripts as they are now, and passes.
+- *A note of the rest nobody counted.* Yes: F96, below.
+
+### F88: closed in part
+
+`t1b_finding_f88_an_owner_keeps_its_shard_under_statements_of_its_own_at_half_a_bond_a_round` (still a
+finding's test: the round still ends with the same shard). The bond of a draw has a floor of 0.2 KAS
+(`KpfTChange`; a sompi less is not stated).
+
+| The shard holds (at 1 %) | The bond of its draw | A round costs the owner |
+|---|---|---|
+| 1 KAS | 0.2 KAS | 0.129 KAS |
+| 10 KAS | 0.2 KAS | 0.129 KAS (it was 0.079) |
+| 1,000 KAS | 10 KAS | 5.03 KAS |
+| 100,000 KAS | 1,000 KAS | 500.03 KAS |
+
+An honest draw of a small shard is still made: half of a shard of 1 KAS and no leg, stated with a bond of 0.2
+KAS, applied; the owner has the amount and its bond.
+
+What undercuts the floor is F98: the same holding of the shard for 0.0067 KAS a block, with no statement.
+
+### F89: closed
+
+`t1b_fixed_f89_an_account_that_holds_less_than_it_must_pay_is_stepped_for_what_it_holds`. Round 54's account
+(it says 1,000 KAS, its leg lost 40) is stepped by the builder's transaction whatever its output holds:
+
+| Its output holds | It pays the shard | The user has | Whoever steps, before its fees |
+|---|---|---|---|
+| 1 sompi | 1 sompi | nothing | -0.2 KAS (it adds the note's least) |
+| 30 KAS | 30 KAS | nothing | -0.2 KAS |
+| 40 KAS less a sompi, 40 KAS | all of it | nothing | -0.2 KAS |
+| 40.2 KAS | 40 KAS | nothing | nothing |
+| 40.3 KAS | 40 KAS | nothing | the fee, 0.1 KAS |
+| 41 KAS | 40 KAS | 0.7 KAS | the fee |
+| 1,000 KAS | 40 KAS | 959.7 KAS | the fee |
+
+The note of the 30 KAS is applied to the called shard (30 KAS more held, no row), and a claim on it is then
+paid. One thing to know: where the output holds less than a note's least after what it pays, whoever steps adds
+up to 0.2 KAS and has it back only by applying the note. An account that says more than it holds is made by a
+statement nobody disputed; the cost of clearing it falls on whoever steps.
+
+### F90: closed
+
+`t1b_fixed_f90_a_statement_is_of_the_calls_time_by_its_own_time_or_by_its_landing_while_it_stands_as_stated`.
+The call's time 6,500. For `KpfTCStep` (a leaving on an account) and for `KpfTCallEnter` (an entry on a marked
+account), every case of the statement's own time 6,499 or 6,500, landed at 6,499 or 6,500, standing, disputed,
+standing again: 24 cases. The engine steps over it, or ends it, in the 14 where `after_call` says after; in the
+10 where it says before the builders write nothing, and the transaction of the same case at the call's own
+time, with the statement's time and its object put in, is refused. Round 54's case is among them: a statement
+of before the call, disputed after it, stands.
+
+What the rule leaves is F97.
+
+### F91: closed
+
+`t1b_fixed_f91_the_models_sums_saturate_and_a_shard_of_any_fee_is_called`. `Left::value` of a note that says
+the largest number less five is the largest number; `Shard::left` and `Shard::voided` return (the books are
+beyond what is counted where the note's output holds what it says; the script's answer with what it holds). A
+call is stated at the engine on shards whose terms say a keeper's fee of 92,233,720,368,547,758 (the cap
+taken), a sompi more, a hundredth of the largest number and a sompi, and the largest number (no cap: the
+shard's own bond, with the floor); a sompi less of bond is not stated.
+
+### F93: closed
+
+`t1b_fixed_f93_whoever_steps_adds_nothing_and_has_the_fee_where_the_account_has_it`:
+
+| The account | The fee | The user is paid | The step leaves whoever made it |
+|---|---|---|---|
+| gained 20 KAS, 50 KAS of coins | 0.1 | 49.7 KAS | +0.0873 KAS |
+| lost 20 KAS of 50 | 0.1 | 29.7 KAS | +0.0873 KAS |
+| lost all its 5 KAS | none | nothing | -0.0126 KAS (its transaction's cost) |
+| a note's least and the fee | 0.1 | nothing | +0.0874 KAS |
+| a note's least | none | nothing | -0.0126 KAS |
+
+The user now pays the note's least (0.2 KAS) and the fee out of its coins: 0.3 KAS a step. The note's least is
+whoever applies the note's, or whoever pays the rest of it.
+
+Item 5, the step's sums again: `t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts`, brought along
+and widened: 180 accounts; the output holding the coins, 5 KAS more, a sompi, half, a sompi less; the three
+forms. The model, the arithmetic written out and the engine agree on each; the user, another claimer and the
+disputer have to the sompi what the arithmetic says. In 131 of the 180 whoever stepped added nothing; in none
+is it the poorer by more than its transaction's cost and what the output lacked of a note's least. The
+heaviest step: 5,960 bytes, compute mass 9,190, storage mass 90,540. 180 transactions with a sompi changed:
+refused.
+
+### F94: closed
+
+`t1b_fixed_f94_a_note_of_the_rest_is_counted_when_it_is_written_and_the_order_of_payment_decides_nothing`. A
+called shard that holds 44.9 KAS and owes 70: the notes of 50 and 20 KAS are paid 32.07 and 12.83 KAS in either
+order (to a unit of a thousand sompi: 857 and 1 sompi apart). A note applied leaves what it asks and is not
+paid in what the shard owes, called or not (four cases at the engine; the same written and not counted:
+refused). A note never counted is paid by neither script: `KpfTCallPay.claim` of more than is owed, and
+`KpfTLeft.rest` paying more than is owed, are refused at the engine. That last is also F96.
+
+Item 3, what a shard owes:
+
+- *Counted twice:* no. What is asked and not paid is added once, where the note is written; a note paid in part
+  takes what is paid off, and the note that goes on is of what is left.
+- *Below zero:* no (`pay <= owed`, `amount <= owed`).
+- *Uncounted and paid, or taking the count of a real one:* F96.
+- *A draw while something is owed:* neither the draw's end nor the call's reads what the shard owes; a draw is
+  ended by the note of the rest (`KpfTDrawNote`), as before. So that a shard that owes is not drawn rests on
+  the note's holder, or anyone, showing it within the period, for half the draw's bond.
+- *The bond of a statement on a shard that owes* is of what it holds and what it owes: 1.3 KAS on a shard of
+  100 KAS that owes 30, at 1 %. A shard that owes pays more to draw; nothing wrong with it.
+- *A shard that owes and is not called*
+  (`t1b_r55_a_shard_that_owes_and_is_not_called_takes_an_entry_a_top_up_a_draw_and_a_call_and_pays_its_note`):
+  a leg enters and what it owes stays; its owner adds and it stays; a draw is stated and ended by the note; a
+  call, where one is due, is right, and the shard called owes what it owed; the note is paid 30 KAS and nothing
+  is owed; the same with what is owed written a sompi more, as it was, or below nothing: refused.
+
+### F83: closed
+
+`t1b_fixed_f83_the_undoing_of_an_entry_is_written_and_taken_at_the_smallest_account`. Marked accounts of a
+note's least and of that and a sompi, 0.01, 0.1, 0.3, 1 and 3 KAS more: each is undone by the builder's
+transaction (2,032 bytes; storage mass 403,764 of a block's 500,000 at the smallest, 216,667 at the largest);
+the account that goes on is the one of before the entry (its legs, keys, time, shard) with a leg fewer counted
+and the fee less, in state and in value; the note holds a note's least. Refused: the account a sompi poorer
+than the fee, in value and in state.
+
+What it leaves whoever undoes it is F99.
+
+## Findings
+
+### F98 (Medium). A sompi added in every block keeps an account, or a shard, from every other transaction
+
+`KpfTAddC`: `require(int(ageb) >= 0)`. It adds to a covered account by its user's signature and to a shard by
+its owner's, and asks nothing of how long the object has stood. Whoever adds spends the object and writes it
+again. Every transaction somebody else made on the object as it stood (a step's statement on the account; the
+call's step; a call, a note or an entry on the shard) spends an output that is gone.
+
+`t1b_finding_f98_...`: an account long 10 units with 3 KAS of coins, the price 9.9 (a step is the rule's): three
+sompi added in a row, each on the output of the one before, at no age, each taken. The same to a shard of 10
+KAS on which a call is due. What each cost beside the sompi, which stays the adder's own: 669,600 sompi, six times of six (the transaction's fee and the copy's).
+
+Against what was built to stop this:
+
+| The way | What it costs a time | What stops it |
+|---|---|---|
+| a statement of the user's own, again and again (review 42, M1) | a bond; and the account's time between two | 14.2 |
+| the owner's round of a draw (F88) | 0.129 KAS and up | the bond's floor |
+| a sompi added (this) | 0.0067 KAS | nothing |
+
+Whether another's transaction gets in between two additions is F88's race, and here it is easier for the adder:
+no statement stands for anyone to dispute, and the additions are made ahead and sent together.
+
+Under a call it is worse than a delay: one user that is not stepped keeps a row from emptying, and no claim of
+the shard is paid.
+
+Closing it: `KpfTAddC` asks that the object has stood for the terms' quiet period (the slot already holds an
+input's age to what the script is told; the terms have a quiet period that nothing of this form reads). Then
+after every addition there is a time in which only others' transactions are taken. The same line closes F88's
+race where it is asked of a draw's statement on a shard (a call asks none), and is what N1 needs.
+
+### F96 (Medium). A note of the rest that is not counted ends every draw and is paid by nothing
+
+After F94's fix a note of the rest is paid only out of what the shard says it owes. `KpfTLeft.rest` pays the
+lesser of the note and what the shard holds, and refuses where that is more than is owed; it pays no less.
+`KpfTCallPay.claim` refuses a note of more than is owed. `KpfTDrawNote` ends a draw by a note of the rest
+whatever the shard owes.
+
+A right statement writes a note of the rest counted. A statement nobody disputed (F81's premise) writes one
+that is not.
+
+`t1b_finding_f96_...`: a shard of 100 KAS that owes nothing, and a note of the rest of 30 KAS: it ends a draw at
+the engine; no transaction pays it (four written: paid whole with what is owed left, or written below nothing;
+paid nothing; paid a sompi); the model refuses it on a called shard too. Beside a real note of 30 KAS on a
+shard that owes 30: the made-up one is paid first, in the real one's place, and the real one is then the note
+nothing pays.
+
+Before this round the made-up note was paid out of whatever the shard held: a theft. Now it is a lock on every
+draw for good, and beside real notes still a theft, of their count.
+
+Closing it: `KpfTDrawNote` ends a draw by a note of the rest only where the shard owes at least its amount (the
+number is in the moving part it is shown). A note that is of more than is owed is then nothing: it ends no
+draw and is paid by nothing. And `KpfTLeft.rest` pays `min(amount, held, owed)`, so that a real note is paid as
+far as the count goes where a made-up one took part of it. What is left is the theft of a count, which is the
+premise's own.
+
+### F97 (Low). A statement of the block before the call that its own key disputes is not stepped
+
+F90's rule: a disputed statement, and one that stands again, are held to their own time. A statement's own
+time is its user's to say, up to a lateness before it lands. So for a lateness after a call's time a user
+states with a time of the block before it, and has a second key of its own dispute it in the next
+transaction, so that it never stands. It is not stepped. The dispute is answered (the statement is the rule's,
+at the committee's price of its own time), it stands again, and it is applied.
+
+`t1b_finding_f97_...`: a leaving of the time 6,499 landed at 6,560, the call's time 6,500. Standing: stepped
+over. Disputed: not. Standing again: not; after the last time to dispute it is applied at once.
+
+What it buys: the user leaves at a price of just before the call in place of the call's, whichever is better
+for it, and at its own price within the tolerance. The prices are a lateness apart at most. It is F95 without
+the need that nobody steps for a period.
+
+A caller that says a time a full lateness before it states leaves no such time: every statement that could
+say an earlier one has landed late. That is a rule for the tool that calls, and it has a cost (older prices).
+In the script: nothing I would add; the rule of F90 is right for what it was asked, and the paper should say
+this beside F95.
+
+### F99 (Low). The undo of an entry costs whoever makes it the note's least
+
+`KpfTEnterOff` writes the account (the fee less) and the note, holding a note's least, which whoever undoes
+adds. From F83's test: with the fee (0.1 KAS) the undo leaves its maker -0.107 KAS; on an account with nothing
+above a note's least, -0.207 KAS. It has the note's least back by applying the note, in a second transaction
+that anyone may make first. The same shape as a step before F93; under a call an entry that is not undone
+keeps a row from emptying. No line to propose that is as clean as the step's (the account goes on and keeps
+its own least): say in 14.7 that the undo and the note's applying are one keeper's two transactions.
+
+## Sizes (item 8)
+
+| Script | Bytes | Was |
+|---|---|---|
+| `KpfTDrawNote` | 1,393 | 1,159 |
+| `KpfTDrawEntry` | 1,181 | 1,138 |
+| `KpfTChange` | 1,543 | 1,508 |
+| `KpfTCStep` | 3,239 | 3,173 |
+| `KpfTCallEnter` | 1,051 | 1,013 |
+| `KpfTCallPay` | 1,562 | 1,562 |
+| `KpfTLeft` | 2,197 | 2,239 |
+| `KpfTLeftAll` | 3,825 | 3,846 |
+| `KpfTEnterOff` | 719 | 770 |
+
+# Part B: section 15 on paper
+
+What I hold it against: section 14 as built, and the two tests of review 44 (standing is of the net; what
+leaves an account as coins leaves the coins at the maintenance and at what the legs that stay lost).
+
+## N1 (High). A hand-over or a join lands the account again at will
+
+15.1: by the user's signature, nothing asked of the shard, no time written, "nothing waits". 15.2 the same.
+Each spends the account and writes it again. Section 14 holds a user's own changes of its account to a bond
+and to the account's time, so that "between two statements of its user's an account is free for a step". A
+hand-over to a second key of the user's own is no statement: it has no bond and reads no time.
+
+A user whose account stands below its maintenance hands it from its key A to its key A' and back, a
+transaction a block, made ahead and sent together. A step is a statement on the account's output; the call's
+step spends it. Each finds the output gone. The cost is a fee a block (some 0.007 KAS by what `KpfTAddC`'s
+transaction weighs). Under a call one such user keeps a row from emptying and every claim of the shard from
+being paid.
+
+This is F98 (which is built today) with a second door.
+
+*Decision I would take:* a hand-over and a join are of an account whose output has stood the terms' quiet
+period, and so is an addition (F98). "A user that is handed an account and wants out in the same second hands
+it on" becomes "after the quiet period". The quiet period is what a step needs to land, a few blocks; the
+section's second stays a second or two. Not the account's time (that is minutes), and not a bond (a hand-over
+has no wrong form to forfeit one for).
+
+## N2 (High). What a taker must check is what the shard is good for, and no script can check it
+
+15.1 names three things the taker checks: the registry's id, what the legs gained, "what its shard holds
+against its requirement". The third is the books. The books do not see an account that lost and was not
+stepped; that was review 44's S2.
+
+With numbers, the stock of 15.3: the owner holds a long and a short of 1,000 units from 10 in two accounts of
+its own, each with 5.5 % of coins (550 KAS); the shard holds 700 KAS. The books: net nothing; the requirement
+is the gross's alone. The price goes to 15. The short has lost 5,000 KAS and holds 550: it is due a step from
+a move of 1 % on, and its owner keeps it from one (F98, N1, or a statement of its own each round on an account
+whose bond is small). The books still show net nothing and an equity of 700 KAS against an upper level of 675
+(2.25 % of the gross's 30,000). The owner hands the long to a buyer for its coins and its gain: 5,500 KAS in
+plain coins, in the one transaction. The buyer's tool showed the three things, and each was in order. The
+buyer leaves: it is owed 4,850 KAS (the gain less the band); the shard holds 700 and the short's account can
+pay 550.
+
+A hand-over is what turns the owner's claim on its own shard (worth nothing where the shard cannot pay) into
+somebody's coins. Section 14 had no such way: a leg entered with the shard, by a statement anyone could read
+and dispute.
+
+*Decision:* the paper says what the taker's tool computes: what the shard is good for (its coins, less what it
+owes, less what its accounts gained, and what each account that lost can pay, no more than its coins: the
+number of review 44's model), over every account under the shard, with every statement, entry and note that is
+pending; and that an account below its standing that nobody stepped is a reason not to take any account of
+that shard. That is an index of a shard's accounts, which a tool needs anyway to step them. No script can do
+it: it would have to be shown the shard and every account. With N1's quiet period the owner's account is at
+least stepped by whoever watches.
+
+## N3 (Medium). A join under a call sets a loss off at par against a claim paid at a share
+
+14.6: every leg leaves at the call's price, "for every account alike, and what the accounts gained is paid at
+one share". A user with two accounts under a called shard, one that gained 100 KAS and one that lost 80 at the
+call's prices. Apart: it pays 80 in coins and has a claim of 100. Joined before it is stepped: a claim of 20.
+
+With the others owed 200 KAS and the shard holding 100:
+
+| | The shard holds | It owes | The share | The user nets | The others are paid |
+|---|---|---|---|---|---|
+| apart | 180 | 300 | 60 % | 60 - 80 = -20 | 120 |
+| joined | 100 | 220 | 45.5 % | +9.1 | 90.9 |
+
+The user is 29 KAS better and the others 29 worse. The prices are known from the moment the call is stated, a
+dispute period before the shard is called, so it is done at no risk. And it is a trade: whoever has a claim
+buys a losing account (a hand-over) and joins it; the loser is rid of a debt at par for less than par.
+
+15.2's "the shard is never worse for it" is about the shard's books, and here it is the other users who are
+worse.
+
+*Decision:* either a join is shown the shard and refused where it is called (a join then also waits while a
+statement stands on the shard, which is the dispute period of a call; a join is rarer than a hand-over and can
+bear it); or the paper says that an account's net is what it is owed and takes "for every account alike" out
+of 14.6. I would take the first: the second makes a called shard's claims a market in losses.
+
+## N4 (Medium). "The shard is never worse for it" is wrong by the band
+
+15.2 asks the reviewer to check the line of arithmetic. Apart, a leg that gained is paid its gain less the
+band (twice the tolerance of what it is worth), and an account that lost pays its loss. Joined, the gain
+stands against the loss at par: the band on what is set off is not kept.
+
+Account 1: long 100 units from 10, the price 10.1: a gain of 10 KAS; the band is 1 % of 1,010 = 10.1 KAS; apart
+it is paid nothing. Account 2 lost 30 KAS and has the coins. Apart: the shard receives 30. Joined: the net is
+-20; the shard receives 20. It is 10 KAS worse, by one signature.
+
+In general the shard gives up, by a join, the band of the legs whose gain is set off: at most twice the
+tolerance of what they are worth (1 % here). Where both lost, or one lost more than its own coins, the join is
+better for the shard, as the paper says.
+
+The joined account is exactly an account that entered the same legs itself: section 14 already pays an account
+its net. So nothing is opened that an entry did not allow; but a gain inside the band, which is worth nothing
+to its holder, is worth its face to anyone with a loss, and a hand-over delivers it.
+
+*Decision:* the sentence becomes "the shard is no worse than if the legs had entered one account; against the
+two apart it gives up the band on what is set off". And say whether that is meant. If the band is to hold, the
+joined account's time could be the later of the two and a lifetime more, which does not stop it; I see no
+cheap line that does, short of a join that reads prices. I would accept it and say so.
+
+## N5 (Medium). Whoever signs first gives the other a free option
+
+"In the first form the two parties sign one transaction ... or one signs a part and the other the rest, as an
+entry is signed today." An entry's statement has a time and a lateness: landed late it is ended at its user's
+cost. A hand-over has neither, and 14.1 says why it cannot: a script holds no transaction to "no later than".
+So the party that signs last lands it when it likes, at the price agreed, for as long as the first signer's
+inputs stand: the price moves and it lands, or it does not.
+
+*Decision:* the paper says who signs last (I would have the taker sign first with a coin of the exact amount
+and the party whose account it is land it: what the taker risks is a stale price it agreed to, and it takes
+its coin away by spending it), and that the first signer's tool moves its coin after a set number of blocks.
+With N1's quiet period the account's side cannot take its account away at once, which is one more reason for
+that order.
+
+## N6 (Medium). "An owner's own account counted at no gross" is S2's hole, and no hand-over could carry it
+
+15.3 names it as what would lower the stock's cost, not designed. It should be said that it cannot be:
+
+- The rate on the gross is what stands for a long and a short that part: review 44's S2 is an owner's own two
+  legs, one leaving paid and the other unable to pay. N2's numbers are that case; with no gross counted the
+  shard's requirement in them is nothing at all.
+- A hand-over "leaves the books as they are" and is not shown the shard. If the gross depended on whose key an
+  account has, a hand-over to a user would raise the shard's requirement: it would have to be shown the shard
+  and be refused where the shard does not hold it. That is an entry by another name.
+
+What the stock costs, for the paper to say plainly: a long and a short of S each are 5.5 % of S of coins in
+each account (they go with the account when it is handed out) and 2.25 % of 2 S in the shard's upper level:
+15.5 % of S idle, 4.5 of it the gross's.
+
+*Decision:* strike the sentence, or replace it by "not possible in this form".
+
+## N7 (Low). Legs of one market made one: possible, at a few sompi, without the shard
+
+15.3 says the books' number would have to move. It need not be shown the shard. The smallest thing I see:
+
+- a script on the account alone: legs of one market, one committee, one scale and limit, one way, become one
+  leg of the sum of the sizes, at an entry rounded against the user (up where it is long, down where short);
+- the account's gain is then less than before by under a sompi a unit: 20 units from 10.00, 10 from 10.03, 5
+  from 9.98 and 2 from 10.01 are worth 370.22 KAS; 37 units at 1,000,594,595 sompi are worth 15 sompi more;
+- when the leg leaves, the books' number is moved by its worth at that entry, which is those 15 sompi off what
+  the four entries put in. In the owner's disfavour or its favour by sompi; and so that it does not gather,
+  `KpfTLeft` writes the number as nothing where the last unit leaves the books.
+
+It costs granularity: a leaving is of one leg or of all, so 37 made one leave as 37. With hand-overs for the
+way out that is what the section wants anyway.
+
+*Decision:* design it with the join; without it six legs are one market at stock sizes and a half.
+
+## N8 (Low). What two accounts must have in common to be joined
+
+"Of one user's key under one shard." The shard's id is of the terms and the periods; it is not of the second
+key (an account may name a shard and another second key: nothing enters it, but it is opened) nor of the
+place where a position has its lease. A join that takes those of the first account lets the second's differ.
+
+*Decision:* the two moving parts are equal but for the coins, the count and the time; the two terms are equal;
+say it in 15.2.
+
+## N9 (Low). Where a wait comes back
+
+The table of 15 has no statement on the user's side. A wait is back in these:
+
+| A user | Waits for |
+|---|---|
+| was handed an account and wants coins out of it | a take: a statement, and the account's time first |
+| was handed an account whose last user (or the owner, entering it) stated lately | the account's time: twice a statement's life, before it states anything |
+| wants an account whose user has a statement on it | that statement applied, then the account's time |
+| wants out and nobody quotes | a leaving: a statement, and the band |
+| is under a shard that is called, or on which a call is stated | the step and its share; a hand-over then sells a claim |
+| wants in and the stock is out | the owner's entry: a statement |
+
+And one for the owner: every entry of stock writes the shard's time (F82), so an owner that keeps its stock
+filled states no draw until it has stopped for a lateness and two dispute periods (round 52 said this of
+entries; with a stock it is the owner's every day).
+
+*Decision:* the table in the paper, so that "never waits for one" is read with it.
+
+## N10 (Low). What a second is made of
+
+Every transaction that uses a script of the library spends a copy of it and writes it again (the fee of
+0.002 KAS a use goes with it). A copy is used once a block. So the hand-overs of every shard under one library
+are as many a block as the library has copies of `KpfTPass`; the tests' libraries have two. And each
+hand-over that takes a stock account is followed, some time, by the owner's entry of another.
+
+*Decision:* say the number of copies an exchange needs (trades a second over blocks a second), and what a copy
+costs to carry.
+
+## N11 (Low). "The taker needs no signature on the account"
+
+It holds for coins: what is handed can lose no more than is in it. Three things it does not hold for:
+
+- an account handed to a key nobody has stays in the books for good unless it falls below its standing: its
+  gains are asked by nobody, and the shard carries its requirement. A lost key does the same today; a
+  hand-over makes it a typing error;
+- an account can be put under anyone's key without its leave (an account below its standing; an account of a
+  shard with terms one would not sign);
+- N1: the second key is the user's own.
+
+*Decision:* the taker signs. It signs the transaction already where it pays; the script reads one signature
+more. It closes the first two and costs 65 bytes.
+
+## What is not found
+
+- *Anything of a third party's that moves by a hand-over alone:* nothing. The shard is owed out of the same
+  coins; the owner's signature is still needed for every entry; a transaction somebody signed on the account
+  as it stood is void.
+- *The account's time:* a hand-over keeps it and a join takes the later. No way round it by either.
+- *The second test, by a join or a hand-over:* coins leave an account by a take or a leaving alone; a join
+  only pools. A join that hides an account from a step is cross margin, and the shard is paid out of more
+  coins.
+- *The bond of a statement:* it is of the coins, which neither moves out.
+- *F61 and its kin by the stock:* an owner's own accounts are entered as any, by statements anyone disputes;
+  an account of both keys the owner's is taken today (round 51). What the stock adds is N2, not a false
+  entry.
+
+## What an exchange's feel still lacks
+
+- a size that is not a stock size, and a part of an account out (N7 helps the first; nothing here the second);
+- an order that waits: an offer signed once and taken by anyone (15.3 says it comes with the commands; until
+  then both are at their machines, and N5);
+- coins out without a statement, and with them a change of leverage downwards;
+- a price a user can hold the owner to: the quote is the owner's, and the way out without it is a leaving,
+  with the band (1 % of what the leg is worth, by 14.9);
+- a view of the shard that says what N2 asks, before every trade, in the time of a click;
+- more than a library's copies of trades a block (N10).
+
+# Ledger and counts
+
+| | Severity | State |
+|---|---|---|
+| F98 | Medium | open, new: `t1b_finding_f98_...` |
+| F96 | Medium | open, new: `t1b_finding_f96_...` |
+| F97, F99 | Low | open, new: `t1b_finding_f97_...`; F99 from F83's test |
+| F88 | Medium | closed in part; the race is open, and F98 is cheaper |
+| F95 | Medium | open by decision (14.7) |
+| F87, F89, F90, F91, F93, F94, F83 | | fixed, verified |
+| F92 | | the paper says it: `t1b_r55_f92_...` |
+| F85 | Low | open, left alone |
+| N1, N2 | High | paper |
+| N3, N4, N5, N6 | Medium | paper |
+| N7 to N11 | Low | paper |
+
+Files:
+
+- `crates/kpf-protocol/tests/auditT1_builders.rs`: 166 pass (161 before). Brought along: a note of the rest
+  with no `counted`; `enter_off` with no key; what is owed counted where a note is applied
+  (`left_as_the_script54`); a step that pays no more than is held and whose note's least is the account's
+  (`step_as_the_script54`); the tests of rounds 46, 51, 53 and 54 that the changes touched (the rest paid
+  where it is counted; the undo with no output of the fee; the arguments of `KpfTDrawNote`; the whole way of
+  a call; an entry under a call by the rule of time; sizes). `t1b_finding_f83/f87/f89/f90/f91/f93/f94_...`
+  are `t1b_fixed_...`; F88's test stays a finding's with the floor's numbers; F92's is
+  `t1b_r55_f92_..._as_the_paper_now_says`. New: `t1b_finding_f96_...`, `f97`, `f98`,
+  `t1b_r55_a_shard_that_owes_...`, `t1b_r55_the_sizes_...`.
+- `crates/kpf-tests/tests/auditT1_tests.rs`: 55 pass, unchanged this round.
+- `crates/kpf-cli/tests/auditT1_cli.rs`: 48 pass, unchanged.
+- `crates/kpf-protocol/tests/auditT1_solvency.rs`: 11 pass, unchanged.
+- `docs/audit/REVIEW-T1b.md`: this round appended.
+
+## The whole workspace, once
+
+`CARGO_BUILD_JOBS=2 cargo test --workspace --no-fail-fast --jobs 2`: 1,282 passed, 0 failed (138 result lines).
+Nothing failed, mine or not. `thin_draw` 31 of 31, `clearing_cli` 1 of 1, `committee_cli` 13 of 13. The run
+had my builders file at 165 tests; `t1b_finding_f98_...` was added after it, and the file run again alone: 166.
+
+```
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_builders   # 166 passed, 0 failed (after the run)
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-tests --jobs 2 --test auditT1_tests         # 55 passed, 0 failed
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-cli --jobs 2 --test auditT1_cli             # 48 passed, 0 failed (in the workspace run)
+CARGO_BUILD_JOBS=2 cargo test -q -p kpf-protocol --jobs 2 --test auditT1_solvency   # 11 passed, 0 failed (in the workspace run)
+```

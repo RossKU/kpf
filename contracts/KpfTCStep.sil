@@ -14,8 +14,10 @@ pragma silverscript ^0.1.0;
 // the note's least, and has it back where the note is applied.
 // What a block takes decides the payments (an output weighs as the inverse of what it holds, and one under a
 // covenant four times a plain one: the note and the call are over half a block): the fee is no output (what the
-// transaction leaves is whoever steps's, who funds it); the bond of a statement the user stated is paid with the
-// user's coins, in one output; and a payment of less than a note's least is not asked (it is whoever steps's).
+// transaction leaves is whoever steps's, who funds it); the note's least is the account's own (the one that stays
+// in it while it has a leg), and whoever applies the note has it; the bond of a statement the user stated is paid
+// with the user's coins, in one output; and a payment of less than a note's least is not asked (it is whoever
+// steps's).
 //   step(who, ageb, slotLen, terms, legs, at, moving, ctime, body, form, kind, t0, arg, outs, bond, claimer,
 //        window, late, held, dkey, point)       anyone; `at`: the call's row of each leg, 8 bytes a leg; form: 0 the
 //        account, 1 a statement on it, 2 a statement disputed.
@@ -34,7 +36,8 @@ contract KpfTCStep(int init_version) {
     int constant PAY_MIN = 20000000;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant CLAIM = 9;
+    // The lateness of a statement that stands again after a point of it was answered right.
+    int constant LATE_AGAIN = 499999999999;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
@@ -130,10 +133,18 @@ contract KpfTCStep(int init_version) {
         if (form == 0) {
             require(acct == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         } else {
-            // A statement of the account's own kinds that landed at or after the call's time: it is ended.
+            // A statement of the account's own kinds, of the call's time or after: it is ended. Its own time is at
+            // or after the call's; or it stands as it was stated, and landed at or after it. (One that stands
+            // again, or is disputed, is an object no older than the answer or the dispute: it is held to its own
+            // time. Review 54, F90.)
             require(kind >= 7);
             require(kind <= 9);
-            require(OpTxInputDaaScore(j) >= ctime);
+            int after = 0;
+            if (t0 >= ctime) { after = 1; }
+            if (form == 1 && late < LATE_AGAIN) {
+                if (OpTxInputDaaScore(j) >= ctime) { after = 1; }
+            }
+            require(after == 1);
             require(bond > 0);
             byte[32] c0 = blake2b(i9(CHANGE_TAG) + p33(acct) + i9(kind) + i9(t0) + p33(arg) + p33(outs) + i9(bond) + p33(claimer) + i9(window) + i9(late) + i9(held));
             if (form == 2) {
@@ -153,8 +164,17 @@ contract KpfTCStep(int init_version) {
             if (pay > room) { pay = room; }
             asked = 0 - pay;
         }
-        require(v >= pay);
+        // (An output that holds less than its account says pays what it holds: review 54, F89.)
+        if (pay > v) {
+            pay = v;
+            asked = 0 - pay;
+        }
         int rest = v - pay;
+        // The note's least is the account's own, the one that stays in it while it has a leg: whoever steps adds
+        // nothing (review 54, F93), but where the output holds less than that.
+        int least = NOTE_MIN;
+        if (least > rest) { least = rest; }
+        rest = rest - least;
         int fee = int(byte[8](tb.slice(KEEPER_AT, KEEPER_AT + 8)));
         if (fee < 0) { fee = 0; }
         if (fee > NOTE_MIN) { fee = NOTE_MIN; }

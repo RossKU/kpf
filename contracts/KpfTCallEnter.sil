@@ -23,7 +23,8 @@ contract KpfTCallEnter(int init_version) {
     int constant PAY_MIN = 20000000;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant CLAIM = 9;
+    // The lateness of a statement that stands again after a point of it was answered right.
+    int constant LATE_AGAIN = 499999999999;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
@@ -84,7 +85,13 @@ contract KpfTCallEnter(int init_version) {
             c0 = blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point));
         }
         require(c0 == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
-        require(OpTxInputDaaScore(j) >= ctime);
+        // (Of the call's time or after, as a step reads it: review 54, F90.)
+        int after = 0;
+        if (t0 >= ctime) { after = 1; }
+        if (form == 1 && late < LATE_AGAIN) {
+            if (OpTxInputDaaScore(j) >= ctime) { after = 1; }
+        }
+        require(after == 1);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);

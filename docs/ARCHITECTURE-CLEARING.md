@@ -1458,13 +1458,16 @@ held against the engine in 14.10 (c)):
 - *No note that is not applied ends a call*, as one ends a draw: an owner writes notes at will (a leaving of an
   account of its own), and a call could then never be applied. The owner keeps its shard's notes applied; a
   shard called because a note that paid it was not applied is called.
-- *"Landed at or after the call's time"* is the object's own time in the chain (the DAA score of the output a
-  script spends), not the time a statement says. A statement that stood before the call and is written again
-  after it (answered right: it stands again) is one that landed after: it is ended by a step like any.
+- *"Of the call's time or after"* (review 54, F90): a statement is ended by a step where the time it says is at
+  or after the call's; or where it stands as it was stated and its output landed at or after it (the DAA score
+  of the output a script spends). One that stands again, or is disputed, is an output no older than the answer
+  or the dispute, and is held to the time it says: a statement of before the call stands whoever disputes it
+  afterwards.
 - *No band under a call*: every leg leaves at the call's one price for its row, for every account alike, and
   what the accounts gained is paid at one share.
-- *Claims are their own notes* (tag 9: the key, the amount), counted in what the shard owes by claims when they
-  are written; a note of the rest written before the call is counted when it is shown to the called shard.
+- *A claim is the note of the rest*, and no kind of its own (review 54, F94): whatever a shard does not pay of
+  what a note asks is counted in what it owes when the note of the rest is written, called or not, and uncounted
+  as it is paid. A called shard pays none in full and each at one share, in whatever order they are shown.
 - *The share* of a claim of `a` is `a` times what the shard holds over what it owes, rounded down, and no more
   than `a`. A script's numbers are of 64 bits, so above 3,000,000,000 sompi owed both are counted in a unit of a
   thousand, a million, ... sompi (what is owed rounded up, what is held down): a claim is paid at most 7 parts in
@@ -1476,8 +1479,15 @@ held against the engine in 14.10 (c)):
   (it is whoever steps's: an account that cannot be stepped would keep the rows from emptying, and every claim
   from being paid); and the bond of a statement the user itself stated is paid with the user's coins, in one
   output. A user whose account is left with less than 0.2 KAS after what it lost and the fee is paid nothing.
-- *An entry or a statement that a step ends costs nobody a bond*, as 14.6 says: a user that states again and
-  again on a called shard's account is stepped over its statement, whatever it stated.
+- *The note's least of a step is the account's own* (review 54, F93): the note's least that stays in an account
+  while it has a leg becomes the least of the note the step writes, so that whoever steps adds nothing and has
+  the fee; whoever applies the note, or pays what it asks, has that least. A user stepped under a call is the
+  poorer by the fee and by a note's least (0.3 KAS with the terms in use), and has the least back where it
+  applies its own note and is paid its own share.
+- *A step ends a statement at nobody's cost but for bonds too small to pay* (review 54, F92): a bond of less
+  than a note's least is whoever steps's, as every such payment is.
+- *An account's output that holds less than the account says* pays what it holds (review 54, F89): its legs
+  leave the books all the same.
 
 ### 14.7 What rests on whoever watches, and what pays for it
 
@@ -1730,3 +1740,134 @@ What it found is of whether a call reaches its end, not of its sums:
 | F93 (low) | a step leaves whoever makes it 0.11 KAS the poorer where the user is paid: it adds the note's least, which whoever applies the note has |
 | F94 (low) | a claim paid before a note of the rest is shown is paid at a share that does not count the note |
 | F83 (low, open since review 51) | the undo of an entry on a small account fits no transaction: it now stands on the way to every claim of a called shard |
+
+**After review 54** (26 November 2026; at the engine, my tests; the reviewer's are round 55):
+
+| Finding | Closed by |
+|---|---|
+| F87 | what ends a draw is opened: `KpfTDrawNote` is shown the legs of a note that legs left (one to six) and holds their chain to the note; `KpfTDrawEntry` is shown the leg of a note that a leg did not enter, and of a marked account its terms, the chain before its last leg and that leg. An object nobody opens ends no draw |
+| F88 | in part: a statement on a shard (a draw, a call) has a bond of a note's least at the least, whatever the shard holds. A round of a draw that is not the rule's, answered wrong by the owner's other key, costs half of that and three fees (0.13 KAS) and holds the shard for the blocks of three transactions: an hour of it costs some thousands of KAS, on a shard of any size. Not closed: that a caller's statement lands between two rounds is a race in the mempool, which no script decides |
+| F89 | a step pays no more than the account's output holds, and its note says so |
+| F90 | the rule of time above |
+| F91 | the model's sums saturate as the scripts refuse; the cap of a call's bond is taken only where it is a number, so that terms of a fee beyond anything leave a shard that is called |
+| F92 | the paper says it (above) |
+| F93 | the note's least of a step is the account's own: whoever steps has the fee less what the transaction costs (0.09 KAS where the account has it) and adds nothing |
+| F94 | one note of the rest, counted when it is written |
+| F95 | not by a script: a leaving stated after the call is ended by a step within its period, and a step is now paid. That somebody steps rests on whoever watches (14.7) |
+| F83 | the undo of an entry has no output of the fee (the account holds it less; what the transaction leaves is whoever undoes it's): the account and the note alone fit a block at the smallest account an entry leaves |
+
+F85 stays: the pass that takes out what nothing reaches follows the commands.
+
+**Review 55**, at the engine: F87, F89, F90, F91, F93, F94 and F83 are closed (what ends a draw is opened, and
+fifteen objects nobody opens end none; an account that says 1,000 KAS is stepped whatever its output holds, from
+a sompi up; the rule of time on 24 cases of the two scripts; whoever steps adds nothing and has 0.0873 KAS where
+the account has the fee; two notes of the rest paid 32.07 and 12.83 KAS in either order; the undo of an entry
+taken from a note's least upward, 403,764 grams of a block's 500,000). A step on 180 random accounts in the three
+forms, with outputs that hold the coins, more, half, or a sompi: model, arithmetic written out and engine agree.
+The whole workspace passes (1,282 tests). Sizes: `KpfTDrawNote` 1,393 bytes, `KpfTDrawEntry` 1,181, `KpfTChange`
+1,543, `KpfTCStep` 3,239, `KpfTCallEnter` 1,051, `KpfTLeft` 2,197, `KpfTLeftAll` 3,825, `KpfTEnterOff` 719.
+
+| Finding | What it is |
+|---|---|
+| F98 (medium) | a sompi added in every block keeps an account or a shard from every other transaction: `KpfTAddC` asks no age, and each addition costs a fee and no bond (0.0067 KAS, a twentieth of F88's round). Under a call one such user keeps a row from emptying and every claim unpaid |
+| F96 (medium) | a note of the rest that was never counted ends every draw and is paid by nothing: F94's closing turned a theft into a lock |
+| F97 (low) | what the rule of time leaves of F95: a statement of a block before the call's time, landed a lateness after and disputed at once by its user's other key, is not stepped, and once answered stands again |
+| F99 (low) | the undo of an entry costs whoever makes it the note's least, which it has back only by applying the note too |
+| F88 | closed in part as said: a round costs 0.129 KAS on a shard of 1 or 10 KAS, 5.03 on 1,000, 500 on 100,000; and F98 is cheaper |
+| F95 | open by decision |
+
+**Review 55 on section 15** (on paper): nothing of a third party's moves by a hand-over alone, and no way was
+found round an account's time, the second test or a statement's bond. What it found is in 15.5.
+
+## 15. In and out with no wait: an account changes hands (26 November 2026; on paper, nothing built)
+
+Section 14 is the form that is safe whoever the clearing party is. What it costs a user is time: a leg enters by
+a statement, and the account takes no other change until the statement is applied (a lateness and a dispute
+period: 45 to 90 seconds by 14.9); a leg leaves by a statement, and its user is paid after the same. An exchange
+answers in a second. This section is how the same form answers in a second, without a price read by any script
+and without anything new that a third party must trust.
+
+**Why a statement waits, and when nothing needs to.** A statement waits because its price is said and not read:
+the wait is the time anyone has to show the committee's. A price matters to a third party only where the
+shard's books change: a leg enters them (its entry is what the shard is held to) or leaves them (what it gained
+is asked of the shard). **Where the books do not change no price is needed, and nothing waits.** Two things
+leave the books as they are:
+
+1. **The user's side of an account is handed to another key.** The legs stay, at their entries; the coins stay.
+   What the two agree to pay each other for it is theirs alone, in plain coins, in the same transaction.
+2. **Two accounts of one user under one shard become one.** The legs of both, the coins of both.
+
+With the two, a statement is what a clearing party (or anyone who makes a market) does ahead of time, and a user
+never waits for one:
+
+| A user wants | What happens, in one transaction |
+|---|---|
+| in, when somebody is leaving | the leaver's account is handed to it; it pays the leaver what the two agreed |
+| in, with nobody leaving | an account the clearing party entered before (its stock: accounts of one leg, long and short, of round sizes) is handed to it |
+| one account for all it holds | the account it was handed is joined to its own |
+| out, when somebody is entering | its account is handed to whoever enters |
+| out, with nobody entering | the clearing party takes the account for what it quotes (and leaves the books by a statement, in its own time) |
+| less, or the other way | its account is handed over and another is handed to it, in the one transaction: both or neither |
+
+This is the goal's second row ("a side is handed over without the party that stays; a clearing party takes the
+user's side at once") in the form of section 14, and what was asked for on 22 November: a close and an open
+joined in one transaction, a statement of a price the way out when nobody is there.
+
+### 15.1 A hand-over (`KpfTPass`)
+
+Spends a covered account that carries no statement and no mark, by its user's signature; writes it again with
+another key where the user's was. Nothing else of it changes: its legs, their entries, its coins, its count, its
+time, its shard. The shard is not shown.
+
+- *Who is paid* is not the script's: the taker's coin and the leaver's payment are in the same transaction,
+  which both sign or neither.
+- *The taker needs no signature of its own on the account.* What it is handed can lose no more than the coins
+  in it (a covered account owes nothing beyond them), and the coins are now its own.
+- *Nothing of a third party's moves.* The shard is owed by the account what it was owed, out of the same coins;
+  what the legs gain is asked of the shard by a later statement as before, for the key that then holds the
+  account.
+- *The time before which the user states nothing* stays as it is: a hand-over is no way round it.
+
+What whoever takes an account checks, and no script does: that the account is the registry's (its object's id),
+what its legs gained at the price it believes, what its shard holds against its requirement. The tool shows the
+three.
+
+### 15.2 Two accounts joined (`KpfTJoinC`)
+
+Spends two covered accounts of one user's key under one shard, neither carrying a statement or a mark, by that
+key's signature; writes one: the legs of the first then the legs of the second (six at most), the coins of both,
+the later of the two times. The shard is not shown.
+
+- *The shard is never worse for it.* Before, each account's loss was paid out of its own coins and each
+  account's gain asked in full. After, a gain of one's legs stands against a loss of the other's, and what is
+  left of a loss is paid out of the coins of both: what the shard receives is at least what it received, and
+  what it pays at most what it paid (a line of arithmetic, to be checked by the reviewer; with the band, whose
+  rate is of what all legs are worth either way).
+- *The other way (one account made two) is not here.* Legs and coins divided as their user likes leave the legs
+  that lost in an account of no coins: that needs a price (a statement), or it is a hand-over of the whole.
+
+### 15.3 What it asks of a clearing party, and what is not solved
+
+- **Stock.** The accounts it hands out were entered by statements of its own, with its own coins in them, and
+  are counted in its shard's gross (1.75 % of them, 14.9) though a long and a short of its stock are no risk to
+  anybody. A stock of both ways of ten sizes is capital that earns nothing but the spread. *What would lower it*
+  (not designed): an account whose user is its shard's owner counted at no gross.
+- **Sizes.** An account is handed over whole. A user that wants 37 units takes accounts of 20, 10, 5 and 2 and
+  joins them: four legs of its six. *Legs of one market and one way made one leg* (the sum of the sizes, and an
+  entry that leaves what the legs were entered at as it is) would take the count back to one; the entry is a
+  price and the sum of two worths is not the worth of a sum to the sompi, so the books' number would have to move
+  with it. Not designed.
+- **A user that is handed an account and wants out in the same second** hands it on: nothing waits. A user
+  whose account carries a statement of its own (it chose the slow way out) waits for it.
+- **Orders.** An offer of an account (a price for it, signed by its user) and an offer to take one are what
+  Executors match. In the first form the two parties sign one transaction on one machine, or one signs a part
+  and the other the rest, as an entry is signed today. An order as an object comes with the commands.
+- **What a taker is not protected from by a script:** an account of a shard that is about to be called. A call
+  steps every account at the call's price and pays what was gained at one share. The tool shows the shard's
+  equity against its level; a taker that does not look is a user of that shard like any.
+
+### 15.4 What this leaves of section 14
+
+Everything. A statement is how legs come into being and cease (the clearing party's work, and a user's way out
+when nobody takes its account), how a user takes coins out, how an account that lost is stepped, how a shard is
+called. Section 15 is how accounts that exist find their users.

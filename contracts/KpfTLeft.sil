@@ -32,11 +32,11 @@ pragma silverscript ^0.1.0;
 //   blake2b(push8(12) + push(sid) + push8(7) + push(the user's key) + push8(the rest))
 // or, below zero, what the note holds is added to what the shard holds. (Applied a leg at a time, the books
 // between two legs were neither those before nor those after: review 48, F76.)
-// While the shard is called nothing is paid by this script: what a note asks is counted in what the shard owes by
-// claims (one number, where a position has side B's margin), and goes on as a claim, which the call's own scripts
-// pay at one share (docs 14.6):
-//   blake2b(push8(12) + push(sid) + push8(9) + push(the user's key) + push8(the amount))
-// A note of the rest that is shown to a called shard is counted and goes on as a claim the same way.
+// What the shard does not pay it owes: the rest is counted in what the shard owes (one number, where a position has
+// side B's margin) when the note of the rest is written, and uncounted as the note is paid. While the shard is
+// called nothing is paid by this script: all that is asked is the note of the rest, counted, and the call's own
+// script pays every such note at one share once no row has a unit (docs 14.6; counted when written, so that a
+// note written before a call has its share whenever it is shown: review 54, F94).
 // KpfTLeft: a note of one leg, and a note of the rest.
 //   apply(who, ageb, slotLen, terms, rows, moving, leg, r, key, asked, tag)    anyone; `r`: the leg's row; `tag`: 6, or 8
 //                                                    for the note that a leg did not enter (KpfTEnterOff writes it).
@@ -50,7 +50,6 @@ contract KpfTLeft(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant CLAIM = 9;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
@@ -157,7 +156,6 @@ contract KpfTLeft(int init_version) {
         int pay = 0;
         int left = 0;
         int owed = int(byte[8](mv.slice(76, 84)));
-        int out = REST;
         if (asked < 0) {
             int more = tx.inputs[n].value - NOTE_MIN;
             if (more < 0) { more = 0; }
@@ -167,15 +165,13 @@ contract KpfTLeft(int init_version) {
         } else {
             pay = asked;
             if (pay > held) { pay = held; }
-            if (int(byte[8](mv.slice(130, 138))) != 0) {
-                // (Called: nothing is paid, and what is asked is a claim.)
-                pay = 0;
-                owed = owed + asked;
-                out = CLAIM;
-            }
+            // (Called: nothing is paid.)
+            if (int(byte[8](mv.slice(130, 138))) != 0) { pay = 0; }
             held = held - pay;
             v = v - pay;
             left = asked - pay;
+            // (What is not paid is owed.)
+            owed = owed + left;
         }
         if (pay > 0) {
             int m = tx.outputs.length - 1 - 4 * j;
@@ -189,7 +185,7 @@ contract KpfTLeft(int init_version) {
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(out) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);
@@ -218,34 +214,28 @@ contract KpfTLeft(int init_version) {
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
+        // (Not while the shard is called: the call's own script pays every note of the rest the same share.)
+        require(int(byte[8](mv.slice(130, 138))) == 0);
         int held = int(byte[8](mv.slice(67, 75)));
         int owed = int(byte[8](mv.slice(76, 84)));
         int pay = amount;
         if (pay > held) { pay = held; }
-        int out = REST;
-        if (int(byte[8](mv.slice(130, 138))) != 0) {
-            // (Called: nothing is paid here. The note is counted in what the shard owes by claims and goes on as
-            // a claim, which the call's own scripts pay at one share.)
-            pay = 0;
-            owed = owed + amount;
-            out = CLAIM;
-        } else {
-            require(pay > 0);
-        }
+        require(pay > 0);
+        // (What is paid is owed no more: a note that was never counted is paid out of nothing.)
+        require(pay <= owed);
+        owed = owed - pay;
         int left = amount - pay;
-        if (pay > 0) {
-            int m = tx.outputs.length - 1 - 4 * j;
-            require(m >= tx.inputs.length);
-            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
-            require(tx.outputs[m].value >= pay);
-        }
+        int m = tx.outputs.length - 1 - 4 * j;
+        require(m >= tx.inputs.length);
+        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
+        require(tx.outputs[m].value >= pay);
         int c = OpCovOutputIdx(id, 0);
         require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(rw)))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value - pay);
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(out) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);

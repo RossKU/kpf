@@ -32,11 +32,11 @@ pragma silverscript ^0.1.0;
 //   blake2b(push8(12) + push(sid) + push8(7) + push(the user's key) + push8(the rest))
 // or, below zero, what the note holds is added to what the shard holds. (Applied a leg at a time, the books
 // between two legs were neither those before nor those after: review 48, F76.)
-// While the shard is called nothing is paid by this script: what a note asks is counted in what the shard owes by
-// claims (one number, where a position has side B's margin), and goes on as a claim, which the call's own scripts
-// pay at one share (docs 14.6):
-//   blake2b(push8(12) + push(sid) + push8(9) + push(the user's key) + push8(the amount))
-// A note of the rest that is shown to a called shard is counted and goes on as a claim the same way.
+// What the shard does not pay it owes: the rest is counted in what the shard owes (one number, where a position has
+// side B's margin) when the note of the rest is written, and uncounted as the note is paid. While the shard is
+// called nothing is paid by this script: all that is asked is the note of the rest, counted, and the call's own
+// script pays every such note at one share once no row has a unit (docs 14.6; counted when written, so that a
+// note written before a call has its share whenever it is shown: review 54, F94).
 // KpfTLeftAll: a note of two to six legs.
 //   apply(who, ageb, slotLen, terms, rows, moving, legs, at, key, asked)    anyone; `at`: the row of each leg, 8 bytes a leg.
 contract KpfTLeftAll(int init_version) {
@@ -48,7 +48,6 @@ contract KpfTLeftAll(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant CLAIM = 9;
     int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
@@ -166,7 +165,6 @@ contract KpfTLeftAll(int init_version) {
         int pay = 0;
         int left = 0;
         int owed = int(byte[8](mv.slice(76, 84)));
-        int out = REST;
         if (asked < 0) {
             int more = tx.inputs[n].value - NOTE_MIN;
             if (more < 0) { more = 0; }
@@ -176,15 +174,13 @@ contract KpfTLeftAll(int init_version) {
         } else {
             pay = asked;
             if (pay > held) { pay = held; }
-            if (int(byte[8](mv.slice(130, 138))) != 0) {
-                // (Called: nothing is paid, and what is asked is a claim.)
-                pay = 0;
-                owed = owed + asked;
-                out = CLAIM;
-            }
+            // (Called: nothing is paid.)
+            if (int(byte[8](mv.slice(130, 138))) != 0) { pay = 0; }
             held = held - pay;
             v = v - pay;
             left = asked - pay;
+            // (What is not paid is owed.)
+            owed = owed + left;
         }
         if (pay > 0) {
             int m = tx.outputs.length - 1 - 4 * j;
@@ -198,7 +194,7 @@ contract KpfTLeftAll(int init_version) {
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(out) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);
