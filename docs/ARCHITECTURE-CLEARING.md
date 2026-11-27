@@ -4828,8 +4828,19 @@ owner that pays its shard up, states at the edge and sets its book off; users th
 take; a hedge by the clock, a user's and the owner's own) with the levels by rows, 28,000 paths: no user and no
 account unpaid. **What this does not show:** in those walks two legs seldom meet in one series (what the owner
 took differs from the walk leg by leg in one set of twenty-eight), so they say that nothing breaks, and the
-books at random are what holds the rule. Not in the model yet, and before step A: a call by a second price a
-market (6) against today's call of a futures shard. Reckoned: today a price is moved the tolerance in the
+books at random are what holds the rule. **A call by one price a market that shows it** (6) is in the same walks (the lower level is what the rows lose
+at the worst price of the move, exactly; the upper stays along the line of nothing): no user and no account
+unpaid on another 28,000 paths, and on 30,000 paths a variant of a user's hedge by the clock at ticks of 3.5,
+4 and 4.5 %. **Found on the way, in the walk and not in the form** (`s472_model_owes.py`): the walk counted
+what an account's coins did not pay at a leg's day as unpaid at once. A covered call whose call ended in the
+money (the long had gained twice as much) was so "unpaid" by 57,248 on one path in 15,000 with today's rule, and
+four times as often with a call that comes later, which is how it was seen. The form says it is owed (16.18;
+17.8g, C) and set against what the account is paid later: the walk now carries it so (coins below nothing; unpaid
+where the account is gone), and every variant leaves nobody unpaid. One sentence of 17.4 changes with it: the
+owner's own hedge by the clock, without the rule of N68, left users unpaid on 131 paths of 1,000 at ticks of
+4 % because the walk dropped what its account owed; carried, users are unpaid on 0 and 2 paths (2 and 4 %) and
+the owner's own accounts on 949 and 699. N68 stands on the other count, which did not move: without it the
+shard is unpaid by its users on 950 paths of 1,000. Against today's call of a futures shard, reckoned: today a price is moved the tolerance in the
 shard's favour and the lower rate is the maintenance rate less the tolerance, which for one market is the
 shard's equity at the price below the maintenance rate less twice the tolerance of the net; so the second
 price is within **that** rate of the first (the account's lower rate less the tolerance), and a futures shard

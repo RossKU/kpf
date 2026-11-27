@@ -500,22 +500,35 @@ impl Shard {
         asked_flat(&side, p, r) + rate_up(units * p, gross)
     }
     fn is_paid(&mut self, i: usize, owed: i64) {
+        // (16.18: what the coins do not pay the account owes. Its coins go below nothing; what it is paid later
+        // is set against that; it is unpaid where the account is gone with it: `gone`.)
         let a = &mut self.parties[i];
-        let paid = owed.min(a.coins);
-        a.coins -= paid;
+        let paid = owed.min(a.coins.max(0));
+        a.coins -= owed;
         self.held += paid;
-        if a.own {
-            self.unpaid_own += owed - paid;
-        } else {
-            self.unpaid += owed - paid;
+    }
+    /// An account that is gone: what it still owes is unpaid; an account of the owner's gives its coins back.
+    fn gone(&mut self, a: &Party) {
+        if a.coins < 0 {
+            if a.own {
+                self.unpaid_own -= a.coins;
+            } else {
+                self.unpaid -= a.coins;
+            }
+        } else if a.own {
+            self.owner_took += a.coins;
         }
+    }
+    /// What an account owes, taken out of its coins: for whoever sets a claim against it.
+    fn owed_out(&mut self, i: usize) -> i64 {
+        let debt = (-self.parties[i].coins).max(0);
+        self.parties[i].coins += debt;
+        debt
     }
     /// An account with no leg left: its coins are its user's.
     fn close(&mut self, i: usize) {
         let a = self.parties.remove(i);
-        if a.own {
-            self.owner_took += a.coins;
-        }
+        self.gone(&a);
     }
     /// A leg enters, the premium of a written option paid in by the owner; the account has what an entry asks and
     /// `more` beside. No gate.
@@ -548,6 +561,11 @@ impl Shard {
     }
     /// What the shard pays an account stays in it as coins (17.5: a gain is no coin of its user's while legs stay).
     fn pays_into(&mut self, i: usize, asked: i64) {
+        // (Set against what the account owes first: no coin moves for that.)
+        let debt = self.owed_out(i);
+        let set = debt.min(asked);
+        self.parties[i].coins -= debt - set;
+        let asked = asked - set;
         let paid = asked.min(self.held);
         self.held -= paid;
         self.parties[i].coins += paid;
@@ -636,11 +654,12 @@ impl Shard {
                     old += g;
                 }
             }
-            let net = old + young.min(0);
+            let own = a.own;
+            let net = old + young.min(0) - self.owed_out(i);
             if net < 0 {
                 self.is_paid(i, -net);
             } else {
-                claims.push((a.own, net));
+                claims.push((own, net));
             }
         }
         let (held, owed) = (self.held, claims.iter().map(|c| c.1).sum::<i64>());
@@ -655,9 +674,7 @@ impl Shard {
         }
         // (What is left of the accounts and of the shard is their owners'.)
         for a in std::mem::take(&mut self.parties) {
-            if a.own {
-                self.owner_took += a.coins;
-            }
+            self.gone(&a);
         }
         self.owner_took += self.held;
         self.held = 0;
@@ -849,6 +866,9 @@ struct Extra {
     /// The shard's levels by rows (17.8j, 6): the legs of one series (calls or puts, a strike, a day) netted, and
     /// the futures legs.
     rows: bool,
+    /// A call is due by one price a market that shows it (17.8j, 6): the lower level is what the side loses at
+    /// the worst price of the move, exactly; the upper level stays along the line of nothing.
+    shown: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -920,7 +940,7 @@ impl Shard {
             side = netted(&held, self.now, self.rules.near);
         }
         let (r, gross) = if upper { (UP, GROSS_UP) } else { (LO, GROSS_LO) };
-        (if x.exact { worst_near(&side, p, r) } else { asked_flat(&side, p, r) }) + rate_up(units * p, gross)
+        (if x.exact || (x.shown && !upper) { worst_near(&side, p, r) } else { asked_flat(&side, p, r) }) + rate_up(units * p, gross)
     }
     fn due_x(&self, i: usize, p: i64, x: Extra) -> bool {
         let a = &self.parties[i];
@@ -1013,6 +1033,7 @@ impl Shard {
             let young = if x.young_net { (gained + lost).max(0) } else { gained };
             net += if x.young_net { (gained + lost).min(0) } else { lost };
             let own = a.own;
+            net -= self.owed_out(i);
             if net < 0 {
                 self.is_paid(i, -net);
             } else {
@@ -1044,9 +1065,7 @@ impl Shard {
             }
         }
         for a in std::mem::take(&mut self.parties) {
-            if a.own {
-                self.owner_took += a.coins;
-            }
+            self.gone(&a);
         }
         self.owner_took += self.held;
         self.held = 0;
@@ -1222,7 +1241,7 @@ fn tally(tick: i64, rules: Rules, plays: u32, x: Extra, paths: u64) -> [i64; 8] 
     t
 }
 
-const X0: Extra = Extra { top_own: 0, edge: false, set_off: false, informed: false, farm: false, pair: 0, junior: false, exact: false, young_net: false, edge_users: false, witness: false, users_take: false, gross_futures: false, rows: false };
+const X0: Extra = Extra { top_own: 0, edge: false, set_off: false, informed: false, farm: false, pair: 0, junior: false, exact: false, young_net: false, edge_users: false, witness: false, users_take: false, gross_futures: false, rows: false, shown: false };
 const BOTH: Rules = Rules { young: true, near: true };
 
 /// The claim of `a_shard_of_options_pays_its_users_whatever_its_owner_does`, against an owner that pays its shard
@@ -1309,14 +1328,18 @@ fn review_t2_what_the_young_give_up() {
 }
 
 /// N68, the owner's own account: a hedge that ends by the clock, in a shard its owner keeps paid up (in `run` the
-/// entry itself has the shard called, and the leg is young). Without the day's rule users are unpaid.
+/// entry itself has the shard called, and the leg is young). Without the day's rule its accounts end unpaid.
 #[test]
 fn review_t2_the_owners_own_hedge_by_the_clock_needs_the_days_rule() {
     for tick in [200, 400] {
         let x = Extra { top_own: 1, young_net: true, ..X0 };
         let (without, with) = (tally(tick, Rules { young: true, near: false }, 0b0010, x, 1_000), tally(tick, BOTH, 0b0010, x, 1_000));
         println!("T2 the owner's hedge by the clock, its shard paid up, {tick} bps: without the day's rule users unpaid on {} of 1,000 paths, its own accounts on {}; with it {} and {}", without[0], without[2], with[0], with[2]);
-        assert!(without[0] > 10 && without[2] > 500);
+        // (With what an account owes carried as the form has it (16.18), what the owner's account does not pay
+        // at its hedge's day is set against what it is paid later, and its users are paid: before, the walk
+        // counted it gone at once, and users were unpaid on 131 paths at 400 bps. The accounts themselves end
+        // unpaid without the rule.)
+        assert!(without[2] > 500);
         assert_eq!((with[0], with[1], with[2]), (0, 0, 0));
     }
 }
@@ -1832,8 +1855,11 @@ fn with_the_shards_levels_by_rows_nobody_is_left_unpaid() {
         for tick in [50, 200, 400, 450] {
             let t = tally(tick, BOTH, plays, x, 1_000);
             let flat = tally(tick, BOTH, plays, Extra { rows: false, ..x }, 1_000);
-            println!("rows {name:50} {tick:3} bps: unpaid {} {} {}; {} ticks a path; the owner took {} a path (leg by leg {})", t[0], t[1], t[2], t[4], t[5], flat[5]);
+            // (And a call by one price a market that shows it.)
+            let s = tally(tick, BOTH, plays, Extra { shown: true, ..x }, 1_000);
+            println!("rows {name:50} {tick:3} bps: unpaid {} {} {}; {} ticks a path; the owner took {} a path (leg by leg {}); a call by a price that shows it: unpaid {} {} {}, {} ticks a path", t[0], t[1], t[2], t[4], t[5], flat[5], s[0], s[1], s[2], s[4]);
             assert_eq!((t[0], t[1], t[2]), (0, 0, 0), "{name}, ticks of {tick} bps");
+            assert_eq!((s[0], s[1], s[2]), (0, 0, 0), "{name}, ticks of {tick} bps, a call by a price that shows it");
         }
     }
 }
