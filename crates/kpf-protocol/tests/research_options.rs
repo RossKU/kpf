@@ -1376,6 +1376,17 @@ fn due_at(acct: &Acct, a: i64, q: i64) -> bool {
     acct.coins + acct.gained(a) + moved < acct.premiums()
 }
 
+/// M1 (17.8g, D): the same test counting what a step would leave the account. What the legs gained to the price
+/// named, where it is above nothing, is paid in less the band of the futures legs, and no less than nothing: an
+/// account whose premiums lie in what its futures legs gained is due a band sooner, and pays whole. (An account
+/// whose legs set each other off gained nothing and gives up no band: it is not due for it.)
+fn due_stepped(acct: &Acct, a: i64, q: i64) -> bool {
+    let moved: i64 = acct.legs.iter().map(|x| if x.option() && x.near { x.moved(a, q).min(0) } else { x.moved(a, q) }).sum();
+    let gain = acct.gained(a) + moved;
+    let band: i64 = acct.legs.iter().filter(|x| !x.option()).map(|x| rate_up(x.units * a, 2 * G)).sum();
+    acct.coins + if gain >= 0 { (gain - band).max(0) } else { gain } < acct.premiums()
+}
+
 /// The prices a stater would try: the two ends, and every strike between them with the price either side.
 fn prices_to_try(legs: &[Leg], a: i64) -> Vec<i64> {
     let (l, u) = ends(a, LO);
@@ -1635,7 +1646,7 @@ fn a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_withou
 
     // At random.
     let mut rng = Rng(0x17_0087);
-    let (mut kept_n, mut left_n, mut unpaid_rule, mut unpaid_none, mut paths_none, mut later, mut by_band) = (0, 0, 0i64, 0i64, 0, 0, 0);
+    let (mut kept_n, mut left_n, mut unpaid_rule, mut unpaid_none, mut paths_none, mut later, mut by_band, mut unpaid_band, mut sooner) = (0, 0, 0i64, 0i64, 0, 0, 0, 0i64, 0);
     for _ in 0..40_000 {
         let a = 1_000 + rng.below(1_000_000);
         // A held option in the money at its day, and one to three legs that go on.
@@ -1652,43 +1663,61 @@ fn a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_withou
         let whole = Acct { coins: 0, legs: all.clone() };
         let floor = worst(&all, a, LO) + whole.premiums() - whole.gained(a);
         let coins = (floor + rng.below(floor.abs() / 2 + 2)).max(0);
-        for rule in [true, false] {
+        for (rule, band_counted) in [(true, false), (false, false), (true, true)] {
             // (The premium of the ended leg is paid out of what it gained: the coins are as they were.)
             let (mut coins, mut kept, mut legs, mut p) = (coins, net, stay.clone(), a);
             let mut unpaid = 0i64;
             for tick in 0..6 {
                 // The ended leg leaves where the rule lets it (without the rule: at once).
                 if kept > 0 && (!rule || stands(coins, &legs, p)) {
-                    if rule {
+                    if rule && !band_counted {
                         left_n += (tick == 0) as i64;
                         later += (tick > 0) as i64;
                     }
                     kept = 0;
-                } else if kept > 0 && tick == 0 {
+                } else if kept > 0 && tick == 0 && !band_counted {
                     kept_n += 1;
                 }
                 // Whoever watches: a step of every leg where the account is due by a price (what is kept counts).
                 let acct = Acct { coins: coins + kept, legs: legs.clone() };
-                if prices_to_try(&legs, p).iter().any(|q| due_at(&acct, p, *q)) {
+                let due_plain = prices_to_try(&legs, p).iter().any(|q| due_at(&acct, p, *q));
+                let due = if band_counted { prices_to_try(&legs, p).iter().any(|q| due_stepped(&acct, p, *q)) } else { due_plain };
+                sooner += (band_counted && due && !due_plain) as i64;
+                // (An account that the test with the band shows due at the day itself was due before it: it is
+                // not one this test would have let stand. The path is not counted.)
+                if band_counted && due && tick == 0 {
+                    break;
+                }
+                if due {
                     let (_, _, owes) = stepped(&acct, (1 << legs.len()) - 1, p);
                     // (Found: with the rule, what a step leaves unpaid is never more than the band of the
                     // futures legs that leave in it: the account had its premiums in what its legs gained, and
                     // a step pays what they gained less their band.)
                     let band: i64 = legs.iter().filter(|x| !x.option()).map(|x| rate_up(x.units * p, 2 * G)).sum();
                     assert!(!rule || owes <= band, "unpaid {owes} beyond the band {band}");
-                    by_band += (rule && owes > 0) as i64;
+                    assert!(!band_counted || owes == 0, "M1: unpaid {owes} with the band counted");
+                    by_band += (rule && !band_counted && owes > 0) as i64;
                     unpaid += owes;
                     legs.clear();
                     break;
                 }
                 // The user takes all a take gives it (never what is kept: it is no coin).
                 let alone: i64 = legs.iter().map(|x| (-x.gained(p)).max(0)).sum();
-                coins -= (coins - asked_group(&legs, p, UP) - legs.iter().map(|x| x.premium_all()).sum::<i64>() - alone).max(0);
+                let took = (coins - asked_group(&legs, p, UP) - legs.iter().map(|x| x.premium_all()).sum::<i64>() - alone).max(0);
+                coins -= took;
                 // The price moves, by the lower rate at the most.
                 let (l, u) = ends(p, LO);
                 p = l + rng.below(u - l + 1);
+                // (An account that took all a take gives is due at no price right after a move of the lower rate,
+                // by the test that counts the band as well: review T11, D8.)
+                if took > 0 && kept == 0 {
+                    let after = Acct { coins, legs: legs.clone() };
+                    assert!(!due_stepped(&after, p, p) && !due_at(&after, p, p));
+                }
             }
-            if rule {
+            if band_counted {
+                unpaid_band += unpaid;
+            } else if rule {
                 unpaid_rule += unpaid;
             } else {
                 unpaid_none += unpaid;
@@ -1696,6 +1725,6 @@ fn a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_withou
             }
         }
     }
-    println!("a held leg at its day: by the rule its gain stayed in the account on {kept_n} paths and left at its day on {left_n} (on {later} it left at a later visit); the shard unpaid {unpaid_rule} in all with the rule, on {by_band} paths and never by more than the band of the futures legs a step takes; paid out at the day whatever stays, the shard is unpaid on {paths_none} paths, {unpaid_none} in all");
-    assert!(kept_n > 3_000 && left_n > 1_000 && paths_none > 300 && unpaid_none > 10 * unpaid_rule);
+    println!("a held leg at its day: by the rule its gain stayed in the account on {kept_n} paths and left at its day on {left_n} (on {later} it left at a later visit); the shard unpaid {unpaid_rule} in all with the rule, on {by_band} paths and never by more than the band of the futures legs a step takes; paid out at the day whatever stays, the shard is unpaid on {paths_none} paths, {unpaid_none} in all; with the band counted in a step's test (M1) the shard is unpaid {unpaid_band}, {sooner} visits stepping an account the plain test does not");
+    assert!(kept_n > 3_000 && left_n > 1_000 && paths_none > 300 && unpaid_none > 10 * unpaid_rule && unpaid_band == 0 && sooner > 0);
 }

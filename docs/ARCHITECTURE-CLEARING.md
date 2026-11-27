@@ -3230,13 +3230,16 @@ change when a claim is paid and grows by every coin that reaches the shard.
    account would be asked 186 and has 70), the account has 120 and after a move of the lower rate 66, its
    premium and more; paid out at the day, the written call would stand on 70 having lost 100. At random
    (40,000 accounts, the price then moving a lower rate a visit, the user taking all a take gives): by the rule
-   the gain stayed on 3,662 paths and left at once on 4,706; paid out at the day whatever stays, the shard is
-   unpaid on 410 paths, twenty times as much. **Found (M1): with the rule the shard is still unpaid on 30
+   the gain stayed on 3,836 paths and left at once on 4,685; paid out at the day whatever stays, the shard is
+   unpaid on 474 paths, twenty-eight times as much. **Found (M1): with the rule the shard is still unpaid on 34
    paths, never by more than the band.** An account may have its premiums in what its futures legs gained, and
    a step pays what they gained less their band: the test of a step counts no band. For the account's side
    (17.8, 6): a step is due where the coins, what the legs gained less the band of the futures legs, and the
    sum to the price named are below the premiums; or a step takes no band (its price is its stater's, within
-   the tolerance, and the band is there for that). Not decided. Still to say before it is carried into
+   the tolerance, and the band is there for that). Decided by review T11 (D8) and shown: the test counts what
+   a step would leave the account (17.8g, D): the shard is then unpaid on no path, 43 visits step an account
+   the plain test does not, and an account that took all a take gives is due at no price after a move of the
+   lower rate. Still to say before it is carried into
    `covered.rs` and `reserve.rs`: the sums a row needs (with the account's side); N81's bound is 17.8f's, left
    for the last phase.
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
@@ -3934,7 +3937,97 @@ book set off), which does not close S1. The choice is 3.13 % (closed; 39 % and 1
 a call still due at once, with at the most 0.74 % less than the lower level), or nothing until the rates are
 set. Whichever: the numbers of many tests move with it, and it is reviewed at the engine.
 
-### 17.8g The day's price, and an ended leg (17.8, 5; on paper, for review)
+### 17.8g The day's price, and an ended leg (17.8, 5; second writing, after review T11; on paper)
+
+17.5 says what holds; this says the objects and the transactions, and what of it is built now. The first
+writing (kept below, with the review's table) let every transaction take the day's note it liked, and a
+committee's attest takes its price, within the spread, from whoever builds the transaction: two true notes of
+one day differ. So: **a shard has one price a market and a day, written once into its books, and every leg of
+the shard ends by it.**
+
+**A. The committee's note of a day** (built first, alone).
+
+- **The object** (`KpfDay`): under the library's id, in the form the fee pool has (its `go` asks the id of its
+  own input and that a script of the library names it), its state `blake2b(push8(22) + push(committee) +
+  push(market) + push8(day) + push8(price) + push8(spread))`. No owner; it holds `DAY_MIN` (a note's least).
+- **`KpfTDay.write(u, n, rid, mkt, t0)`**, anyone: the twin of `KpfTNote.note`. Beside the committee's epoch
+  table spent by its attest for the market and the time `t0` (every line `KpfTNote` has of that: the table of
+  the time, the quorum, the time not ahead of the chain); the price is the attest's and above nothing, the
+  spread the table's; output `n` is the object of that state, under the library's id, holding `DAY_MIN` or
+  more; its copy goes on with the fee; one input and two outputs under the library's id. No citation: a price
+  note's signatures are public and are used again while a table of the day's window lives.
+- **`KpfTDay.copy(who, ageb, x, n)`**, anyone: the note at the place `who` names, of the state `x`, goes on
+  as it is (its script, the id, its value or more), and output `n` is a second note of the same script
+  holding `DAY_MIN` or more. Two inputs and three outputs under the library's id.
+- **A reader** names the note at a place of `who`; holds its input to the library's id and to the script of
+  the state it is shown (the committee, opened from the shard's id by the seed; the market and the day of
+  what it prices, equal; the price; the spread); asks four times the spread within its terms' tolerance and a
+  price above nothing, and uses the lower of the price and its row's limit; and writes the note again as it
+  is, its value or more (never a least: what a note holds above a copy's floor can be swept).
+- A day's price is attested within the life of the committee's tables of that time (an epoch or two), or
+  never: whoever holds a leg of the day, or will have its keeper's fees, writes the note in that time.
+
+**B. The shard's price of a day** (built with the dated rows of the tree: 17.8's seventh step).
+
+- **A leaf of the day** in the tree of dated rows: its key the market and the day, its kind "the day's
+  price"; it holds the price, or "none". **Put in once**: by anyone, in a transaction that spends the shard
+  beside a committee's note of that market and day (a reader, as above: the spread is held here, once, against
+  the shard's tolerance), where no leaf of that key stands (the leaf before, as a row is put in).
+- **"None"** is put in the same way, with no note, shown an input that landed at or after the day and the
+  fallback's time (two epochs of the committee at the least), where no leaf of that key stands. Whichever is
+  written first is the day's for that shard: the fallback cannot be taken where a price was written, nor a
+  price after it.
+- **The shard's note of the day** (state `blake2b(push8(23) + push(sid) + push(market) + push8(day) +
+  push8(price or nothing) + push8(1 where none))`) is written by that transaction and copied by anyone
+  (`KpfTDay.copy` takes either note). **It is all the end of a leg reads**: of its account's shard, by
+  equality of the market and the day, and nothing of a spread.
+- A draw's and a call's trace count a dated row of an ended day at the leaf's price, answered by the leaf;
+  where none is written yet the row is priced as a row of a day to come (the price now, stated and answered).
+
+**C. An ended leg leaves by one transaction of anyone's, always** (`KpfTDayLeg.end`; built with the account's
+side, 17.8's sixth step, and B).
+
+- The account, not under a statement (a statement holds the account's hash; an ended leg leaves in the time
+  14 leaves a step); the shard's note of the leg's market and day, which goes on; the leg named.
+- **What it gained** is what it is worth exercised at the day's price less the same at its entry (the lower
+  of the price and the leg's limit), and for a held option less its premium, and less the entry's part of
+  its band (17.5).
+  - **Below nothing**: the coins pay it, as far as they go, into a note to the shard that says the leg; what
+    they do not pay is added to what the account owes (16.18).
+  - **Above nothing**: it is **credited to the account**: the number of 16.18 goes down by it, below nothing
+    where the account owed less (the shard then owes the account). It is no coin. It counts for the account's
+    standing in every test, is turned into the account's coins by a payment of the shard into it, and is
+    taken out by a take under the take's test (the coins at what stays is asked, the premiums, what each leg
+    lost alone): the model's rule of 17.8, 1, with nothing left in the account that is no leg and no number.
+    A step sets it against what the legs lost; under a call it is what the shard owes: a claim of the first
+    class (an ended leg is never young: none enters within T of its day).
+  - A written option's premium is its user's coins from this transaction on (17.3: "at the day").
+- **"None"**: the leg ends at its entry. A held option's premium is its user's coins again; **a written
+  option's premium stays its user's** (it does not return to the owner: silence of the committee the owner
+  named pays the owner nothing).
+- **The note to the shard** says the leg whole (its row's key and what its legs were entered at come from
+  it; a leg says whether it is a call or a put and held or written in the place a futures leg says its way),
+  and what is asked of the shard or paid to it; the dated row loses the leg when it is applied.
+- **The keeper's fee**: after what the leg lost and its premium, from the coins; never owed; none where the
+  input shown landed before the day and a lateness (its user ends its own leg free). Six legs, six fees at
+  the most.
+- A leg whose day came before a call's time ends by the day's rule, not the call's.
+
+**D. M1**: a step's test counts what a step would leave the account. What the legs gained to the price named,
+where it is above nothing, is counted less every band the step takes (the futures legs', and an option's at a
+stated price), and no less than nothing; where it is below nothing, as it is. A step is due where the coins
+and that are below the premiums. (Not "less the bands" outright: an account whose legs set each other off
+gained nothing and gives up no band, and would be due for bands it never pays.) Shown in the model
+(`due_stepped`, in `a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_without_it`): the
+thirty-four paths that left the shard unpaid leave it paid; an account that took all a take gives is due at no
+price after a move of the lower rate.
+
+**What is built when.** A now: `KpfDay`, `KpfTDay.write`, `KpfTDay.copy`, and a reader in the tests. B with
+the dated rows; C with the account's side. What 17.5 said otherwise is replaced by this: the price "written
+once" is the shard's leaf; a leg that gained leaves by the one transaction, credited; an ended leg is passed
+by no row (it has left); a citation answers no day.
+
+#### The first writing (replaced)
 
 17.5 says what holds; this says the objects and the transactions, and what of it is built now.
 
