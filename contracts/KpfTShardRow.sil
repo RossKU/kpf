@@ -110,7 +110,7 @@ contract KpfTShardRow(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, int kind) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, int kind) {
         require(version == 1);
         require(kind == 5 || kind == 11);
         require(int(ageb) >= 0);
@@ -158,7 +158,7 @@ contract KpfTShardRow(int init_version) {
         // The trace's row is of the row of the books at its place.
         if (int(byte[8](cur.slice(0, 8))) != at - 1) { ok = 0; }
         byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        byte[] row = rw.slice(102 * (at - 1), 102 * at);
+        byte[] row = rw.slice(105 * (at - 1), 105 * at);
         if (row.slice(0, 33) == none) {
             // A row with no market adds nothing; the place of its price is read by nothing.
             if (cwn != pwn) { ok = 0; }
@@ -169,10 +169,10 @@ contract KpfTShardRow(int init_version) {
             if (c < 0) { ok = 0; }
             if (c >= ne) { ok = 0; }
             if (ok == 1) {
-                // The price the list has there: of the row's market (the name the row has), of its limit, of no day.
+                // The price the list has there: of the row's market (its key's, plain), of its limit, of no day.
                 byte[] en = sd.slice(16 + 56 * c, 72 + 56 * c);
-                int sc = int(byte[8](row.slice(67, 75)));
-                int pm = int(byte[8](row.slice(76, 84)));
+                int sc = int(byte[8](row.slice(61, 69)));
+                int pm = int(byte[8](row.slice(70, 78)));
                 int p = int(byte[8](en.slice(48, 56)));
                 if (en.slice(0, 32) != row.slice(1, 33)) { ok = 0; }
                 if (int(byte[8](en.slice(32, 40))) != pm) { ok = 0; }
@@ -182,8 +182,8 @@ contract KpfTShardRow(int init_version) {
                 if (p > pm) { ok = 0; }
                 if (sc <= 0) { ok = 0; }
                 if (ok == 1) {
-                    int net = int(byte[8](row.slice(85, 93)));
-                    int gross = int(byte[8](row.slice(94, 102)));
+                    int net = int(byte[8](row.slice(79, 87)));
+                    int gross = int(byte[8](row.slice(88, 96)));
                     int short = 0;
                     if (net < 0) {
                         net = 0 - net;

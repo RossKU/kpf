@@ -3,11 +3,13 @@
 //! `KpfTLeftAll`, `KpfTLeftVoid` and `KpfTAcctEnd`, with the scripts' integer arithmetic.
 //!
 //! - A [`Shard`] has an account's form with a moving part of 171 bytes: its owner's key as A, no second key, what it
-//!   holds as A's margin, and its own id at the end. Its fixed part is the hash of its terms and of four market rows.
+//!   holds as A's margin, and its own id at the end. Its fixed part is the hash of its terms and of its books (four
+//!   rows, each named by its key: docs 17.8d).
 //! - A covered account is an [`Account`] with `shard` set: the same 171 bytes, the id being the shard's.
 //! - A note to a shard is an object of its own ([`Left`], [`Rest`]; the old form's notes, of a leg entered or left, a
 //!   deposit, or what a user is still owed.
 
+use crate::books::Key;
 use crate::committee::blake2b;
 use crate::cross::{XLeg, XTerms};
 use crate::error::{Error, Result};
@@ -31,7 +33,9 @@ fn i9(v: i64) -> Vec<u8> {
     [&[0x08][..], &sm8(v)].concat()
 }
 
-/// A market as a leg and a row name it: the first 84 bytes of either.
+/// A market as an uncovered account's take names the row a leg leaves (`thin::ATake`): 84 bytes, the hash of a
+/// kind and of the market's name, the committee, the scale and the price's limit. (A shard's row is named by its
+/// key, plain: `RowHead`.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Head {
     pub market: [u8; 32],
@@ -81,21 +85,80 @@ pub fn futures_market(market: &[u8; 32]) -> [u8; 32] {
     blake2b(&[i9(crate::thin::FUTURES_TAG), p33(market)].concat())
 }
 
-/// A row of a shard: a market, the clearing party's net units in it over the accounts the shard covers (below zero:
-/// it is short), and the sum of the legs' sizes.
+/// What a leg says of the row it is counted in (docs 17.6, 17.8d), 78 bytes: the row's key, plain (the market, and
+/// a day, a kind and a strike: three of nothing for a market's futures row), its market's scale and its price's
+/// limit. No committee: every row of a shard is of the shard's one, which its id is opened by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowHead {
+    pub key: Key,
+    pub scale: i64,
+    pub price_max: i64,
+}
+
+impl RowHead {
+    /// No market: an empty row's.
+    pub const EMPTY: RowHead = RowHead { key: Key::HEAD, scale: 0, price_max: 0 };
+
+    /// The futures row of a leg's market.
+    pub fn of(l: &XLeg) -> RowHead {
+        RowHead { key: Key::futures(l.market), scale: l.scale, price_max: l.price_max }
+    }
+
+    pub fn bytes(&self) -> Vec<u8> {
+        [self.key.bytes(), i9(self.scale), i9(self.price_max)].concat()
+    }
+}
+
+/// A row of a shard, 105 bytes (the tree's leaf without its tag and the key after it): its key, its market's scale
+/// and price's limit, the clearing party's net units in it over the accounts the shard covers (below zero: it is
+/// short), the sum of the legs' sizes, and what its legs were entered at (kept in a row with a day: nothing in a
+/// futures row, whose legs' entries are in the one number over all rows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShardRow {
-    pub head: Head,
+    pub key: Key,
+    pub scale: i64,
+    pub price_max: i64,
     pub net: i64,
     pub gross: i64,
+    pub entered: i64,
 }
 
 impl ShardRow {
-    pub const EMPTY: ShardRow = ShardRow { head: Head::EMPTY, net: 0, gross: 0 };
+    pub const EMPTY: ShardRow = ShardRow { key: Key::HEAD, scale: 0, price_max: 0, net: 0, gross: 0, entered: 0 };
+
+    /// A row of a head, with its units.
+    pub fn of(head: RowHead, net: i64, gross: i64) -> ShardRow {
+        ShardRow { key: head.key, scale: head.scale, price_max: head.price_max, net, gross, entered: 0 }
+    }
+
+    /// The futures row of a market.
+    pub fn futures(market: [u8; 32], scale: i64, price_max: i64, net: i64, gross: i64) -> ShardRow {
+        ShardRow::of(RowHead { key: Key::futures(market), scale, price_max }, net, gross)
+    }
+
+    pub fn head(&self) -> RowHead {
+        RowHead { key: self.key, scale: self.scale, price_max: self.price_max }
+    }
+
+    /// Whether it is a row of no market.
+    pub fn no_market(&self) -> bool {
+        self.key.market == [0; 32]
+    }
 
     pub fn bytes(&self) -> Vec<u8> {
-        [self.head.bytes(), i9(self.net), i9(self.gross)].concat()
+        [self.head().bytes(), i9(self.net), i9(self.gross), i9(self.entered)].concat()
     }
+}
+
+/// The point of a draw's or a call's dispute that is a row of its trace (the row's number among the trace's, from
+/// nothing) and the one that is a price of its list (its number in the list, from nothing): tests and tools say
+/// points by these, which move when the books are a tree.
+pub fn trace_row_point(row: usize) -> i64 {
+    row as i64 + 1
+}
+
+pub fn trace_price_point(e: usize) -> i64 {
+    (SHARD_ROWS + 1 + e) as i64
 }
 
 /// A clearing party's reserve shard.
@@ -154,7 +217,7 @@ impl Shard {
         self.shell().terms()
     }
 
-    /// The four rows, 408 bytes.
+    /// The four rows, 420 bytes.
     pub fn rows_bytes(&self) -> Vec<u8> {
         self.rows.iter().flat_map(|r| r.bytes()).collect()
     }
@@ -194,9 +257,33 @@ impl Shard {
         blake2b(&[p33(&self.fixed_hash()), self.moving()].concat())
     }
 
-    /// The row a note of the market `head` is applied to: the market's own, or the first empty one.
-    pub fn row_for(&self, head: &Head) -> Option<usize> {
-        self.rows.iter().position(|r| r.head == *head).or_else(|| self.rows.iter().position(|r| *r == ShardRow::EMPTY))
+    /// The row a leg of the head `head` enters: the row of that head, or the first empty one.
+    pub fn row_for(&self, head: &RowHead) -> Option<usize> {
+        self.rows.iter().position(|r| r.head() == *head).or_else(|| self.rows.iter().position(|r| *r == ShardRow::EMPTY))
+    }
+
+    /// The futures row of a market, where the shard has one.
+    pub fn row(&self, market: &[u8; 32]) -> Option<&ShardRow> {
+        self.rows.iter().find(|r| r.key == Key::futures(*market) && !r.no_market())
+    }
+
+    /// The shard with these rows for its own (four at the most; the others of no market).
+    pub fn of_rows(&self, rows: &[ShardRow]) -> Shard {
+        let mut s = *self;
+        s.rows = [ShardRow::EMPTY; SHARD_ROWS];
+        s.rows[..rows.len()].copy_from_slice(rows);
+        s
+    }
+
+    /// The shard with the id its opening by `seed` gives it, for a committee (`shard_sid`: what an entry and a
+    /// price's answer hold it to).
+    pub fn seeded(&self, seed: &[u8; 32], committee: &[u8; 32]) -> Shard {
+        Shard { sid: shard_sid(seed, committee, &self.terms(), &self.moving()[93..120]), ..*self }
+    }
+
+    /// Whether the shard's id is its opening's by `seed`, for a committee.
+    pub fn is_of(&self, seed: &[u8; 32], committee: &[u8; 32]) -> bool {
+        self.sid == shard_sid(seed, committee, &self.terms(), &self.moving()[93..120])
     }
 
 }
@@ -391,12 +478,12 @@ impl Shard {
     /// What a futures leg is to the books: the row of its market's futures legs, side B's units in it (the size
     /// below zero where A is long), and its worth at its entry signed as side B's (what it adds to what the legs
     /// were entered at).
-    fn book_of(l: &XLeg) -> Result<(Head, i64, i64)> {
+    fn book_of(l: &XLeg) -> Result<(RowHead, i64, i64)> {
         if (l.dir != LONG && l.dir != crate::state::SHORT) || l.size <= 0 || l.scale <= 0 || l.entry <= 0 {
             return Err(Error::Invalid("the books are of futures legs: a direction, a size, a scale and an entry".into()));
         }
         let we = worth(l.size, l.scale, l.entry).ok_or_else(|| Error::Invalid("the leg's worth is beyond what is counted".into()))?;
-        let head = Head { market: futures_market(&l.market), committee: l.committee, scale: l.scale, price_max: l.price_max };
+        let head = RowHead::of(l);
         Ok(if l.dir == LONG { (head, -l.size, -we) } else { (head, l.size, we) })
     }
 
@@ -407,7 +494,7 @@ impl Shard {
         let r = self.row_for(&head).ok_or_else(|| Error::Invalid("the shard has no row for the leg's market: its four are other markets'".into()))?;
         let mut s = *self;
         let row = &mut s.rows[r];
-        row.head = head;
+        (row.key, row.scale, row.price_max) = (head.key, head.scale, head.price_max);
         row.net = row.net.checked_add(units).ok_or_else(|| Error::Invalid("the row is beyond what is counted".into()))?;
         row.gross = row.gross.checked_add(l.size).ok_or_else(|| Error::Invalid("the row is beyond what is counted".into()))?;
         s.basis = s.basis.checked_add(basis).ok_or_else(|| Error::Invalid("what the legs were entered at is beyond what is counted".into()))?;
@@ -430,7 +517,8 @@ impl Shard {
         }
         let (head, units, basis) = Shard::book_of(l)?;
         let Some(row) = self.rows.get(r) else { return no("it has four rows") };
-        if row.head != head && (*row != ShardRow::EMPTY || self.rows.iter().any(|x| x.head.market == head.market)) {
+        // (A market of nothing is no row's: the rows of no market have its key.)
+        if row.head() != head && (*row != ShardRow::EMPTY || self.rows.iter().any(|x| x.key == head.key)) {
             return no("the row is another market's, or the leg's market has a row of its own");
         }
         let mut s = *self;
@@ -446,7 +534,7 @@ impl Shard {
         if self.held.checked_sub(self.owed).is_none_or(|free| free < need) && need > before {
             return no("the row's gate: what the shard holds, less what it owes, is below the upper requirement of the leg's row with the leg, and the leg raises it");
         }
-        s.rows[r] = ShardRow { head, net, gross };
+        s.rows[r] = ShardRow::of(head, net, gross);
         s.basis = b;
         // (The shard's time: no draw before the entry is settled or ended. Review 51, F82. And an entry's time is
         // a lateness after the last: what this entry writes is a lateness or more after what the shard says.
@@ -534,7 +622,7 @@ impl Shard {
         let mut at = vec![];
         for l in &n.legs {
             let (head, units, basis) = Shard::book_of(l)?;
-            let Some(r) = s.rows.iter().position(|row| row.head.same_row(&head)) else { return no("a leg is in no row of the shard") };
+            let Some(r) = s.rows.iter().position(|row| row.head() == head) else { return no("a leg is in no row of the shard") };
             let row = &mut s.rows[r];
             if row.gross < l.size {
                 return no("a row has fewer units than the leg");
@@ -542,7 +630,7 @@ impl Shard {
             row.net = row.net.checked_sub(units).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
             row.gross -= l.size;
             if row.net == 0 && row.gross == 0 {
-                row.head = Head::EMPTY;
+                (row.key, row.scale, row.price_max) = (Key::HEAD, 0, 0);
             }
             s.basis = s.basis.checked_sub(basis).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
             at.push(r);
@@ -572,7 +660,7 @@ impl Shard {
     pub fn gone_at(&self, n: &Left) -> Option<usize> {
         n.legs.iter().position(|l| {
             let Ok((head, _, _)) = Shard::book_of(l) else { return true };
-            let Some(row) = self.rows.iter().find(|row| row.head.same_row(&head)) else { return true };
+            let Some(row) = self.rows.iter().find(|row| row.head() == head) else { return true };
             let units: i64 = n.legs.iter().filter(|x| (x.market, x.scale, x.price_max) == (l.market, l.scale, l.price_max) && x.size > 0).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
             row.gross < units
         })
@@ -694,15 +782,21 @@ pub const CALL_HOLD: i64 = SHARD_CARRIER / 2;
 pub struct Called {
     pub sid: [u8; 32],
     pub time: i64,
-    pub heads: [Head; SHARD_ROWS],
+    pub heads: [RowHead; SHARD_ROWS],
     pub prices: [i64; SHARD_ROWS],
 }
 
 impl Called {
-    /// The list of the call's prices (docs 17.8b): one for each row that has a market (its name, its price's
-    /// limit, no day, the price), in the order of the names.
+    /// The list of the call's prices (docs 17.8b): one for each market a row has (the market plain, its price's
+    /// limit, no day, the price), in the order of the markets. (A market of two rows has one price: the first
+    /// row's.)
     pub fn list(&self) -> Vec<Priced> {
-        let mut list: Vec<Priced> = self.heads.iter().zip(&self.prices).filter(|(h, _)| h.market != [0; 32]).map(|(h, p)| Priced { market: h.market, limit: h.price_max, day: 0, price: *p }).collect();
+        let mut list: Vec<Priced> = vec![];
+        for (h, p) in self.heads.iter().zip(&self.prices).filter(|(h, _)| h.key.market != [0; 32]) {
+            if list.iter().all(|x| x.market != h.key.market) {
+                list.push(Priced { market: h.key.market, limit: h.price_max, day: 0, price: *p });
+            }
+        }
         list.sort_by_key(|p| p.numbers());
         list
     }
@@ -788,16 +882,16 @@ impl Shard {
     fn worths(&self, p: &[i64; SHARD_ROWS]) -> Option<(i64, i64, i64)> {
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(p) {
-            if row.head.market == [0; 32] {
+            if row.key.market == [0; 32] {
                 continue;
             }
-            if *p <= 0 || *p > row.head.price_max || row.head.scale <= 0 {
+            if *p <= 0 || *p > row.price_max || row.scale <= 0 {
                 return None;
             }
-            let w = worth(row.net.checked_abs()?, row.head.scale, *p)?;
+            let w = worth(row.net.checked_abs()?, row.scale, *p)?;
             wn = wn.checked_add(w)?;
             sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
-            wg = wg.checked_add(worth(row.gross.checked_abs()?, row.head.scale, *p)?)?;
+            wg = wg.checked_add(worth(row.gross.checked_abs()?, row.scale, *p)?)?;
         }
         Some((wn, wg, sn))
     }
@@ -831,18 +925,18 @@ impl Shard {
         let mut ok = *claimer == self.owner && d.amount > 0;
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(&d.prices) {
-            if row.head.market == [0; 32] {
+            if row.key.market == [0; 32] {
                 continue;
             }
             let (net, gross) = (row.net.checked_abs()?, row.gross.checked_abs()?);
-            if *p <= 0 || *p > row.head.price_max || row.head.scale <= 0 {
+            if *p <= 0 || *p > row.price_max || row.scale <= 0 {
                 ok = false;
             }
             if ok {
-                let w = worth(net, row.head.scale, *p)?;
+                let w = worth(net, row.scale, *p)?;
                 wn = wn.checked_add(w)?;
                 sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
-                wg = wg.checked_add(worth(gross, row.head.scale, *p)?)?;
+                wg = wg.checked_add(worth(gross, row.scale, *p)?)?;
             }
         }
         let need = need_of(wn, wg, &self.t, true)?;
@@ -885,12 +979,12 @@ impl Shard {
     /// committee's `c`. A row with no market is of nothing: right.
     pub fn draw_price_right(&self, d: &Draw, r: usize, c: i64) -> bool {
         let Some(row) = self.rows.get(r.wrapping_sub(1)) else { return true };
-        if row.head.market == [0; 32] {
+        if row.key.market == [0; 32] {
             return true;
         }
         let (a, g) = (d.prices[r - 1], self.t.g_bps);
-        let p = c.min(row.head.price_max);
-        a > 0 && a >= p * (BPS - g) / BPS && a <= ((p * (BPS + g) + BPS - 1) / BPS).min(row.head.price_max)
+        let p = c.min(row.price_max);
+        a > 0 && a >= p * (BPS - g) / BPS && a <= ((p * (BPS + g) + BPS - 1) / BPS).min(row.price_max)
     }
 
     /// The first point of a stated draw that is wrong at the committee's prices `c` (one a row): 0 the end, r the
@@ -913,7 +1007,7 @@ impl Shard {
         if let Some(r) = (1..=SHARD_ROWS).find(|r| self.trace_row_judged(t, *r, call) != Some(true)) {
             return Some(r as i64);
         }
-        let cited = |x: &Priced| self.rows.iter().position(|r| r.head.market == x.market).map_or(0, |i| c[i]);
+        let cited = |x: &Priced| self.rows.iter().position(|r| r.key.market == x.market).map_or(0, |i| c[i]);
         (1..=t.list.len()).find(|e| !self.trace_price_right(t, *e, cited(&t.list[*e - 1]))).map(|e| 4 + e as i64)
     }
 
@@ -986,21 +1080,21 @@ impl Shard {
         let g = self.t.g_bps;
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(&d.prices) {
-            if row.head.market == [0; 32] {
+            if row.key.market == [0; 32] {
                 continue;
             }
             let (net, gross) = (row.net.checked_abs()?, row.gross.checked_abs()?);
-            let pm = row.head.price_max;
-            if *p <= 0 || *p > pm || row.head.scale <= 0 {
+            let pm = row.price_max;
+            if *p <= 0 || *p > pm || row.scale <= 0 {
                 ok = false;
             }
             if ok {
                 let down = p.checked_mul(BPS - g)? / BPS;
                 let q = if row.net > 0 { (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(pm) } else { down };
-                let w = worth(net, row.head.scale, q)?;
+                let w = worth(net, row.scale, q)?;
                 wn = wn.checked_add(w)?;
                 sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
-                wg = wg.checked_add(worth(gross, row.head.scale, q)?)?;
+                wg = wg.checked_add(worth(gross, row.scale, q)?)?;
             }
         }
         let need = need_of(wn, wg, &self.t, false)?;
@@ -1023,7 +1117,7 @@ impl Shard {
 
     /// The shard called at `t0`, having paid `pay`; and the call, at the prices `p`.
     pub fn called_at(&self, p: &[i64; SHARD_ROWS], t0: i64, pay: i64) -> (Shard, Called) {
-        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head), prices: *p })
+        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head()), prices: *p })
     }
 
     /// The outputs of a call that is the rule's: the shard called, the call, and the fee to the caller.
@@ -1151,8 +1245,8 @@ fn num8(b: &[u8]) -> i64 {
     if below { -m } else { m }
 }
 
-/// A price of the list a draw and a call say (docs 17.8b), 56 bytes: a market (the name its row has in the books:
-/// the plain market's once the books are a tree), its price's limit, a day (nothing: the price now) and the price.
+/// A price of the list a draw and a call say (docs 17.8b), 56 bytes: a market, plain (one entry a market, whatever
+/// rows are its), its price's limit, a day (nothing: the price now) and the price.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Priced {
     pub market: [u8; 32],
@@ -1242,28 +1336,36 @@ impl Shard {
         }
         let g = self.t.g_bps;
         let down = p.checked_mul(BPS - g)? / BPS;
-        Some(if row.net > 0 { (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(row.head.price_max) } else { down })
+        Some(if row.net > 0 { (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(row.price_max) } else { down })
     }
 
     /// The trace of a draw or a call at the prices `d` gives, one a row (docs 17.8b): the list of the rows' prices
     /// in order, and a row of the trace a row of the books. A row with no market, and a row whose price is not
     /// one (nothing, or beyond its limit), adds nothing: the second is answered wrong at its point. `None` where
-    /// a worth or a sum is beyond 64 bits: nobody states such a trace.
+    /// a worth or a sum is beyond 64 bits, and where two rows of one market are given two prices or have two
+    /// limits (a market has one entry of the list): nobody states such a trace.
     pub fn traced(&self, d: &Draw, call: bool) -> Option<Traced> {
-        let mut list: Vec<Priced> = self.rows.iter().zip(&d.prices).filter(|(r, _)| r.head.market != [0; 32]).map(|(r, p)| Priced { market: r.head.market, limit: r.head.price_max, day: 0, price: *p }).collect();
+        let mut list: Vec<Priced> = vec![];
+        for (r, p) in self.rows.iter().zip(&d.prices).filter(|(r, _)| !r.no_market()) {
+            match list.iter().find(|x| x.market == r.key.market) {
+                Some(x) if (x.limit, x.price) == (r.price_max, *p) => {}
+                Some(_) => return None,
+                None => list.push(Priced { market: r.key.market, limit: r.price_max, day: 0, price: *p }),
+            }
+        }
         list.sort_by_key(|p| p.numbers());
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         let mut rows = vec![];
         for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate() {
             let mut at = 0;
-            if row.head.market != [0; 32] {
-                at = list.iter().position(|x| x.market == row.head.market && x.limit == row.head.price_max)? as i64;
-                if *p > 0 && *p <= row.head.price_max && row.head.scale > 0 {
+            if row.key.market != [0; 32] {
+                at = list.iter().position(|x| x.market == row.key.market && x.limit == row.price_max)? as i64;
+                if *p > 0 && *p <= row.price_max && row.scale > 0 {
                     let q = self.counted_at(row, *p, call)?;
-                    let w = worth(row.net.checked_abs()?, row.head.scale, q)?;
+                    let w = worth(row.net.checked_abs()?, row.scale, q)?;
                     wn = wn.checked_add(w)?;
                     sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
-                    wg = wg.checked_add(worth(row.gross.checked_abs()?, row.head.scale, q)?)?;
+                    wg = wg.checked_add(worth(row.gross.checked_abs()?, row.scale, q)?)?;
                 }
             }
             rows.push(TraceRow { place: i as i64, at, wn, wg, sn });
@@ -1277,15 +1379,15 @@ impl Shard {
         let (Some(row), Some(cur)) = (self.rows.get(at.wrapping_sub(1)), t.rows.get(at.wrapping_sub(1))) else { return Some(false) };
         let prev = if at >= 2 { t.rows[at - 2] } else { TraceRow { place: 0, at: 0, wn: 0, wg: 0, sn: 0 } };
         let ok = cur.place == at as i64 - 1;
-        if row.head.market == [0; 32] {
+        if row.key.market == [0; 32] {
             return Some(ok && (cur.wn, cur.wg, cur.sn) == (prev.wn, prev.wg, prev.sn));
         }
         if cur.at < 0 || cur.at >= t.list.len() as i64 {
             return Some(false);
         }
         let en = t.list[cur.at as usize];
-        let (p, sc, pm) = (en.price, row.head.scale, row.head.price_max);
-        if !ok || en.market != row.head.market || en.limit != pm || en.day != 0 || p <= 0 || p > pm || sc <= 0 {
+        let (p, sc, pm) = (en.price, row.scale, row.price_max);
+        if !ok || en.market != row.key.market || en.limit != pm || en.day != 0 || p <= 0 || p > pm || sc <= 0 {
             return Some(false);
         }
         let q = self.counted_at(row, p, call)?;
@@ -1381,7 +1483,7 @@ mod trace_tests {
             let huge = r.below(40) == 0;
             let gross = if huge { i64::MAX / 3 } else { 1 + r.below(1_000_000_000_000) };
             let net = (r.below(2 * gross.min(1 << 40) + 1) - gross.min(1 << 40)).clamp(-gross, gross);
-            s.rows[i] = ShardRow { head: Head { market, committee: [3; 32], scale: 100_000_000, price_max: 1_000_000_000_000 }, net, gross };
+            s.rows[i] = ShardRow::futures(market, 100_000_000, 1_000_000_000_000, net, gross);
         }
         s.held = r.below(1_000_000_000_000);
         s.basis = r.below(2_000_000_000_000) - 1_000_000_000_000;
@@ -1404,7 +1506,7 @@ mod trace_tests {
             for (p, row) in prices.iter_mut().zip(&s.rows) {
                 *p = match r.below(12) {
                     0 => 0,
-                    1 => row.head.price_max + 1,
+                    1 => row.price_max + 1,
                     _ => 1 + r.below(3_000_000_000),
                 };
             }
@@ -1451,7 +1553,7 @@ mod trace_tests {
                         let mut lie = t.clone();
                         let x = &mut lie.rows[i];
                         *[&mut x.place, &mut x.at, &mut x.wn, &mut x.wg, &mut x.sn][f] += 1;
-                        let empty = s.rows[i].head.market == [0; 32];
+                        let empty = s.rows[i].key.market == [0; 32];
                         // (An empty row's place of a price is read by nothing; a row's place of a price moved
                         // names another entry or none.)
                         let judged = s.trace_row_judged(&lie, i + 1, call);

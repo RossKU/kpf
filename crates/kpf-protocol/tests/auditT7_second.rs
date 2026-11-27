@@ -10,7 +10,7 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OSigned};
-use kpf_protocol::reserve::{Head, Shard, ShardRow, NOTE_MIN, SHARD_CARRIER};
+use kpf_protocol::reserve::{RowHead, Shard, ShardRow, NOTE_MIN, SHARD_CARRIER};
 use kpf_protocol::state::LONG;
 use kpf_protocol::thin::{Account, Out, Outs, Pointed, Stated};
 use kpf_protocol::thin_build::*;
@@ -92,15 +92,15 @@ impl World {
         let p = &self.markets[0].p;
         XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
     }
-    fn head(&self, i: usize) -> Head {
+    fn head(&self, i: usize) -> RowHead {
         let m = &self.markets[i];
-        Head { market: kpf_protocol::reserve::futures_market(&m.id()), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max }
+        RowHead { key: kpf_protocol::books::Key::futures(m.id()), scale: m.p.scale, price_max: m.p.price_max }
     }
     /// The clearing party's shard: 100 KAS; in market 0 it is 60 units short over 140 of legs, in market 1 it is
     /// 10 long over 30, every leg entered at 10 (what its legs were entered at: 500 KAS short); two rows are empty.
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
-        let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+        let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
         let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
@@ -328,7 +328,7 @@ fn gate_takes(w: &World, base: &OLive<Shard>, held: i64, books: Shard, leg: XLeg
     let rich = Shard { held: i64::MAX / 4, ..shard.s }.entered(&leg, r, T0).expect("a shard that holds enough takes the leg");
     let next = Shard { held, ..rich };
     let model = shard.s.entered(&leg, r, T0);
-    let b = c_enter_state_as(&w.lib, &acct, &shard, &w.script("KpfTEnterS"), SEED, &st, &said, &next, w.payer(&w.w, &f)).unwrap();
+    let b = c_enter_state_as(&w.lib, &acct, &shard, &w.script("KpfTEnterS"), SEED, leg.committee, &st, &said, &next, w.payer(&w.w, &f)).unwrap();
     let taken = accepted(&b, &w.keys);
     assert_eq!(taken, model.is_ok(), "the gate: the engine and the model");
     taken
@@ -828,7 +828,7 @@ fn t7_b5_the_gate_on_random_rows_is_the_models_and_the_arithmetics() {
     for case in 0..120 {
         let gross = if r.range(0, 4) == 0 { 0 } else { r.range(1, 3_000) * scale / 4 };
         let net = if gross == 0 { 0 } else { r.range(-gross, gross + 1) };
-        let rows = if gross == 0 { [ShardRow::EMPTY; 4] } else { [ShardRow { head: w.head(0), net, gross }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY] };
+        let rows = if gross == 0 { [ShardRow::EMPTY; 4] } else { [ShardRow::of(w.head(0), net, gross), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY] };
         let size = match r.range(0, 6) { 0 => 1, 1 => r.range(1, scale), _ => r.range(1, 2_000) * scale / 4 };
         let entry = match r.range(0, 6) { 0 => 1, 1 => r.range(1, 1_000), _ => r.range(1, 500) * P10 / 100 };
         let leg = XLeg { size, entry, ..fleg(&w, 0, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) };

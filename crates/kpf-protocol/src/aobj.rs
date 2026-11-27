@@ -17,7 +17,7 @@ use crate::committee::blake2b;
 use crate::cross::{XLeg, XTerms};
 use crate::error::{Error, Result};
 use crate::covered::CSaid;
-use crate::reserve::{Draw, Head, Left, Rest, Shard, ShardRow, SHARD_CARRIER, SHARD_ROWS};
+use crate::reserve::{Draw, Left, Rest, Shard, ShardRow, SHARD_CARRIER, SHARD_ROWS};
 use crate::state::int8;
 use crate::thin::{leg_bytes, ATake, Account, Outs, Pointed, Stated, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_TAKE, KIND_DRAW};
 
@@ -151,8 +151,11 @@ fn terms_of(r: &mut Rd) -> Result<XTerms> {
     Ok(XTerms { term: r.int()?, mmr_bps: r.int()?, g_bps: r.int()?, liq_fee_bps: r.int()?, keeper_fee_min: r.int()?, carrier: r.int()?, idle_daa: r.int()?, grace_daa: r.int()?, late_daa: r.int()?, quiet_daa: r.int()? })
 }
 
-fn head_of(r: &mut Rd) -> Result<Head> {
-    Ok(Head { market: r.p33()?, committee: r.p33()?, scale: r.int()?, price_max: r.int()? })
+/// A shard's row: its key (the market, a day, a kind, a strike), its scale and limit, its net, its gross, and
+/// what its legs were entered at.
+fn row_of(r: &mut Rd) -> Result<ShardRow> {
+    let key = crate::books::Key { market: r.p33()?, day: r.int()?, of: r.int()?, strike: r.int()? };
+    Ok(ShardRow { key, scale: r.int()?, price_max: r.int()?, net: r.int()?, gross: r.int()?, entered: r.int()? })
 }
 
 /// The moving part's fields: the two keys, the two margins, the lease, the lateness, the dispute period, the bond
@@ -195,7 +198,7 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
     let t = terms_of(r)?;
     let mut rows = [ShardRow::EMPTY; SHARD_ROWS];
     for row in rows.iter_mut() {
-        *row = ShardRow { head: head_of(r)?, net: r.int()?, gross: r.int()? };
+        *row = row_of(r)?;
     }
     let (owner, none, v, sid) = moving_of(r, 171)?;
     if none != [0; 32] || v[3] != t.late_daa {

@@ -3569,6 +3569,44 @@ keys' order; `KpfTCStep` compares the leg's market with the entry's as bytes (a 
 answer needs no market shown beside the citation. The model's `Head` and `ShardRow` become `books::Key` and a
 row of `books.rs`'s fields; `Shard` still holds four of them. Every test of today passes with its rows said so.
 
+**Stage 1 as it is built, and reviewed at the engine (review T9).** A row is 105 bytes, the tree's leaf without its tag
+and the key after: the key (60: the market, a day, a kind and a strike, three of nothing in a futures row), the
+scale and the limit (18), the net, the gross and what its legs were entered at (27; the last nothing, in a
+futures row). Four rows are 420 bytes. `KpfTEnterS`, `KpfTLeft`, `KpfTLeftAll` and `KpfTLeftVoid` name a leg's
+row by the leg's market and three numbers of nothing (no hash); a market of nothing enters no row (the rows of
+no market have its key). What is held is one row a KEY: beside a row of a market with a day (made by hand:
+no script writes one yet) the market's futures leg enters an empty row. `KpfTShardPrice` reads no row: it is shown the seed of the shard's opening and a
+committee, which give the shard's id with its terms and periods, and the citation is of that committee and of
+the entry's market, plain (an entry no row is of is priced as any other). `KpfTCStep` holds the list's entry
+to the leg's market as bytes. The model: `ShardRow` (a key, a scale, a limit, the net, the gross, what was
+entered), `RowHead` (what a leg says of its row), `Shard::row` (the futures row of a market), `of_rows`,
+`seeded`, `is_of`; one entry of a list a market, whatever rows are its (two rows of one market given two
+prices have no trace). The builders of an entry and of a price's answer are given the committee and the seed.
+Measured: `KpfTShardPrice` 2,317 bytes (2,707), `KpfTCStep` 5,319 (5,439), `KpfTEnterS` 2,966 (2,982),
+`KpfTLeft` 2,914 (2,916), `KpfTLeftAll` 5,059 (5,093), `KpfTLeftVoid` 2,093 (2,088), `KpfTCallPay` 2,567
+(2,523: two rows of no market written out, longer), `KpfTShardOpen` 752 (730). Of the transactions: an entry
+stated 5,550 bytes (5,554); a note of one leg applied 4,862 to 5,006 (10 more: the rows are 12 bytes longer); a
+call's step 120 less; a claim paid and a call's end 56 more each. The patch of the scripts is
+`run/gen/s333_keys_sil.py`, run after `s320_gate_sil.py`.
+
+**Review T9** (`docs/audit/REVIEW-T9-keys.md`; its tests `auditT9_keys.rs`, ten; the earlier reviews' nineteen
+failing tests brought along; the default workspace 723 tests, none failed). Held under attack: a leg enters,
+leaves and is voided by the row of its futures key and no other, for the four scripts; no two rows of one key;
+a leg of another scale or limit enters neither its market's row nor an empty one; the market of nothing enters
+and leaves nothing. A price is answered only with the seed and the committee that open the shard's id (five
+wrong seeds, five wrong committees, the two the other way round, another market's citation: refused); a shard
+whose id no seed opens has no price answered, at the cost of whoever stated. A futures row and an options row
+of one market are one entry both rows name; two prices or two limits for one market have no right statement.
+A call's step finds its leg's market plain and refuses the old hashed names. Sixty random books: the model is
+the engine for an entry, a leaving of one and of two legs, and a void.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| Q1 (medium) | **two ids that are one market by their numbers enter two rows, and no draw or call over them is right.** The list is ordered by a market's 32 bytes as four numbers, and a script reads eight bytes of nothing with the top bit set as nothing; `KpfTEnterS` compares keys as bytes. Of two ids that differ so in one number, neither entry is below the other: the second is answered wrong, by anybody, in either order. It takes the owner's signature at the entry (the owner's power of P1's rest, by another door); the hashed names had no such pair | closed in stage 2, where a row is put in by `KpfTRowIn` alone: it refuses a market of which a number is nothing written below zero (the model's `Key::well_made`; review T8, P2), and no entry makes a row. Until then: open |
+| Q2 (low) | an entry no row is of is priced as any other, as built; the model's `trace_wrong_point` still names its point wrong whatever it says (a watcher that disputes by it loses its bond; the tool computes its own) | with stage 2, where a trace's functions are written again |
+| Q3 (low; not reached in stage 1) | a row emptied keeps its nine bytes of what was entered: with a number there it is not the empty row, takes no leg, and `KpfTCallPay` never sees four empty rows | a rule for stage 2 and the day: a row is taken out only with nothing entered (the model's `Books::out` has it), and whatever writes "entered" takes it back as the legs leave |
+| Q6 (low; usability) | whoever answers a price must know the seed of the shard's opening: no object says it, and the tool asks for it | the seed is public (the hash of the anchor's outpoint the shard was opened with: the first transaction of the shard's chain gives it); the tool should find it there. Not built |
+
 **Stage 2: the tree.** A shard's state holds the root where it holds the hash of the four rows.
 
 | Script | Is shown | Holds |

@@ -52,7 +52,6 @@ contract KpfTLeftVoid(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
     // The least a note holds.
@@ -92,7 +91,7 @@ contract KpfTLeftVoid(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry void(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, byte[] legs, int k, byte[32] key, int asked, int tag, int young) {
+    entry void(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, byte[] legs, int k, byte[32] key, int asked, int tag, int young) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -120,7 +119,7 @@ contract KpfTLeftVoid(int init_version) {
         require(k >= 0);
         require(k * 111 < legs.length);
         byte[] lk = legs.slice(k * 111, k * 111 + 111);
-        byte[] head = byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lk.slice(0, 33)));
+        byte[] head = lk.slice(0, 33) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
         // The chain of the legs; and how many units the note's legs of the named leg's row are, together.
         byte[32] lh = byte[32](z32);
         int units = 0;
@@ -145,9 +144,9 @@ contract KpfTLeftVoid(int init_version) {
         if (int(byte[8](lk.slice(103, 111))) <= 0) { gone = 1; }
         int found = 0;
         for (r, 0, 4, 4) {
-            if (rw.slice(102 * r, 102 * r + 33) == head && rw.slice(102 * r + 66, 102 * r + 84) == lk.slice(66, 84)) {
+            if (rw.slice(105 * r, 105 * r + 60) == head && rw.slice(105 * r + 60, 105 * r + 78) == lk.slice(66, 84)) {
                 found = 1;
-                if (int(byte[8](rw.slice(102 * r + 94, 102 * r + 102))) < units) { gone = 1; }
+                if (int(byte[8](rw.slice(105 * r + 88, 105 * r + 96))) < units) { gone = 1; }
             }
         }
         if (found == 0) { gone = 1; }

@@ -12,7 +12,7 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OPlan, OSigned};
-use kpf_protocol::reserve::{Called, Claim, Claims, Draw, Head, Left, MarkNote, Owed, Rest, Shard, ShardRow, CALL_HOLD, NOTE_MIN, SHARD_CARRIER};
+use kpf_protocol::reserve::{Called, Claim, Claims, Draw, RowHead, Left, MarkNote, Owed, Rest, Shard, ShardRow, CALL_HOLD, NOTE_MIN, SHARD_CARRIER};
 use kpf_protocol::state::{sm8, LONG};
 use kpf_protocol::thin::{Account, Out, Outs, Pointed, Stated, KIND_DRAW};
 use kpf_protocol::thin_build::*;
@@ -246,7 +246,7 @@ fn claim_of(base: &OLive<Shard>, key: [u8; 32], a1: i64, x1: i64, a2: i64, x2: i
 }
 /// The call of the shards made by hand.
 fn call_of(base: &OLive<Shard>) -> OLive<Called> {
-    OLive { s: Called { sid: base.s.sid, time: CALLED, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_450 }
+    OLive { s: Called { sid: base.s.sid, time: CALLED, heads: [RowHead::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_450 }
 }
 /// What a payment of `p1` to the first class and `p2` to the second writes: the shard after, what is paid, and the
 /// claim as it goes on (none where it is whole by them).
@@ -1584,7 +1584,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2523), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTLeftVoid", 2088), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 2982), ("KpfTShardPrice", 2707), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 2966), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");
@@ -1614,10 +1614,15 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     println!("T6 sizes: the scripts {sizes:?}; a claim paid whole {whole} bytes (3,624 before), below a note's least {dust}; paid a part and written again {part}, of both classes {two}; the call's end {off}; a note of one leg applied: {applied:?} (4,314 before, nothing asked)");
     // (Second round, K1: 4,450, 4,345, 4,485, 4,497 and 4,340 in the first: the script is 5 bytes more, and a claim
     // below a note's least paid whole has its output.)
-    assert_eq!((whole, dust, part, two, off), (4_455, 4_454, 4_490, 4_502, 4_345));
+    // (Review T9, docs 17.8d: 4,455, 4,454, 4,490, 4,502 and 4,345 before: each 56 bytes more. `KpfTCallPay` is 44
+    // bytes more (2,567 from 2,523: the row of no market written out is nine pushes where it was six) and is
+    // shown 12 bytes more of rows (420 from 408). A claim paid and a call's end are DEARER by stage 1.)
+    assert_eq!((whole, dust, part, two, off), (4_511, 4_510, 4_546, 4_558, 4_401));
     // (Review T7, docs 17.8c (b): `KpfTLeft` is 410 bytes longer (the class at the applying) and is shown one
     // argument more: a note of one leg applied was 4,550, 4,585, 4,533 and 4,441.)
-    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_961, 4_996, 4_944, 4_852]);
+    // (Review T9, docs 17.8d: 4,961, 4,996, 4,944 and 4,852 before: each 10 bytes more. `KpfTLeft` is 2 bytes less
+    // and is shown 12 bytes more of rows.)
+    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_971, 5_006, 4_954, 4_862]);
 }
 
 // ================================================================================================================

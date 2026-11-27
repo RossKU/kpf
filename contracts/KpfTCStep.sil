@@ -38,7 +38,6 @@ contract KpfTCStep(int init_version) {
     int constant REST = 7;
     // The lateness of a statement that stands again after a point of it was answered right.
     int constant LATE_AGAIN = 499999999999;
-    int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
     // The least a note holds.
@@ -128,7 +127,7 @@ contract KpfTCStep(int init_version) {
                 require(56 * r + 56 <= cb.length);
                 // (The price the list has for the leg's market: the name its row has, its price's limit, no day.
                 // The list is in order with no market twice: whoever steps has one entry to show.)
-                require(cb.slice(56 * r, 56 * r + 32) == byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33))));
+                require(cb.slice(56 * r, 56 * r + 32) == lg.slice(1, 33));
                 require(cb.slice(56 * r + 32, 56 * r + 40) == lg.slice(76, 84));
                 require(cb.slice(56 * r + 40, 56 * r + 48) == byte[](0 as byte[8]));
                 int p = int(byte[8](cb.slice(56 * r + 48, 56 * r + 56)));

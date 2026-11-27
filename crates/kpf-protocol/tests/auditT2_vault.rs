@@ -11,7 +11,7 @@ use kpf_protocol::covered::{
 };
 use kpf_protocol::cross::{XLeg, XTerms};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OPlan, OSigned};
-use kpf_protocol::reserve::{Called, Head, Shard, ShardRow, CALL_HOLD, NOTE_MIN, SHARD_CARRIER};
+use kpf_protocol::reserve::{Called, RowHead, Shard, ShardRow, CALL_HOLD, NOTE_MIN, SHARD_CARRIER};
 use kaspa_txscript::pay_to_script_hash_script;
 use kpf_protocol::state::LONG;
 use kpf_protocol::thin::{Account, Pointed, Stated};
@@ -80,13 +80,13 @@ impl World {
         let p = &self.markets[0].p;
         XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
     }
-    fn head(&self, i: usize) -> Head {
+    fn head(&self, i: usize) -> RowHead {
         let m = &self.markets[i];
-        Head { market: kpf_protocol::reserve::futures_market(&m.id()), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max }
+        RowHead { key: kpf_protocol::books::Key::futures(m.id()), scale: m.p.scale, price_max: m.p.price_max }
     }
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
-        let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+        let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
         let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }

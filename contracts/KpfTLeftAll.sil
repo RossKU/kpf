@@ -48,7 +48,6 @@ contract KpfTLeftAll(int init_version) {
     int constant NOTE_TAG = 12;
     int constant LEFT = 6;
     int constant REST = 7;
-    int constant FUTURES_TAG = 14;
     int constant DIR_LONG = 1;
     int constant DIR_SHORT = 2;
     // The least a note holds.
@@ -88,7 +87,7 @@ contract KpfTLeftAll(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, byte[] legs, byte[] at, byte[32] key, int asked, int tag, int young) {
+    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, byte[] legs, byte[] at, byte[32] key, int asked, int tag, int young) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -144,7 +143,7 @@ contract KpfTLeftAll(int init_version) {
         int held = int(byte[8](mv.slice(67, 75)));
         int basis = int(byte[8](mv.slice(121, 129)));
         int v = tx.inputs[j].value;
-        byte[] empty = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
+        byte[] empty = byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
         // Each leg out of its row, and out of what the legs were entered at.
         for (k, 0, 6, 6) {
             if (k * 111 < legs.length) {
@@ -161,13 +160,13 @@ contract KpfTLeftAll(int init_version) {
                 require(e > 0);
                 require(r >= 0);
                 require(r <= 3);
-                byte[] row = rw.slice(102 * r, 102 * r + 102);
-                // (The row of the leg's market: its name, its scale and its price's limit. Docs 17.2.)
-                require(row.slice(0, 33) == byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33))));
-                require(row.slice(66, 84) == lg.slice(66, 84));
+                byte[] row = rw.slice(105 * r, 105 * r + 105);
+                // (The futures row of the leg's market: its key, its scale and its price's limit. Docs 17.2, 17.8d.)
+                require(row.slice(0, 60) == lg.slice(0, 33) + empty.slice(33, 60));
+                require(row.slice(60, 78) == lg.slice(66, 84));
                 // Side B's units in the leg: the size below zero where A is long.
-                int rn = int(byte[8](row.slice(85, 93)));
-                int rg = int(byte[8](row.slice(94, 102))) - size;
+                int rn = int(byte[8](row.slice(79, 87)));
+                int rg = int(byte[8](row.slice(88, 96))) - size;
                 int we = (size / sc) * e + (size % sc) * (e / sc) + ((size % sc) * (e % sc)) / sc;
                 if (dir == DIR_LONG) {
                     rn = rn + size;
@@ -177,9 +176,9 @@ contract KpfTLeftAll(int init_version) {
                     basis = basis - we;
                 }
                 require(rg >= 0);
-                byte[] hd = row.slice(0, 84);
+                byte[] hd = row.slice(0, 78);
                 if (rn == 0 && rg == 0) { hd = empty; }
-                rw = rw.slice(0, 102 * r) + hd + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
+                rw = rw.slice(0, 105 * r) + hd + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + row.slice(96, 105) + rw.slice(105 * r + 105, 420);
                 // (The sum of the rows' gross units, in the books' hash: docs 17.8a.)
                 gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) - size) as byte[8]) + gb.slice(9, 36);
             }

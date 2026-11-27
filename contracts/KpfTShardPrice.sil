@@ -18,15 +18,13 @@ pragma silverscript ^0.1.0;
 // tolerance of the committee's price for the row's market at the statement's time, read in a citation (at place 1
 // of `who` stands a copy of KpfTCite spent by `cite`). A row with no market, and a point beyond the fourth, are of
 // nothing: answered right, with no citation (place 1 names the object again).
-// A row carries the hash of a kind (a market's futures legs, or its options) and of the market's name: the answer
-// shows the market `under` that hashes to the row's name, and the citation is of that market.
-//   answer(who, ageb, slotLen, terms, rows, moving, t0, said, outs, bond, claimer, window, late, held, dkey, point,
-//          at, rkey, verdict, under)                                                                  anyone.
+// A list's entry holds its market plain: the citation is of that market and of the shard's committee, which the
+// answer shows with the seed of the shard's opening (the shard's id is their hash with its terms and periods).
+//   answer(who, ageb, slotLen, terms, rows, gbook, moving, t0, said, outs, bond, claimer, window, late, held, dkey,
+//          point, at, rkey, verdict, seed, cmt, kind)                                                 anyone.
 contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
     int version = init_version;
 
-    int constant OPTION_TAG = 13;
-    int constant FUTURES_TAG = 14;
     int constant BPS = 10000;
     int constant SPREAD_MARGIN = 4;
     int constant G_AT = 19;
@@ -114,7 +112,7 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] under, int kind) {
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, byte[32] seed, byte[32] cmt, int kind) {
         require(version == 1);
         // (A price of the list a draw or a call says: docs 17.8b. The points 5 and above.)
         require(kind == 5 || kind == 11);
@@ -145,7 +143,6 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(ne <= 4);
         int ok = 1;
         int u = int(byte[8](who.slice(8, 16)));
-        byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         int cited = 0;
         int e = at - 4;
         // (A point beyond the list is of nothing: right, with nothing cited.)
@@ -180,9 +177,10 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
                 cited = 1;
                 int a = int(byte[8](en.slice(48, 56)));
                 int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
-                // The committee's price: input u is a copy of KpfTCite spent by `cite` for the committee of the row
-                // of that market and for the market, at the statement's time. (An entry no row is of is cited by
-                // nobody: it costs whoever wrote it.)
+                // The committee's price: input u is a copy of KpfTCite spent by `cite` for the shard's committee and
+                // for the entry's market, at the statement's time. (The shard's id is the hash of its opening, of
+                // its committee, and of its terms and periods: as `KpfTEnterS` opens it. No row is read: an entry
+                // no row is of is priced as any other.)
                 require(u >= 0);
                 require(u < tx.inputs.length);
                 require(u != this.activeInputIndex);
@@ -190,19 +188,8 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
                 require(tx.inputs[u].scriptPubKey == byte[](CITE_SPK));
                 require(OpInputCovenantId(u) == OpInputCovenantId(this.activeInputIndex));
                 require(OpTxInputScriptSigSubstr(u, 0, 1) == byte[](0x20));
-                byte[32] name = byte[32](en.slice(0, 32));
-                byte[] cm = none;
-                int found = 0;
-                for (r, 0, 4, 4) {
-                    byte[] row = rw.slice(102 * r, 102 * r + 102);
-                    if (row.slice(0, 33) != none && row.slice(1, 33) == byte[](name)) {
-                        cm = row.slice(33, 66);
-                        found = 1;
-                    }
-                }
-                require(found == 1);
-                require(blake2b(i9(FUTURES_TAG) + p33(under)) == name || blake2b(i9(OPTION_TAG) + p33(under)) == name);
-                require(OpTxInputScriptSigSubstr(u, 33, 99) == cm + p33(under));
+                require(mv.slice(139, 171) == byte[](blake2b(byte[](seed) + byte[](cmt) + tb + mv.slice(93, 120))));
+                require(OpTxInputScriptSigSubstr(u, 33, 99) == p33(cmt) + byte[](0x20) + en.slice(0, 32));
                 require(OpTxInputScriptSigSubstr(u, 99, 108) == i9(t0));
                 require(OpTxInputScriptSigSubstr(u, 108, 109) == byte[](0x08));
                 int c = int(byte[8](OpTxInputScriptSigSubstr(u, 109, 117)));

@@ -210,8 +210,8 @@ fn show_shard(s: &Shard, net: Network) {
     println!("  id {}", to_hex(&s.sid));
     println!("  owner {} holds {} KAS in it", p2pk_address(&s.owner, net), fmt_kas(s.held as i128));
     for (i, r) in s.rows.iter().enumerate() {
-        if r.head.market != [0; 32] {
-            println!("  row {}: market {}: net {} units, gross {}", i + 1, &to_hex(&r.head.market)[..8], crate::args::fmt_units(r.net as i128, r.head.scale as i128), crate::args::fmt_units(r.gross as i128, r.head.scale as i128));
+        if !r.no_market() {
+            println!("  row {}: market {}: net {} units, gross {}", i + 1, &to_hex(&r.key.market)[..8], crate::args::fmt_units(r.net as i128, r.scale as i128), crate::args::fmt_units(r.gross as i128, r.scale as i128));
         }
     }
     println!("  a draw waits {} DAA and posts {} KAS", s.dispute_daa, fmt_kas(s.bond() as i128));
@@ -623,7 +623,9 @@ pub fn answer_cmd(a: &Args) -> R<()> {
                 (b, r, "KpfTShardRow")
             } else {
                 let s = script_of(a, &l.lib, "KpfTShardPrice", &mut node, net)?;
-                let (b, r) = tb::shard_price_t(&l.lib, &q, sh, &d, at, &s, pair, fk, p, None).map_err(e)?;
+                // (The shard's committee is shown with the seed of its opening: `kpf shard-open` printed it.)
+                let seed = if pair.is_some() { hex32(a.need("seed")?).map_err(e)? } else { [0; 32] };
+                let (b, r) = tb::shard_price_t(&l.lib, &q, sh, seed, &d, at, &s, pair, fk, p, None).map_err(e)?;
                 (b, r, "KpfTShardPrice")
             }
         }

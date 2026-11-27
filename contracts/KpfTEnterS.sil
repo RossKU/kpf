@@ -107,12 +107,11 @@ contract KpfTEnterS(int init_version) {
     function iAt(byte[] b, int at) : int {
         return int(byte[8](b.slice(at, at + 8)));
     }
-    int constant FUTURES_TAG = 14;
     int constant SCALE_MAX = 1000000000;
     int constant MARGIN_MAX = 1152921504606846975;
     int constant LEGS_MAX = 6;
 
-    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[408] rows, byte[36] gbook, byte[171] smoving, byte[32] seed, byte[32] cmt, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
+    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[420] rows, byte[36] gbook, byte[171] smoving, byte[32] seed, byte[32] cmt, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -195,22 +194,25 @@ contract KpfTEnterS(int init_version) {
         require(e > 0);
         require(e <= pm);
         require(size / sc <= MARGIN_MAX / pm - 1);
-        // The shard's row: the futures legs of the leg's market, or no market's where no row is that market's.
+        // The shard's row: the futures row of the leg's market (its key: the market, and a day, a kind and a
+        // strike of nothing), or no market's where no row has that key. (A market of nothing is no row's: the
+        // rows of no market have its key.)
         require(r >= 0);
         require(r <= 3);
-        byte[] name = byte[](0x20) + byte[](blake2b(i9(FUTURES_TAG) + lg.slice(0, 33)));
-        byte[] head = name + byte[](0x20) + byte[](cmt) + lg.slice(66, 84);
-        byte[] row = rw.slice(102 * r, 102 * r + 102);
-        if (row.slice(0, 84) != head) {
-            require(row == byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + z8 + byte[](0x08) + z8 + byte[](0x08) + z8 + byte[](0x08) + z8);
+        byte[] z9 = byte[](0x08) + z8;
+        byte[] name = lg.slice(0, 33) + z9 + z9 + z9;
+        byte[] head = name + lg.slice(66, 84);
+        byte[] row = rw.slice(105 * r, 105 * r + 105);
+        if (row.slice(0, 78) != head) {
+            require(row == byte[](0x20) + z32 + z9 + z9 + z9 + z9 + z9 + z9 + z9 + z9);
             for (q, 0, 4, 4) {
-                require(rw.slice(102 * q, 102 * q + 33) != name);
+                require(rw.slice(105 * q, 105 * q + 60) != name);
             }
         }
         // Side B's units in the leg (the size below zero where A is long), and its worth at its entry signed the
         // same way: what the row and what the legs were entered at take.
-        int rn = iAt(row, 85);
-        int rg = iAt(row, 94) + size;
+        int rn = iAt(row, 79);
+        int rg = iAt(row, 88) + size;
         int we = (size / sc) * e + (size % sc) * (e / sc) + ((size % sc) * (e % sc)) / sc;
         int basis = iAt(sm, 121);
         if (dir == 1) {
@@ -234,9 +236,9 @@ contract KpfTEnterS(int init_version) {
         gg = gg + gt;
         int an = rn;
         if (an < 0) { an = 0 - an; }
-        int an0 = iAt(row, 85);
+        int an0 = iAt(row, 79);
         if (an0 < 0) { an0 = 0 - an0; }
-        int rg0 = iAt(row, 94);
+        int rg0 = iAt(row, 88);
         int wan = (an / sc) * e + (an % sc) * (e / sc) + ((an % sc) * (e % sc)) / sc;
         int wag = (rg / sc) * e + (rg % sc) * (e / sc) + ((rg % sc) * (e % sc)) / sc;
         int wbn = (an0 / sc) * e + (an0 % sc) * (e / sc) + ((an0 % sc) * (e % sc)) / sc;
@@ -244,7 +246,7 @@ contract KpfTEnterS(int init_version) {
         int gneed = (wan / BPS) * gn + ((wan % BPS) * gn + BPS - 1) / BPS + (wag / BPS) * gg + ((wag % BPS) * gg + BPS - 1) / BPS;
         int gneed0 = (wbn / BPS) * gn + ((wbn % BPS) * gn + BPS - 1) / BPS + (wbg / BPS) * gg + ((wbg % BPS) * gg + BPS - 1) / BPS;
         require(iAt(sm, 67) - iAt(sm, 76) >= gneed || gneed <= gneed0);
-        rw = rw.slice(0, 102 * r) + head + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
+        rw = rw.slice(0, 105 * r) + head + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + z9 + rw.slice(105 * r + 105, 420);
         // (The sum of the rows' gross units, in the books' hash: docs 17.8a.)
         gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) + size) as byte[8]) + gb.slice(9, 36);
         // The shard's time, before which no draw is stated (docs 14.5): no sooner than when this entry is settled

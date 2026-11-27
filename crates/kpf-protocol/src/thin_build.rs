@@ -2544,18 +2544,19 @@ pub fn c_enter_state(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<cra
     if !s.of_committee(&seed, &leg) {
         return invalid("the leg is not of the shard's committee (the shard's id is the hash of its opening, its committee, and the terms and periods of its accounts)");
     }
-    let head = crate::reserve::Head::of(&leg);
+    let head = crate::reserve::RowHead::of(&leg);
     let r = s.row_for(&head).ok_or_else(|| Error::Invalid("the shard has no row for the leg's market: its four are other markets'".into()))?;
     let next = s.entered(&leg, r, t0)?;
     let (st, said, marked, after) = account.s.c_enter(leg, more, r as i64, a, t0, account.value as i64)?;
-    let b = c_enter_state_as(lib, account, shard, script, seed, &st, &said, &next, p)?;
+    let b = c_enter_state_as(lib, account, shard, script, seed, leg.committee, &st, &said, &next, p)?;
     Ok((b, st, said, marked, after, next))
 }
 
 /// As `c_enter_state`, the statement, what it says and the shard after as they are given (for whoever tests what
-/// the script refuses, and what is answered wrong).
+/// the script refuses, and what is answered wrong). The shard's committee is given beside the seed of its opening:
+/// no row says it, and the leg said says its time where a leg said its committee.
 #[allow(clippy::too_many_arguments)]
-pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<crate::reserve::Shard>, script: &LibScript, seed: [u8; 32], st: &Stated, said: &crate::covered::CEnterSaid, next: &crate::reserve::Shard, p: Payer) -> Result<OBuilt> {
+pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<crate::reserve::Shard>, script: &LibScript, seed: [u8; 32], committee: [u8; 32], st: &Stated, said: &crate::covered::CEnterSaid, next: &crate::reserve::Shard, p: Payer) -> Result<OBuilt> {
     let (a, s) = (&account.s, &shard.s);
     if a.shard != Some(s.sid) || a.b_key != s.owner || said.add < 0 {
         return invalid("the shard is not the account's (its id; its owner the account's second key), or coins are taken where they are added");
@@ -2574,10 +2575,12 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
         return invalid("an entry's time is not ahead of the chain: fund with a coin that landed at or after it");
     };
     // (The shard's committee, shown: the head of the row the leg is counted in, in the shard after.)
-    let Some(row) = usize::try_from(said.r).ok().and_then(|r| next.rows.get(r)) else { return invalid("the entry names no row of the shard") };
+    if usize::try_from(said.r).ok().and_then(|r| next.rows.get(r)).is_none() {
+        return invalid("the entry names no row of the shard");
+    }
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()),
-        bv(seed.to_vec()), bv(row.head.committee.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
+        bv(seed.to_vec()), bv(committee.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
     ];
     let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterS", "state", args, 0)?;
     d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
@@ -3471,15 +3474,16 @@ pub fn shard_row_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
 /// `KpfTShardPrice.answer`: the point `at` (5 and above: the price `at - 4` of the list) of a draw or of a call is
 /// answered with the committee's price for that market at the statement's time, in a citation. A point beyond the
 /// list is answered right with none; an entry out of its order, or of a day, wrong with none. A market in the list
-/// is the name its row has (the hash of its kind and its market): the citation is of that market.
+/// is plain: the citation is of that market and of the shard's committee, which the answer shows with the `seed`
+/// of the shard's opening (the shard's id is their hash with its terms and periods).
 #[allow(clippy::too_many_arguments)]
-pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
-    shard_price_t(lib, obj, shard, &trace_of(shard, dr, obj.s.st.kind)?, at, script, cite, rkey, p, force)
+pub fn shard_price(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, seed: [u8; 32], dr: &crate::reserve::Draw, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    shard_price_t(lib, obj, shard, seed, &trace_of(shard, dr, obj.s.st.kind)?, at, script, cite, rkey, p, force)
 }
 
 /// As `shard_price`, of the trace as it was said.
 #[allow(clippy::too_many_arguments)]
-pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, t: &crate::reserve::Traced, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, seed: [u8; 32], t: &crate::reserve::Traced, at: i64, script: &LibScript, cite: Option<(&LibScript, &Cited)>, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
     draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
@@ -3490,18 +3494,14 @@ pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserv
     let en = t.list.get(e - 1);
     // (Cited where the entry is in its order and of no day: else it is wrong with nothing cited.)
     let cited_for = en.filter(|x| (e < 2 || t.list[e - 2].below(x)) && x.day == 0);
-    // The market the citation is of: the entry carries the hash of its kind and of that market's name.
-    let mut under = [0u8; 32];
+    // The committee the citation is of: the shard's, which its id is opened by.
+    let mut committee = [0u8; 32];
     let right = match (cited_for, cite) {
         (Some(x), Some((_, cited))) => {
             let n = &cited.note;
-            under = n.market;
-            let named = crate::reserve::futures_market(&n.market) == x.market || crate::reserve::option_market(&n.market) == x.market;
-            let Some(row) = shard.rows.iter().find(|r| r.head.market == x.market && r.head.market != [0; 32]) else {
-                return invalid("no row of the shard is of the entry's market: nobody cites its price, and the dispute lapses at the cost of whoever stated it");
-            };
-            if n.committee != row.head.committee || !named || n.t0 != c.t0 || n.spread_bps * 4 > shard.t.g_bps {
-                return invalid("the citation is not of the row's committee and the entry's market and the statement's time, or the committee's spread leaves the tolerance no margin");
+            committee = n.committee;
+            if !shard.is_of(&seed, &n.committee) || n.market != x.market || n.t0 != c.t0 || n.spread_bps * 4 > shard.t.g_bps {
+                return invalid("the citation is not of the shard's committee (its id opened by the seed) and the entry's market and the statement's time, or the committee's spread leaves the tolerance no margin");
             }
             force.unwrap_or_else(|| shard.trace_price_right(t, e, n.price))
         }
@@ -3516,7 +3516,8 @@ pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserv
     let who: Vec<u8> = [0i64, if cite.is_some() { 2 } else { 0 }, if cite.is_some() { 2 } else { 0 }].iter().flat_map(|w| sm8(*w)).collect();
     let mut args = shard_args(shard, who);
     args.extend(point_args_said(q, t.said(), at, rkey, right));
-    args.push(bv(under.to_vec()));
+    args.push(bv(seed.to_vec()));
+    args.push(bv(committee.to_vec()));
     // (Of a draw, or of a call: the statement's kind.)
     args.push(iv(c.kind));
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardPrice", "answer", args, 0)?;

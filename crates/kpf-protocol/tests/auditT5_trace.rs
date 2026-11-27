@@ -10,7 +10,7 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OSigned};
-use kpf_protocol::reserve::{Head, Shard, ShardRow, SHARD_CARRIER};
+use kpf_protocol::reserve::{RowHead, Shard, ShardRow, SHARD_CARRIER};
 use kpf_protocol::state::LONG;
 use kpf_protocol::thin::{Account, Out, Outs, Pointed, Stated};
 use kpf_protocol::thin_build::*;
@@ -90,16 +90,19 @@ impl World {
         let p = &self.markets[0].p;
         XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
     }
-    fn head(&self, i: usize) -> Head {
+    fn head(&self, i: usize) -> RowHead {
         let m = &self.markets[i];
-        Head { market: kpf_protocol::reserve::futures_market(&m.id()), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max }
+        RowHead { key: kpf_protocol::books::Key::futures(m.id()), scale: m.p.scale, price_max: m.p.price_max }
     }
     /// The clearing party's shard: 100 KAS; in market 0 it is 60 units short over 140 of legs, in market 1 it is
     /// 10 long over 30, every leg entered at 10 (what its legs were entered at: 500 KAS short); two rows are empty.
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
-        let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+        let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
         let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        // (Review T9, docs 17.8d: a price's answer opens the shard's id by the seed of its opening and its
+        // committee. The shard made by hand has the id that opening gives it.)
+        let s = s.seeded(&SEED, &self.markets[0].committee_id);
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -387,7 +390,7 @@ fn answer_as(w: &World, q: &OLive<Pointed>, s: &Shard, raw: &[u8], t: &Traced, a
     } else if at <= 4 {
         (shard_row_t(&w.lib, &qc, s, t, at, &w.script("KpfTShardRow"), xk(&w.f), p, Some(verdict)).ok()?.0, 8)
     } else {
-        (shard_price_t(&w.lib, &qc, s, t, at, &w.script("KpfTShardPrice"), cite.map(|c| (&cs, c)), xk(&w.f), p, Some(verdict)).ok()?.0, 8)
+        (shard_price_t(&w.lib, &qc, s, SEED, t, at, &w.script("KpfTShardPrice"), cite.map(|c| (&cs, c)), xk(&w.f), p, Some(verdict)).ok()?.0, 8)
     };
     // (The place of what is said among the arguments: 7 of an end's, 8 of a row's and of a price's.)
     assert!(matches!(&args_of(&mut b.clone(), 1)[said_at], Arg::V(ArtifactValue::Bytes(x)) if x[..] == t.said()[..]), "the bytes said are argument {said_at}");
@@ -423,7 +426,7 @@ fn two_short(w: &World, held: i64) -> (OLive<Shard>, XLeg, XLeg) {
 }
 /// The market of the world's that the entry `e` of a list is of.
 fn market_of(w: &World, t: &Traced, e: usize) -> usize {
-    (0..w.markets.len()).find(|i| w.head(*i).market == t.list[e].market).expect("a market of the world")
+    (0..w.markets.len()).find(|i| w.head(*i).key.market == t.list[e].market).expect("a market of the world")
 }
 
 /// R1, closed (second round). `KpfTShardRow` and `KpfTShardPrice` now hold the day's eight bytes to eight bytes of
@@ -651,11 +654,14 @@ fn random_books(w: &World, r: &mut Rng, call: bool) -> (OLive<Shard>, [i64; 4], 
             2 => -gross,
             _ => r.below(2 * gross + 1) - gross,
         };
-        rows[row] = ShardRow { head: w.head(m), net, gross };
+        rows[row] = ShardRow::of(w.head(m), net, gross);
         prices[row] = P10 / 2 + r.below(3 * P10);
         of[row] = Some(m);
     }
     let mut s = Shard { t: w.terms(), rows, owner: xk(&w.c), held: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Default::default() };
+    // (Review T9, docs 17.8d: the id its opening gives it, so that its prices are answered. It was: "the point 5
+    // of the rule's trace" not taken, the shard's id being of chosen bytes: no disagreement of model and engine.)
+    s = s.seeded(&SEED, &w.markets[0].committee_id);
     let sn = s.equity(&prices).unwrap();
     s.held = (1 + r.below(900)) * KAS1 + r.below(KAS1);
     s.basis = if call { sn + s.held + 10_000 * KAS1 } else { sn - 10_000 * KAS1 };
@@ -675,7 +681,7 @@ fn price_cite(w: &World, s: &Shard, of: &[Option<usize>; 4], c: &[i64; 4], t: &T
     if !cited_entry(t, e) {
         return None;
     }
-    let r = s.rows.iter().position(|x| x.head.market == t.list[e - 1].market && x.head.market != [0; 32])?;
+    let r = s.rows.iter().position(|x| x.key.market == t.list[e - 1].market && x.key.market != [0; 32])?;
     Some(w.cited(of[r]?, c[r] * (BPS + bps) / BPS))
 }
 
@@ -686,7 +692,7 @@ fn lies_of(t: &Traced, s: &Shard, r: &mut Rng) -> Vec<(String, Traced)> {
     let i = r.below(4) as usize;
     let k = r.below(ne as i64) as usize;
     // (A row that has a market, and its place in the trace.)
-    let m = (0..4).map(|j| (i + j) % 4).find(|j| s.rows[*j].head.market != [0; 32]).unwrap();
+    let m = (0..4).map(|j| (i + j) % 4).find(|j| s.rows[*j].key.market != [0; 32]).unwrap();
     {
         let mut put = |what: &str, f: &dyn Fn(&mut Traced)| {
             let mut x = t.clone();
@@ -779,7 +785,7 @@ fn t5_b1_the_trace_of_a_draw_and_of_a_call_on_random_shards_the_model_and_the_en
             let by_bytes = { let mut x: Vec<[u8; 32]> = t.list.iter().map(|e| e.market).collect(); x.sort(); x };
             not_byte_order += (by_bytes != t.list.iter().map(|e| e.market).collect::<Vec<_>>()) as usize;
             below_nothing += t.list.iter().filter(|e| e.numbers()[0] < 0).count();
-            empty_between += (0..3).any(|j| s.rows[j].head.market == [0; 32] && s.rows[j + 1..].iter().any(|x| x.head.market != [0; 32])) as usize;
+            empty_between += (0..3).any(|j| s.rows[j].key.market == [0; 32] && s.rows[j + 1..].iter().any(|x| x.key.market != [0; 32])) as usize;
             let live = states(&w, &shard, &st, &raw).unwrap_or_else(|| panic!("case {case}: the rule's statement is stated"));
             assert_eq!(s.trace_wrong_point(&t, call, &st.claimer, &st.outs, held, T0, &prices), None, "case {case}");
             // Every point of the rule's trace, and beyond.
@@ -797,7 +803,7 @@ fn t5_b1_the_trace_of_a_draw_and_of_a_call_on_random_shards_the_model_and_the_en
             honest += 1;
             // The lies.
             let mut all = lies_of(&t, s, &mut r);
-            let m = (0..4).find(|j| s.rows[*j].head.market != [0; 32]).unwrap();
+            let m = (0..4).find(|j| s.rows[*j].key.market != [0; 32]).unwrap();
             let mut false_prices = prices;
             false_prices[m] = prices[m] * 105 / 100;
             if let Some(x) = s.traced(&Draw { amount: d.amount, prices: false_prices }, call) {
@@ -844,7 +850,7 @@ fn t5_b1_the_trace_of_a_draw_and_of_a_call_on_random_shards_the_model_and_the_en
 fn long_then_short(w: &World) -> OLive<Shard> {
     let x = w.shard();
     let scale = w.markets[0].p.scale;
-    let rows = [ShardRow { head: w.head(0), net: 10 * scale, gross: 30 * scale }, ShardRow { head: w.head(1), net: -60 * scale, gross: 140 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+    let rows = [ShardRow::of(w.head(0), 10 * scale, 30 * scale), ShardRow::of(w.head(1), -60 * scale, 140 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
     OLive { s: Shard { rows, ..x.s }, ..x }
 }
 
@@ -906,6 +912,10 @@ fn t5_b2_the_end_reads_no_row_and_a_sum_at_the_end_of_64_bits_is_judged_by_the_m
     assert_eq!((got[1], got[2], s.trace_row_judged(&lie, 2, false)), ((false, true), (false, false), Some(false)), "R3 is closed");
 }
 
+/// (Review T9, docs 17.8d: `KpfTShardPrice` reads no row and requires none of the entry's name: "an entry no row
+/// is of is priced as any other". What this test holds is what it always ran: an entry of a market the shard's
+/// COMMITTEE SIGNS NO PRICE OF is answered by nobody, and costs whoever wrote it. An entry of no row whose market
+/// the committee does sign is answered right or wrong by its price, by anybody: `auditT9_keys.rs`.)
 /// B3 (and T21, T24 of the paper's review): an entry that no row is of, and the lapse of a call's point.
 /// A call that is the rule's but for one entry more in its list, in its order, of a market no row has. Its end and
 /// its rows are answered right (the builder; B1). The point of that entry: the engine takes no answer of it:
@@ -951,7 +961,7 @@ fn t5_b3_an_entry_no_row_is_of_is_answered_by_nobody_and_its_dispute_lapses_at_t
     for (as_point, cite) in [(5i64, Some(&c)), (9, None)] {
         for verdict in [true, false] {
             let q = OLive { s: Pointed { point: as_point, ..q6.s }, ..q6.clone() };
-            let (b, _) = shard_price_t(&w.lib, &q, s, &lie, as_point, &w.script("KpfTShardPrice"), cite.map(|c| (&cs, c)), xk(&w.f), w.payer(&w.f, &ff), Some(verdict)).unwrap();
+            let (b, _) = shard_price_t(&w.lib, &q, s, SEED, &lie, as_point, &w.script("KpfTShardPrice"), cite.map(|c| (&cs, c)), xk(&w.f), w.payer(&w.f, &ff), Some(verdict)).unwrap();
             // (Control: as the builder wrote it, of its own point, on its own object, it is taken where it is right.)
             assert_eq!(accepted(&b, &w.keys), verdict, "(control) the point {as_point} answered {verdict}");
             assert!(matches!(&args_of(&mut b.clone(), 1)[17], Arg::V(ArtifactValue::Int(x)) if *x == as_point) && matches!(&args_of(&mut b.clone(), 1)[16], Arg::V(ArtifactValue::Int(x)) if *x == as_point), "arguments 16 and 17: the point disputed and the point answered");
@@ -1061,7 +1071,7 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
     let w = world();
     let base = seeded(&w);
     let ff = [fund(xk(&w.f), 36)];
-    let other_way = |i: usize, j: usize| !Priced { market: w.head(i).market, limit: 0, day: 0, price: 0 }.below(&Priced { market: w.head(j).market, limit: 0, day: 0, price: 0 });
+    let other_way = |i: usize, j: usize| !Priced { market: w.head(i).key.market, limit: 0, day: 0, price: 0 }.below(&Priced { market: w.head(j).key.market, limit: 0, day: 0, price: 0 });
     let (i, j) = (0..12).flat_map(|i| (0..12).map(move |j| (i, j))).find(|(i, j)| i != j && other_way(*i, *j)).expect("two markets");
     let legs = [fleg(&w, i, 10, LONG, P10), fleg(&w, i, 4, kpf_protocol::state::SHORT, P10), fleg(&w, j, 3, LONG, P10)];
     let mut books = base.s;
@@ -1070,7 +1080,7 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
     }
     let shard = OLive { s: books, ..base.clone() };
     let scale = w.markets[0].p.scale;
-    assert_eq!((shard.s.rows[0].head, shard.s.rows[1].head, shard.s.rows[0].gross, shard.s.rows[1].gross), (w.head(i), w.head(j), 14 * scale, 3 * scale));
+    assert_eq!((shard.s.rows[0].head(), shard.s.rows[1].head(), shard.s.rows[0].gross, shard.s.rows[1].gross), (w.head(i), w.head(j), 14 * scale, 3 * scale));
     let up = [P10 * 3, P10, 0, 0];
     let fw = [fund(xk(&w.w), 30)];
     let (b, st, d) = shard_call(&w.lib, &shard, &w.script("KpfTChange"), up, T0, xk(&w.w), w.payer(&w.w, &fw)).unwrap();
@@ -1179,41 +1189,53 @@ fn t5_b5_the_length_of_what_a_draw_and_a_call_say_and_two_statements_of_an_accou
 // ================================================================================================================
 // B6. The name of a row in the list; sizes.
 
-/// B6. The list holds the name a row has (the hash of its kind and its market), not the plain market. No script
-/// of this library writes a row of options (`KpfTEnterS` writes the futures' name, and holds an entry's leg to
-/// no day, strike or premium): a shard with a futures row and an options row of ONE market is made by hand here.
-/// A draw on it states two prices for the one underlying, 0.4 % below and 0.4 % above the committee's: two
-/// entries of two names; each row is answered right, and each price is answered right with the SAME citation.
-/// It was so before the change (two rows, a price a row, each within the tolerance of the one citation): the
-/// list by names changes nothing there, and with the plain market (17.8a, 4) the two rows have one entry.
+/// B6, as review T9 holds it (docs 17.8d: one entry a market). It was: "the list holds the name a row has (the
+/// hash of its kind and its market): a futures row and an options row of ONE market are two entries of two names
+/// and two prices, each answered right with the same citation". The list now holds the plain market, in order
+/// with no market twice. No script of this library writes a row with a day: the shard is made by hand.
+///  - The model: a draw that gives the two rows two prices has no trace (nobody states it); one that gives them
+///    one price has one entry, which both rows name.
+///  - The engine: that draw stated; its end, its two rows (both naming the entry 0) and its one price (one
+///    citation) are answered right and not wrong; the point after is beyond the list.
+///  - The old form written by hand (two entries of the one market, a row each, two prices): the second entry is
+///    not above the first, and is answered WRONG with nothing cited and not right, cited or not. Two prices for
+///    one underlying cost whoever states them.
 #[test]
-fn t5_b6_a_futures_row_and_an_options_row_of_one_market_are_two_entries_and_two_prices() {
+fn t5_b6_a_futures_row_and_an_options_row_of_one_market_are_one_entry_and_one_price() {
     let w = world();
     let x = w.shard();
     let scale = w.markets[0].p.scale;
     let fut = w.head(0);
-    let opt = Head { market: kpf_protocol::reserve::option_market(&w.markets[0].id()), ..fut };
-    let rows = [ShardRow { head: fut, net: -10 * scale, gross: 10 * scale }, ShardRow { head: opt, net: 5 * scale, gross: 5 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+    let opt = RowHead { key: kpf_protocol::books::Key { market: w.markets[0].id(), day: 9_000, of: kpf_protocol::books::OF_CALLS, strike: 1 }, ..fut };
+    let rows = [ShardRow::of(fut, -10 * scale, 10 * scale), ShardRow::of(opt, 5 * scale, 5 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
     let shard = OLive { s: Shard { rows, basis: -50 * KAS1, ..x.s }, ..x };
     let s = &shard.s;
-    let prices = [P10 * 996 / 1_000, P10 * 1_004 / 1_000, 0, 0];
+    let (lo, hi) = (P10 * 996 / 1_000, P10 * 1_004 / 1_000);
+    assert!(s.traced(&Draw { amount: KAS1, prices: [lo, hi, 0, 0] }, false).is_none() && s.draw(KAS1, [lo, hi, 0, 0], T0, shard.value as i64).is_err(), "two prices for one market: no trace");
+    let prices = [lo, lo, 0, 0];
     let (st, d) = s.draw(KAS1, prices, T0, shard.value as i64).unwrap();
     let t = s.traced(&d, false).unwrap();
-    assert_eq!(t.list.len(), 2);
-    assert_ne!(t.list[0].price, t.list[1].price);
+    assert_eq!((t.list.len(), t.list[0].market, t.rows[0].at, t.rows[1].at), (1, w.markets[0].id(), 0, 0), "one entry, which both rows name");
     let raw = t.said();
     let live = states(&w, &shard, &st, &raw).expect("stated");
     for at in 0..=6i64 {
-        let cite = (at >= 5).then(|| w.cited(0, P10));
+        let cite = (at == 5).then(|| w.cited(0, P10));
         assert_eq!(taken_raw(&w, &w.pointed(&live, at), s, &raw, at, cite.as_ref()), (true, false), "the point {at}");
     }
-    // (One entry for both rows: the second row's name is not the entry's: wrong at that row.)
-    let mut one = t.clone();
-    one.rows[1].at = one.rows[0].at;
-    let raw1 = one.said();
-    let st1 = stated_as(&shard, KIND_DRAW, &raw1, draw_outs(&shard, KAS1, T0, xk(&w.c)).unwrap(), xk(&w.c), T0);
-    let live1 = states(&w, &shard, &st1, &raw1).expect("stated");
-    assert_eq!(taken_raw(&w, &w.pointed(&live1, 2), s, &raw1, 2, None), (false, true), "two rows naming one entry");
+    // The old form by hand: two entries of the one market, a row each.
+    let mut old = t.clone();
+    old.list.push(Priced { price: hi, ..t.list[0] });
+    old.e = 2;
+    old.rows[1].at = 1;
+    assert!(!old.list[0].below(&old.list[1]) && !old.list[1].below(&old.list[0]));
+    let raw2 = old.said();
+    let st2 = stated_as(&shard, KIND_DRAW, &raw2, draw_outs(&shard, KAS1, T0, xk(&w.c)).unwrap(), xk(&w.c), T0);
+    let live2 = states(&w, &shard, &st2, &raw2).expect("stated");
+    assert_eq!(taken_raw(&w, &w.pointed(&live2, 6), s, &raw2, 6, None), (false, true), "the second entry of one market: wrong, nothing cited");
+    let c = w.cited(0, P10);
+    assert!(!taken_raw(&w, &w.pointed(&live2, 6), s, &raw2, 6, Some(&c)).0, "the second entry of one market is not answered right with the citation");
+    assert_eq!(taken_raw(&w, &w.pointed(&live2, 5), s, &raw2, 5, Some(&c)), (true, false), "(the first entry is priced as it was)");
+    assert!(s.trace_wrong_point(&old, false, &xk(&w.c), &st2.outs, shard.value as i64, T0, &[P10, P10, 0, 0]).is_some(), "the model names a wrong point of it");
 }
 
 /// The sizes of the transactions, on the shard of two markets of `thin_draw.rs` (296 bytes said) and on one of four
@@ -1227,10 +1249,10 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     // 4,829; KpfTChange 1,728; KpfTShardRow is new. Second round: the day held as eight bytes (R1) is three bytes
     // in each of KpfTShardPrice (2,700 from 2,697) and KpfTShardRow (2,098 from 2,095); the others as they were.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2707), ("KpfTCStep", 5439), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2317), ("KpfTCStep", 5319), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
-    let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow { head: w.head(2), net: 5 * scale, gross: 5 * scale }, ShardRow { head: w.head(3), net: -5 * scale, gross: 5 * scale }], ..two.s }, ..two.clone() };
+    let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)], ..two.s }, ..two.clone() };
     let mut out = vec![];
     for (what, shard) in [("two markets", &two), ("four markets", &four)] {
         let prices = if what == "two markets" { [P10, P10, 0, 0] } else { [P10; 4] };
@@ -1246,7 +1268,7 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
         let row = signed(&format!("sizes, {what}: a row answered"), &b, &w.keys);
         let p1 = 5 + s.traced(&d, false).unwrap().rows[0].at;
         let c = w.cited(0, P10);
-        let (b, _) = shard_price(&w.lib, &w.pointed(&live, p1), s, &d, p1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+        let (b, _) = shard_price(&w.lib, &w.pointed(&live, p1), s, SEED, &d, p1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
         let price = signed(&format!("sizes, {what}: a price answered"), &b, &w.keys);
         // A call, on the same books holding 5 KAS and having lost.
         let low = OLive { s: Shard { held: 5 * KAS1, basis: s.basis + 300 * KAS1, ..*s }, value: (5 * KAS1 + SHARD_CARRIER) as u64, ..shard.clone() };

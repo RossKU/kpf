@@ -9,7 +9,7 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OSigned};
-use kpf_protocol::reserve::{Head, Shard, ShardRow, NOTE_MIN, SHARD_CARRIER};
+use kpf_protocol::reserve::{RowHead, Shard, ShardRow, NOTE_MIN, SHARD_CARRIER};
 use kpf_protocol::state::LONG;
 use kpf_protocol::thin::{Account, Out, Outs, Pointed, Stated};
 use kpf_protocol::thin_build::*;
@@ -91,15 +91,15 @@ impl World {
         let p = &self.markets[0].p;
         XTerms { term: p.term, mmr_bps: p.mmr_bps, g_bps: p.g_bps, liq_fee_bps: p.liq_fee_bps, keeper_fee_min: p.keeper_fee_min, carrier: p.carrier, idle_daa: p.idle_daa, grace_daa: p.grace_daa, late_daa: p.late_daa, quiet_daa: p.quiet_daa }
     }
-    fn head(&self, i: usize) -> Head {
+    fn head(&self, i: usize) -> RowHead {
         let m = &self.markets[i];
-        Head { market: kpf_protocol::reserve::futures_market(&m.id()), committee: m.committee_id, scale: m.p.scale, price_max: m.p.price_max }
+        RowHead { key: kpf_protocol::books::Key::futures(m.id()), scale: m.p.scale, price_max: m.p.price_max }
     }
     /// The clearing party's shard: 100 KAS; in market 0 it is 60 units short over 140 of legs, in market 1 it is
     /// 10 long over 30, every leg entered at 10 (what its legs were entered at: 500 KAS short); two rows are empty.
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
-        let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
+        let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
         let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
@@ -327,7 +327,7 @@ fn gate_takes(w: &World, base: &OLive<Shard>, held: i64, books: Shard, leg: XLeg
     let rich = Shard { held: i64::MAX / 4, ..shard.s }.entered(&leg, r, T0).expect("a shard that holds enough takes the leg");
     let next = Shard { held, ..rich };
     let model = shard.s.entered(&leg, r, T0);
-    let b = c_enter_state_as(&w.lib, &acct, &shard, &w.script("KpfTEnterS"), SEED, &st, &said, &next, w.payer(&w.w, &f)).unwrap();
+    let b = c_enter_state_as(&w.lib, &acct, &shard, &w.script("KpfTEnterS"), SEED, leg.committee, &st, &said, &next, w.payer(&w.w, &f)).unwrap();
     let taken = accepted(&b, &w.keys);
     assert_eq!(taken, model.is_ok(), "the gate: the engine and the model");
     taken
@@ -784,7 +784,7 @@ fn t3_b2_an_account_has_its_shards_periods_and_the_step_reads_the_accounts() {
     let by_hand = |a: &OLive<Account>| {
         let (st, said, _, _) = a.s.c_enter(long, 0, 0, &[], T0, a.value as i64).unwrap();
         let next = Shard { expiry: T0 + a.s.t.late_daa + 2 * a.s.dispute_daa, ..seeded.s.booked(&long).unwrap() };
-        c_enter_state_as(&w.lib, a, &seeded, &enter, SEED, &st, &said, &next, w.payer(&w.w, &f))
+        c_enter_state_as(&w.lib, a, &seeded, &enter, SEED, long.committee, &st, &said, &next, w.payer(&w.w, &f))
     };
     let plain = cov(&w, &seeded, &[], 20 * KAS1);
     assert!(accepted(&by_hand(&plain).unwrap(), &w.keys), "(control) an entry written by hand");
@@ -1024,8 +1024,20 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     let leg = leg_entered(&raw, 0);
     // A row of another committee, and the note of a leg of its market.
     let booked = base.s.booked(&raw).unwrap();
-    let mut odd = booked;
-    odd.rows[0].head.committee = [0x99; 32];
+    // (Review T9, docs 17.8d: a row says NO committee, so "a row whose head says another committee" is an object
+    // that cannot be written any more, by hand or otherwise: the 420 bytes of the rows hold the committee nowhere,
+    // and what this half gave up in review T3 is given back. What it holds now: the leg's row is the row of the
+    // leg's KEY (the market plain, a day, a kind and a strike of nothing), scale and limit: found, and the units
+    // taken out; and a row of the leg's market that has a day (made by hand: no script writes one) is NOT the
+    // leg's row: the model has no row for the note. At the engine: `auditT9_keys.rs`.)
+    let odd = booked;
+    assert!(odd.rows_bytes().len() == 420 && !odd.rows_bytes().windows(32).any(|x| x == &w.markets[0].committee_id[..]), "a row says no committee");
+    assert_eq!(odd.rows[0].head(), RowHead::of(&raw));
+    let mut dated = booked;
+    dated.rows[0].key.day = 1;
+    let dated = OLive { s: dated, ..base.clone() };
+    let dn = OLive { s: Left { sid: dated.s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 }, value: NOTE_MIN as u64, id: dated.id, op: op(75), daa: 6_050 };
+    assert!(left_apply(&w.lib, &dated, &dn, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err() && dated.s.gone_at(&dn.s) == Some(0), "a row of the leg's market with a day is not the leg's row");
     let odd = OLive { s: odd, ..base.clone() };
     let note = Left { sid: odd.s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 };
     let note_live = OLive { s: note.clone(), value: NOTE_MIN as u64, id: odd.id, op: op(75), daa: 6_050 };
@@ -1039,7 +1051,7 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     // Two rows of one market in a call's body.
     let shard = OLive { s: Shard { held: 20 * KAS1, ..booked }, value: (20 * KAS1 + SHARD_CARRIER) as u64, ..base.clone() };
     let (_, call) = called_objs(&shard, [P10 * 13 / 10, 0, 0, 0], 6_600);
-    let two = OLive { s: Called { heads: [w.head(0), w.head(0), Head::EMPTY, Head::EMPTY], prices: [P10 * 13 / 10, P10 * 2, 0, 0], ..call.s }, ..call.clone() };
+    let two = OLive { s: Called { heads: [w.head(0), w.head(0), RowHead::EMPTY, RowHead::EMPTY], prices: [P10 * 13 / 10, P10 * 2, 0, 0], ..call.s }, ..call.clone() };
     let a = cov(&w, &shard, &[leg], 40 * KAS1);
     let step_s = w.script("KpfTCStep");
     let (b, first) = call_step(&w.lib, &a, &a.s, None, &two, &step_s, w.payer(&w.f, &ff)).unwrap();
@@ -1048,8 +1060,21 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     let at20 = a.s.call_step(&Called { prices: [P10 * 2, P10 * 2, 0, 0], ..two.s }, a.value as i64).unwrap();
     let second = CallStep { at: vec![1], ..at20 };
     assert_eq!(second.note.asked, 100 * KAS1);
-    let b = call_step_as(&w.lib, &a, &a.s, None, &two, &second, &step_s, w.payer(&w.f, &ff)).unwrap();
-    assert!(accepted(&b, &w.keys), "(of a call no script writes) the step names the second row of the leg's market");
+    // (Review T9, docs 17.8d: ONE entry a market. The call's object is the list of its prices, and `Called::list`
+    // gives a market of two rows one entry, the first row's: the object of `two` IS the call at 13 alone, and the
+    // second row's price of 20 is nowhere in it. It was: "the step names either, and the note asks 30 KAS or 100
+    // KAS as whoever steps chooses". Now whoever steps has one entry to show: the step at 20 is refused, named
+    // at the first place and at the second. What review T3 found the change gave up is closed for a call whose
+    // body is the model's; a list written by hand with one market twice is `auditT9_keys.rs`'s.)
+    assert_eq!(two.s.list().iter().map(|e| (e.market, e.price)).collect::<Vec<_>>(), vec![(w.markets[0].id(), P10 * 13 / 10)]);
+    assert_eq!(two.s.hash(), Called { heads: [w.head(0), RowHead::EMPTY, RowHead::EMPTY, RowHead::EMPTY], prices: [P10 * 13 / 10, 0, 0, 0], ..two.s }.hash(), "the second row of the market is not in the call's object");
+    for at in [vec![1], vec![0]] {
+        let b = call_step_as(&w.lib, &a, &a.s, None, &two, &CallStep { at, ..second.clone() }, &step_s, w.payer(&w.f, &ff));
+        assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the step at the second row's price of a market of one entry");
+    }
+    let b = call_step_as(&w.lib, &a, &a.s, None, &two, &CallStep { at: vec![1], ..first.clone() }, &step_s, w.payer(&w.f, &ff));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the right step naming a place the list has not");
+    let second = first.clone();
     // (Review T5, docs 17.8b: the call's object is the list of prices: a market's name, its limit, a day, the
     // price. It has NO scale: a call whose row says another scale is the same object, and the step is taken as
     // before. It was: "a row of the market's name and another scale or limit is no row of the leg: the step is
@@ -1061,8 +1086,11 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     assert_eq!(other_scale.s.hash(), two.s.hash(), "the call's object does not say a scale");
     let b = call_step_as(&w.lib, &a, &a.s, None, &other_scale, &second, &step_s, w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys), "the object is the same: the step is the one above");
+    // (Review T9: the limit the object says for the market is its FIRST row's.)
     let mut other_limit = two.clone();
     other_limit.s.heads[1].price_max += 1;
+    assert_eq!(other_limit.s.hash(), two.s.hash(), "the second row of a market is not in the call's object, whatever its limit");
+    other_limit.s.heads[0].price_max += 1;
     assert_ne!(other_limit.s.hash(), two.s.hash());
     let b = call_step_as(&w.lib, &a, &a.s, None, &other_limit, &second, &step_s, w.payer(&w.f, &ff));
     assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "an entry of another limit");
@@ -1089,9 +1117,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5439), ("KpfTEnterS", 2982), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTLeftVoid", 2088), ("KpfTStepPrice", 1821)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 2966), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 2523), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2707), ("KpfTCallEnd", 1853)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 752), ("KpfTCallPay", 2567), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2317), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);
@@ -1106,6 +1134,11 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     let shard = OLive { s: Shard { held: 20 * KAS1, ..books }, value: (20 * KAS1 + SHARD_CARRIER) as u64, ..base.clone() };
     let (_, call) = called_objs(&shard, [P10 * 13 / 10, P10, 0, 0], 6_600);
     let mut steps = vec![];
+    // (Review T9: the six legs are of two markets, and the books have two rows and the call two prices. Before
+    // stage 1 a row's head held the 32 bytes where a covered leg says its time, and `booked` made the old legs
+    // and the young ones of one market two rows: these books had FOUR rows and the call four prices, two markets
+    // twice, an object no entry at the engine could make. The steps below were measured with those 224 bytes.)
+    assert_eq!((shard.s.rows.iter().filter(|r| !r.no_market()).count(), call.s.list().len(), call.s.body().len()), (2, 2, 112));
     for (what, legs, coins) in [("one leg, a note's least", vec![legs6[0]], NOTE_MIN), ("one leg, 40 KAS", vec![legs6[0]], 40 * KAS1), ("six legs, three of them young, 40 KAS", legs6.clone(), 40 * KAS1)] {
         let a = cov(&w, &shard, &legs, coins);
         let (b, _) = call_step(&w.lib, &a, &a.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).unwrap();
@@ -1119,7 +1152,11 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // numbers of the claims) and is shown 5 bytes fewer beside the rows.)
     // (Review T7, docs 17.8c (b) and (c): an entry stated was 5,056: `KpfTEnterS` is 498 bytes longer (the gate).
     // The steps were 6,972, 7,024 and 7,620: `KpfTCStep` is 383 bytes longer (the band, the note of tag 9).)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_554, 7_355, 7_407, 8_003));
+    // (Review T9, docs 17.8d: an entry stated was 5,554: `KpfTEnterS` is 16 bytes less and is shown 12 bytes more
+    // of rows. The steps were 7,355, 7,407 and 8,003: `KpfTCStep` is 120 bytes less (no hash a leg), and the
+    // call's list is of two prices where the old measure had four (above): 112 bytes less that are the test's,
+    // not the stage's.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_550, 7_123, 7_175, 7_771));
 }
 
 // ================================================================================================================
@@ -1253,7 +1290,7 @@ fn t3_b1_the_account_an_entry_becomes_is_held_to_the_leg_said_where_its_end_is_d
     assert_eq!(leg_time(&after.legs[0]), T0);
     let aged = Account { legs: vec![leg_entered(&leg, 0)], ..after.clone() };
     let lie = Stated { outs: Outs::of(&[Out { key: false, to: aged.hash(), value: st.held }]).unwrap(), ..st };
-    let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, &lie, &said, &next, w.payer(&w.w, &f)).unwrap();
+    let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, w.markets[0].committee_id, &lie, &said, &next, w.payer(&w.w, &f)).unwrap();
     let sg = signed("an entry that becomes an account whose leg says another time, stated", &b, &w.keys);
     assert_eq!(Account::c_enter_wrong_point(&marked, &said, &lie.claimer, &lie.outs, lie.held, T0, &[P10]), Some(0));
     let live = nth(&sg, 0, lie, 6_510);
@@ -1362,14 +1399,17 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     assert_eq!((paid, left), (6 * KAS1, None));
     v.push(("KpfTCallPay.claim (numbers that are not nothing)", b, 5, 0, part.s, same()));
     let done = OLive { s: Shard { owed: 0, ..called.s }, ..called.clone() };
-    let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
+    let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [RowHead::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
     let (b, _) = call_off(&w.lib, &done, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
     v.push(("KpfTCallPay.off", b, 5, 0, done.s, same()));
     // The answers of a row of a draw's trace and of a price of its list, and of a row of a call's: the object is
     // the disputed point of a statement on the shard. (Review T5, docs 17.8b: the two ENDS read no row and show
     // none: they are shown the books' hash, 32 bytes, and are no longer of this list: `ends_t5` below. The rows
     // are shown to the new `KpfTShardRow.answer`, a point 1 to 4, and to `KpfTShardPrice.answer`, a point from 5.)
+    // (Review T9, docs 17.8d: a price's answer opens the shard's id by the seed of its opening and its committee:
+    // the shard made by hand has the id that opening gives it.)
     let shard = w.shard();
+    let shard = OLive { s: shard.s.seeded(&SEED, &w.markets[0].committee_id), ..shard };
     let s = shard.s;
     let prices = [P10, P10, 0, 0];
     let (_, st, d) = shard_draw(&w.lib, &shard, &w.script("KpfTChange"), KAS1, prices, T0, w.payer(&w.c, &fc)).unwrap();
@@ -1384,7 +1424,7 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     let p1 = 5 + s.traced(&d, false).unwrap().rows[0].at;
     let q = w.pointed(&live, p1);
     let c = w.cited(0, P10);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, p1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, &s, SEED, &d, p1, &w.script("KpfTShardPrice"), Some((&w.script("KpfTCite"), &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
     v.push(("KpfTShardPrice.answer", b, 5, 0, s, pointed_of(st, p1)));
     let up = [P10 * 11 / 10, P10, 0, 0];
@@ -1438,7 +1478,7 @@ fn t5_the_two_ends_hold_the_32_bytes_they_are_shown_to_the_statements_shard() {
         let rows_alone = blake2b(&s.rows_bytes());
         let mut bit = s.books_hash();
         bit[0] ^= 1;
-        let other = Shard { rows: [ShardRow { head: w.head(3), net: 0, gross: 77 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_hash();
+        let other = Shard { rows: [ShardRow::of(w.head(3), 0, 77), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_hash();
         for h in [rows_alone, bit, [0u8; 32], other] {
             assert!(!accepted(&with_arg(b, 4, bytes_arg(&h)), &w.keys), "{what}: shown other 32 bytes than its shard's books' hash");
         }
@@ -1489,7 +1529,7 @@ fn t3r2_every_script_that_shows_the_rows_holds_the_41_bytes_and_takes_no_shard_o
         let with = |d: [i64; 3]| -> Vec<u8> { kpf_protocol::reserve::Claims { paid1: s.claims.paid1 + d[0], owed2: s.claims.owed2 + d[1], paid2: s.claims.paid2 + d[2] }.bytes() };
         let mut tag = head.clone();
         tag[0] = 0x09;
-        let mut heads = vec![head_of(g + 1, &claims), head_of(g - 1, &claims), head_of(i64::MAX, &claims), head_of(-g - 1, &claims), head_of(g, &flipped), head_of(g, &with([1, 0, 0])), tag, Shard { rows: [ShardRow { head: w.head(3), net: 0, gross: 77 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_head()];
+        let mut heads = vec![head_of(g + 1, &claims), head_of(g - 1, &claims), head_of(i64::MAX, &claims), head_of(-g - 1, &claims), head_of(g, &flipped), head_of(g, &with([1, 0, 0])), tag, Shard { rows: [ShardRow::of(w.head(3), 0, 77), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_head()];
         heads.push(head_of(g, &with([0, 1, 0])));
         heads.push(head_of(g, &with([0, 0, 1])));
         heads.push(head_of(g, &with([1, 1, 1])));
@@ -1655,7 +1695,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     // the SUM of the gross at its end, not of a price.)
     let last = fleg(&w, 3, 1, LONG, 1);
     let at10 = fleg(&w, 3, 1, LONG, P10);
-    let full = |i: usize, gross: i64| ShardRow { head: w.head(i), net: 0, gross };
+    let full = |i: usize, gross: i64| ShardRow::of(w.head(i), 0, gross);
     let top = OLive { s: Shard { rows: [full(0, MARGIN_MAX), full(1, MARGIN_MAX), full(2, MARGIN_MAX), full(3, MARGIN_MAX - scale)], ..base.s }, ..base.clone() };
     assert_eq!((top.s.gross_sum(), units(&top.s)), (4 * MARGIN_MAX - scale, 4 * MARGIN_MAX - scale));
     assert!(4 * (MARGIN_MAX as i128) < i64::MAX as i128);
@@ -1672,7 +1712,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
         let (st, said, _, _) = acct.s.c_enter(at10, 0, 3, &[], T0, acct.value as i64).unwrap();
         let mut would = next;
         would.basis = top.s.basis - P10;
-        let b = c_enter_state_as(&w.lib, &acct, &rich, &w.script("KpfTEnterS"), SEED, &st, &said, &Shard { held: rich.s.held, ..would }, w.payer(&w.w, &f)).unwrap();
+        let b = c_enter_state_as(&w.lib, &acct, &rich, &w.script("KpfTEnterS"), SEED, w.markets[0].committee_id, &st, &said, &Shard { held: rich.s.held, ..would }, w.payer(&w.w, &f)).unwrap();
         assert!(!accepted(&b, &w.keys), "a row whose gross is worth more than 64 bits at the leg's entry takes the leg");
     }
     let brim = OLive { s: next, ..top.clone() };
@@ -1689,7 +1729,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     // Objects no script writes: books that say another sum than their rows have.
     // (a) A called shard of no row, its books saying 5: its call is ended, and it goes on saying 5.
     let done = OLive { s: Shard { owed: 0, called: T0, ..base.s }, ..base.clone() };
-    let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
+    let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [RowHead::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
     let (b, open) = call_off(&w.lib, &done, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys));
     let five = head_of(5, &done.s.claims.bytes());

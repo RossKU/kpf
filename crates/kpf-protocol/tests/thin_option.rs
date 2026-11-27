@@ -13,7 +13,10 @@ use kpf_protocol::cmarket::CMarket;
 use kpf_protocol::committee::*;
 use kpf_protocol::cross::{XLeg, XTerms, SIDE_A, SIDE_B};
 use kpf_protocol::oracle_build::{OBuilt, OLive, OSigned};
-use kpf_protocol::reserve::{option_market, Head, Shard, ShardRow, SHARD_CARRIER};
+use kpf_protocol::reserve::{RowHead, Shard, ShardRow, SHARD_CARRIER};
+
+/// The seed of the opening of the shards made here: a price's answer opens a shard's id by it.
+const SEED: [u8; 32] = [0x5e; 32];
 use kpf_protocol::state::{LONG, SHORT};
 use kpf_protocol::thin::{holder_of, option_dir, option_of, ATake, Account, Out, Outs, Pointed, Stated, CALL_HELD, CALL_WRITTEN, KIND_ACCOUNT_LEAVE, KIND_ACCOUNT_LIQ, KIND_ACCOUNT_TAKE, PUT_HELD, PUT_WRITTEN};
 use kpf_protocol::thin_build::*;
@@ -503,9 +506,10 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let w = world();
     let m = &w.markets[1];
     let scale = m.p.scale;
-    let ohead = Head { market: option_market(&m.id()), committee: m.committee_id, scale, price_max: m.p.price_max };
+    // (A row of calls on market 1: its key has the market plain, a day and a strike. Docs 17.8d.)
+    let ohead = RowHead { key: kpf_protocol::books::Key { market: m.id(), day: 9_000, of: kpf_protocol::books::OF_CALLS, strike: 1 }, scale, price_max: m.p.price_max };
     // A shard that counts options on 20 units of market 1, and holds 50 KAS.
-    let s = Shard { t: w.terms(), rows: [ShardRow { head: ohead, net: 20 * scale, gross: 20 * scale }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0, owed: 0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::of(ohead, 20 * scale, 20 * scale), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], owner: xk(&w.b), held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0, owed: 0, claims: Default::default() }.seeded(&SEED, &m.committee_id);
     let shard = OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 };
     let stated = |st: &Stated, said: &[u8]| -> OLive<Stated> {
         let f = [fund(xk(&w.b), 30)];
@@ -527,23 +531,23 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     let cite1 = w.script("KpfTCite");
     let q = w.pointed(&stated(&st, &s.traced(&d, false).unwrap().said()), 5);
     let c = w.cited(1, P10);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, &s, SEED, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(!right);
     let sg = signed("the price of a row of options answered wrong, with its underlying's citation", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "the shard again");
-    let forced = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
+    let forced = shard_price(&w.lib, &q, &s, SEED, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(true));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
     // The citation of another market is not the row's.
     let other = w.cited(0, P10 / 2);
-    assert!(shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &other)), xk(&w.w), w.payer(&w.w, &f), None).is_err());
+    assert!(shard_price(&w.lib, &q, &s, SEED, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &other)), xk(&w.w), w.payer(&w.w, &f), None).is_err());
     // A draw at the committee's price is answered right.
     let (st, d) = s.draw(s.draw_max(&honest), honest, T0, held).unwrap();
     let q = w.pointed(&stated(&st, &s.traced(&d, false).unwrap().said()), 5);
     let c = w.cited(1, P10 + P10 / 400);
-    let (b, right) = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+    let (b, right) = shard_price(&w.lib, &q, &s, SEED, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
     assert!(right);
     signed("the price of a row of options answered right", &b, &w.keys);
-    let forced = shard_price(&w.lib, &q, &s, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(false));
+    let forced = shard_price(&w.lib, &q, &s, SEED, &d, 5, &w.script("KpfTShardPrice"), Some((&cite1, &c)), xk(&w.w), w.payer(&w.w, &f), Some(false));
     assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
 }
 
