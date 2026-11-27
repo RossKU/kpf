@@ -3541,6 +3541,68 @@ the two common paths by about 5 %.
 
 The checks of each script, as lists to build from, are in `docs/audit/REVIEW-T4-tree.md` ("Third round").
 
+### 17.8d The tree, in two stages (17.8a, 4; on paper, for review)
+
+The model of the tree is `books.rs` (no script reads it yet): the key (60 bytes: the market, the day, what the
+row is of, the strike), the row (the key, its market's scale and price's limit, the net, the gross, what its
+legs were entered at where it has a day, the hash of the key after: 165 bytes hashed under a leaf's tag), the
+head leaf, a row put in and taken out, the root and the books' hash in the form 17.8a, 1 built. What the model
+decided beyond 17.6 and 17.10:
+
+- **One scale and one limit a market are held by one leaf shown, the one before**: a market's futures row is
+  its first row and is put in before any other row of the market (the leaf before it is another market's); a
+  row with a day is put in after a row of its own market, and has that row's scale and limit; the futures row
+  is taken out only where the row after it is another market's, or none. No third leaf is ever shown.
+- An id of which a number of 8 bytes is nothing written below zero is no market's (two such ids are one key by
+  their numbers).
+
+Every script, test and tool that says `rows` changes with the tree. Two stages, each reviewed at the engine,
+so that the change of what a row is CALLED is not made in the same commit as the change of where a row IS:
+
+**Stage 1: keys for names, still four rows written whole.** Today a row's head is the hash of its kind and its
+market, the committee, the scale, the limit (84 bytes), and the list of a draw's prices holds that hash (17.8a,
+2, the one thing not as 17.8b had it). In this stage a row is the tree's row without its last field: the key
+plain (the market, a day and a strike of nothing, futures; an options row of today's one test: calls, with a
+day and a strike), the scale, the limit, the net, the gross, what was entered. No committee: `KpfTShardPrice`
+opens the shard's id by the seed, as `KpfTStepPrice` does. The list of prices holds the plain market, in the
+keys' order; `KpfTCStep` compares the leg's market with the entry's as bytes (a hash less a leg); a price's
+answer needs no market shown beside the citation. The model's `Head` and `ShardRow` become `books::Key` and a
+row of `books.rs`'s fields; `Shard` still holds four of them. Every test of today passes with its rows said so.
+
+**Stage 2: the tree.** A shard's state holds the root where it holds the hash of the four rows.
+
+| Script | Is shown | Holds |
+|---|---|---|
+| `KpfTShardOpen` | nothing more | the root of a tree of the head leaf alone, a constant |
+| a row put in (new, `KpfTRowIn`; the owner signs) | the leaf before and its path, the key it names plain, the new row's key, scale and limit, an empty place and its path against the root as the leaf before rewrote it | the leaf before's key below the new key; the key it names above it, or nothing; the rule of a market's first row; the new row of no unit |
+| a row taken out (new, `KpfTRowOut`; anyone for a row whose day has passed, the owner for a futures row) | the row and its path, the leaf before and its path, the key the row names plain | no unit, nothing entered; the futures row's rule; the leaf before names what the row named; the place empty |
+| `KpfTEnterS`, `KpfTLeft`, `KpfTLeftVoid` | the one row and its path (165 + 8 + 192 bytes, where 408 are shown today) | the row opens the root; the root with the row rewritten |
+| `KpfTLeftAll` | a row and its path for each leg of the note, in the note's order: each path against the root as the leg before rewrote it (two legs of one row: the second is shown the row as the first left it) | the same, leg by leg |
+| `KpfTShardRow` (a row of a trace) | the row and its path, and the row before it in the trace's order and its path | the row before names this row's key (the first: the head names it); the trace's row as today |
+| a point more of a trace (the last) | the last row and its path | it names the key of nothing: no row is left out at the end |
+| `KpfTShardPrice` | no row (the shard's id by the seed) | as stage 1 |
+| `KpfTCallPay` | no row: the books' three numbers and the root | the sum of the gross is nothing (the four rows compared whole today, beside it) |
+| `KpfTChange` | | a trace's length by its two counts: 24 bytes, 56 a price, 40 a row; sixty-three rows and a number of prices at the most |
+
+- A row's place among the sixty-four is whoever puts it in's to choose; the trace's row says the place (the
+  first of its five numbers, which says the row's number among four today).
+- No entry puts a row in: an entry on a market the shard has no row of is refused, and the owner puts the row
+  in first (a transaction of its own: about 700 bytes of rows and paths; the common entry is not made heavier
+  for it).
+- The model: `Shard` holds `books::Books` in a form that copies (sixty-four places); `rows` as tests say it
+  today is given by a function (the rows in the keys' order), and a shard of given rows is made by one.
+
+**To be said by the review:** whether stage 1 is worth a commit of its own, or the two are one; the checks of
+`KpfTRowIn` and `KpfTRowOut` exactly, with the order's comparison (the head by rule; seven numbers) and what
+"the place is empty in the root as the leaf before rewrote it" needs where the leaf before and the empty place
+share nodes of their paths; `KpfTLeftAll` with paths (bytes, and whether one note of six legs of six rows fits
+a transaction: 6 x 365 bytes of rows and paths, and the script unrolled six times); `KpfTShardRow` with two
+paths; what an owner that never puts a row in, or fills the tree, does to its users (nothing: they do not
+enter); who takes a dated row out and when (its day has passed AND it has no unit); sizes of the common paths
+against today's 5,554 (an entry) and 4,852 (a note of one leg), which review T4 estimated 6 to 15 % heavier
+before the last two pieces made them 10 % heavier already; and S1 (the leaving that raises a row's requirement):
+does anything in the tree make either of its two directions cheaper or dearer.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
