@@ -223,6 +223,27 @@ contract KpfTEnterS(int init_version) {
         require(rg <= MARGIN_MAX);
         require(rn <= MARGIN_MAX);
         require(rn >= 0 - MARGIN_MAX);
+        // The row's gate (docs 17.8c): what the shard holds, less what it owes, is at least the upper requirement of
+        // this row with the leg, at the leg's own entry; or the row is asked no more with the leg than without it.
+        // (It bounds a leg by what its shard holds: an owner's leg of any size, entered to bring a call about, is
+        // paid for first. Review T3, L4; review T4, T27 and T35.)
+        int gt = iAt(tb, 19);
+        int gn = iAt(tb, 10) + gt;
+        int gg = (iAt(tb, 10) - 3 * gt) / 2;
+        if (gg < 0) { gg = 0; }
+        gg = gg + gt;
+        int an = rn;
+        if (an < 0) { an = 0 - an; }
+        int an0 = iAt(row, 85);
+        if (an0 < 0) { an0 = 0 - an0; }
+        int rg0 = iAt(row, 94);
+        int wan = (an / sc) * e + (an % sc) * (e / sc) + ((an % sc) * (e % sc)) / sc;
+        int wag = (rg / sc) * e + (rg % sc) * (e / sc) + ((rg % sc) * (e % sc)) / sc;
+        int wbn = (an0 / sc) * e + (an0 % sc) * (e / sc) + ((an0 % sc) * (e % sc)) / sc;
+        int wbg = (rg0 / sc) * e + (rg0 % sc) * (e / sc) + ((rg0 % sc) * (e % sc)) / sc;
+        int gneed = (wan / BPS) * gn + ((wan % BPS) * gn + BPS - 1) / BPS + (wag / BPS) * gg + ((wag % BPS) * gg + BPS - 1) / BPS;
+        int gneed0 = (wbn / BPS) * gn + ((wbn % BPS) * gn + BPS - 1) / BPS + (wbg / BPS) * gg + ((wbg % BPS) * gg + BPS - 1) / BPS;
+        require(iAt(sm, 67) - iAt(sm, 76) >= gneed || gneed <= gneed0);
         rw = rw.slice(0, 102 * r) + head + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
         // (The sum of the rows' gross units, in the books' hash: docs 17.8a.)
         gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) + size) as byte[8]) + gb.slice(9, 36);

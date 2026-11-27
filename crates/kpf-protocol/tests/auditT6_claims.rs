@@ -1583,7 +1583,8 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     let sizes: Vec<(&str, usize)> = ["KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTMarkNote", "KpfTDrawNote", "KpfTEnterS", "KpfTShardPrice", "KpfTShardRow"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2523), ("KpfTLeft", 2506), ("KpfTLeftAll", 4310), ("KpfTLeftVoid", 2030), ("KpfTMarkNote", 1190), ("KpfTDrawNote", 1742), ("KpfTEnterS", 2484), ("KpfTShardPrice", 2707), ("KpfTShardRow", 2105)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTCallPay", 2523), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTLeftVoid", 2088), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 2982), ("KpfTShardPrice", 2707), ("KpfTShardRow", 2105)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");
@@ -1614,7 +1615,9 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (Second round, K1: 4,450, 4,345, 4,485, 4,497 and 4,340 in the first: the script is 5 bytes more, and a claim
     // below a note's least paid whole has its output.)
     assert_eq!((whole, dust, part, two, off), (4_455, 4_454, 4_490, 4_502, 4_345));
-    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_550, 4_585, 4_533, 4_441]);
+    // (Review T7, docs 17.8c (b): `KpfTLeft` is 410 bytes longer (the class at the applying) and is shown one
+    // argument more: a note of one leg applied was 4,550, 4,585, 4,533 and 4,441.)
+    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_961, 4_996, 4_944, 4_852]);
 }
 
 // ================================================================================================================
@@ -1647,18 +1650,29 @@ fn t6_for_piece_b_a_claim_counted_late_and_a_first_part_that_waits_behind_its_se
     // the three numbers are carried; the claim (100, 0, 0, 0) is written.)
     let mark = OLive { s: MarkNote { sid: base.s.sid, leg: fleg(&w, 0, 10, LONG, P10), entry: 2 * P10, key: xk(&w.f), asked: 100 * KAS1 }, value: NOTE_MIN as u64, id: base.id, op: op(61), daa: 6_300 };
     let ff = [fund(xk(&w.f), 36)];
-    let (b, late, m) = mark_apply(&w.lib, &live_shard(&base, s1), &mark, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T7, docs 17.8c, piece (b): T29 IS CLOSED HERE. Once anything was paid, what is counted is of the
+    // second class: the mark's note is applied by `KpfTMarkNote`, which opens the books (68 bytes) and writes
+    // what is owed of the second class: 100 owed of the first still, 100 of the second, the claim (0, 0, 100, 0).
+    // The form of the first class is refused, by the model and at the engine. The late claim is then paid what
+    // the shard has beyond what the first class is owed: 50, as before in coins, but now BEHIND X by right: X is
+    // whole because its class is covered, not because it came first. This test asserted the hole: the note
+    // counted in the first class, 200 owed.)
+    let paid_shard = live_shard(&base, s1);
+    assert!(s1.paid_any() && mark_apply(&w.lib, &paid_shard, &mark, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).is_err(), "T29 is open: a note counted after a payment is of the first class");
+    let first = mark_apply_as(&w.lib, &paid_shard, &mark, Shard { owed: 200 * KAS1, basis: s1.marked_class(&mark.s).unwrap().0.basis, ..s1 }, 0, Some(Rest { sid: base.s.sid, key: xk(&w.f), amount: 100 * KAS1 }), &w.script("KpfTMarkNote"), w.payer(&w.f, &ff));
+    assert!(first.is_err() || !accepted(&first.unwrap().0, &w.keys), "T29 is open: the engine counts a note in the first class after a payment");
+    let (b, late, m) = mark_apply_c(&w.lib, &paid_shard, &mark, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("for (b): a mark's note applied to a called shard that has paid", &b, &w.keys);
-    assert_eq!((late.owed, late.held, late.claims, m), (200 * KAS1, 50 * KAS1, Claims { paid1: 100 * KAS1, owed2: 0, paid2: 0 }, Some(Rest { sid: base.s.sid, key: xk(&w.f), amount: 100 * KAS1 })));
-    let (late, m) = (nth(&sg, 0, late, 6_700), nth(&sg, 2, m.unwrap().claim(), 6_700));
+    assert_eq!((late.owed, late.held, late.claims, m), (100 * KAS1, 50 * KAS1, Claims { paid1: 100 * KAS1, owed2: 100 * KAS1, paid2: 0 }, Some(Claim { sid: base.s.sid, key: xk(&w.f), amount1: 0, paid1: 0, amount2: 100 * KAS1, paid2: 0 })));
+    let (late, m) = (nth(&sg, 0, late, 6_700), nth(&sg, 2, m.unwrap(), 6_700));
     let o = late.s.claim_paid_at(&m.s, due).unwrap();
-    assert_eq!((o.1, o.2, o.0.held, o.0.claims.paid1), (50 * KAS1, Some(Claim { paid1: 50 * KAS1, ..m.s }), 0, 150 * KAS1), "the late claim has what is left, not its part of 75");
+    assert_eq!((o.1, o.2, o.0.held, o.0.claims.paid1, o.0.claims.paid2), (50 * KAS1, Some(Claim { paid2: 50 * KAS1, ..m.s }), 0, 100 * KAS1, 50 * KAS1), "the late claim has what is beyond the first class");
     assert!(taken(pay_tx(&w, &late, &m, &o, due), &w.keys));
     assert!(o.0.call_off(&call_of(&base).s).is_err(), "the call ends with the late claim half paid");
     let more = live_shard(&base, Shard { held: 50 * KAS1, ..o.0 });
     let m2 = live_claim(&base, o.2.unwrap());
     let o2 = more.s.claim_paid_at(&m2.s, due).unwrap();
-    assert_eq!((o2.1, o2.2, o2.0.claims.paid1), (50 * KAS1, None, 200 * KAS1));
+    assert_eq!((o2.1, o2.2, o2.0.claims.paid1, o2.0.claims.paid2), (50 * KAS1, None, 100 * KAS1, 100 * KAS1));
     assert!(taken(pay_tx(&w, &more, &m2, &o2, due), &w.keys) && o2.0.call_off(&call_of(&base).s).is_ok());
     // (The same counted late beside a claim that was on time and not yet shown: X and Y of 100 each, 100 ever
     // held; X is paid its 50; a note of 200 is then counted (400 owed): it is paid the 50 that are held, its own
@@ -1668,10 +1682,19 @@ fn t6_for_piece_b_a_claim_counted_late_and_a_first_part_that_waits_behind_its_se
     let (y, big) = (claim_of(&base, xk(&w.c), 100 * KAS1, 0, 0, 0).s, claim_of(&base, xk(&w.f), 200 * KAS1, 0, 0, 0).s);
     let (t1, px, _) = two.claim_paid_at(&x.s, due).unwrap();
     assert_eq!((px, two.claim_paid_at(&y, due).unwrap().1), (50 * KAS1, 50 * KAS1));
-    let t2 = Shard { owed: 400 * KAS1, ..t1 };
-    let (t3, pm, _) = t2.claim_paid_at(&big, due).unwrap();
-    assert_eq!((pm, t3.held, parts(&t3, &y)), (50 * KAS1, 0, Some((0, 0))));
-    assert!(t3.claim_paid_at(&y, due).is_err());
+    // (Review T7: the note of 200 is now counted by the engine, a mark's note applied after X was paid: of the
+    // second class. What is owed of the first class stays 200: Y finds its 50, and the late claim nothing while
+    // the first class is not covered. Before: counted by hand in the first class (400 owed), it took the 50 that
+    // were held and Y found nothing.)
+    let _ = big;
+    let mark200 = OLive { s: MarkNote { sid: base.s.sid, leg: fleg(&w, 0, 10, LONG, P10), entry: 3 * P10, key: xk(&w.f), asked: 200 * KAS1 }, value: NOTE_MIN as u64, id: base.id, op: op(62), daa: 6_300 };
+    let (b, t2, late200) = mark_apply_c(&w.lib, &live_shard(&base, t1), &mark200, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).unwrap();
+    signed("for (b): a note of 200 counted after a claim was paid a part", &b, &w.keys);
+    let late200 = late200.unwrap();
+    assert_eq!((t2.owed, t2.claims.owed2, late200.amount1, late200.amount2), (200 * KAS1, 200 * KAS1, 0, 200 * KAS1));
+    assert!(t2.claim_paid_at(&late200, due).is_err(), "the late claim is paid before the first class is covered");
+    let (t3, py, left) = t2.claim_paid_at(&y, due).unwrap();
+    assert_eq!((py, left, t3.held), (50 * KAS1, Some(Claim { paid1: 50 * KAS1, ..y }), 0), "T29 is open: Y, on time and not yet shown, does not find its part");
     // 2.
     let tenth = KAS1 / 10;
     let s = shard_of(&base, tenth + 1_000, tenth, 0, 100 * KAS1, 0);

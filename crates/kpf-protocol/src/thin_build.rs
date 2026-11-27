@@ -2726,10 +2726,26 @@ pub fn left_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &O
     left_apply_as(lib, shard, note, &at, next, paid, rest, script, p)
 }
 
+/// As `left_apply`, of a note by its kind (docs 17.8c): an account's own (`tag` 6), or a call's step's (`tag` 9,
+/// with what its young legs gained, `young`: `CallStep::young`). Returns the claim written where the shard did not
+/// pay, which under a call says its class.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn left_apply_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, tag: i64, young: i64, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Claim>)> {
+    let (next, at, paid, claim) = shard.s.left_class(&note.s, tag, young, note.value as i64)?;
+    left_apply_as_c(lib, shard, note, tag, young, &at, next, paid, claim, script, p)
+}
+
+/// As `left_apply_c`, with the rows named and the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn left_apply_as_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, tag: i64, young: i64, at: &[usize], next: crate::reserve::Shard, paid: i64, claim: Option<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Claim>)> {
+    left_apply_of(lib, shard, note, &note.s, note.s.hash_as(tag, young), tag, young, at, next, paid, claim, script, p)
+}
+
 /// As `left_apply`, with the rows named and the outputs said (for whoever tests what the script refuses).
 #[allow(clippy::too_many_arguments)]
 pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
-    left_apply_of(lib, shard, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, at, next, paid, rest, script, p)
+    let (b, next, claim) = left_apply_of(lib, shard, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, 0, at, next, paid, rest.map(|r| r.claim()), script, p)?;
+    Ok((b, next, claim.map(|c| crate::reserve::Rest { sid: c.sid, key: c.key, amount: c.amount1 })))
 }
 
 /// `KpfTLeft.apply` on the note that a leg did not enter (`KpfTEnterOff` wrote it): the leg is taken out of the
@@ -2737,23 +2753,29 @@ pub fn left_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note:
 pub fn unentered_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::covered::Unentered>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard)> {
     let left = note.s.as_left();
     let (next, at, paid, rest) = shard.s.left(&left)?;
-    let (b, next, _) = left_apply_of(lib, shard, note, &left, note.s.hash(), crate::covered::NOTE_UNENTERED, &at, next, paid, rest, script, p)?;
+    let (b, next, _) = left_apply_of(lib, shard, note, &left, note.s.hash(), crate::covered::NOTE_UNENTERED, 0, &at, next, paid, rest.map(|r| r.claim()), script, p)?;
     Ok((b, next))
 }
 
 /// `KpfTLeftVoid.void`: a note of legs one of which is no leg of the shard's books is spent, the shard as it is
 /// (it is applied by nothing, and would end every draw). `k`: the leg that is not in the books (`Shard::gone_at`).
 pub fn left_void(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {
-    left_void_of(lib, shard, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, k, script, p)
+    left_void_of(lib, shard, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, 0, k, script, p)
+}
+
+/// As `left_void`, of a note by its kind: a call's step's is tag 9, with what its young legs gained.
+#[allow(clippy::too_many_arguments)]
+pub fn left_void_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, tag: i64, young: i64, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    left_void_of(lib, shard, note, &note.s, note.s.hash_as(tag, young), tag, young, k, script, p)
 }
 
 /// As `left_void`, of the note that a leg did not enter.
 pub fn unentered_void(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::covered::Unentered>, script: &LibScript, p: Payer) -> Result<OBuilt> {
-    left_void_of(lib, shard, note, &note.s.as_left(), note.s.hash(), crate::covered::NOTE_UNENTERED, 0, script, p)
+    left_void_of(lib, shard, note, &note.s.as_left(), note.s.hash(), crate::covered::NOTE_UNENTERED, 0, 0, script, p)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {
+fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, young: i64, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {
     let s = &shard.s;
     if n.sid != s.sid || n.legs.is_empty() || n.legs.len() > 6 || k >= n.legs.len() {
         return invalid("a note to this shard, of one to six legs, and one of them named");
@@ -2762,7 +2784,7 @@ fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let args = vec![
         bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()),
-        bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), iv(k as i64), bv(n.key.to_vec()), iv(n.asked), iv(tag),
+        bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), iv(k as i64), bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(young),
     ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeftVoid", "void", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
@@ -2778,7 +2800,7 @@ fn left_void_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &
 
 /// The applying of a note of legs whose object is `note` (its state's hash `nhash`, its kind `tag`).
 #[allow(clippy::too_many_arguments)]
-fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, young: i64, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Claim>)> {
     let s = &shard.s;
     if n.legs.is_empty() || at.len() != n.legs.len() {
         return invalid("a note of legs, and a row a leg");
@@ -2791,10 +2813,8 @@ fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     } else {
         args.extend([bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), bv(at.iter().flat_map(|r| sm8(*r as i64)).collect())]);
     }
-    args.extend([bv(n.key.to_vec()), iv(n.asked)]);
-    if n.legs.len() == 1 {
-        args.push(iv(tag));
-    }
+    // (The note's kind, and what a call's step's says its young legs gained: docs 17.8c.)
+    args.extend([bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(young)]);
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, left_script(n.legs.len()), "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
     // (Below zero, what is asked is what the account paid: the note holds it, and the shard takes what the note's
@@ -2821,14 +2841,28 @@ pub fn mark_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &O
     mark_apply_as(lib, shard, note, next, paid, rest, script, p)
 }
 
-/// As `mark_apply`, with the outputs said (for whoever tests what the script refuses).
-#[allow(clippy::too_many_arguments)]
+/// As `mark_apply`, with the claim written, which under a call says its class (docs 17.8c).
+#[allow(clippy::type_complexity)]
+pub fn mark_apply_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::MarkNote>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Claim>)> {
+    let (next, paid, claim) = shard.s.marked_class(&note.s)?;
+    mark_apply_as_c(lib, shard, note, next, paid, claim, script, p)
+}
+
+/// As `mark_apply_as`, of the claim as it is given.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn mark_apply_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::MarkNote>, next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Rest>)> {
+    let (b, next, claim) = mark_apply_as_c(lib, shard, note, next, paid, rest.map(|r| r.claim()), script, p)?;
+    Ok((b, next, claim.map(|c| crate::reserve::Rest { sid: c.sid, key: c.key, amount: c.amount1 })))
+}
+
+/// As `mark_apply_c`, with the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn mark_apply_as_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::MarkNote>, next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, Option<crate::reserve::Claim>)> {
     let (s, n) = (&shard.s, &note.s);
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.books_hash().to_vec()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.books_open()), bv(s.moving()),
         bv(crate::thin::leg_bytes(&n.leg)), iv(n.entry), bv(n.key.to_vec()), iv(n.asked),
     ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTMarkNote", "apply", args, 0)?;
@@ -3188,7 +3222,7 @@ pub fn call_step_as<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood:
     d.contract(call, OWhich::T(SLOT), pinned::kit().object(lib, &call.s.hash()), "go", vec![iv(1), iv(1)], "call", 0);
     d.out(call.value, hash_spk(lib, &call.s.hash()), Some((0, id)), "call", None);
     keep(&mut d, script, lid)?;
-    d.out((crate::reserve::NOTE_MIN + step.pay) as u64, hash_spk(lib, &step.note.hash()), Some((0, id)), "note", None);
+    d.out((crate::reserve::NOTE_MIN + step.pay) as u64, hash_spk(lib, &step.note_hash()), Some((0, id)), "note", None);
     // (An account that holds token legs goes on with them: it holds its coins, and a KAS at the least, which
     // whoever steps puts in where the coins are less.)
     if let Some(next) = &step.after {

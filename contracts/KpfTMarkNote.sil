@@ -62,7 +62,7 @@ contract KpfTMarkNote(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] rowsHash, byte[171] moving, byte[111] leg, int mark, byte[32] key, int asked) {
+    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[68] books, byte[171] moving, byte[111] leg, int mark, byte[32] key, int asked) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -73,8 +73,11 @@ contract KpfTMarkNote(int init_version) {
         byte[] ns = slotOf(n, slotLen);
         byte[] mv = byte[](moving);
         byte[] tb = byte[](terms);
-        // The shard (an object with no second key).
-        require(blake2b(p33(blake2b(tb + p33(rowsHash))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The shard (an object with no second key). Its books are shown opened, 68 bytes: the sum of the rows'
+        // gross units, the hash of the rows, and the claims' three numbers (under a call the note's amount is
+        // counted in its class: docs 17.8c).
+        byte[] bk = byte[](books);
+        require(blake2b(p33(blake2b(tb + p33(blake2b(bk.slice(0, 9) + p33(byte[32](bk.slice(9, 41))) + p33(blake2b(bk.slice(41, 68))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         byte[] lg = byte[](leg);
@@ -108,15 +111,28 @@ contract KpfTMarkNote(int init_version) {
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
         int owed = int(byte[8](mv.slice(76, 84)));
-        int pay = asked;
-        if (pay > held) { pay = held; }
-        // (Called: nothing is paid.)
-        if (int(byte[8](mv.slice(130, 138))) != 0) { pay = 0; }
-        held = held - pay;
-        v = v - pay;
-        int left = asked - pay;
-        // (What is not paid is owed.)
-        owed = owed + left;
+        int called = int(byte[8](mv.slice(130, 138)));
+        int pay = 0;
+        int a1 = 0;
+        int a2 = 0;
+        if (called == 0) {
+            pay = asked;
+            if (pay > held) { pay = held; }
+            held = held - pay;
+            v = v - pay;
+            // (What is not paid is owed.)
+            a1 = asked - pay;
+        } else {
+            // Called: nothing is paid, and what is asked is counted in its class (docs 17.8c): of the second
+            // where the leg is young at the call (it entered after the call's time less twice a lateness and a
+            // dispute period), or once anything was paid to a claim.
+            int second = 0;
+            if (int(byte[8](bk.slice(42, 50))) + int(byte[8](bk.slice(60, 68))) > 0) { second = 1; }
+            if (int(byte[8](lg.slice(34, 42))) > called - 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111))))) { second = 1; }
+            if (second == 1) { a2 = asked; } else { a1 = asked; }
+        }
+        owed = owed + a1;
+        bk = bk.slice(0, 50) + i9(int(byte[8](bk.slice(51, 59))) + a2) + bk.slice(59, 68);
         if (pay > 0) {
             int m = tx.outputs.length - 1 - 4 * j;
             require(m >= tx.inputs.length);
@@ -124,12 +140,12 @@ contract KpfTMarkNote(int init_version) {
             require(tx.outputs[m].value >= pay);
         }
         int c = OpCovOutputIdx(id, 0);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(rowsHash))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(bk.slice(0, 9) + p33(byte[32](bk.slice(9, 41))) + p33(blake2b(bk.slice(41, 68))))))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= v);
-        if (left > 0) {
+        if (a1 + a2 > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left) + i9(0) + i9(0) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(a1) + i9(0) + i9(a2) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);

@@ -257,7 +257,21 @@ impl Left {
     pub fn value(&self) -> i64 {
         NOTE_MIN.saturating_add(self.asked.saturating_neg().max(0))
     }
+
+    /// The hash of the note a call's step writes (tag 9; docs 17.8c): it says, beside what is asked, what the
+    /// young legs gained together less their band, which is a claim of the second class.
+    pub fn hash_step(&self, young: i64) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_STEP), p33(&Left::chain(&self.legs)), p33(&self.key), i9(self.asked), i9(young)].concat())
+    }
+
+    /// The note's hash by its kind: an account's own (6), or a call's step's (9) with what the young gained.
+    pub fn hash_as(&self, tag: i64, young: i64) -> [u8; 32] {
+        if tag == NOTE_STEP { self.hash_step(young) } else { self.hash() }
+    }
 }
+
+/// The note that legs left by a call's step (`KpfTCStep`): of a kind of its own, since it says two amounts.
+pub const NOTE_STEP: i64 = 9;
 
 /// The note that a leg of a covered account was marked (`KpfTMarkNote`; docs 16.3).
 pub const NOTE_MARK: i64 = 13;
@@ -424,6 +438,14 @@ impl Shard {
         let net = s.rows[r].net.checked_add(units).filter(|n| (-max..=max).contains(n));
         let gross = s.rows[r].gross.checked_add(l.size).filter(|g| *g <= max);
         let (Some(net), Some(gross), Some(b)) = (net, gross, s.basis.checked_add(basis).filter(|b| *b != i64::MIN)) else { return no("its books are beyond what is counted") };
+        // The row's gate (docs 17.8c; `KpfTEnterS`): what the shard holds, less what it owes, is at least the upper
+        // requirement of this row with the leg, at the leg's own entry; or the row is asked no more with the leg
+        // than without it.
+        let asked = |n: i64, g: i64| need_of(worth(n.checked_abs()?, l.scale, l.entry)?, worth(g, l.scale, l.entry)?, &self.t, true);
+        let (Some(need), Some(before)) = (asked(net, gross), asked(self.rows[r].net, self.rows[r].gross)) else { return no("its row's requirement is beyond what is counted") };
+        if self.held.checked_sub(self.owed).is_none_or(|free| free < need) && need > before {
+            return no("the row's gate: what the shard holds, less what it owes, is below the upper requirement of the leg's row with the leg, and the leg raises it");
+        }
         s.rows[r] = ShardRow { head, net, gross };
         s.basis = b;
         // (The shard's time: no draw before the entry is settled or ended. Review 51, F82. And an entry's time is
@@ -447,11 +469,57 @@ impl Shard {
         self.left_holding(n, n.value())
     }
 
+    /// Whether a leg is young at this shard's call (docs 17.9): it entered after the call's time less T, T twice a
+    /// lateness and a dispute period. No leg is, of a shard that is not called.
+    pub fn young(&self, l: &XLeg) -> bool {
+        let t = self.t.late_daa.saturating_add(self.dispute_daa).saturating_mul(2);
+        self.called != 0 && crate::covered::leg_time(l) > self.called.saturating_sub(t)
+    }
+
+    /// Whether anything was paid to a claim of this shard: what is counted after is of the second class.
+    pub fn paid_any(&self) -> bool {
+        self.claims.paid1.saturating_add(self.claims.paid2) > 0
+    }
+
+    /// The books as `KpfTMarkNote` is shown them, 68 bytes: the sum of the rows' gross units, the hash of the
+    /// rows, and the claims' three numbers.
+    pub fn books_open(&self) -> Vec<u8> {
+        [i9(self.gross_sum()), blake2b(&self.rows_bytes()).to_vec(), self.claims.bytes()].concat()
+    }
+
+    /// What a called shard counts of an amount asked by a note of the legs `legs` (docs 17.8c): of the second
+    /// class where a leg of an account's own note is young or anything was paid to a claim; else of the first.
+    fn classed(&self, asked: i64, legs: &[XLeg], step: bool) -> (i64, i64) {
+        if asked <= 0 {
+            return (0, 0);
+        }
+        if self.paid_any() || (!step && legs.iter().any(|l| self.young(l))) { (0, asked) } else { (asked, 0) }
+    }
+
     /// As `left`, of a note whose output holds `holds`: where the note says it holds what an account paid, the
     /// shard takes what the output holds above a note's least, and no more than the note says (a note is not
     /// taken at its word: a wrong statement nobody disputed writes one that says anything. Review 53, F86).
     pub fn left_holding(&self, n: &Left, holds: i64) -> Result<(Shard, Vec<usize>, i64, Option<Rest>)> {
+        let (s, at, pay, claim) = self.left_class(n, NOTE_LEFT, 0, holds)?;
+        match claim {
+            Some(c) if c.amount2 != 0 => Err(Error::Invalid("the note's amount is a claim of the second class (a leg of it is young at the call, or a claim was paid already): `left_class` gives it".into())),
+            c => Ok((s, at, pay, c.map(|c| Rest { sid: c.sid, key: c.key, amount: c.amount1 }))),
+        }
+    }
+
+    /// `KpfTLeft.apply`, `KpfTLeftAll.apply` (docs 17.8c): a note that legs left, of an account's own (`tag` 6) or
+    /// of a call's step (`tag` 9, with what its young legs gained, `young`), applied to this shard. Not called: as
+    /// ever, what is asked is paid as far as the shard holds and the rest is owed. Called: nothing is paid, and
+    /// what is asked is counted in its class. The shard after, the rows, what is paid, and the claim written.
+    pub fn left_class(&self, n: &Left, tag: i64, young: i64, holds: i64) -> Result<(Shard, Vec<usize>, i64, Option<Claim>)> {
         let no = |why: &str| Err(Error::Invalid(format!("the note that legs left is not applied: {why}")));
+        let step = tag == NOTE_STEP;
+        if (!step && (tag != NOTE_LEFT || young != 0)) || (step && (self.called == 0 || young < 0)) {
+            return no("it is an account's own (6), or a call's step's (9), which is of a called shard and says what its young legs gained");
+        }
+        if step && ((young != 0 && !n.legs.iter().any(|l| self.young(l))) || (n.asked > 0 && n.legs.iter().all(|l| self.young(l)))) {
+            return no("a step's note is held to its legs: nothing of the young's where no leg is young, nothing asked above nothing where every leg is");
+        }
         if n.sid != self.sid {
             return no("it is to another shard");
         }
@@ -482,13 +550,20 @@ impl Shard {
         if n.asked < 0 {
             // (What the account paid for the legs, which the note holds.)
             s.held = s.held.checked_add(held_for(n.asked, holds)).ok_or_else(beyond)?;
-            return Ok((s, at, 0, None));
         }
-        // (Called: nothing is paid. What is not paid is owed, and the note of the rest says it.)
-        let pay = if self.called != 0 { 0 } else { n.asked.min(s.held) };
+        // (Called: nothing is paid, and what is asked is counted in its class. Not called: what is not paid is
+        // owed, and the note of the rest says it.)
+        let (pay, a1, a2) = if self.called == 0 {
+            let pay = n.asked.max(0).min(s.held);
+            (pay, n.asked.max(0) - pay, 0)
+        } else {
+            let (a1, a2) = self.classed(n.asked, &n.legs, step);
+            (0, a1, a2.checked_add(young).ok_or_else(beyond)?)
+        };
         s.held -= pay;
-        s.owed = s.owed.checked_add(n.asked - pay).ok_or_else(beyond)?;
-        Ok((s, at, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+        s.owed = s.owed.checked_add(a1).ok_or_else(beyond)?;
+        s.claims.owed2 = s.claims.owed2.checked_add(a2).ok_or_else(beyond)?;
+        Ok((s, at, pay, (a1 > 0 || a2 > 0).then_some(Claim { sid: n.sid, key: n.key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 })))
     }
 
     /// `KpfTLeftVoid`: the first leg of a note that is no leg of these books (no futures leg; no row of its
@@ -528,6 +603,16 @@ impl Shard {
     /// the shard holds (nothing while it is called), the rest owed and written as a note of the rest. No row is
     /// read: it is applied whatever the rows hold by then.
     pub fn marked(&self, n: &MarkNote) -> Result<(Shard, i64, Option<Rest>)> {
+        let (s, pay, claim) = self.marked_class(n)?;
+        match claim {
+            Some(c) if c.amount2 != 0 => Err(Error::Invalid("the mark's amount is a claim of the second class (its leg is young at the call, or a claim was paid already): `marked_class` gives it".into())),
+            c => Ok((s, pay, c.map(|c| Rest { sid: c.sid, key: c.key, amount: c.amount1 }))),
+        }
+    }
+
+    /// `KpfTMarkNote.apply` (docs 16.3, 17.8c): as `left_class`, of the note that a leg was marked: under a call
+    /// its amount is of the second class where the leg is young or anything was paid to a claim.
+    pub fn marked_class(&self, n: &MarkNote) -> Result<(Shard, i64, Option<Claim>)> {
         let no = |why: &str| Err(Error::Invalid(format!("the note that a leg was marked is not applied: {why}")));
         if n.sid != self.sid {
             return no("it is to another shard");
@@ -547,10 +632,17 @@ impl Shard {
         let mut s = *self;
         // (Side B's units in the leg: the size below zero where A is long.)
         s.basis = fits(if l.dir == LONG { s.basis.checked_sub(dlt) } else { s.basis.checked_add(dlt) })?;
-        let pay = if self.called != 0 { 0 } else { n.asked.min(s.held) };
+        let (pay, a1, a2) = if self.called == 0 {
+            let pay = n.asked.min(s.held);
+            (pay, n.asked - pay, 0)
+        } else {
+            let (a1, a2) = self.classed(n.asked, std::slice::from_ref(l), false);
+            (0, a1, a2)
+        };
         s.held -= pay;
-        s.owed = s.owed.checked_add(n.asked - pay).ok_or_else(beyond)?;
-        Ok((s, pay, (pay < n.asked).then_some(Rest { sid: n.sid, key: n.key, amount: n.asked - pay })))
+        s.owed = s.owed.checked_add(a1).ok_or_else(beyond)?;
+        s.claims.owed2 = s.claims.owed2.checked_add(a2).ok_or_else(beyond)?;
+        Ok((s, pay, (a1 > 0 || a2 > 0).then_some(Claim { sid: n.sid, key: n.key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 })))
     }
 
     /// `KpfTOwed.apply`: the shard once a note of what an account paid of what it owed is applied, the note's

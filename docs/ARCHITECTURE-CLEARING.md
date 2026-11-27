@@ -3322,6 +3322,55 @@ not need the tree; the tree needs traces. Four commits, each with every test of 
    150 where its part is 75: 17.8c's "second once anything was paid". Measured: `KpfTCallPay` 2,523 bytes
    (1,691); a claim paid whole 4,455 (3,624; estimated 4,100), a part and written again 4,491, the call's end
    4,345; a note of one leg applied 4,441 to 4,585 (4,314); an entry stated 5,056 (5,040).
+
+   **(b) The second class, and (c) the row's gate: built and reviewed (S1, S2 and S6 open)** (`s322_second_sil.py` and
+   `s320_gate_sil.py`, run after `s310`; `Shard::left_class`, `marked_class`, `young`, `CallStep::young` and the
+   gate in `Shard::entered`). `KpfTCStep` writes a note of tag 9 that says, beside what is asked, what the young
+   legs gained together less their band; `KpfTLeft`, `KpfTLeftAll` and `KpfTMarkNote` (which opens the books: 68
+   bytes) count what a note asks of a called shard in its class, and write the claim with both amounts;
+   `KpfTLeftVoid` takes a note of tag 9; `KpfTEnterS` holds the row's gate. At the engine:
+   - **L4's play** (a shard of 20 KAS, a user's long of 5 units that gained 15 a hundred blocks after it
+     entered, an owner's own long of 1,000 units entered at the call's time): the user's step says 14.35 KAS of
+     the young's (15 less the band of 0.65); its note is counted of the second class; the owner does not have
+     its shard back while that claim stands; the claim is paid whole from the time of the claims, and the call
+     ends with what is left. With the gate the owner's leg does not enter that shard at all: it asks 1,007.5
+     KAS held, and enters where the shard is paid up.
+   - **L1**: the same leg leaving by its user's own statement after the call: its note is of the second class,
+     whole; counted of the first, refused. A leg that entered T before the call: of the first.
+   - **T29**: an old leg's note counted after a claim was paid: of the second class.
+   - A step's note is held to its legs; shown as an account's own, refused; the young's amount a sompi more,
+     without its band, as what is asked, or left out: each refused.
+   - **The gate**, to the sompi: a leg of 100 units at 10 in a row of its own asks 77.5 KAS held (7.75 %); a
+     sompi less, refused; a shard that owes holds that much more; a short that sets a row off enters a shard
+     of 1 KAS (155 asked before, 122.5 after), one that turns the row and asks more does not; another row's
+     requirement is not counted.
+   **Review T7** (`docs/audit/REVIEW-T7-second.md`; its tests `auditT7_second.rs`, eight; the earlier reviews'
+   24 failing tests brought along, none weakened; the default workspace 713 tests, none failed). **L4 and L1,
+   as they were found, are closed at the engine**; N1 and T29 (a claim counted late) closed; nothing young
+   dilutes the first class (108 notes made by hand of every combination applied as the rule says, 574 other
+   outcomes and kinds refused); nothing is claimed twice; the gate is the model's to the sompi on 120 random
+   rows. F116 is closed for a young leg: an owner's young leg is a claim of the second class, paid only what is
+   held beyond the honest claims, whoever is shown first. With the gate and the second class both, L4's user
+   (the shard paid up for the owner's long) is whole at moves of 0, 1, 2 and 5 % and at 1 % down, has 18.97 of
+   19.85 at 8 % and 16.21 of 21.14 at 10 %; the paper's 3.79, 2.12 and 1.16 of 15 do not hold with the gate,
+   since what the owner paid in is in what the shard ever held.
+
+   | Finding | What it is | Decided |
+   |---|---|---|
+   | S1 (medium; open) | **a leaving raises its row's requirement with no gate, and the leg that stays is as old as its owner likes.** In L4's shard: the owner's long of 1,000 units enters with 1,007.47 KAS held; its short of 1,000 from a second account enters by the gate's second arm; hedged, it draws 272; the short leaves by its own statement; the row is one-sided on 734 KAS (5.6 % where the gate asks 7.75 %) and a call is due at once. With no move nobody loses. With 10 % up before the call: the long old, a first-class claim of 1,436, the old user has 11.01 of 21.86 and the young one nothing; the long young, the old user whole and the young one 11.81 of 21.14. It costs the owner time, and needs a move beyond what the shard holds while a call is due | open. Two directions: the upper rate on the gross at half the upper rate on the net (a row set off is then held as its larger side alone would be: a number, with the rates); or a leg is young where its row's net grew by a leaving within T. For the owner of the design; with the rates |
+   | S2 (medium; open) | the gate reads what is held, not the equity, and one row: on a shard that holds 20 and has an equity of 5, a leg of 2 units more enters and a call is due at once (the user then loses its band and no more); a shard of 775 KAS takes 1,000 units in each of four rows and is asked 3,100 | said in 17.8c already (it bounds a leg; it is not the rule of 12); a number over the rows is the tree's question |
+   | S6 (medium; rests on 17.9) | the gate's price is the one the entry states: a long of 10,000 units "from a sompi" enters a shard of 1 KAS, and a call is due at once; if nobody disputes the entry's price, its step says 128,700 KAS of the young's | as every statement: a wrong price is answered wrong and the entry undone. Whoever watches disputes an entry whose price is not the market's; the second class bounds what it takes to the young |
+   | S3 (low) | a young leg nobody stepped leaves at its own later price: a second-class claim of 48.5 where its step said 18.8 (F95, inside the second class) | with F95 |
+   | S4 (medium; a hole in the tests, not the scripts) | about a dozen places in the earlier reviews' tests applied a step's output as a note of tag 6, which no script writes (the builder made the input): two tests passed on the changed scripts so, one of them still asserting L4's hole | re-derived by the review: a step's note is held to its hash and applied with its tag, and the same transaction with the other tag refused. One line of `thin_draw.rs` has the same weakness (refused for its outcome, not its hash) |
+   | S5 (low) | the gate's arithmetic refuses an entry where its row's gross is worth more than 64 bits at the leg's entry, even a leg that sets the row off | said |
+
+   Measured: an entry stated 5,554 bytes (5,056; `KpfTEnterS` 2,982); a note of one leg applied 4,852 to 4,944
+   (4,441 to 4,533; `KpfTLeft` 2,916, `KpfTLeftAll` 5,093); a call's step of one leg 7,355 to 7,407 (6,972 to
+   7,024; `KpfTCStep` 5,439); a mark's note applied about 3,100. **The two common paths are about 10 % and 9 %
+   heavier than before these two pieces, where 17.8c estimated 5 %.** Not reached: `KpfTLeftVoid` with a note
+   of tag 9 at the engine; the entry undone after S6's; S1's draw at the engine and S1 in four rows; terms other
+   than the tests'.
+
 4. **The tree**: it then touches only the scripts that read one row, and a row's answer.
 
 ### 17.8b A draw and a call as traces, on four rows (17.8a, 2; on paper, reviewed)

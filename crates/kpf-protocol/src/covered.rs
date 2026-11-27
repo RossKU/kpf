@@ -953,8 +953,18 @@ pub struct CallStep {
     pub claimer_bond: i64,
     pub disputer_bond: i64,
     pub note: Left,
+    /// What the young legs gained together, less their band (docs 17.8c): a claim of the second class, which the
+    /// step's note says beside what it asks (`Left::hash_step`).
+    pub young: i64,
     /// The account that goes on, where it holds token legs: with them, what is left of its coins, and what it owes.
     pub after: Option<Account>,
+}
+
+impl CallStep {
+    /// The hash of the note the step writes: of a kind of its own (tag 9).
+    pub fn note_hash(&self) -> [u8; 32] {
+        self.note.hash_step(self.young)
+    }
 }
 
 impl Account {
@@ -982,6 +992,8 @@ impl Account {
         // is young. The young legs of an account are counted together: nothing where they gained, paid where
         // they lost.)
         let mut young = 0i64;
+        // (The sum of the young legs' larger worths, at the entry or at the call's price: their band's base.)
+        let mut ymax = 0i64;
         let ywin = ck(2i64.checked_mul(add(self.t.late_daa, self.dispute_daa)?))?;
         let tokens: Vec<XLeg> = self.legs.iter().filter(|l| l.dir == DIR_SPOT).copied().collect();
         let futures: Vec<XLeg> = self.legs.iter().filter(|l| l.dir != DIR_SPOT).copied().collect();
@@ -1011,6 +1023,7 @@ impl Account {
             let d = if l.dir == LONG { sub(wp, we)? } else { sub(we, wp)? };
             if leg_time(l) > sub(call.time, ywin)? {
                 young = add(young, d)?;
+                ymax = add(ymax, wp.max(we))?;
             } else {
                 gain = add(gain, d)?;
             }
@@ -1019,6 +1032,9 @@ impl Account {
         if young < 0 {
             gain = add(gain, young)?;
         }
+        // (Where the young gained: a claim of the second class, less their band: the tolerance twice of the sum
+        // of their larger worths, rounded up once. Nothing of it is set off, paid by or to the account.)
+        let yask = if young > 0 { sub(young, rate_up(ymax, ck(2i64.checked_mul(self.t.g_bps))?)?)?.max(0) } else { 0 };
         // (An account that holds token legs goes on: it keeps a KAS of its coins back. Review 64, F113.)
         let keep = if tokens.is_empty() { 0 } else { crate::reserve::OWING_KEEP };
         let room = sub(sub(self.a_margin, NOTE_MIN)?, keep)?.max(0);
@@ -1064,7 +1080,7 @@ impl Account {
             Some(Account { a_margin: user, b_margin: add(self.b_margin, more)?, a_min_counter: tokens.len() as i64, b_min_counter: quiet, legs: tokens, ..self.clone() })
         };
         let user = if after.is_some() { 0 } else { user };
-        Some(CallStep { at, gain, pay, fee, user: least(user), claimer_bond: least(cb), disputer_bond: least(db), note: Left { sid, legs: futures, key: self.a_key, asked }, after })
+        Some(CallStep { at, gain, pay, fee, user: least(user), claimer_bond: least(cb), disputer_bond: least(db), note: Left { sid, legs: futures, key: self.a_key, asked }, young: yask, after })
     }
 }
 

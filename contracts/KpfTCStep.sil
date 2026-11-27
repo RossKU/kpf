@@ -104,6 +104,8 @@ contract KpfTCStep(int init_version) {
         byte[32] g = byte[32](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
         int gain = 0;
         int ygain = 0;
+        // (The sum of the young legs' larger worths, at the entry or at the call's price: their band's base.)
+        int ymax = 0;
         int ywin = 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111))));
         // (The futures legs' chain, which the note names; the token legs' chain, which the account goes on with;
         // and how many token legs: docs 16.18.)
@@ -144,12 +146,25 @@ contract KpfTCStep(int init_version) {
                 if (dir != DIR_LONG) { dl = we - wp; }
                 // (A leg that entered less than T before the call's time, T twice a lateness and a dispute
                 // period, is young: the young legs of an account are counted together. Docs 17.9.)
-                if (int(byte[8](lg.slice(34, 42))) > ctime - ywin) { ygain = ygain + dl; } else { gain = gain + dl; }
+                if (int(byte[8](lg.slice(34, 42))) > ctime - ywin) {
+                    ygain = ygain + dl;
+                    if (wp > we) { ymax = ymax + wp; } else { ymax = ymax + we; }
+                } else {
+                    gain = gain + dl;
+                }
                 }
             }
         }
-        // (The young legs together: nothing where they gained, paid where they lost.)
+        // (The young legs together: paid where they lost. Where they gained it is a claim of the second class, less
+        // their band: the tolerance twice of the sum of their larger worths, rounded up once. Nothing of it is set
+        // off against what the account owes, and nothing of it is paid by or to the account. Docs 17.8c.)
         if (ygain < 0) { gain = gain + ygain; }
+        int yask = 0;
+        if (ygain > 0) {
+            int g2 = 2 * int(byte[8](tb.slice(19, 27)));
+            yask = ygain - ((ymax / 10000) * g2 + ((ymax % 10000) * g2 + 9999) / 10000);
+            if (yask < 0) { yask = 0; }
+        }
         // (A futures leg at the least: an account of token legs alone has nothing in the call's rows.)
         require(nt < count);
         byte[32] acct = blake2b(p33(blake2b(tb + p33(g))) + mv);
@@ -266,7 +281,7 @@ contract KpfTCStep(int init_version) {
         int c1 = OpCovOutputIdx(id, 1);
         require(tx.outputs[c].scriptPubKey == tx.inputs[n].scriptPubKey);
         require(tx.outputs[c].value >= tx.inputs[n].value);
-        require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(LEFT) + p33(gf) + mv.slice(0, 33) + i9(asked))) + ns.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(9) + p33(gf) + mv.slice(0, 33) + i9(asked) + i9(yask))) + ns.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c1].value >= NOTE_MIN + pay);
         // The payments, from the end: the user, and the bonds of a statement that is ended.
         int m = tx.outputs.length - 1 - 4 * j;

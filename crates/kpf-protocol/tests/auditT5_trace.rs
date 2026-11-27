@@ -1094,7 +1094,12 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
         let sg = signed(&format!("B4: the account of {what} stepped"), &b, &w.keys);
         let by_row = call_step_as(&w.lib, a, &a.s, None, &call, &CallStep { at: wrong, ..step.clone() }, &step_s, w.payer(&w.f, &ff)).unwrap();
         assert!(!accepted(&by_row, &w.keys), "{what}: stepped naming the rows' places");
-        let (b, next, claim) = left_apply(&w.lib, &called, &nth(&sg, 2, step.note.clone(), 6_810), &w.script(script), w.payer(&w.f, &ff)).unwrap();
+        // (Review T7, docs 17.8c: the step's note is of tag 9. It was applied here as an account's own (tag 6), an
+        // object the step does not write, which the engine took: REVIEW-T7, S4. Now the step's output is held to
+        // the note's hash and applied as the step wrote it; its legs are old: a claim of the first class.)
+        assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "{what}: the step's note is of tag 9");
+        let (b, next, claim) = left_apply_c(&w.lib, &called, &nth(&sg, 2, step.note.clone(), 6_810), kpf_protocol::reserve::NOTE_STEP, step.young, &w.script(script), w.payer(&w.f, &ff)).unwrap();
+        let claim = claim.map(|c| { assert_eq!((c.amount2, c.paid1), (0, 0), "{what}"); kpf_protocol::reserve::Rest { sid: c.sid, key: c.key, amount: c.amount1 } });
         let sg = signed(&format!("B4: the note of {what} applied"), &b, &w.keys);
         if let Some(c) = claim {
             claims.push(nth(&sg, 2, c, 6_820));
@@ -1221,7 +1226,8 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     // (Before, from the artifacts of 5281d25: KpfTShardEnd 3,234; KpfTCallEnd 3,695; KpfTShardPrice 1,810; KpfTCStep
     // 4,829; KpfTChange 1,728; KpfTShardRow is new. Second round: the day held as eight bytes (R1) is three bytes
     // in each of KpfTShardPrice (2,700 from 2,697) and KpfTShardRow (2,098 from 2,095); the others as they were.)
-    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2707), ("KpfTCStep", 5056), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2707), ("KpfTCStep", 5439), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
     let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow { head: w.head(2), net: 5 * scale, gross: 5 * scale }, ShardRow { head: w.head(3), net: -5 * scale, gross: 5 * scale }], ..two.s }, ..two.clone() };

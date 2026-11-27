@@ -293,6 +293,54 @@ fn own_acct(w: &World, shard: &OLive<Shard>, legs: &[XLeg], coins: i64, n: u8) -
 }
 
 // ================================================================================================================
+// Review T7 (docs 17.8c, pieces (b) and (c)): what these tests need of the second class and of the gate.
+
+use kpf_protocol::reserve::{Claim, Claims, NOTE_LEFT, NOTE_STEP};
+
+/// The note a call's step wrote at output 2 of `sg` (tag 9: what is asked, and what the young legs gained less
+/// their band), applied to its called shard: the shard after and the claim written, of either class. The tests of
+/// before the second class applied it as an account's own note (tag 6), which is an object the step does not
+/// write: the builder made that input, and the engine took it. Here the step's output is held to the note's hash,
+/// and the same transaction with the kind said 6 is refused.
+#[allow(clippy::type_complexity)]
+fn step_apply_t7(w: &World, shard: &OLive<Shard>, sg: &OSigned, step: &CallStep, daa: u64, p: Payer) -> (OBuilt, Shard, Option<Claim>) {
+    assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "the step's note is of tag 9");
+    assert_ne!(step.note_hash(), step.note.hash());
+    let note = nth(sg, 2, step.note.clone(), daa);
+    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script(note.s.legs.len())), p).unwrap();
+    let mut as6 = b.clone();
+    assert!(matches!(&args_of(&mut as6, 1)[11], Arg::V(ArtifactValue::Int(9))), "argument 11 is the note's kind");
+    args_of(&mut as6, 1)[11] = Arg::V(ArtifactValue::Int(6));
+    args_of(&mut as6, 1)[12] = Arg::V(ArtifactValue::Int(0));
+    assert!(accepted(&b, &w.keys) && !accepted(&as6, &w.keys), "a step's note applied as an account's own");
+    (b, next, claim)
+}
+
+/// The row's gate at the engine (docs 17.8c): whether `KpfTEnterS` takes the entry of `leg` into row `r` of a
+/// shard of the books `books` that holds `held`. The entry is stated past the model where the model refuses (the
+/// shard after is the one a shard that holds enough would write), and the engine and the model agree.
+fn gate_takes(w: &World, base: &OLive<Shard>, held: i64, books: Shard, leg: XLeg, r: usize) -> bool {
+    let shard = OLive { s: Shard { held, ..books }, value: (held + SHARD_CARRIER) as u64, ..base.clone() };
+    let acct = cov(w, &shard, &[], 2_000 * KAS1);
+    let f = [fund(xk(&w.w), 33)];
+    let (st, said, _, _) = acct.s.c_enter(leg, 0, r as i64, &[], T0, acct.value as i64).unwrap();
+    let rich = Shard { held: i64::MAX / 4, ..shard.s }.entered(&leg, r, T0).expect("a shard that holds enough takes the leg");
+    let next = Shard { held, ..rich };
+    let model = shard.s.entered(&leg, r, T0);
+    let b = c_enter_state_as(&w.lib, &acct, &shard, &w.script("KpfTEnterS"), SEED, &st, &said, &next, w.payer(&w.w, &f)).unwrap();
+    let taken = accepted(&b, &w.keys);
+    assert_eq!(taken, model.is_ok(), "the gate: the engine and the model");
+    taken
+}
+
+/// The upper requirement of a row of `net` and `gross` units (whole units of the tests' markets) at the price `p`,
+/// with the terms of these tests: 5.5 % of the worth of the net and 2.25 % of the worth of the gross, each rounded up.
+fn row_need(net: i64, gross: i64, p: i64) -> i64 {
+    let up = |w: i64, r: i64| (w / 10_000) * r + ((w % 10_000) * r + 9_999) / 10_000;
+    up(net * p, 550) + up(gross * p, 225)
+}
+
+// ================================================================================================================
 // F116 at the engine.
 
 /// F116, whole, at the engine, in the numbers of a shard of these tests. A shard that holds 20 KAS; an honest
@@ -334,13 +382,24 @@ fn t3_f116_the_owners_young_leg_asks_nothing_and_the_honest_claim_is_paid_whole(
         assert_eq!((s_o.gain, s_o.pay, s_o.note.asked, s_o.user), (asks, 0, asks, 6_000 * KAS1 - NOTE_MIN - fee), "{what}");
         assert!(pays(&sg_o, &xk(&w.c), s_o.user), "the owner has its coins back, less a note's least and the fee");
         // The two notes applied to the called shard: the legs out of the books; what they ask, claims.
-        let (b, sh1, c_h) = left_apply(&w.lib, &called, &nth(&sg_h, 2, s_h.note.clone(), 6_610), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        // (Review T7, docs 17.8c: the steps' notes are of tag 9 and are applied as such. What the owner's YOUNG leg
+        // gained is not nothing any more: it is said beside what is asked, 3,000 KAS less the band of 130 (the
+        // tolerance twice of the leg's worth at the call, 13,000), and is a claim of the second class. It is
+        // behind the honest claim, which is of the first: paid of what the shard has beyond what the first class
+        // is owed.)
+        let band = (1_000 * (P10 * 13 / 10) / 10_000) * 100;
+        let young_o = if asks == 0 { 3_000 * KAS1 - band } else { 0 };
+        assert_eq!((s_h.young, s_o.young, band), (0, young_o, 130 * KAS1), "{what}: what the young legs gained, less their band");
+        let (b, sh1, c_h) = step_apply_t7(&w, &called, &sg_h, &s_h, 6_610, w.payer(&w.f, &ff));
         let sg = signed("the honest note applied", &b, &w.keys);
-        let (sh1, c_h) = (nth(&sg, 0, sh1, 6_620), nth(&sg, 2, c_h.expect("a claim"), 6_620));
-        let (b, sh2, c_o) = left_apply(&w.lib, &sh1, &nth(&sg_o, 2, s_o.note.clone(), 6_610), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        let c_h = c_h.expect("a claim");
+        assert_eq!((c_h.amount1, c_h.amount2), (15 * KAS1, 0), "the honest claim is of the first class");
+        let (sh1, c_h) = (nth(&sg, 0, sh1, 6_620), nth(&sg, 2, kpf_protocol::reserve::Rest { sid: c_h.sid, key: c_h.key, amount: c_h.amount1 }, 6_620));
+        let (b, sh2, c_o) = step_apply_t7(&w, &sh1, &sg_o, &s_o, 6_610, w.payer(&w.f, &ff));
         let sg = signed("the owner's note applied", &b, &w.keys);
         let sh2 = nth(&sg, 0, sh2, 6_630);
-        assert_eq!((sh2.s.rows, sh2.s.owed, sh2.s.held, c_o.is_some()), ([ShardRow::EMPTY; 4], 15 * KAS1 + asks, 20 * KAS1 - fee, asks > 0), "{what}: the books are empty, and what is owed by claims");
+        assert_eq!((sh2.s.rows, sh2.s.owed, sh2.s.claims.owed2, sh2.s.held, c_o.map(|c| (c.amount1, c.amount2))), ([ShardRow::EMPTY; 4], 15 * KAS1 + asks, young_o, 20 * KAS1 - fee, Some((asks, young_o))), "{what}: the books are empty, and what is owed by claims of each class");
+        let c_o = c_o.map(|c| nth(&sg, 2, c, 6_630));
         // The honest claim paid. (Review T6, docs 17.8c: from the time of the claims, which a coin that landed
         // then shows; and its part of what the shard ever held, where that is at least a note's least.)
         assert!(claim_pay(&w.lib, &sh2, &c_h, &pay_s, w.payer(&w.f, &ff)).is_err(), "a claim is paid before the time of the claims");
@@ -352,6 +411,14 @@ fn t3_f116_the_owners_young_leg_asks_nothing_and_the_honest_claim_is_paid_whole(
                 // in one output.)
                 assert!(paid == 15 * KAS1 && pays(&sg, &xk(&w.w), paid + c_h.value as i64) && !pays(&sg, &xk(&w.w), paid));
                 paid_honest.push(paid);
+                // (Review T7: the owner's claim of the second class, shown FIRST, is paid what the shard has
+                // beyond what the first class is owed and no more: 4.9 of its 2,870 KAS; the honest claim finds
+                // its 15 KAS whatever the order.)
+                let c_o = c_o.clone().expect("the owner's claim of the second class");
+                let (b, after, got, left) = claim_pay_c(&w.lib, &sh2, &c_o, &pay_s, w.payer(&w.f, &fl)).unwrap();
+                signed(&format!("F116, the owner's leg {what}: the owner's claim of the second class, paid first"), &b, &w.keys);
+                assert_eq!((got, after.held, left.map(|c| c.paid2)), (5 * KAS1 - fee, 15 * KAS1, Some(5 * KAS1 - fee)), "{what}: the second class has what is beyond the first");
+                assert_eq!(after.claim_paid_at(&c_h.s.claim(), i64::MAX).map(|x| x.1).ok(), Some(15 * KAS1));
             }
             Err(_) => {
                 // (What F116 was, as it is now: the honest claim's part of 19.9 KAS over 3,015 owed is 0.099 KAS,
@@ -360,15 +427,15 @@ fn t3_f116_the_owners_young_leg_asks_nothing_and_the_honest_claim_is_paid_whole(
                 let (h, o) = (sh2.s.held / 1_000, (sh2.s.owed - 1) / 1_000 + 1);
                 let part = (15 * KAS1 / o) * h + (15 * KAS1 % o) * h / o;
                 assert!(asks > 0 && part < NOTE_MIN, "{what}: a part of {part}");
-                use kpf_protocol::reserve::{Claim, Claims};
                 let c = OLive { s: c_h.s.claim(), value: c_h.value, id: c_h.id, op: c_h.op, daa: c_h.daa };
                 let next = Shard { held: sh2.s.held - part, claims: Claims { paid1: part, owed2: 0, paid2: 0 }, ..sh2.s };
                 for left in [Some(Claim { paid1: part, ..c.s }), None] {
                     let b = claim_pay_as_c(&w.lib, &sh2, &c, next, part, left, &pay_s, w.payer(&w.f, &fl));
                     assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a part below a note's least is paid");
                 }
-                let c_o = c_o.expect("the owner's claim");
-                let (b, after, got) = claim_pay(&w.lib, &sh2, &nth(&sg, 2, c_o, 6_630), &pay_s, w.payer(&w.f, &fl)).unwrap();
+                let c_o = c_o.clone().expect("the owner's claim");
+                let c_o = OLive { s: kpf_protocol::reserve::Rest { sid: c_o.s.sid, key: c_o.s.key, amount: c_o.s.amount1 }, value: c_o.value, id: c_o.id, op: c_o.op, daa: c_o.daa };
+                let (b, after, got) = claim_pay(&w.lib, &sh2, &c_o, &pay_s, w.payer(&w.f, &fl)).unwrap();
                 signed(&format!("F116, the owner's leg {what}: the owner's claim paid its part"), &b, &w.keys);
                 assert!(got > 198 * KAS1 / 10 && after.held < KAS1 / 10 && after.owed == sh2.s.owed, "{what}: {got}");
                 paid_honest.push(part);
@@ -378,6 +445,33 @@ fn t3_f116_the_owners_young_leg_asks_nothing_and_the_honest_claim_is_paid_whole(
     println!("T3 F116 at the engine: an honest claim of 15 KAS on a called shard of 19.9 KAS, beside the owner's long of 1,000 units that gained 3,000 KAS: paid {} sompi where the owner's leg is young, {} where it is old", paid_honest[0], paid_honest[1]);
     assert_eq!(paid_honest[0], 15 * KAS1, "F116 is open: the honest claim is not paid whole beside the owner's young leg");
     assert!(paid_honest[1] < KAS1 / 10 && paid_honest[1] > 9 * KAS1 / 100, "(what F116 was: the part; it waits now, below a note's least) {}", paid_honest[1]);
+
+    // Review T7, the gate (docs 17.8c, piece (c)). The books above are written by hand: `KpfTEnterS` does not let
+    // them come to be. Both, at the engine:
+    //  - into the shard of 20 KAS the owner's long of 1,000 units from 10 does not enter (the row with it asks
+    //    778.875 KAS: 7.75 % of 10,050): the play fails at its entry;
+    //  - it enters where the shard holds that much, to the sompi. In that shard, paid up by 758.875 KAS of the
+    //    owner's, the OLD leg's play (what F116 was for every leg: a price that went from 10 to 13 with nobody
+    //    calling for T) pays the honest claim of 15 its part of 778.775 over 3,015: 3.87 KAS where it was 0.099.
+    //    The young leg's play pays it whole, as above.
+    let with_honest = base.s.booked(&honest).unwrap();
+    let need = row_need(1_005, 1_005, P10);
+    assert_eq!(need, 778_875 * KAS1 / 1_000);
+    assert!(!gate_takes(&w, &base, 20 * KAS1, with_honest, big, 0), "the owner's 1,000 units enter a shard of 20 KAS");
+    assert!(gate_takes(&w, &base, need, with_honest, big, 0) && !gate_takes(&w, &base, need - 1, with_honest, big, 0), "the gate, to the sompi");
+    let paid_up = OLive { s: Shard { held: need, ..books }, value: (need + SHARD_CARRIER) as u64, ..base.clone() };
+    let (called_up, _) = called_objs(&paid_up, p13, 6_600);
+    let old_h = Left { sid: base.s.sid, legs: entered(&[honest], T0 - 2 * t), key: xk(&w.w), asked: 15 * KAS1 };
+    let old_o = Left { sid: base.s.sid, legs: entered(&[big], T0 - t), key: xk(&w.c), asked: 3_000 * KAS1 };
+    let (s1, _, _, ch) = called_up.s.left_class(&old_h, NOTE_STEP, 0, NOTE_MIN).unwrap();
+    let (s2, _, _, _) = s1.left_class(&old_o, NOTE_STEP, 0, NOTE_MIN).unwrap();
+    let live = OLive { s: s2, ..called_up.clone() };
+    let fl = [coin(xk(&w.f), 36, s2.claims_time().unwrap())];
+    let c = OLive { s: ch.unwrap(), value: NOTE_MIN as u64, id: base.id, op: op(77), daa: 6_640 };
+    let (b, _, got, left) = claim_pay_c(&w.lib, &live, &c, &pay_s, w.payer(&w.f, &fl)).unwrap();
+    signed("F116 with the gate: the honest claim beside the owner's old leg, the shard paid up", &b, &w.keys);
+    println!("T7, F116 with the gate: into a shard of 20 KAS the owner's 1,000 units do not enter; the shard paid up to {need} sompi, the honest claim of 15 KAS beside the owner's old leg that gained 3,000 is paid {got} sompi (0.099 KAS before the gate)");
+    assert!(got > 387 * KAS1 / 100 && got < 388 * KAS1 / 100 && left.is_some(), "{got}");
 }
 
 // ================================================================================================================
@@ -597,14 +691,19 @@ fn t3_b2_the_young_rule_at_its_edges_and_beside_tokens_and_what_is_owed() {
     let young = leg_entered(&long, T0 - 1);
     let (st, sg) = stepped("an account of two young legs that gained", &cov(&w, &shard, &[young, young], 40 * KAS1));
     assert_eq!((st.gain, st.pay, st.note.asked, st.fee, st.user), (0, 0, 0, fee, 40 * KAS1 - NOTE_MIN - fee));
-    assert!(pays(&sg, &xk(&w.w), st.user) && out_of(&sg, &hash_spk(&w.lib, &st.note.hash())).1 == NOTE_MIN as u64);
-    let (b, next, claim) = left_apply(&w.lib, &called, &nth(&sg, 2, st.note.clone(), 6_610), &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T7, docs 17.8c: the note is of tag 9 and says what the young legs gained less their band: 60 KAS
+    // less the tolerance twice of 260, the two legs' worth at the call. Applied, the legs are out of the books and
+    // it is a claim of the second class: "makes no claim" was the hole L4.)
+    let young2 = 60 * KAS1 - 26 * KAS1 / 10;
+    assert_eq!(st.young, young2);
+    assert!(pays(&sg, &xk(&w.w), st.user) && out_of(&sg, &hash_spk(&w.lib, &st.note_hash())).1 == NOTE_MIN as u64);
+    let (b, next, claim) = step_apply_t7(&w, &called, &sg, &st, 6_610, w.payer(&w.f, &ff));
     signed("the note of young legs that gained, applied to the called shard", &b, &w.keys);
-    assert_eq!((next.rows, next.owed, next.held, claim), ([ShardRow::EMPTY; 4], 0, called.s.held, None));
+    assert_eq!((next.rows, next.owed, next.claims.owed2, next.held, claim.map(|c| (c.amount1, c.amount2))), ([ShardRow::EMPTY; 4], 0, young2, called.s.held, Some((0, young2))));
     // A young loss larger than the coins.
     let (st, sg) = stepped("a young short that lost more than its account has", &cov(&w, &shard, &[leg_entered(&short, T0 - 1)], 5 * KAS1));
     assert_eq!((st.gain, st.pay, st.note.asked, st.user), (-30 * KAS1, 5 * KAS1 - NOTE_MIN, -(5 * KAS1 - NOTE_MIN), 0));
-    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &st.note.hash())).1, (5 * KAS1) as u64);
+    assert_eq!((out_of(&sg, &hash_spk(&w.lib, &st.note_hash())).1, st.young), ((5 * KAS1) as u64, 0));
 
     // Beside a token leg, and beside what the account owes.
     let owing = |legs: &[XLeg], coins: i64, owes: i64| {
@@ -616,6 +715,9 @@ fn t3_b2_the_young_rule_at_its_edges_and_beside_tokens_and_what_is_owed() {
     assert_eq!((st.note.asked, after.legs.clone(), after.b_margin, st.user), (0, vec![tok], 0, 0));
     let (st, _) = stepped("a young long that gained, on an account that owes 6 KAS", &owing(&[young, tok], 5 * KAS1, 6 * KAS1));
     assert_eq!((st.note.asked, st.after.as_ref().map(|x| x.b_margin)), (0, Some(6 * KAS1)), "a young gain is set against nothing the account owes");
+    // (Review T7: and the young's amount is said whole beside it, 30 KAS less the band of 1.3: the account still
+    // owes its 6 KAS, and the claim of the second class is not the less for them.)
+    assert_eq!(st.young, 30 * KAS1 - 13 * KAS1 / 10);
     let (st, _) = stepped("an old long that gained, on an account that owes 6 KAS", &owing(&[leg_entered(&long, T0 - t), tok], 5 * KAS1, 6 * KAS1));
     assert_eq!((st.note.asked, st.after.as_ref().map(|x| x.b_margin)), (24 * KAS1, Some(0)), "(an old gain is: review 64, F112)");
     let (st, _) = stepped("a young short that lost, beside a token leg, on few coins", &owing(&[leg_entered(&short, T0 - 1), tok], 5 * KAS1, 0));
@@ -810,11 +912,35 @@ fn t3_finding_l1_a_young_legs_gain_is_a_claim_where_its_user_leaves_by_statement
     let ap = signed("L1: the leaving applied", &ab, &w.keys);
     let note = o.note.clone().expect("the note that the leg left");
     let k = out_of(&ap, &hash_spk(&w.lib, &note.hash())).0;
-    let (nb, next, claim) = left_apply(&w.lib, &called, &nth(&ap, k, note.clone(), quiet as u64 + 50), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T7, docs 17.8c: L1 AS FOUND IS CLOSED. The note of an account's own leaving is counted in its class
+    // where it is applied: its leg is young at the call, so the 48.5 KAS are a claim of the second class, whole,
+    // and of the first class nothing is owed for it. Counted in the first class, the transaction is refused. This
+    // test asserted the hole: `claim.amount == next.owed == 48.5 KAS`, at one share with every honest claim.)
+    let live_note = nth(&ap, k, note.clone(), quiet as u64 + 50);
+    assert!(left_apply(&w.lib, &called, &live_note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err(), "L1: the young leg's leaving is a claim of the first class");
+    let (nb, next, claim) = left_apply_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
     signed("L1: its note applied to the called shard", &nb, &w.keys);
     let claim = claim.expect("a claim");
-    println!("T3 L1: a leg that is young at the call: its step asks {} sompi; its user's leaving, stated 101 blocks after the call's time and applied 50 later, asks {}: a claim of {} on the called shard (owed by claims {})", at_call.note.asked, note.asked, claim.amount, next.owed);
-    assert_eq!((note.asked, claim.amount, next.owed, next.rows), (4_850_000_000, 4_850_000_000, 4_850_000_000, [ShardRow::EMPTY; 4]), "L1 is closed: the leaving of a young leg is no claim");
+    let asked = 4_850_000_000;
+    let first = left_apply_as_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &[0], Shard { owed: asked, claims: called.s.claims, ..next }, 0, Some(Claim { amount1: asked, amount2: 0, ..claim }), &w.script("KpfTLeft"), w.payer(&w.f, &ff));
+    assert!(first.is_err() || !accepted(&first.unwrap().0, &w.keys), "L1 is open: the leaving of a young leg is counted in the first class");
+    assert_eq!((note.asked, claim.amount1, claim.amount2, next.owed, next.claims.owed2, next.rows), (asked, 0, asked, 0, asked, [ShardRow::EMPTY; 4]), "L1 is open: the leaving of a young leg is a claim of the first class");
+    // What it does to an honest claim (the model of `KpfTCallPay`, which review T6 ran against the engine): the
+    // shard holds 9.9 KAS; beside an old user's claim of 9 KAS of the first class the old claim is paid whole and
+    // the young leaving 0.9 KAS; at one share (before) the old claim had 1.55 KAS of its 9.
+    let beside = Shard { owed: 9 * KAS1, ..next };
+    let due = beside.claims_time().unwrap();
+    let honest = Claim { sid: beside.sid, key: xk(&w.f), amount1: 9 * KAS1, paid1: 0, amount2: 0, paid2: 0 };
+    let (after, got_young, _) = beside.claim_paid_at(&claim, due).unwrap();
+    let (_, got_old, _) = after.claim_paid_at(&honest, due).unwrap();
+    assert_eq!((got_old, got_young), (9 * KAS1, beside.held - 9 * KAS1));
+    // What is left of it (finding S3 of review T7): the leaving is at its user's own later price. The step of the
+    // same leg says 18.8 KAS for the young (20 less the band of 1.2); the leaving 101 blocks later says 48.5.
+    // Within the second class the leg that was not stepped has 2.6 times its step's share (F95, in the second
+    // class).
+    let young_at_call = at_call.young;
+    assert_eq!(young_at_call, 20 * KAS1 - 12 * KAS1 / 10);
+    println!("T3 L1, with the second class: a leg that is young at the call: its step asks {} sompi and says {young_at_call} for the young; its user's leaving, stated 101 blocks after the call's time and applied 50 later, asks {}: a claim of the second class of {} (owed by claims of the first class {}, of the second {}); beside an old claim of 9 KAS on 9.9 held, the old is paid {got_old} and the leaving {got_young}", at_call.note.asked, note.asked, claim.amount2, next.owed, next.claims.owed2);
 }
 
 // ================================================================================================================
@@ -962,7 +1088,8 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // entry, and still hashes the leg's market to the name its row has. KpfTShardEnd 1,747 from 3,234 and
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5056), ("KpfTEnterS", 2484), ("KpfTLeft", 2506), ("KpfTLeftAll", 4310), ("KpfTLeftVoid", 2030), ("KpfTStepPrice", 1821)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTCStep", 5439), ("KpfTEnterS", 2982), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTLeftVoid", 2088), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 2523), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2707), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
@@ -990,7 +1117,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // object, of two prices here, 112 bytes where it was 368 and one push longer. 17.8b estimated 6,520 to 6,750.)
     // (Review T6, docs 17.8c: an entry stated was 5,040: `KpfTEnterS` is 21 bytes longer (it hashes the three
     // numbers of the claims) and is shown 5 bytes fewer beside the rows.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_056, 6_972, 7_024, 7_620));
+    // (Review T7, docs 17.8c (b) and (c): an entry stated was 5,056: `KpfTEnterS` is 498 bytes longer (the gate).
+    // The steps were 6,972, 7,024 and 7,620: `KpfTCStep` is 383 bytes longer (the band, the note of tag 9).)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_554, 7_355, 7_407, 8_003));
 }
 
 // ================================================================================================================
@@ -1045,12 +1174,38 @@ fn t3_finding_l4_an_owner_brings_a_call_about_with_its_own_leg_and_keeps_what_yo
         let sg_o = signed(&format!("L4, the user's leg {what}: the owner's account stepped"), &b, &w.keys);
         assert_eq!((s_u.note.asked, s_u.user, s_o.note.asked, s_o.user), (asks, 20 * KAS1 - NOTE_MIN - fee, 0, 6_000 * KAS1 - NOTE_MIN - fee), "{what}");
         assert!(pays(&sg_u, &xk(&w.w), s_u.user) && pays(&sg_o, &xk(&w.c), s_o.user));
-        let (b, sh1, c_u) = left_apply(&w.lib, &called, &nth(&sg_u, 2, s_u.note.clone(), 6_610), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        // (Review T7, docs 17.8c: L4 AS FOUND IS CLOSED. The steps' notes are of tag 9. The young user's says, beside
+        // nothing asked, the 15 KAS less the band of 0.65 (the tolerance twice of 65): applied, a claim of the
+        // second class of 14.35 KAS. The call does not end over it; it is paid whole from the time of the claims;
+        // the shard is then open with 20 less the fee and the 14.35. This test asserted the hole: both notes
+        // applied as an account's own of nothing asked, no claim, the call ended at once with 19.9 KAS held.)
+        let young_u = if asks == 0 { 15 * KAS1 - 65 * KAS1 / 100 } else { 0 };
+        assert_eq!((s_u.young, s_o.young), (young_u, 0), "{what}");
+        let (b, sh1, c_u) = step_apply_t7(&w, &called, &sg_u, &s_u, 6_610, w.payer(&w.f, &ff));
         let sg1 = signed("L4: the user's note applied", &b, &w.keys);
         let sh1 = nth(&sg1, 0, sh1, 6_620);
-        let (b, sh2, c_o) = left_apply(&w.lib, &sh1, &nth(&sg_o, 2, s_o.note.clone(), 6_610), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        let (b, sh2, c_o) = step_apply_t7(&w, &sh1, &sg_o, &s_o, 6_610, w.payer(&w.f, &ff));
         let sh2 = nth(&signed("L4: the owner's note applied", &b, &w.keys), 0, sh2, 6_630);
-        assert_eq!((c_o, sh2.s.rows, sh2.s.owed, sh2.s.held), (None, [ShardRow::EMPTY; 4], asks, 20 * KAS1 - fee), "{what}");
+        assert_eq!((c_o, sh2.s.rows, sh2.s.owed, sh2.s.claims.owed2, sh2.s.held), (None, [ShardRow::EMPTY; 4], asks, young_u, 20 * KAS1 - fee), "{what}");
+        let c_u = c_u.expect("the user's claim, of the first class or of the second");
+        assert_eq!((c_u.amount1, c_u.amount2), (asks, young_u), "{what}");
+        if asks == 0 {
+            let fl = [coin(xk(&w.f), 36, sh2.s.claims_time().unwrap())];
+            assert!(call_off(&w.lib, &sh2, &call, &pay_s, w.payer(&w.f, &fl)).is_err(), "L4 is open: the call ends over the young user's claim");
+            let b = call_off_as(&w.lib, &sh2, &call, Shard { called: 0, owed: 0, claims: Claims::default(), ..sh2.s }, &pay_s, w.payer(&w.f, &fl));
+            assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "L4 is open: the call ends over the young user's claim, at the engine");
+            let (b, sh3, got, left) = claim_pay_c(&w.lib, &sh2, &nth(&sg1, 2, c_u, 6_620), &pay_s, w.payer(&w.f, &fl)).unwrap();
+            let sg = signed("L4: the young user's claim paid", &b, &w.keys);
+            assert!(got == young_u && left.is_none() && pays(&sg, &xk(&w.w), got + NOTE_MIN), "{what}: {got}");
+            let sh3 = nth(&sg, 0, sh3, sh2.s.claims_time().unwrap() as u64 + 10);
+            let (b, open) = call_off(&w.lib, &sh3, &call, &pay_s, w.payer(&w.f, &fl)).unwrap();
+            signed("L4: the call ends, the young user paid", &b, &w.keys);
+            println!("T3 L4, with the second class: a user's young leg gained 15 KAS (with no call its leaving is paid {paid} sompi); under the call the owner brought about it is paid {got} sompi, the same; the shard is then open and holds {}", open.held);
+            assert_eq!((open.called, open.owed, open.claims, open.held, open.rows), (0, 0, Claims::default(), 20 * KAS1 - fee - young_u, [ShardRow::EMPTY; 4]), "L4 is open: the owner has its shard and the young gains after the call");
+            assert_eq!(got, paid, "the user has under the call what its own leaving would have paid it");
+            continue;
+        }
+        let c_u = Some(kpf_protocol::reserve::Rest { sid: c_u.sid, key: c_u.key, amount: c_u.amount1 });
         if let Some(claim) = c_u {
             // (Before the change: the user's claim, paid whole.)
             // (Review T6, docs 17.8c: from the time of the claims, which a coin that landed then shows.)
@@ -1061,12 +1216,18 @@ fn t3_finding_l4_an_owner_brings_a_call_about_with_its_own_leg_and_keeps_what_yo
             assert!(got == 15 * KAS1 && pays(&sg, &xk(&w.w), got + NOTE_MIN), "{what}");
             continue;
         }
-        let (b, open) = call_off(&w.lib, &sh2, &call, &pay_s, w.payer(&w.f, &ff)).unwrap();
-        let sg = signed("L4: the call ends", &b, &w.keys);
-        println!("T3 L4: a user's young leg gained 15 KAS (with no call its leaving is paid {paid} sompi, whole; with a leg older than T under the same call, 1500000000); the owner's own leg makes the call due; after the call the user has {} of its 2,000,000,000 sompi of coins and nothing else, and the shard is open, holds {} and owes {}", s_u.user, open.held, open.owed);
-        assert_eq!((open.called, open.owed, open.held, open.rows), (0, 0, 20 * KAS1 - fee, [ShardRow::EMPTY; 4]), "L4 is closed: the owner does not have its shard and the young gains after the call");
-        assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (sh2.value + CALL_HOLD as u64, &hash_spk(&w.lib, &open.hash())));
+        unreachable!("each of the two plays ends above");
     }
+    // Review T7, the gate (docs 17.8c, piece (c)). The books above are written by hand. At the engine the owner's
+    // long of 1,000 units from 13 does not enter the shard of 20 KAS (the row with it asks 1,012.5375 KAS: 7.75 %
+    // of 13,065): the play fails at its entry. Paid up to that, to the sompi, the leg enters, and the shard is
+    // then NOT due for a call at 13 (its equity is above its lower level): the play does not
+    // bring the call about. (How a call is then brought about, and what the user has: `auditT7_second.rs`.)
+    let need = row_need(1_005, 1_005, p13[0]);
+    assert_eq!(need, 10_125_375 * KAS1 / 10_000);
+    assert!(!gate_takes(&w, &base, 20 * KAS1, alone, big, 0), "L4: the owner's 1,000 units enter a shard of 20 KAS");
+    assert!(gate_takes(&w, &base, need, alone, big, 0) && !gate_takes(&w, &base, need - 1, alone, big, 0), "the gate, to the sompi");
+    assert!(!Shard { held: need, ..with_own }.call_due(&p13), "paid up, the shard is due for a call with the owner's leg in");
 }
 
 /// B1, what holds the time between the statement of an entry and the account it becomes. `KpfTEnterS` holds the
@@ -1426,7 +1587,10 @@ fn t3r2_the_sum_of_the_gross_is_kept_through_entries_notes_a_call_and_its_end() 
     for (what, a, script, after) in [("two legs of one row", &a_two, "KpfTLeftAll", 3), ("one leg", &a_one, "KpfTLeft", 0)] {
         let (b, step) = call_step(&w.lib, a, &a.s, None, &call, &step_s, w.payer(&w.f, &ff)).unwrap();
         let sg = signed(&format!("the account of {what} stepped"), &b, &w.keys);
-        let (b, next, claim) = left_apply(&w.lib, &called, &nth(&sg, 2, step.note.clone(), 6_810), &w.script(script), w.payer(&w.f, &ff)).unwrap();
+        // (Review T7: the step's note, of tag 9, as the step wrote it; its legs are old: a claim of the first class.)
+        assert_eq!(left_script(a.s.legs.len()), script);
+        let (b, next, claim) = step_apply_t7(&w, &called, &sg, &step, 6_810, w.payer(&w.f, &ff));
+        let claim = claim.map(|c| { assert_eq!((c.amount2, c.paid1), (0, 0)); kpf_protocol::reserve::Rest { sid: c.sid, key: c.key, amount: c.amount1 } });
         let sg = signed(&format!("the note of {what} applied"), &b, &w.keys);
         assert_eq!((said(&next), units(&next)), (after * scale, after * scale), "{what}");
         for other in [after * scale + 1, after * scale - 1, 17 * scale] {
@@ -1484,7 +1648,13 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let scale = w.markets[0].p.scale;
-    let last = fleg(&w, 3, 1, LONG, P10);
+    // (Review T7, docs 17.8c, the gate: `KpfTEnterS` computes the worth of the row's gross units at the leg's own
+    // entry. A row of the largest gross at an entry of 10 KAS a unit is worth more than 64 bits hold: such a row
+    // takes no leg at that entry any more, by the model and at the engine (run below; finding S5 of review T7,
+    // low). The last unit of this test enters at a sompi a unit, where the row's worth is counted: the test is of
+    // the SUM of the gross at its end, not of a price.)
+    let last = fleg(&w, 3, 1, LONG, 1);
+    let at10 = fleg(&w, 3, 1, LONG, P10);
     let full = |i: usize, gross: i64| ShardRow { head: w.head(i), net: 0, gross };
     let top = OLive { s: Shard { rows: [full(0, MARGIN_MAX), full(1, MARGIN_MAX), full(2, MARGIN_MAX), full(3, MARGIN_MAX - scale)], ..base.s }, ..base.clone() };
     assert_eq!((top.s.gross_sum(), units(&top.s)), (4 * MARGIN_MAX - scale, 4 * MARGIN_MAX - scale));
@@ -1493,9 +1663,23 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     let (b, _, _, _, _, next) = c_enter_state(&w.lib, &acct, &top, &w.script("KpfTEnterS"), SEED, last, 0, &[], T0, w.payer(&w.w, &f)).unwrap();
     signed("the last unit four full rows take", &b, &w.keys);
     assert_eq!((next.gross_sum(), next.rows[3].gross), (4 * MARGIN_MAX, MARGIN_MAX));
+    // (The same unit at 10 KAS: refused by the gate's arithmetic alone, by the model and at the engine, whatever
+    // the shard holds. Before the gate it was taken: this test entered it.)
+    {
+        let rich = OLive { s: Shard { held: i64::MAX / 4, ..top.s }, ..top.clone() };
+        let e = rich.s.entered(&at10, 3, T0).unwrap_err().to_string();
+        assert!(e.contains("its row's requirement is beyond what is counted"), "{e}");
+        let (st, said, _, _) = acct.s.c_enter(at10, 0, 3, &[], T0, acct.value as i64).unwrap();
+        let mut would = next;
+        would.basis = top.s.basis - P10;
+        let b = c_enter_state_as(&w.lib, &acct, &rich, &w.script("KpfTEnterS"), SEED, &st, &said, &Shard { held: rich.s.held, ..would }, w.payer(&w.w, &f)).unwrap();
+        assert!(!accepted(&b, &w.keys), "a row whose gross is worth more than 64 bits at the leg's entry takes the leg");
+    }
     let brim = OLive { s: next, ..top.clone() };
     for i in 0..4 {
-        assert!(c_enter_state(&w.lib, &acct, &brim, &w.script("KpfTEnterS"), SEED, fleg(&w, i, 1, LONG, P10), 0, &[], T0 + 100, w.payer(&w.w, &[coin(xk(&w.w), 33, T0 + 100)])).is_err(), "a unit more into row {i}");
+        // (At a sompi a unit, so that what refuses is the bound of the gross and not the gate's arithmetic.)
+        let e = c_enter_state(&w.lib, &acct, &brim, &w.script("KpfTEnterS"), SEED, fleg(&w, i, 1, LONG, 1), 0, &[], T0 + 100, w.payer(&w.w, &[coin(xk(&w.w), 33, T0 + 100)]));
+        assert!(e.is_err_and(|e| e.to_string().contains("its books are beyond what is counted")), "a unit more into row {i}");
     }
     let n = note_of(&brim, Left { sid: brim.s.sid, legs: entered(&[last], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
     let (b, after, _) = left_apply(&w.lib, &brim, &n, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();

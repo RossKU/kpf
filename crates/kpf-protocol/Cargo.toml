@@ -99,6 +99,10 @@ name = "auditT6_claims"
 path = "tests/auditT6_claims.rs"
 
 [[test]]
+name = "auditT7_second"
+path = "tests/auditT7_second.rs"
+
+[[test]]
 name = "bond_model"
 path = "tests/bond_model.rs"
 required-features = ["legacy"]

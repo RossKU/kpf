@@ -7932,6 +7932,7 @@ fn t1b_fixed_f71_the_model_gives_no_verdict_where_the_script_computes_an_equity_
 // ---------------------------------------------------------------- round 46: the notes of a leaving (stage 2)
 
 use kpf_protocol::reserve::{Left, Rest as RestNote};
+use kpf_protocol::reserve::Claim as ClaimT7;
 
 /// A note to a shard as an object under the shard's id (nothing that exists writes one of kind 6 or 7 yet).
 fn note_made46<T>(shard: &OLive<Shard>, s: T, n: u8, daa: u64) -> OLive<T> {
@@ -7940,14 +7941,17 @@ fn note_made46<T>(shard: &OLive<Shard>, s: T, n: u8, daa: u64) -> OLive<T> {
 
 /// `KpfTLeft.apply`'s arithmetic in the script's own order, for the rows named: the shard that goes on, what is
 /// paid and the note of the rest; `None` where the script refuses or a number does not fit.
-fn left_as_the_script46(s: &Shard, n: &Left, at: &[usize]) -> Option<(Shard, i64, Option<RestNote>)> {
+fn left_as_the_script46(s: &Shard, n: &Left, at: &[usize]) -> Option<(Shard, i64, Option<ClaimT7>)> {
     left_as_the_script54(s, n, at, NOTE_MIN.saturating_add(n.asked.checked_neg().unwrap_or(i64::MAX).max(0)))
 }
 
 /// (Round 54.) As above, of a note whose output holds `holds`: below zero, the shard takes what the output holds
 /// above a note's least and no more than the note says (F86); on a called shard nothing is paid, what is asked is
 /// added to what the shard owes by claims, and the note that goes on is a claim.
-fn left_as_the_script54(s: &Shard, n: &Left, at: &[usize], holds: i64) -> Option<(Shard, i64, Option<RestNote>)> {
+/// (Review T7, docs 17.8c: of an account's own note, tag 6. On a called shard what is asked is counted in its
+/// class: of the second where a leg of the note is young at the call or anything was paid to a claim, else of the
+/// first; the note written is the claim of four numbers. A note that pays in goes on to the same count.)
+fn left_as_the_script54(s: &Shard, n: &Left, at: &[usize], holds: i64) -> Option<(Shard, i64, Option<ClaimT7>)> {
     let worth = |n: i64, sc: i64, p: i64| (n / sc).checked_mul(p)?.checked_add((n % sc).checked_mul(p / sc)?)?.checked_add((n % sc).checked_mul(p % sc)? / sc);
     // (What is asked may be below zero: what the account paid for the legs, which the note holds. It is added to
     // what the shard holds, called or not, and nothing is paid.)
@@ -7978,16 +7982,32 @@ fn left_as_the_script54(s: &Shard, n: &Left, at: &[usize], holds: i64) -> Option
             more = 0i64.checked_sub(n.asked)?;
         }
         t.held = t.held.checked_add(more)?;
-        return Some((t, 0, None));
     }
-    // (Round 55: what is not paid is owed, called or not, and the one note of the rest says it.)
-    let mut pay = n.asked.min(t.held);
-    if t.called != 0 {
-        pay = 0;
+    // (Round 55: what is not paid is owed, called or not, and the one note of the rest says it. Review T7: called,
+    // nothing is paid and what is asked is of the first class or of the second.)
+    let ywin = 2i64.checked_mul(t.t.late_daa.checked_add(t.dispute_daa)?)?;
+    let edge = t.called.checked_sub(ywin)?;
+    let (mut pay, mut a1, mut a2) = (0i64, 0i64, 0i64);
+    if t.called == 0 {
+        if n.asked > 0 {
+            pay = n.asked.min(t.held);
+            t.held = t.held.checked_sub(pay)?;
+            a1 = n.asked - pay;
+        }
+    } else {
+        let young = n.legs.iter().any(|l| kpf_protocol::covered::leg_time(l) > edge);
+        let second = t.claims.paid1.checked_add(t.claims.paid2)? > 0 || young;
+        if n.asked > 0 {
+            if second {
+                a2 = n.asked;
+            } else {
+                a1 = n.asked;
+            }
+        }
     }
-    t.held = t.held.checked_sub(pay)?;
-    t.owed = t.owed.checked_add(n.asked - pay)?;
-    Some((t, pay, (pay < n.asked).then_some(RestNote { sid: n.sid, key: n.key, amount: n.asked - pay })))
+    t.owed = t.owed.checked_add(a1)?;
+    t.claims.owed2 = t.claims.owed2.checked_add(a2)?;
+    Some((t, pay, (a1.checked_add(a2)? > 0).then_some(ClaimT7 { sid: n.sid, key: n.key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 })))
 }
 
 /// The row each leg of a note is read out of: the first of its market as the rows stand when its turn comes (as
@@ -8008,9 +8028,10 @@ fn rows_for46(s: &Shard, n: &Left) -> Vec<usize> {
 }
 
 /// Whether the engine takes the applying of a note that legs left, with the rows named and the outputs said.
-fn left_taken46(w: &OW, shard: &OLive<Shard>, note: &OLive<Left>, at: &[usize], next: Shard, paid: i64, rest: Option<RestNote>) -> bool {
+/// (Review T7: the note an account's own, tag 6, and the claim written as it is given, of either class.)
+fn left_taken46(w: &OW, shard: &OLive<Shard>, note: &OLive<Left>, at: &[usize], next: Shard, paid: i64, rest: Option<ClaimT7>) -> bool {
     let f = [fund(xk(&w.f), 73, 1_000)];
-    left_apply_as(&w.lib, shard, note, at, next, paid, rest, &w.script(left_script(note.s.legs.len())), w.payer(&w.f, &f)).is_ok_and(|b| taken30(&b.0, &w.keys))
+    left_apply_as_c(&w.lib, shard, note, kpf_protocol::reserve::NOTE_LEFT, 0, at, next, paid, rest, &w.script(left_script(note.s.legs.len())), w.payer(&w.f, &f)).is_ok_and(|b| taken30(&b.0, &w.keys))
 }
 
 /// Round 46, items b and d (round 50: a note of one leg is `KpfTLeft`'s, of two to six `KpfTLeftAll`'s, each
@@ -8026,6 +8047,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
     let mut r = Rng(0x46_0001);
     let owner = xk(&w.b);
     let (mut cases, mut taken, mut refused) = (0, 0, 0);
+    let mut classes = [0; 2];
     let mut parts = vec![];
     for case in 0..240 {
         let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4], owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default() };
@@ -8087,7 +8109,9 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
         }
         let at = rows_for46(&s, &note);
         let script = left_as_the_script54(&s, &note, &at, note_live.value as i64);
-        let model = std::panic::catch_unwind(|| s.left_holding(&note, note_live.value as i64).ok());
+        // (Review T7: the model is `left_class`, which gives the claim of either class; `left_holding` refuses
+        // where the claim is of the second.)
+        let model = std::panic::catch_unwind(|| s.left_class(&note, kpf_protocol::reserve::NOTE_LEFT, 0, note_live.value as i64).ok());
         match &model {
             Ok(m) => {
                 let same = match (m, &script) {
@@ -8107,6 +8131,13 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
             refused += 1;
         } else if let Some((next, paid, rest)) = script {
             assert!(left_taken46(&w, &shard, &note_live, &at, next, paid, rest), "case {case}: what the script's arithmetic gives is not taken");
+            // (Review T7: a claim under a call, counted in the other class, is refused.)
+            if let Some(c) = rest.filter(|_| s.called != 0) {
+                let other = ClaimT7 { amount1: c.amount2, amount2: c.amount1, ..c };
+                let swapped = Shard { owed: s.owed + other.amount1, claims: kpf_protocol::reserve::Claims { owed2: s.claims.owed2 + other.amount2, ..s.claims }, ..next };
+                assert!(!left_taken46(&w, &shard, &note_live, &at, swapped, paid, Some(other)), "case {case}: a claim counted in the other class");
+                classes[(c.amount2 > 0) as usize] += 1;
+            }
             // (And not with a sompi more paid, where there is one.)
             if paid < s.held {
                 assert!(!left_taken46(&w, &shard, &note_live, &at, Shard { held: next.held - 1, ..next }, paid + 1, rest), "case {case}: a sompi more is paid");
@@ -8129,7 +8160,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
         cases += 1;
     }
     assert!(taken > 60 && refused > 60, "{taken} taken, {refused} refused");
-    println!("T1b R46 a note that legs left: {cases} notes on random books: {taken} applied as the script's arithmetic gives (and not with a sompi more paid), {refused} refused; the model and that arithmetic part on {}: {:?}", parts.len(), parts.iter().take(4).collect::<Vec<_>>());
+    println!("T1b R46 a note that legs left: {cases} notes on random books: {taken} applied as the script's arithmetic gives (and not with a sompi more paid), {refused} refused; claims under a call of the first and of the second class {classes:?}; the model and that arithmetic part on {}: {:?}", parts.len(), parts.iter().take(4).collect::<Vec<_>>());
     assert!(parts.is_empty(), "the model and the script part on {} of {cases} notes", parts.len());
 }
 
@@ -8208,9 +8239,18 @@ fn t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_i
     // While the shard is called.
     let called = shard_made45(Shard { called: 6_000, ..s }, 74);
     // (Rounds 54 and 55: it is applied; nothing is paid, what it asks is owed, and the note of the rest says it.)
-    let (kb, knext, krest) = left_apply(&w.lib, &called, &note_made46(&called, note.clone(), 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
+    // (Review T7, docs 17.8c: of legs that entered long before the call it is a claim of the first class, as it
+    // was. Of the legs as `fut` gives them, whose "time" is bytes of a committee's id and young at this call, the
+    // same note is a claim of the second class, whole, and counted in the first it is refused.)
+    let old_note = Left { legs: entered_t3(&note.legs, 0), ..note.clone() };
+    let (kb, knext, krest) = left_apply(&w.lib, &called, &note_made46(&called, old_note.clone(), 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
     assert!(taken30(&kb, &w.keys) && (knext.held, knext.owed, knext.called) == (s.held, note.asked, 6_000) && krest == Some(RestNote { sid: s.sid, key, amount: note.asked }), "a note that asks something, applied to a shard that is called, is a claim of all it asks");
-    assert!(!left_taken46(&w, &called, &note_made46(&called, note.clone(), 75, 6_050), &[0, 1], Shard { called: 6_000, ..next }, 20 * KAS1, Some(rest)), "a note that asks something is paid by a shard that is called");
+    assert!(called.s.young(&note.legs[0]) && left_apply(&w.lib, &called, &note_made46(&called, note.clone(), 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).is_err());
+    let (yb, ynext, yclaim) = left_apply_c(&w.lib, &called, &note_made46(&called, note.clone(), 75, 6_050), kpf_protocol::reserve::NOTE_LEFT, 0, &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
+    assert!(taken30(&yb, &w.keys) && (ynext.held, ynext.owed, ynext.claims.owed2) == (s.held, 0, note.asked) && yclaim == Some(ClaimT7 { sid: s.sid, key, amount1: 0, paid1: 0, amount2: note.asked, paid2: 0 }), "of young legs: a claim of the second class");
+    assert!(!left_taken46(&w, &called, &note_made46(&called, note.clone(), 75, 6_050), &[0, 1], knext, 0, krest.map(|r| r.claim())), "a note of young legs counted in the first class");
+    refused.set(refused.get() + 1);
+    assert!(!left_taken46(&w, &called, &note_made46(&called, old_note.clone(), 75, 6_050), &[0, 1], Shard { called: 6_000, ..next }, 20 * KAS1, Some(rest.claim())), "a note that asks something is paid by a shard that is called");
     refused.set(refused.get() + 1);
     let quiet = Left { asked: 0, ..note.clone() };
     let (cb, cnext, crest) = left_apply(&w.lib, &called, &note_made46(&called, quiet, 75, 6_050), &w.script("KpfTLeftAll"), w.payer(&w.f, &f)).unwrap();
@@ -8708,6 +8748,7 @@ fn t1b_r47_the_note_a_leaving_of_the_rules_writes_is_applied_where_its_legs_are_
     let w = ow();
     let mut r = Rng(0x47_0003);
     let (mut applied, mut waited, mut paying, mut resting) = (0, 0, 0, 0);
+    let mut second = 0;
     for case in 0..75 {
         let kind = if case % 3 == 2 { KIND_C_STEP } else { KIND_C_LEAVE };
         let (legs, a, coins) = random_cov47(&w, &mut r, kind, 6);
@@ -8736,7 +8777,9 @@ fn t1b_r47_the_note_a_leaving_of_the_rules_writes_is_applied_where_its_legs_are_
         let at = rows_for46(&shard.s, &note.s);
         let script = left_as_the_script46(&shard.s, &note.s, &at);
         let f = [fund(xk(&w.f), 73, 1_000)];
-        match left_apply(&w.lib, &shard, &note, &w.script(left_script(note.s.legs.len())), w.payer(&w.f, &f)) {
+        // (Review T7, docs 17.8c: by `left_apply_c`, the note an account's own: on a called shard it is a claim of
+        // the first class or of the second, by its legs' times.)
+        match left_apply_c(&w.lib, &shard, &note, kpf_protocol::reserve::NOTE_LEFT, 0, &w.script(left_script(note.s.legs.len())), w.payer(&w.f, &f)) {
             Ok((b, next, rest)) => {
                 assert!(taken30(&b, &w.keys), "{what}: the note is not applied");
                 let (snext, spaid, srest) = script.unwrap_or_else(|| panic!("{what}: the model applies what the script's arithmetic refuses"));
@@ -8748,7 +8791,10 @@ fn t1b_r47_the_note_a_leaving_of_the_rules_writes_is_applied_where_its_legs_are_
                 assert_eq!(next.basis, want.basis, "{what}: the basis");
                 assert_eq!(next.held, shard.s.held - spaid + (-note.s.asked).max(0), "{what}: what the shard holds");
                 // (Round 54: on a called shard a note that asks something is applied: nothing paid, owed by claims.)
-                assert!(o.fee >= 0 && (note.s.asked <= 0 || shard.s.called == 0 || (spaid == 0 && next.owed == note.s.asked && rest.is_some())), "{what}");
+                assert!(o.fee >= 0 && (note.s.asked <= 0 || shard.s.called == 0 || (spaid == 0 && next.owed + next.claims.owed2 == note.s.asked && rest.is_some_and(|c| (c.amount2 > 0) == note.s.legs.iter().any(|l| shard.s.young(l)) && c.amount1 * c.amount2 == 0))), "{what}");
+                if rest.is_some_and(|c| c.amount2 > 0) {
+                    second += 1;
+                }
                 if shard.s.called != 0 && note.s.asked > 0 {
                     waited += 1;
                 }
@@ -8766,7 +8812,7 @@ fn t1b_r47_the_note_a_leaving_of_the_rules_writes_is_applied_where_its_legs_are_
             }
         }
     }
-    println!("T1b R47 the note of a leaving: {applied} notes of statements of the rule's applied at the engine to books that had the legs ({paying} held what the account paid, {resting} left a note of the rest), {waited} waited on a shard that is called");
+    println!("T1b R47 the note of a leaving: {applied} notes of statements of the rule's applied at the engine to books that had the legs ({paying} held what the account paid, {resting} left a note of the rest), {waited} waited on a shard that is called ({second} of them claims of the second class)");
     assert!(applied >= 30 && paying >= 8 && resting >= 3 && waited >= 1, "{applied} {paying} {resting} {waited}");
 }
 
@@ -9525,8 +9571,29 @@ fn timed_t3(m: &Marked, t0: i64) -> Marked {
 fn entered_t3(legs: &[XLeg], t: i64) -> Vec<XLeg> {
     legs.iter().map(|l| if l.dir == kpf_protocol::covered::DIR_SPOT { *l } else { kpf_protocol::covered::leg_entered(l, t) }).collect()
 }
+/// (Review T7, docs 17.8c, the row's gate, written out from `KpfTEnterS`.) Whether the gate lets the leg into row
+/// `r`: what the shard holds, less what it owes, is at least the upper requirement of the row with the leg at the
+/// leg's own entry, or the row is asked no more with the leg than without it. `false` also where a number of it
+/// is beyond 64 bits (the script fails).
+fn gate_open_t7(s: &Shard, l: &XLeg, r: usize) -> bool {
+    let Some(row) = s.rows.get(r) else { return true };
+    let (sc, e) = (l.scale as i128, l.entry as i128);
+    let worth = |n: i128| (n / sc) * e + (n % sc) * (e / sc) + ((n % sc) * (e % sc)) / sc;
+    let up = |w: i128, rate: i128| (w / 10_000) * rate + ((w % 10_000) * rate + 9_999) / 10_000;
+    let (g, mmr) = (s.t.g_bps as i128, s.t.mmr_bps as i128);
+    let (rn, rg) = (mmr + g, ((mmr - 3 * g) / 2).max(0) + g);
+    let need = |n: i128, gr: i128| up(worth(n.abs()), rn) + up(worth(gr), rg);
+    let units = if l.dir == LONG { -(l.size as i128) } else { l.size as i128 };
+    let (with, without) = (need(row.net as i128 + units, row.gross as i128 + l.size as i128), need(row.net as i128, row.gross as i128));
+    let fits = |x: i128| x <= i64::MAX as i128;
+    fits(worth(row.gross as i128 + l.size as i128)) && fits(with) && fits(without) && (s.held as i128 - s.owed as i128 >= with || with <= without)
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn enter_by_hand52(w: &OW, acct: &OLive<Account>, m: &Marked, prices: &[i64], shard: &OLive<Shard>, r: usize, t0: i64, seed: [u8; 32]) -> (kpf_protocol::Result<OBuilt>, Stated, CEnterSaid, Shard) {
+    // (Review T7: no entry these tests write by hand is one the row's gate alone refuses: where a test means an
+    // entry to be refused, it is refused for what the test says and not because its shard holds too little.)
+    assert!(gate_open_t7(&shard.s, m.0.legs.last().unwrap(), r), "review T7: an entry of these tests is refused by the row's gate: its shard holds {} and owes {}", shard.s.held, shard.s.owed);
     // (Review T3, docs 17.9: the leg as it stands in the account says the statement's time where the leg given
     // has its committee (`timed_t3`); the head of the shard's row has the committee of the leg given, which the
     // builder shows the script and the script holds into the shard's id. Whoever answers a point of the
@@ -9700,7 +9767,20 @@ fn t1b_r51_what_the_stating_of_an_entry_takes_and_refuses() {
     let odd = OLive { s: Shard { rows: [ShardRow::EMPTY, ShardRow { head: Head::EMPTY, net: 5, gross: 5 }, ShardRow::EMPTY, ShardRow::EMPTY], ..shard.s }, ..shard.clone() };
     by("a row of no market that has units", &acct, &odd, leg, 1, T0);
     let full = OLive { s: Shard { rows: [ShardRow { head: Head::of(&leg), net: 0, gross: kpf_protocol::cross::MARGIN_MAX - leg.size + 1 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..shard.s }, ..shard.clone() };
-    by("a row whose gross would be beyond the bound", &acct, &full, leg, 0, T0);
+    // (Review T7, docs 17.8c: with the leg at 10 KAS this entry is now refused by the gate's arithmetic before the
+    // bound is reached: the row's gross is worth more than 64 bits at the leg's entry (REVIEW-T7, S5). So that the
+    // test is of the BOUND, the leg enters at a sompi a unit, where the gate's numbers fit and the shard holds what
+    // the row asks; and the same leg into a row a sompi of size lower is taken: the control.)
+    {
+        let cheap = XLeg { entry: 1, ..leg };
+        assert!(!gate_open_t7(&full.s, &leg, 0) && gate_open_t7(&full.s, &cheap, 0));
+        let (b, _, _, _) = enter_by_hand51(&w, &acct, &mark51(&acct.s, cheap, 0), &[1], &full, 0, T0);
+        assert!(refused51(b, &w.keys), "a row whose gross would be beyond the bound");
+        refused.set(refused.get() + 1);
+        let brim = OLive { s: Shard { rows: [ShardRow { gross: full.s.rows[0].gross - 1, ..full.s.rows[0] }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..shard.s }, ..shard.clone() };
+        let (b, _, _, _) = enter_by_hand51(&w, &acct, &mark51(&acct.s, cheap, 0), &[1], &brim, 0, T0);
+        assert!(taken30(&b.unwrap(), &w.keys), "(control) the leg that brings the row's gross to the bound");
+    }
     let marked_late = OLive { s: Account { t: XTerms { late_daa: kpf_protocol::thin::LATE_AGAIN, ..w.terms() }, ..acct.s.clone() }, ..acct.clone() };
     by("an account whose lateness is the mark", &marked_late, &shard, leg, 0, T0);
     let elsewhere = OLive { id: Some(Hash::from_bytes([0x73; 32])), ..shard.clone() };
@@ -10906,7 +10986,8 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // 2,098. The argument beside the rows keeps its place; `KpfTCallPay.claim` has four arguments more at its end.)
     // (Review T6, second round, K1: `KpfTCallPay` is 2,523: the payment that makes a claim whole pays its key
     // the part and what the claim's note held, in one output.)
-    assert_eq!(sizes, vec![("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2030)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2088)]);
 }
 
 // ================================================================================================================
@@ -11418,6 +11499,53 @@ fn step_as_the_script54(a: &Account, call: &Called, v: i64, stood: Option<(i64, 
     Some((gain, pay, asked, fee, least(user), least(cb), least(db)))
 }
 
+/// (Review T7, docs 17.8c.) The note a call's step wrote at output 2 of `sg` (tag 9: it says what is asked and what
+/// the young legs gained), applied to its called shard by the script of its legs' number. The tests of before the
+/// second class applied it as an account's own note (tag 6), an object the step does not write: the builder made
+/// the input, and the engine took it. Here the output is held to the step's note, and the claim to the first class.
+#[allow(clippy::type_complexity)]
+fn step_apply_t7(w: &OW, shard: &OLive<Shard>, sg: &OSigned, step: &CallStep, daa: u64, p: Payer) -> (OBuilt, Shard, Option<RestNote>) {
+    assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "the step's note is of tag 9");
+    assert_ne!(step.note_hash(), step.note.hash());
+    let note = nth(sg, 2, step.note.clone(), daa);
+    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, kpf_protocol::reserve::NOTE_STEP, step.young, &w.script(left_script(note.s.legs.len())), p).unwrap();
+    assert!(claim.is_none_or(|c| c.amount2 == 0 && c.paid1 == 0), "a claim of the first class");
+    // (And shown as an account's own: the same transaction with the kind said 6 and nothing said of the young. The
+    // note's input is the step's still: the hash is another, and it is refused for that alone where the young
+    // gained nothing.)
+    let mut as6 = b.clone();
+    assert!(matches!(&args_of(&mut as6, 1)[11], Arg::V(ArtifactValue::Int(9))), "argument 11 is the note's kind");
+    args_of(&mut as6, 1)[11] = int_arg(6);
+    args_of(&mut as6, 1)[12] = int_arg(0);
+    assert!(taken30(&b, &w.keys) && !taken30(&as6, &w.keys), "a step's note applied as an account's own");
+    (b, next, claim.map(|c| RestNote { sid: c.sid, key: c.key, amount: c.amount1 }))
+}
+
+/// (Review T7, docs 17.8c.) What `KpfTCStep.step` says of the young legs, in the script's own order: where they
+/// gained together, their gain less their band, not below nothing; the band is the tolerance twice of the sum of
+/// their larger worths (each at its entry or at the call's price), rounded up once. `None`: a number does not fit.
+fn young_as_the_script_t7(a: &Account, call: &Called) -> Option<i64> {
+    let worth = |n: i64, sc: i64, p: i64| (n / sc).checked_mul(p)?.checked_add((n % sc).checked_mul(p / sc)?)?.checked_add((n % sc).checked_mul(p % sc)? / sc);
+    let ywin = 2i64.checked_mul(a.t.late_daa.checked_add(a.dispute_daa)?)?;
+    let edge = call.time.checked_sub(ywin)?;
+    let (mut ygain, mut ymax) = (0i64, 0i64);
+    for l in &a.legs {
+        let name = futures_market(&l.market);
+        let r = call.heads.iter().position(|h| h.market == name && h.scale == l.scale && h.price_max == l.price_max)?;
+        let (wp, we) = (worth(l.size, l.scale, call.prices[r])?, worth(l.size, l.scale, l.entry)?);
+        if time_t3(l) > edge {
+            ygain = ygain.checked_add(if l.dir == LONG { wp.checked_sub(we)? } else { we.checked_sub(wp)? })?;
+            ymax = ymax.checked_add(wp.max(we))?;
+        }
+    }
+    if ygain <= 0 {
+        return Some(0);
+    }
+    let g2 = 2i64.checked_mul(a.t.g_bps)?;
+    let band = (ymax / 10_000).checked_mul(g2)?.checked_add((ymax % 10_000).checked_mul(g2)?.checked_add(9_999)? / 10_000)?;
+    Some(ygain.checked_sub(band)?.max(0))
+}
+
 /// Round 54, item c: `KpfTCStep` against `Account::call_step_over` and against its arithmetic written out, at the
 /// engine, on random accounts: one to six legs in the call's four markets, long and short, the call's prices from
 /// half to twice the entries; coins from a note's least up (at the edges of a note's least, of the fee and of the
@@ -11436,6 +11564,7 @@ fn t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts() {
     let (mut steps, mut paying, mut asking, mut nothing_to_user, mut kept, mut over, mut refused) = (0, 0, 0, 0, 0i64, 0, 0);
     let (mut added_nothing, mut heaviest) = (0, (0u64, 0u64, 0u64));
     let mut young_decided = 0;
+    let mut young_said = 0;
     for case in 0..180 {
         let n = r.range(1, 7) as usize;
         // (Review T3, docs 17.9: every leg says the time it entered. A third of the accounts have every leg old,
@@ -11483,7 +11612,25 @@ fn t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts() {
         let note = Left { sid: SID47, legs: legs.clone(), key: x.a_key, asked };
         assert_eq!(step.note, note, "case {case}");
         assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (call.value, &hash_spk(&w.lib, &call.s.hash())), "case {case}: the call again");
-        assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), ((NOTE_MIN + pay) as u64, &hash_spk(&w.lib, &note.hash())), "case {case}: the note");
+        // (Review T7, docs 17.8c: the step's note is of tag 9, and says beside what is asked what the young legs
+        // gained together less their band, by the arithmetic written out above. The step as the script takes it
+        // pays the account, the claimer and the disputer what it paid before: `young` is no payment and is set
+        // against nothing. A sompi more or less said of the young is refused.)
+        let yask = young_as_the_script_t7(x, &call.s).expect("the young's amount");
+        assert_eq!(step.young, yask, "case {case}: the model and the arithmetic written out, of the young");
+        assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), ((NOTE_MIN + pay) as u64, &hash_spk(&w.lib, &note.hash_step(yask))), "case {case}: the note");
+        assert_ne!(note.hash_step(yask), note.hash());
+        if case % 6 == 0 {
+            for d in [1i64, -1] {
+                let mut t = b.clone();
+                t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &note.hash_step(yask + d));
+                assert!(!taken30(&t, &w.keys), "case {case}: the young's amount written {d} off");
+            }
+            let mut t = b.clone();
+            t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &note.hash());
+            assert!(!taken30(&t, &w.keys), "case {case}: the step writes a note of an account's own (tag 6)");
+        }
+        young_said += (yask > 0) as i32;
         let (to_user, to_claimer, to_disputer) = (paid(&sg, &xk(&w.a)), paid(&sg, &xk(&w.w)), paid(&sg, &xk(&w.f)));
         assert_eq!((to_user, to_claimer, to_disputer), (user, cb, db), "case {case}: gain {gain}, coins {coins}, held {v}: the user, another claimer, the disputer");
         // What whoever steps has: all that came in, less what the note holds for the shard and what is paid, less the
@@ -11669,7 +11816,8 @@ fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
     let mut shard = shard_with47(&w, &[l1, l2], 10 * KAS1, 0);
     shard.s.called = T0;
     let ff = [fund(xk(&w.f), 72, 1_000)];
-    let (nb, next, claim) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T7: the step's note is of tag 9; applied as the step wrote it.)
+    let (nb, next, claim) = step_apply_t7(&w, &shard, &sg, &step, 6_580, w.payer(&w.f, &ff));
     let ns = signed("the note of a step, applied to the called shard", &nb, &w.keys);
     assert_eq!((next.rows, next.basis, next.owed, next.held, claim), ([ShardRow::EMPTY; 4], 0, 16 * KAS1, 10 * KAS1, Some(RestNote { sid: SID47, key: xk(&w.a), amount: 16 * KAS1 })));
     assert!(left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err() || !taken30(&left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap().0, &w.keys), "a note of two legs is applied by the script of one");
@@ -11917,14 +12065,15 @@ fn t1b_r54_the_whole_way_of_a_call_and_what_the_order_of_claims_does() {
         let (sb, step) = call_step(&w.lib, acct, &acct.s, None, &c, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).unwrap();
         let sg = signed(&format!("{who} stepped"), &sb, &w.keys);
         assert_eq!((step.gain, step.pay, paid(&sg, &acct.s.a_key)), (gain, pay, acct.s.a_margin - pay - NOTE_MIN - fee), "{who}");
-        notes.push(nth(&sg, 2, step.note.clone(), 6_580));
-        c = nth(&sg, 0, c.s, 6_580);
+        notes.push((sg, step));
+        c = nth(&notes.last().unwrap().0, 0, c.s, 6_580);
     }
     // The notes applied to the called shard: B's first (it pays), then A's (it asks).
-    let (nb, snext, rest) = left_apply(&w.lib, &s, &notes[1], &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T7: each as its step wrote it, of tag 9.)
+    let (nb, snext, rest) = step_apply_t7(&w, &s, &notes[1].0, &notes[1].1, 6_580, w.payer(&w.f, &ff));
     assert!(rest.is_none() && snext.held == 40 * KAS1 - fee);
     s = nth(&signed("the note of what B paid, applied", &nb, &w.keys), 0, snext, 6_590);
-    let (nb, snext, rest) = left_apply(&w.lib, &s, &notes[0], &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (nb, snext, rest) = step_apply_t7(&w, &s, &notes[0].0, &notes[0].1, 6_580, w.payer(&w.f, &ff));
     let claim_a = rest.expect("a claim");
     let sg = signed("the note of what A gained, applied", &nb, &w.keys);
     assert_eq!((snext.held, snext.owed, snext.rows, snext.basis, claim_a), (40 * KAS1 - fee, 70 * KAS1, [ShardRow::EMPTY; 4], 0, RestNote { sid: SID47, key: xk(&w.a), amount: 50 * KAS1 }));
@@ -12189,7 +12338,9 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let mut shard = shard_with47(&w, &six, 10 * KAS1, 0);
     shard.s.called = T0;
     let n6 = note_made46(&shard, Left { sid: SID47, legs: six.clone(), key: xk(&w.a), asked: 3 * KAS1 }, 75, 6_600);
-    see("a note of six legs applied to a called shard, a claim written", left_apply(&w.lib, &shard, &n6, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).map(|x| x.0));
+    // (Review T7: by `left_apply_c`: the legs as `fut` gives them are young at this call, and the claim written is
+    // of the second class; the transaction is the same size for either.)
+    see("a note of six legs applied to a called shard, a claim written", left_apply_c(&w.lib, &shard, &n6, kpf_protocol::reserve::NOTE_LEFT, 0, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).map(|x| x.0));
     for amount in [1i64, 1_000, 1_000_000, 2_500_000, NOTE_MIN] {
         let on = owing54(&w, 50 * KAS1, amount);
         let claim = note_made46(&on, RestNote { sid: SID47, key: xk(&w.a), amount }, 96, 6_710);
@@ -12211,7 +12362,8 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     for (what, taken, size, compute, storage) in &rows {
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5056), ("KpfTCallPay", 2523), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2707), ("KpfTLeft", 2506), ("KpfTLeftAll", 4310), ("KpfTLeftVoid", 2030)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5439), ("KpfTCallPay", 2523), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2707), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTLeftVoid", 2088)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12421,9 +12573,9 @@ fn t1b_fixed_f89_an_account_that_holds_less_than_it_must_pay_is_stepped_for_what
             let shard = shard_with47(&w, &[leg], 100 * KAS1, 0);
             let (mut called, _) = called54(&shard, prices, T0, 6_560);
             called.s.owed = 5 * KAS1;
-            let note = nth(&sg, 2, step.note.clone(), 6_600);
             let fw = [fund(xk(&w.f), 72, 1_000)];
-            let (nb, next, rest) = left_apply(&w.lib, &called, &note, &w.script("KpfTLeft"), w.payer(&w.f, &fw)).unwrap();
+            // (Review T7: the step's note, of tag 9, as the step wrote it.)
+            let (nb, next, rest) = step_apply_t7(&w, &called, &sg, &step, 6_600, w.payer(&w.f, &fw));
             let ns = signed("the note of what the account held, applied", &nb, &w.keys);
             assert!(rest.is_none() && (next.held, next.rows, next.owed) == (called.s.held + 30 * KAS1, [ShardRow::EMPTY; 4], 5 * KAS1));
             let after = nth(&ns, 0, next, 6_610);
@@ -12617,7 +12769,9 @@ fn t1b_fixed_f93_whoever_steps_adds_nothing_and_has_the_fee_where_the_account_ha
     // price here, 56 bytes where it was 368 with a push of two bytes more: a step is 82 bytes more than it was
     // (7,024 from 6,942) where 17.8b estimated it lighter, and costs its maker 16,400 sompi more at the least
     // rate: whoever steps an account that has no fee for it is 1,594,400 sompi the poorer, where it was 1,578,000.)
-    assert_eq!((left[0].3, left[2].3), (8_395_200, -1_594_400), "what a step leaves whoever made it, with the script as it is");
+    // (Review T7, docs 17.8c: `KpfTCStep` is 383 bytes more (5,439 from 5,056: the band and the note of tag 9), so a
+    // step costs its maker 76,600 sompi more at the least rate: 1,671,000 the poorer where it was 1,594,400.)
+    assert_eq!((left[0].3, left[2].3), (8_318_600, -1_671_000), "what a step leaves whoever made it, with the script as it is");
 }
 
 /// Round 54, F94 (Low), fixed in round 55: one note of the rest, counted when it is written. A called shard of
@@ -12689,7 +12843,9 @@ fn t1b_fixed_f94_a_note_of_the_rest_is_counted_when_it_is_written_and_the_order_
     let mut seen = vec![];
     for (held, called) in [(20 * KAS1, 0i64), (0, 0), (80 * KAS1, 0), (80 * KAS1, T0)] {
         let shard = shard_with47(&w, &[leg], held, called);
-        let note = note_made46(&shard, Left { sid: SID47, legs: vec![leg], key: xk(&w.a), asked: 50 * KAS1 }, 75, 6_050);
+        // (Review T7, docs 17.8c: the note's leg entered long before the call: on the called shard what it asks is of
+        // the first class, which is what this test counts. The leg as `fut` gives it is young at that call.)
+        let note = note_made46(&shard, Left { sid: SID47, legs: entered_t3(&[leg], 0), key: xk(&w.a), asked: 50 * KAS1 }, 75, 6_050);
         let (b, next, rest) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap();
         assert!(taken30(&b, &w.keys));
         let paid_out = if called != 0 { 0 } else { held.min(50 * KAS1) };
@@ -12847,7 +13003,8 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2523), ("KpfTLeft", 2506), ("KpfTLeftAll", 4310), ("KpfTEnterOff", 719)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5439), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2523), ("KpfTLeft", 2916), ("KpfTLeftAll", 5093), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -12962,8 +13119,9 @@ fn t1b_fixed_f85_nothing_of_the_old_form_is_left_in_the_five_scripts() {
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         for part in code.split("i9(NOTE_TAG) + mv.slice(138, 171) + i9(").skip(1) {
             let tag = part.split(')').next().unwrap().to_string();
-            // (Round 60: 13, the note that a leg was marked.)
-            if !["6", "7", "8", "LEFT", "REST", "UNENTERED", "tag", "11", "CALL", "13", "15"].contains(&tag.as_str()) {
+            // (Round 60: 13, the note that a leg was marked. Review T7, docs 17.8c: 9, the note of a call's step,
+            // which says two amounts; `KpfTCStep` writes it and no other script does.)
+            if !["6", "7", "8", "9", "LEFT", "REST", "UNENTERED", "tag", "11", "CALL", "13", "15"].contains(&tag.as_str()) {
                 notes.push((name.to_string(), tag));
             }
         }
@@ -13238,9 +13396,9 @@ fn t1b_r56_a_join_before_a_call_sets_a_loss_off_against_a_gain_and_what_the_othe
             let (sb, step) = call_step(&w.lib, a, &a.s, None, &c, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).unwrap();
             let sg = signed("an account stepped", &sb, &w.keys);
             user += paid(&sg, &xk(&w.a));
-            let note = nth(&sg, 2, step.note.clone(), 6_580);
             c = nth(&sg, 0, c.s, 6_580);
-            let (nb, next, _) = left_apply(&w.lib, &s, &note, &w.script(left_script(a.s.legs.len())), w.payer(&w.f, &ff)).unwrap();
+            // (Review T7: the step's note, of tag 9, as the step wrote it.)
+            let (nb, next, _) = step_apply_t7(&w, &s, &sg, &step, 6_580, w.payer(&w.f, &ff));
             s = nth(&signed("its note applied", &nb, &w.keys), 0, next, 6_590);
         }
         assert_eq!(s.s.rows, [ShardRow::EMPTY; 4]);
@@ -13643,7 +13801,8 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
     // (Round 58: the three that changed again.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1760, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2484, 2282), ("KpfTEnterOff", 719, 719)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1760, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 2982, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13936,7 +14095,8 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2484), ("KpfTOpenC", 684)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 2982), ("KpfTOpenC", 684)]);
 }
 
 // ================================================================================================================
@@ -14382,7 +14542,8 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2484), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 5056), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 2982), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 5439), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
 
 // ================================================================================================================
@@ -14672,13 +14833,30 @@ fn t1b_r60_the_note_of_a_mark_is_applied_whatever_the_books_hold_and_moves_no_eq
     let script = w.script("KpfTMarkNote");
     // Applied to shards of four kinds, and to one that no longer has the leg.
     let mut applied = vec![];
-    for (what, held, called, legs) in [("holding 100 KAS", 100 * KAS1, 0, vec![long]), ("holding 5 KAS", 5 * KAS1, 0, vec![long]), ("holding nothing", 0, 0, vec![long]), ("called", 100 * KAS1, T0, vec![long]), ("without the leg in a row", 100 * KAS1, 0, vec![])] {
+    // (Review T7, docs 17.8c: under a call the note's amount is counted in its class by its leg's time. The leg of
+    // this test is as `fut` gives it: its "time" is bytes of a committee's id, young at the call: the note is a
+    // claim of the second class (it was a note of the rest of what is owed). The same note of the leg entered long
+    // before the call, made by hand, is of the first class, as it was.)
+    let old_note = nth(&a1, i1, MarkNote { leg: kpf_protocol::covered::leg_entered(&note.leg, 0), ..note }, 6_700);
+    for (what, held, called, legs, old) in [("holding 100 KAS", 100 * KAS1, 0, vec![long], false), ("holding 5 KAS", 5 * KAS1, 0, vec![long], false), ("holding nothing", 0, 0, vec![long], false), ("called", 100 * KAS1, T0, vec![long], false), ("called, the leg entered long before", 100 * KAS1, T0, vec![long], true), ("without the leg in a row", 100 * KAS1, 0, vec![], false)] {
         let shard = shard_with47(&w, &legs, held, called);
-        let (b, next, rest) = mark_apply(&w.lib, &shard, &note_live, &script, w.payer(&w.f, &ff)).unwrap();
+        let note_live = if old { &old_note } else { &note_live };
+        let young = shard.s.young(&note_live.s.leg);
+        assert_eq!(young, called != 0 && !old, "{what}");
+        assert_eq!(mark_apply(&w.lib, &shard, note_live, &script, w.payer(&w.f, &ff)).is_ok(), !young, "{what}: the form of the first class");
+        let (b, next, claim) = mark_apply_c(&w.lib, &shard, note_live, &script, w.payer(&w.f, &ff)).unwrap();
         let sg = signed(&format!("the note of a mark applied to a shard {what}"), &b, &only_keys(&[&w.f]));
         let paid_out = paid(&sg, &xk(&w.a));
         assert_eq!(sg.tx.outputs[0].script_public_key, hash_spk(&w.lib, &next.hash()));
-        assert_eq!((next.rows, next.called, shard.s.held - next.held, next.owed - shard.s.owed, rest.as_ref().map(|n| n.amount).unwrap_or(0)), (shard.s.rows, called, paid_out, note.asked - paid_out, note.asked - paid_out), "{what}");
+        let (first, second) = if young { (0, note.asked) } else { (note.asked - paid_out, 0) };
+        assert_eq!((next.rows, next.called, shard.s.held - next.held, next.owed - shard.s.owed, next.claims.owed2, claim.map(|c| (c.amount1, c.paid1, c.amount2, c.paid2)).unwrap_or((0, 0, 0, 0))), (shard.s.rows, called, paid_out, first, second, (first, 0, second, 0)), "{what}");
+        if young {
+            // (Counted in the first class: refused.)
+            let lie = mark_apply_as(&w.lib, &shard, note_live, Shard { owed: shard.s.owed + note.asked, ..Shard { claims: shard.s.claims, ..next } }, 0, Some(RestNote { sid: note.sid, key: note.key, amount: note.asked }), &script, w.payer(&w.f, &ff));
+            assert!(lie.is_err() || !taken30(&lie.unwrap().0, &w.keys), "{what}: a young leg's mark counted in the first class");
+        }
+
+        let next = Shard { owed: next.owed + next.claims.owed2, ..next };
         assert_eq!((next.held - next.owed) - next.basis, (shard.s.held - shard.s.owed) - shard.s.basis, "{what}: what it holds, owes and says its legs were entered at, together");
         assert_eq!(shard.s.basis - next.basis, note.asked, "{what}: a long's mark takes what is asked off what the legs were entered at");
         applied.push((what, paid_out, next.owed, sg.mass.size));
@@ -14753,7 +14931,8 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1190), ("KpfTCRow", 2547), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1419), ("KpfTCRow", 2547), ("KpfTChange", 1760), ("KpfTCStep", 5439), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15112,7 +15291,8 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1760), ("KpfTCStep", 5056), ("KpfTEnterS", 2484), ("KpfTPoint", 2588)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1760), ("KpfTCStep", 5439), ("KpfTEnterS", 2982), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15245,7 +15425,8 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5056), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5439), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================
