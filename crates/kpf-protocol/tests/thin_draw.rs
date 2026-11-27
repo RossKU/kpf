@@ -4708,3 +4708,72 @@ fn a_note_of_an_option_leg_takes_it_out_of_its_row() {
     let forced = left_apply_d_of(&w.lib, &with, &b3, &left_note(&with, &more, 6), &more, more.hash(), kpf_protocol::reserve::NOTE_LEFT, before, 0, None, &left_d, w.payer(&w.f, &ff));
     assert!(forced.is_err() || !accepted(&forced.unwrap(), &w.keys), "a note of more units than the row has, at the engine");
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, B3: a note of several legs of which some have a day (`KpfTLeftAllD`).
+
+/// An account of a long futures leg and a call held at 11 is taken whole: its note is of two legs. Applied, the
+/// futures leg leaves its row among the four and the call the leaf of its series, and the shard is as before the
+/// two entered, with what the note paid. A note of two calls of one series: the second is shown the row as the
+/// first left it. Another shard after, and a path of the books as they were for the second leg, are refused.
+#[test]
+fn a_note_of_several_legs_takes_the_option_legs_out_of_their_rows() {
+    use kpf_protocol::books::{Books, Key, OF_CALLS};
+    use kpf_protocol::reserve::Left;
+    let w = world();
+    let h = w.head(0);
+    let scale = h.scale;
+    let base = seeded(&w);
+    let committee = w.markets[0].committee_id;
+    let day = T0 + 1_000_000;
+    let k11 = Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 11 };
+    let (s1, b1) = base.s.row_in(&Books::opened(), k11, scale, h.price_max, 0, 1, Some(2)).unwrap();
+    let ff = [fund(xk(&w.f), 36)];
+    let all_d = w.script("KpfTLeftAllD");
+    // The books with a long of 10 units from 10 and two calls held at 11 (4 and 6 units).
+    let long = kpf_protocol::covered::leg_entered(&fleg(&w, 0, 10, LONG, P10), T0);
+    let (c4, c6) = (kpf_protocol::covered::leg_entered(&oleg(&w, 0, 3, 4, P10 / 10 * 11, P10, day, KAS1 / 2), T0), kpf_protocol::covered::leg_entered(&oleg(&w, 0, 3, 6, P10 / 10 * 11, P10, day, KAS1 / 2), T0));
+    let sf = s1.entered(&long, 0, T0).unwrap();
+    let (sa, ba) = Shard { expiry: 0, ..sf }.entered_d(&b1, &c4, T0).unwrap();
+    let (sb, bb) = Shard { expiry: 0, ..sa }.entered_d(&ba, &c6, T0).unwrap();
+    let with = OLive { s: sb, ..base.clone() };
+    assert_eq!((sb.rows[0].gross, sb.dgross, bb.row(&k11).unwrap().net), (10 * scale, 10 * scale, -10 * scale));
+    // A long and a call, taken whole: the account paid 7 KAS (a loss and a premium).
+    let n = Left { sid: sb.sid, legs: vec![long, c4], key: xk(&w.w), asked: -7 * KAS1 };
+    let note = OLive { value: (NOTE_MIN + 7 * KAS1) as u64, ..left_note(&with, &n, 1) };
+    let (b, after, books, rest) = left_apply_d(&w.lib, &with, &bb, &note, &all_d, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a note of a futures leg and an option leg applied", &b, &w.keys);
+    assert_eq!((after.rows[0].gross, after.rows[0].entered, after.dgross, after.held, books.row(&k11).unwrap().net, rest), (0, 2, 6 * scale, sb.held + 7 * KAS1, -6 * scale, None), "the head stands with its count, the row has the six units of the other call");
+    assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &after.hash()));
+    for (what, wrong) in [("the root as with the call", Shard { root: sb.root, ..after }), ("the sum as with the call", Shard { dgross: sb.dgross, ..after }), ("the futures row as it was", Shard { rows: sb.rows, ..after })] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &wrong.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    // Two calls of one series: the second is shown the row as the first left it.
+    let n2 = Left { sid: sb.sid, legs: vec![c4, c6], key: xk(&w.w), asked: 0 };
+    let note2 = left_note(&with, &n2, 2);
+    let (b, after, books, _) = left_apply_d(&w.lib, &with, &bb, &note2, &all_d, w.payer(&w.f, &ff)).unwrap();
+    signed("a note of two option legs of one series applied", &b, &w.keys);
+    assert_eq!((after.dgross, after.root, books.root(), after.rows[0].gross), (0, b1.root(), b1.root(), 10 * scale), "the row empty again; the futures leg stays");
+    // (The second leg shown the row as it was before the first left: refused.)
+    let (_, _, at, paid, rest) = with.s.left_d(&bb, &n2, note2.value as i64).unwrap();
+    let mut stale = left_apply_all_d_of(&w.lib, &with, &bb, &note2, &at, after, paid, rest, &all_d, w.payer(&w.f, &ff)).unwrap();
+    let shown = bb.shown(&k11).unwrap();
+    let args = match &mut stale.plans[1] {
+        kpf_protocol::oracle_build::OPlan::Contract { args, .. } => args,
+        _ => panic!("the script's copy"),
+    };
+    let last = args.len();
+    let (mut leaves, mut besides) = (vec![], vec![]);
+    for _ in 0..2 {
+        leaves.extend(shown.row.bytes()[9..].to_vec());
+        besides.extend(shown.beside.iter().flat_map(|x| x.to_vec()));
+    }
+    args[last - 3] = kpf_protocol::tx::Arg::V(silverscript_abi::ArtifactValue::Bytes(leaves));
+    args[last - 1] = kpf_protocol::tx::Arg::V(silverscript_abi::ArtifactValue::Bytes(besides));
+    assert!(!accepted(&stale, &w.keys), "the second leg of a row shown the row as it was");
+    // Applied by nothing: a called shard.
+    let called = OLive { s: Shard { called: 6_000, ..sb }, ..with.clone() };
+    assert!(left_apply_d(&w.lib, &called, &bb, &left_note(&called, &n2, 3), &all_d, w.payer(&w.f, &ff)).is_err());
+}

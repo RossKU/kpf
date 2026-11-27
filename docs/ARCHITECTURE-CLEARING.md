@@ -5257,6 +5257,31 @@ all, and the six that failed were one thing, below).
   and an option that is taken whole in a step writes one), and the twins for a called shard: until then such a
   note is applied by nothing.
 
+**B3, the second part, as it is built: a note of several legs** (the engine; `s517_b3_left_all_d.py`: `KpfTLeftAllD`
+is written from `KpfTLeftAll`, run after `s478`; the library has 82 scripts; 801 tests: 756 passed in the one run
+of all, and the 45 that failed were one thing, the library of one test file, below, and pass in their file).
+- **`KpfTLeftAllD.apply`** (**11,887 bytes**; the twin 4,476): for each of two to six legs, a futures leg out of
+  its row among the four as in the twin, an option leg out of the leaf of its key by its path against the root
+  as the legs before it left it. Each leg has a slot of its leaf, its place and its path (read for an option
+  leg only).
+- **At the engine** (`thin_draw.rs`, `a_note_of_several_legs_takes_the_option_legs_out_of_their_rows`): the note
+  of a long and a held call, taken whole: the futures leg leaves its row (the head stands, counting its two
+  leaves) and the call its leaf; three other shards after refused. A note of two calls of one series: the row
+  is empty again; **the second leg shown the row as it was before the first left is refused**. A called shard
+  takes none.
+- **Measured: a note of a futures leg and an option leg applied is 14,682 bytes.** The script unrolls six legs,
+  each with the tree's six hashes twice. It is on no common path (an account that holds an option and is taken
+  whole in a step), and it is the heaviest transaction of the form. **For the last phase**: a script of three
+  legs from the same source (reckoned: about 6 kB of script, a transaction of about 8.5); or a note a leg where
+  an account holds an option (what `KpfTCEnd` writes changes: review T16, Z15). Whether a block takes 14.7 kB
+  is for the testnet (E).
+- **A library's genesis.** Review T1's tests make a library of two copies a script: at 13 KAS a copy the genesis
+  of 82 scripts weighs 504,472 against a block's 500,000; 15 KAS a copy now (2,460 KAS in the copies of such a
+  library; 1,230 with one copy). 17.8e's last line stands, with these numbers.
+- **Not built**: the twins for a called shard (`KpfTLeftDC`, `KpfTLeftAllDC`): with the call's step for option
+  legs, step C. A note of an option leg that is in no row is spent by nothing (`KpfTLeftVoid` reads futures
+  rows): no script writes such a note; said.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

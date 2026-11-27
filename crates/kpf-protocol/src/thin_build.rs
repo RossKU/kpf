@@ -2968,9 +2968,60 @@ pub fn unentered_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, not
 /// and whose tree of dated rows is `books`. The shard and the books after, and the note of the rest where the
 /// shard did not hold what was asked.
 pub fn left_apply_d(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books, Option<crate::reserve::Rest>)> {
-    let (next, after, _, paid, rest) = shard.s.left_d(books, &note.s, note.value as i64)?;
-    let b = left_apply_d_of(lib, shard, books, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, next, paid, rest, script, p)?;
+    let (next, after, at, paid, rest) = shard.s.left_d(books, &note.s, note.value as i64)?;
+    let b = if note.s.legs.len() == 1 { left_apply_d_of(lib, shard, books, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, next, paid, rest, script, p)? } else { left_apply_all_d_of(lib, shard, books, note, &at, next, paid, rest, script, p)? };
     Ok((b, next, after, rest))
+}
+
+/// `KpfTLeftAllD.apply` (docs 17.8j, 9): a note of two to six legs of which some are option legs, with the rows of
+/// its futures legs (`at`, in their order) and the outputs said. Each option leg is shown its leaf, its place and
+/// its path in the books as the legs before it left them.
+#[allow(clippy::too_many_arguments)]
+pub fn left_apply_all_d_of(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::reserve::Left>, at: &[usize], next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let (s, n) = (&shard.s, &note.s);
+    if n.legs.len() < 2 || n.legs.len() > 6 {
+        return invalid("a note of two to six legs");
+    }
+    let (mut b, mut rows, mut leaves, mut places, mut besides) = (books.clone(), vec![], vec![], vec![], vec![]);
+    let mut futures = at.iter();
+    for l in &n.legs {
+        if crate::crow::option_of(l).is_some() {
+            let (head, units, basis) = crate::reserve::Shard::book_of_option(l)?;
+            let shown = b.shown(&head.key).ok_or_else(|| Error::Invalid("an option leg's series is not in the shard's books".into()))?;
+            leaves.extend(leaf138(&shown.row));
+            places.extend(sm8(shown.place as i64));
+            besides.extend(beside192(&shown.beside));
+            rows.extend(sm8(0));
+            b = b.moved(&head.key, units.checked_neg().unwrap_or(0), -l.size, basis.checked_neg().unwrap_or(0))?;
+        } else {
+            let r = futures.next().ok_or_else(|| Error::Invalid("a row a futures leg of the note".into()))?;
+            leaves.extend(vec![0u8; 138]);
+            places.extend(sm8(0));
+            besides.extend(vec![0u8; 192]);
+            rows.extend(sm8(*r as i64));
+        }
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), bv(rows), bv(n.key.to_vec()), iv(n.asked), iv(crate::reserve::NOTE_LEFT), iv(0),
+        bv(leaves), bv(places), bv(besides),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeftAllD", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
+    let taken = crate::reserve::held_for(n.asked, note.value as i64);
+    let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        let c = left.claim();
+        d.out(c.value() as u64, hash_spk(lib, &c.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
+    d.finish()
 }
 
 /// `KpfTLeftD.apply` on the note that an option leg did not enter (`KpfTEnterOff` wrote it): the leg is taken out

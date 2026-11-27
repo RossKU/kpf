@@ -1829,5 +1829,5 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
     opens.sort();
     // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
     // (17.8e: `KpfTRest`, which was `KpfTLeft.rest`, is a script of its own.)
-    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTEnterSD", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftD", "KpfTLeftVoid", "KpfTRest", "KpfTRowIn", "KpfTRowOut", "KpfTShardPrice", "KpfTShardRow", "KpfTShardRowD"]);
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTEnterSD", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftAllD", "KpfTLeftC", "KpfTLeftD", "KpfTLeftVoid", "KpfTRest", "KpfTRowIn", "KpfTRowOut", "KpfTShardPrice", "KpfTShardRow", "KpfTShardRowD"]);
 }

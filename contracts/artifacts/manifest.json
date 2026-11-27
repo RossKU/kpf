@@ -316,6 +316,13 @@
       "source": "contracts/KpfTLeftAllC.sil",
       "source_sha256": "a15b491c4a7f3709ee6ab6f819537b1744fa8ce11b4f6b918dcf2673375ec2c3"
     },
+    "KpfTLeftAllD": {
+      "artifact": "KpfTLeftAllD.json",
+      "artifact_sha256": "197726ae415e4a15207c1e9149702a72f9421d162fce22f2b4faa093c57fb10b",
+      "script_len": 11887,
+      "source": "contracts/KpfTLeftAllD.sil",
+      "source_sha256": "4321cdeb9b48c78d5828c88545290f802af56f93a18568956118fe89af41b80a"
+    },
     "KpfTLeftC": {
       "artifact": "KpfTLeftC.json",
       "artifact_sha256": "6fb8cf1fb1247bfcffeb621eff1803ee99c8b9d741d06518eea04139b9cb6c8f",
