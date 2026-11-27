@@ -3679,6 +3679,27 @@ would need a time in the leaf and in the list's entry (a call's step reads no ro
 dated rows are judged an underlying. **The leaf has no field for it**: if S1 is closed, it is by the rate
 (not decided: the owner of the design's).
 
+**Stage 2, how it is built.** P7's trial was made (not kept): with a shard's row padded so that the model's
+`Shard` is 9 kB, as it will be with sixty-four places, the default workspace passes whole (723 tests; no stack
+is short, in the tests or the tool's), a little slower (the tests' own time 227 s where it was 158 s). So the
+model's `Shard` copies and has every place. To keep the tests' change small, without the model saying anything
+the scripts do not:
+
+- **The model's rows are the places.** `Shard.rows` is the sixty-three places a row can stand at, a row of no
+  market where none stands; the head leaf is at the last place (63), in the model and in the constant
+  `KpfTShardOpen` writes. The key after each row is not kept: it is the next key of the rows that stand, which
+  is what the scripts hold a tree to. A test's row `r` is the place `r`.
+- **The tests' worlds have their markets in the keys' order**, so that the rows a test puts at the places 0, 1,
+  2 are the first, second and third rows of a trace.
+- **The tests' shards are made with their rows put in** (the model's `of_rows`); a test that enters a leg into a
+  shard of no row puts the row in first, by the model or by `KpfTRowIn`.
+- **A point is said by a function** (`trace_row_point`, `trace_price_point`): a price's points are from 64.
+
+In this order, the default workspace passing after each: (1) the tests say rows by `of_rows` and points by the
+functions, the worlds' markets in order: nothing changes in what is built; (2) the tree: the scripts that show
+rows, `KpfTRowIn` and `KpfTRowOut`, the model, the builders, the tool, in one commit, reviewed at the engine;
+(3) `KpfTLeftAll`'s worst case measured, and its twin of three legs if it must be (P6).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
