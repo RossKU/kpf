@@ -188,11 +188,12 @@ contract KpfTCSplit(int init_version) {
             // The account that stays, and the new one: each stands by itself.
             // (No more than the coins: what a token leg counts leaves no coin that is not there.)
             if (coins - amount - NOTE_MIN < 0) { ok = 0; }
-            if (coins - amount - NOTE_MIN + tk < rst + ls) { ok = 0; }
+            if (coins - amount - NOTE_MIN + tk < rst + int(byte[8](row.slice(152, 160))) + ls) { ok = 0; }
             int lost = 0;
             if (gl < 0) { lost = 0 - gl; }
             // (The leg that moves, alone: what it can lose at either end of a move of the rate.)
-            if (amount - NOTE_MIN < int(byte[8](row.slice(136, 144))) + lost) { ok = 0; }
+            // (And its premium: an option moves with it. Docs 17.4, 17.8i.)
+            if (amount - NOTE_MIN < int(byte[8](row.slice(136, 144))) + int(byte[8](row.slice(144, 152))) - int(byte[8](row.slice(152, 160))) + lost) { ok = 0; }
         }
         if (ok == 1) {
             byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(224, 256))) + mv.slice(0, 67) + byte[]((coins - amount) as byte[8]) + mv.slice(75, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - amount) as byte[8]);

@@ -192,7 +192,7 @@ contract KpfTCMark(int init_version) {
             // What the leg keeps unrealized: the band a leaving of it alone takes, at the least (the row's).
             if (kept < int(byte[8](row.slice(80, 88)))) { ok = 0; }
             // The account stands, as after a take.
-            if (coins - NOTE_MIN + tk < rall + ls) { ok = 0; }
+            if (coins - NOTE_MIN + tk < rall + int(byte[8](row.slice(144, 152))) + ls) { ok = 0; }
         }
         if (ok == 1) {
             byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(224, 256))) + mv.slice(0, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[](held as byte[8]);

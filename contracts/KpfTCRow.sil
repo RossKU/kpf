@@ -213,13 +213,12 @@ contract KpfTCRow(int init_version) {
             }
             if (a <= 0) { ok = 0; }
             if (a > int(byte[8](lg.slice(76, 84)))) { ok = 0; }
-            // A futures leg, or a token leg (direction 7: docs 16.12): a covered account has no other.
+            // A futures leg (1 long, 2 short), an option leg (3 a call held, 4 a call written, 5 a put held, 6 a put
+            // written: docs 17.8i), or a token leg (7: docs 16.12): a covered account has no other.
             int dir = int(byte[8](lg.slice(94, 102)));
-            if (dir != DIR_LONG) {
-                if (dir != 2) {
-                    if (dir != 7) { ok = 0; }
-                }
-            }
+            if (dir < 1 || dir > 7) { ok = 0; }
+            // (The head's lines: a bit a leg, none below nothing.)
+            if (int(byte[8](said.slice(hd + 24, hd + 32))) < 0) { ok = 0; }
             int leaves = 0;
             if (skip == 0 - 1) { leaves = 1; }
             if (skip == i) {
@@ -308,6 +307,121 @@ contract KpfTCRow(int init_version) {
                     dlb = 0 - dlb;
                     dub = 0 - dub;
                 }
+                // An option leg (docs 17.2, 17.8i). Its 32 bytes say, after the time it entered, its day, its strike
+                // and its premium a unit. What it is worth exercised at a price, to its user: `sg` times the larger
+                // of nothing and `cs` times the worth there less the worth at the strike.
+                int prem = 0;
+                int pod = 0;
+                int nsd = 1;
+                int wo = worth;
+                if (dir >= 3 && dir <= 6) {
+                    int strike = int(byte[8](lg.slice(50, 58)));
+                    int pu = int(byte[8](lg.slice(58, 66)));
+                    int day = int(byte[8](lg.slice(42, 50)));
+                    // Wrong, before anything: a strike out of its market's range, a premium below nothing, an
+                    // ended leg (it leaves by the day's transaction), a leaving or a mark that names it (nobody
+                    // exercises before the day), and the leg an entry says (an option enters by the seventh step).
+                    if (strike <= 0 || strike > int(byte[8](lg.slice(76, 84))) || pu < 0 || day <= t0) { ok = 0; }
+                    if (leaves == 1) {
+                        if (kind == 8 || kind == 13) { ok = 0; }
+                    }
+                    if (kind == 10) {
+                        if (i == n) { ok = 0; }
+                    }
+                    if (ok == 1) {
+                        int cs = 1;
+                        if (dir >= 5) { cs = 0 - 1; }
+                        int sg = 1;
+                        if (dir == 4 || dir == 6) { sg = 0 - 1; }
+                        int wk = quoteAt(size, scale, strike);
+                        int va = cs * (worth - wk);
+                        if (va < 0) { va = 0; }
+                        va = sg * va;
+                        int ve = cs * (quoteAt(size, scale, int(byte[8](lg.slice(103, 111)))) - wk);
+                        if (ve < 0) { ve = 0; }
+                        ve = sg * ve;
+                        d = va - ve;
+                        // The two sums: exact; a held option whose strike is between the ends, along its line (in
+                        // a step the line of nothing; else the head's bit of its place); within T of its day,
+                        // each no more than nothing.
+                        dl = cs * (quoteAt(size, scale, lo) - wk);
+                        du = cs * (quoteAt(size, scale, up) - wk);
+                        int line = 0;
+                        if (sg == 1 && lo < strike && strike < up) {
+                            line = 1;
+                            int pw = 1;
+                            if (i == 2) { pw = 2; }
+                            if (i == 3) { pw = 4; }
+                            if (i == 4) { pw = 8; }
+                            if (i == 5) { pw = 16; }
+                            if (i == 6) { pw = 32; }
+                            if (kind != 9 && (int(byte[8](said.slice(hd + 24, hd + 32))) / pw) % 2 == 1) { line = 2; }
+                        }
+                        if (line == 1) {
+                            dl = 0;
+                            du = 0;
+                        }
+                        if (line == 0) {
+                            if (dl < 0) { dl = 0; }
+                            if (du < 0) { du = 0; }
+                            dl = sg * dl;
+                            du = sg * du;
+                        }
+                        dl = dl - va;
+                        du = du - va;
+                        mq = cs * (quoteAt(size, scale, q) - wk);
+                        if (mq < 0) { mq = 0; }
+                        mq = sg * mq - va;
+                        if (day - t0 <= int(byte[8](said.slice(hd + 16, hd + 24)))) {
+                            if (dl > 0) { dl = 0; }
+                            if (du > 0) { du = 0; }
+                            if (mq > 0) { mq = 0; }
+                        }
+                        // Its entry's part: what it is worth exercised changes by where its entry is a tolerance
+                        // off for the user.
+                        int en = int(byte[8](lg.slice(103, 111)));
+                        int et = (en / BPS) * tol + ((en % BPS) * tol + BPS - 1) / BPS;
+                        int el = en - et;
+                        if (el < 0) { el = 0; }
+                        el = cs * (quoteAt(size, scale, el) - wk);
+                        if (el < 0) { el = 0; }
+                        et = cs * (quoteAt(size, scale, en + et) - wk);
+                        if (et < 0) { et = 0; }
+                        be = sg * el - ve;
+                        if (sg * et - ve > be) { be = sg * et - ve; }
+                        if (be < 0) { be = 0; }
+                        // The band's ends: what it gains to them (the line of nothing where its strike is between
+                        // them); and its band where it leaves alone: its entry's part and what it loses there.
+                        int lb = a - dt;
+                        if (lb < 0) { lb = 0; }
+                        dlb = cs * (quoteAt(size, scale, lb) - wk);
+                        if (dlb < 0) { dlb = 0; }
+                        dlb = sg * dlb - va;
+                        dub = cs * (quoteAt(size, scale, a + dt) - wk);
+                        if (dub < 0) { dub = 0; }
+                        dub = sg * dub - va;
+                        bd = 0 - dlb;
+                        if (0 - dub > bd) { bd = 0 - dub; }
+                        if (bd < 0) { bd = 0; }
+                        bd = bd + be;
+                        if (sg == 1 && lb < strike && strike < a + dt) {
+                            dlb = 0 - va;
+                            dub = 0 - va;
+                        }
+                        // Its premium; what its leaving pays of it (a holder's, whole; a writer's, less what it
+                        // lost); a held option is not counted among the legs that stay.
+                        prem = quoteAt(size, scale, pu);
+                        pod = prem;
+                        if (sg == 1) {
+                            nsd = 0;
+                        } else {
+                            if (d < 0) { pod = prem + d; }
+                            if (pod < 0) { pod = 0; }
+                        }
+                        // (An option adds nothing to the legs' worth.)
+                        wo = 0;
+                    }
+                }
                 // (The band of all the legs, the open group's two sums at the tolerance, and how many of the legs
                 // that stay are not held options.)
                 int ba = int(byte[8](before.slice(72, 80)));
@@ -343,8 +457,8 @@ contract KpfTCRow(int init_version) {
                 int gl = 0;
                 // (What the row's first sum takes: what the leg gained or lost; of a mark, see below.)
                 int dg = d;
-                // (What the second sum takes: the leg's worth; a token leg's is not counted there.)
-                int dw = worth;
+                // (What the second sum takes: the leg's worth; a token leg's and an option's are not counted there.)
+                int dw = wo;
                 int tkd = 0;
                 // (The band of a leg that leaves; what it can lose alone; whether it adds to the sums of what stays.)
                 int dbl = 0;
@@ -404,7 +518,7 @@ contract KpfTCRow(int init_version) {
                         }
                     }
                 } else {
-                    ws = worth;
+                    ws = wo;
                     stays = 1;
                     if (d < 0) { ls = 0 - d; }
                     h = blake2b(before.slice(224, 256) + lg);
@@ -415,7 +529,11 @@ contract KpfTCRow(int init_version) {
                 if (stays == 1) {
                     dds = dds + dl;
                     dus = dus + du;
-                    ns = ns + 1;
+                    ns = ns + nsd;
+                }
+                // (A held option that leaves is counted in the same number, by 256: an end is not shown the leg.)
+                if (leaves == 1) {
+                    if (dir == 3 || dir == 5) { ns = ns + 256; }
                 }
                 ba = ba + be;
                 tdd = tdd + dlb;
@@ -425,7 +543,11 @@ contract KpfTCRow(int init_version) {
                 // and the options' numbers as they were (docs 17.8h: nothing, before the option leg).
                 if (row.slice(8, 56) != byte[]((int(byte[8](before.slice(8, 16))) + dg) as byte[8]) + byte[]((int(byte[8](before.slice(16, 24))) + dw) as byte[8]) + byte[]((int(byte[8](before.slice(24, 32))) + ws) as byte[8]) + byte[]((int(byte[8](before.slice(32, 40))) + ls) as byte[8]) + byte[]((int(byte[8](before.slice(40, 48))) + gl) as byte[8]) + byte[]((int(byte[8](before.slice(48, 56))) + tkd) as byte[8])) { ok = 0; }
                 if (row.slice(64, 144) != byte[]((int(byte[8](before.slice(64, 72))) + mq) as byte[8]) + byte[](ba as byte[8]) + byte[]((int(byte[8](before.slice(80, 88))) + dbl) as byte[8]) + byte[](dda as byte[8]) + byte[](dua as byte[8]) + byte[](rall as byte[8]) + byte[](dds as byte[8]) + byte[](dus as byte[8]) + byte[](rst as byte[8]) + byte[]((int(byte[8](before.slice(136, 144))) + drl) as byte[8])) { ok = 0; }
-                if (row.slice(144, 168) != before.slice(144, 168)) { ok = 0; }
+                // (The premiums of all the option legs and of those that stay; what the option legs pay of theirs
+                // where they leave, all of them: a step that names one leg may take every leg.)
+                int ps = int(byte[8](before.slice(152, 160)));
+                if (stays == 1) { ps = ps + prem; }
+                if (row.slice(144, 168) != byte[]((int(byte[8](before.slice(144, 152))) + prem) as byte[8]) + byte[](ps as byte[8]) + byte[]((int(byte[8](before.slice(160, 168))) + pod) as byte[8])) { ok = 0; }
                 if (row.slice(168, 192) != byte[](tdd as byte[8]) + byte[](tdu as byte[8]) + byte[](ns as byte[8])) { ok = 0; }
                 if (h != byte[32](row.slice(224, 256))) { ok = 0; }
             }

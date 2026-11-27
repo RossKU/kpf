@@ -4558,6 +4558,59 @@ with premiums and the fee). (2) `crow.rs` and `KpfTCRow` at 256 bytes, futures a
 test of today passing, the band of every leg read from the row). (3) The option leg in the row, and the ends
 with premiums; accounts with option legs made in the tests as objects. (4) The engine's review.
 
+**The option leg as it is built** (the engine; every test passes, 759; not yet read by a reviewer). In the order
+of the second writing:
+
+- **The row at 256 bytes** (`s446_row_256.py`), futures and tokens as they were: the band of all the legs is each
+  leg's entry's part and what the closed groups lose by a move of the tolerance; the open group's two sums at
+  the tolerance; NS. The ends read the band of every leg, and of a leg alone, from the row.
+- **The option leg in the row** (`crow.rs` `option_of`, `crow_after`; `KpfTCRow`, `s454_row_option_sil.py`): the
+  four ways, the two sums exact or along a line, within T of the day no more than nothing, the entry's part,
+  the band's ends, the premiums. A statement's row is of its time and of the leg's place (the head's bit).
+  Wrong before anything: a strike out of range, a premium below nothing, an ended leg, a leaving or a mark
+  that names it, the leg an entry says, a head whose lines are below nothing.
+- **The ends** (`covered.rs` `c_end_as`; `KpfTCEnd` and the four others, `s457_ends_premium_sil.py`): the premiums
+  beside what is asked; a step due below the premiums; the leg named in the order loss, premium, fee; the fee
+  of an option named alone; E13 and O3 as decided.
+- **Two things the list did not have, found while building.** (1) An end is not shown the leg named, and a
+  step's rule reads whether it is a held option: **NS counts, by 256, the held options that leave**, beside the
+  legs that stay that are not held options. (2) **PO is of every option leg**, not of those that leave: a step
+  that names one leg may take every leg (E13, O3, or where the account does not lack less), and its rows were
+  written with one leg leaving; the premium of the others was then paid by nobody. Of the leg named alone the
+  end has what it pays from the row (its premium is PA less PS; a holder's whole, a writer's less what it
+  lost). Found at the engine by O3's account: the shard had 3.95 of its 10.
+- **How a statement is stated** (`c_state`): at its time; with the lines of its held options that ask its user
+  least (`c_head_least`, every choice tried: sixty-four at the most); a step's fee is the rule's
+  (`c_end_as`, not strict, then strict).
+
+| Script | Bytes before the option leg | Now |
+|---|---|---|
+| `KpfTCRow` | 4,873 (232 bytes a row: 4,241) | 7,508 |
+| `KpfTCEnd` | 4,488 | 5,459 |
+| `KpfTCEnter`, `KpfTCSplit`, `KpfTCMark`, `KpfTCTok` | 1,993, 2,613, 2,497, 3,756 | 2,003, 2,643, 2,507, 3,767 |
+
+A held call's row answered: 9,189 bytes; an end answered beside it: 7,043; a take stated beside a held call
+3,423 (a leg). For the last phase: the answer of a row in two scripts, by the kind of its leg (a futures leg's
+answer carries the option leg's 2,600 bytes).
+
+**Shown** (`crow_model.rs`, the row's model: 40,000 accounts of futures and options of the four ways, legs within
+T of their day among them): what is asked is no less than what the legs lose at any price a move of the rate
+reaches (the ends, every strike between them and a sompi either side), and exactly that on the 13,541 with no
+held option between the ends and none near its day; the band of every leg is no less than what prices stated
+the tolerance off, at the entries and at the leaving, could show the legs to have gained. **At the engine**
+(`thin_draw.rs`, `an_option_leg_is_asked_its_premium_and_what_it_can_lose_with_its_group`): a call held alone is
+asked its premium at any price; each of the seven numbers an option leg writes, a sompi off, is answered wrong
+and not right; no leaving and no mark names an option; an ended leg's account takes no statement; a covered
+call is asked what the long loses below and the premium it was paid (7.5 where the rate on the worth asked 13);
+a long leaves in a step from beside a held call whose premium the coins hold, and the call goes on (N71); the
+held call named beside the long takes every leg, in the order loss, premium, fee; O3's account leaves whole
+and the shard has its 10; a put held against a long is asked nothing but its premium by its user's line, and
+the long whole within T of the day.
+
+**Not done**: the review's tests 6 and 7 of the model (the walk of 17.8, 1 with premiums and a fee; the
+payments against `stepped_owing`, leg by leg): the options' model has one underlying and its own step, and the
+engine's review is asked for the walks instead. The tool states no account with an option leg (none enters).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

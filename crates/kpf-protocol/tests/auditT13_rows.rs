@@ -781,7 +781,10 @@ fn t13_held_the_ends_at_their_edges_a_sompi_either_side() {
             n += 1;
         }
     }
-    for lines in [1i64, -1, i64::MAX] {
+    // (Docs 17.8i: the lines are a bit a leg and no number below nothing: under a head whose lines are below
+    // nothing no row is right.)
+    assert!(kpf_protocol::crow::ctrace(KIND_C_TAKE, &CHead { lines: -1, ..s.head }, 0, &h, &a, &a, |_| Part::Stays).is_none());
+    for lines in [1i64, 2, i64::MAX] {
         let t = with(CHead { lines, ..s.head });
         let st2 = Stated { arg: t.arg(), ..st };
         assert_eq!((acct.s.c_end_judged(KIND_C_TAKE, &t, &st2.claimer, &st2.outs, st2.held, T0), end_taken(&w, &acct, &w.stated(&acct, &st2, &t.said()), &t)), (Some(true), (true, false)), "the lines are held by nothing");

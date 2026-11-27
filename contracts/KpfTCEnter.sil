@@ -170,7 +170,7 @@ contract KpfTCEnter(int init_version) {
         int next = t0 + 2 * (int(byte[8](mv.slice(94, 102))) + 2 * int(byte[8](mv.slice(103, 111))));
         if (ok == 1) {
             // The user stands, of the net: its coins less a note's least, and what all its legs gained or lost.
-            if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain + tk < rall) { ok = 0; }
+            if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain + tk < rall + int(byte[8](row.slice(144, 152)))) { ok = 0; }
             // (The place of the leg that enters: the last. docs 17.8h, review T12, E2.)
             if (int(byte[8](said.slice(159, 167))) != n) { ok = 0; }
         }

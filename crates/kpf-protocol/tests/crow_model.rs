@@ -241,13 +241,15 @@ fn an_option_legs_row_is_what_the_rule_says_and_asks_no_less_than_a_move_of_the_
             };
             assert_eq!(last.pa, legs.iter().map(prem).sum::<i64>());
             assert_eq!(last.ps, legs.iter().enumerate().filter(|(i, _)| part(*i) == Part::Stays).map(|(_, l)| prem(l)).sum::<i64>());
-            let po: i64 = legs.iter().enumerate().filter(|(i, _)| part(*i) != Part::Stays).map(|(i, l)| match option_of(l) {
+            // (Of every option leg: what it pays of its premium where it leaves.)
+            let po: i64 = legs.iter().enumerate().map(|(i, l)| match option_of(l) {
                 Some(o) if o.held => prem(l),
                 Some(_) => (prem(l) - (-gained(l, a[i])).max(0)).max(0),
                 None => 0,
             }).sum();
             assert_eq!(last.po, po);
-            assert_eq!(last.ns, legs.iter().enumerate().filter(|(i, l)| part(*i) == Part::Stays && !option_of(l).is_some_and(|o| o.held)).count() as i64);
+            // (The legs that stay that are not held options; and, by 256, the held options that leave.)
+            assert_eq!(last.ns, legs.iter().enumerate().filter(|(i, l)| part(*i) == Part::Stays && !option_of(l).is_some_and(|o| o.held)).count() as i64 + 256 * legs.iter().enumerate().filter(|(i, l)| part(*i) != Part::Stays && option_of(l).is_some_and(|o| o.held)).count() as i64);
             assert_eq!(last.gain, legs.iter().enumerate().map(|(i, l)| gained(l, a[i])).sum::<i64>());
             assert_eq!(last.gl, if leaves { gained(&legs[named], a[named]) } else { 0 });
             // An option adds nothing to the legs' worth.

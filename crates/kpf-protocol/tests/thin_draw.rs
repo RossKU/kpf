@@ -4086,3 +4086,128 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
         }
     }
 }
+
+/// An option leg of market `i` in a covered account (docs 17.2, 17.8i): `way` 3 a call held, 4 a call written, 5 a
+/// put held, 6 a put written; its 32 bytes say the time it entered, its day, its strike and its premium a unit.
+fn oleg(w: &World, i: usize, way: i64, units: i64, strike: i64, entry: i64, day: i64, premium: i64) -> XLeg {
+    XLeg { dir: way, committee: kpf_protocol::covered::leg_more(6_000, day, strike, premium), ..fleg(w, i, units, LONG, entry) }
+}
+
+/// Docs 17.8i (the option leg in an account), at the engine. Accounts with option legs are made here as objects
+/// are (the entry with its premium is 17.8's seventh step). A held option is asked its premium; a covered call
+/// what the long loses below and the premium it was paid; an option is named by no leaving; an ended leg has no
+/// row; in a step a futures leg leaves from beside a held option whose premium the coins hold (N71), a held
+/// option named beside it takes every leg (E13), and a leg that gained does not leave alone where the coins do
+/// not hold the premiums that stay (review T14, O3): every leg leaves, in the order loss, premium, fee.
+#[test]
+fn an_option_leg_is_asked_its_premium_and_what_it_can_lose_with_its_group() {
+    use kpf_protocol::covered::{c_row_judged_at, CSaid, ALL, KIND_C_LEAVE, KIND_C_MARK, KIND_C_STEP, KIND_C_TAKE};
+    use kpf_protocol::crow::CRow;
+    let w = world();
+    let shard = bare(&w);
+    let fw = [fund(xk(&w.w), 33)];
+    let far = T0 + 10_000;
+    let state = |acct: &OLive<Account>, kind: i64, amount: i64, skip: i64, a: &[i64]| c_state(&w.lib, acct, &w.script("KpfTChange"), kind, amount, skip, a, T0, xk(&w.w), w.payer(&w.w, &fw));
+    let row_script = w.script("KpfTCRow");
+
+    // A call held alone: 10 units struck at 10, for a premium of half a KAS a unit. Asked its premium, at any
+    // price (its line of nothing loses what it is worth exercised: nothing); and a note's least.
+    let call = oleg(&w, 0, 3, 10, P10, P10, far, KAS1 / 2);
+    let alone = cov(&w, &shard, &[call], 20 * KAS1);
+    let keep = 5 * KAS1 + NOTE_MIN;
+    assert!(state(&alone, KIND_C_TAKE, 20 * KAS1 - keep + 1, 0, &[P10]).is_err());
+    let (live, s, o, _) = c_applied(&w, "a take beside a held call", &alone, KIND_C_TAKE, 20 * KAS1 - keep, 0, &[P10], &w.w);
+    assert_eq!((o.after.unwrap().a_margin, s.rows[0].pa, s.rows[0].ps, s.rows[0].closed(), s.rows[0].w, s.rows[0].ns), (keep, 5 * KAS1, 5 * KAS1, Some((0, 0)), 0, 0));
+    end_answered(&w, "a take beside a held call", &alone, &live, &s, true);
+    let (b, right) = c_row(&w.lib, &w.pointed(&live, 1), &s, 1, &[0; 32], None, &call, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    assert!(right);
+    signed("a held call's row answered right", &b, &w.keys);
+    // Each number of its row that an option leg writes, a sompi off: the row is wrong, and answered so.
+    let mut bent_n = 0;
+    for k in 0..7 {
+        let mut r = s.rows[0];
+        *[&mut r.pa, &mut r.ps, &mut r.po, &mut r.ns, &mut r.ba, &mut r.ddb, &mut r.dub][k] += 1;
+        let bent = CSaid { rows: vec![r], ..s.clone() };
+        assert_eq!(c_row_judged_at(KIND_C_TAKE, T0, &[0; 32], None, &call, &CRow::ZERO, &r, 1, &bent), Some(false));
+        let lv = acct_stated(&w, &alone, &Stated { arg: bent.arg(), ..live.s }, &bent.said());
+        let (b, right) = c_row(&w.lib, &w.pointed(&lv, 1), &bent, 1, &[0; 32], None, &call, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        assert!(!right);
+        signed(&format!("a held call's row with its number {k} a sompi off, answered wrong"), &b, &w.keys);
+        let (b, _) = c_row(&w.lib, &w.pointed(&lv, 1), &bent, 1, &[0; 32], None, &call, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
+        assert!(!accepted(&b, &w.keys));
+        bent_n += 1;
+    }
+    assert_eq!(bent_n, 7);
+    // No leaving and no mark names an option; and an ended leg has no row: nothing is stated on its account.
+    assert!(state(&alone, KIND_C_LEAVE, 0, 1, &[P10]).is_err() && state(&alone, KIND_C_LEAVE, 0, ALL, &[P10]).is_err() && state(&alone, KIND_C_MARK, P10, 1, &[P10 * 12 / 10]).is_err());
+    let ended = cov(&w, &shard, &[oleg(&w, 0, 3, 10, P10, P10, T0, KAS1 / 2)], 20 * KAS1);
+    assert!(state(&ended, KIND_C_TAKE, KAS1, 0, &[P10]).is_err() && cov(&w, &shard, &[oleg(&w, 0, 3, 10, P10, P10, T0 + 1, KAS1 / 2)], 20 * KAS1).s.c_state(KIND_C_TAKE, KAS1, 0, &[P10], T0, 20 * KAS1, xk(&w.w)).is_ok());
+
+    // A covered call: a long of 10 and a call written on 10 at 11, for a premium of 0.2 a unit that the owner put
+    // in the account. Asked what the long loses below (5.5 % of 100), nothing more above, and the 2 KAS of the
+    // premium (never margin for the long). By the rate on what the two are worth it was 11 and the premium.
+    let long = fleg(&w, 0, 10, LONG, P10);
+    let written = oleg(&w, 0, 4, 10, P10 * 11 / 10, P10, far, KAS1 / 5);
+    let covered = cov(&w, &shard, &[long, written], 30 * KAS1);
+    let keep = 55 * KAS1 / 10 + 2 * KAS1 + NOTE_MIN;
+    assert!(state(&covered, KIND_C_TAKE, 30 * KAS1 - keep + 1, 0, &[P10; 2]).is_err());
+    let (live, s, _, _) = c_applied(&w, "a take from a covered call", &covered, KIND_C_TAKE, 30 * KAS1 - keep, 0, &[P10; 2], &w.w);
+    assert_eq!((s.rows[1].closed().unwrap().0, s.rows[1].pa, s.rows[1].ns, s.rows[1].w), (55 * KAS1 / 10, 2 * KAS1, 2, 100 * KAS1));
+    end_answered(&w, "a take from a covered call", &covered, &live, &s, true);
+    let (b, right) = c_row(&w.lib, &w.pointed(&live, 3), &s, 3, &s.rows[0].g, Some(&long), &written, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    assert!(right);
+    signed("a written call's row, next to its long, answered right", &b, &w.keys);
+    // The long leaves by its user's statement only where the call alone stands: asked what it loses above.
+    // (A call written at the money: alone it is asked what it loses above, 5.5, and its premium of 2.)
+    let at_money = oleg(&w, 0, 4, 10, P10, P10, far, KAS1 / 5);
+    assert!(state(&cov(&w, &shard, &[long, at_money], NOTE_MIN + 75 * KAS1 / 10 - 1), KIND_C_LEAVE, 0, 1, &[P10; 2]).is_err());
+    assert!(state(&cov(&w, &shard, &[long, at_money], NOTE_MIN + 75 * KAS1 / 10), KIND_C_LEAVE, 0, 1, &[P10; 2]).is_ok());
+
+    // A step. A long of 10 from 10 beside a call held at 11 for a premium of 5 KAS, at 9.5: the long lost 5. With
+    // coins of 12 the account is due (after a move of the lower rate it has less than its premium). The long is
+    // named: it leaves alone, for the fee of its worth; the held call goes on, its premium in the coins (N71).
+    let held = oleg(&w, 0, 3, 10, P10 * 11 / 10, P10, far, KAS1 / 2);
+    let low = [P10 * 95 / 100; 2];
+    let due = cov(&w, &shard, &[long, held], NOTE_MIN + 12 * KAS1);
+    let (lv, s9, o, _) = c_applied(&w, "a step: a long leaves from beside a held call", &due, KIND_C_STEP, 0, 1, &low, &w.f);
+    let after = o.after.clone().unwrap();
+    let fee = 475 * KAS1 / 1_000;
+    assert_eq!((after.legs.clone(), after.a_margin, s9.amount, o.note.clone().unwrap().asked), (vec![held], NOTE_MIN + 12 * KAS1 - 5 * KAS1 - fee, fee, -5 * KAS1));
+    end_answered(&w, "a step: a long leaves from beside a held call", &due, &lv, &s9, true);
+    assert!(after.c_state(KIND_C_STEP, 0, 1, &low[..1], T0, after.a_margin, xk(&w.f)).is_err(), "the held call alone, its premium in the coins, is not due");
+    // The held call named, the long staying: a held option is named alone only beside held options: every leg
+    // leaves. The coins pay the 5 the long lost, then the call's premium of 5, then the fee of what was asked
+    // (5.225 and the premium, by the fee's rate over the rate).
+    let (lv, s9, o, _) = c_applied(&w, "a step: a held call named beside a long takes every leg", &due, KIND_C_STEP, 0, 2, &low, &w.f);
+    let fee_all = (5_225 * KAS1 / 1_000 + 5 * KAS1) * 50 / 550;
+    assert_eq!((o.after.is_none(), s9.rows[1].ns, s9.amount, o.note.clone().unwrap().asked, o.paid), (true, 256 + 1, fee_all, -10 * KAS1, NOTE_MIN + 2 * KAS1 - fee_all));
+    end_answered(&w, "a step: a held call named beside a long takes every leg", &due, &lv, &s9, true);
+
+    // Review T14, O3. A long of 10 from 10 that gained 5 at 10.5, beside a call held at 12 for a premium of 10 KAS;
+    // coins 6.1: the premium stands on what the long gained, and the account is due. The long named: it gained,
+    // no leg that stays has lost, and the account would lack less without it; but the coins do not hold the
+    // premium that stays: every leg leaves. What the legs gained beyond the band (3.95 of the 5) is set against
+    // the premium, the coins pay 6.05 more of it: the shard has the 10; the fee is what is left, 0.05.
+    let dear = oleg(&w, 0, 3, 10, P10 * 12 / 10, P10, far, KAS1);
+    let up = [P10 * 105 / 100; 2];
+    let o3 = cov(&w, &shard, &[long, dear], NOTE_MIN + 61 * KAS1 / 10);
+    let (lv, s9, o, _) = c_applied(&w, "a step: a leg that gained beside a premium the coins do not hold", &o3, KIND_C_STEP, 0, 1, &up, &w.f);
+    let band = s9.rows[1].band().unwrap();
+    assert_eq!((band, s9.rows[1].gain, s9.rows[1].po), (105 * KAS1 / 100, 5 * KAS1, 10 * KAS1));
+    assert_eq!((o.after.is_none(), o.note.clone().unwrap().asked, s9.amount, o.paid), (true, -605 * KAS1 / 100, 5 * KAS1 / 100, NOTE_MIN));
+    end_answered(&w, "a step: a leg that gained beside a premium the coins do not hold", &o3, &lv, &s9, true);
+    // With coins that hold the premium the account is not due.
+    assert!(cov(&w, &shard, &[long, dear], NOTE_MIN + 10 * KAS1).s.c_state(KIND_C_STEP, 0, 1, &up, T0, NOTE_MIN + 10 * KAS1, xk(&w.f)).is_err());
+
+    // A put held against a long. Far from its day the user's statement counts it along its line of being
+    // exercised: the two are asked nothing but the premium. Within T of its day it is counted only where it
+    // loses: the long is asked whole.
+    let t = alone.s.c_head().t;
+    let put = |day: i64| oleg(&w, 0, 5, 10, P10, P10, day, KAS1 / 10);
+    let asked = |day: i64| {
+        let x = cov(&w, &shard, &[long, put(day)], 30 * KAS1);
+        let (_, s, _) = x.s.c_state(KIND_C_TAKE, KAS1, 0, &[P10; 2], T0, 30 * KAS1, xk(&w.w)).unwrap();
+        (s.rows[1].closed().unwrap().0, s.head.lines)
+    };
+    assert_eq!((asked(far), asked(T0 + t + 1), asked(T0 + t)), ((0, 0b10), (0, 0b10), (55 * KAS1 / 10, 0)));
+}

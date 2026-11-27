@@ -19,6 +19,8 @@ use crate::thin::leg_bytes;
 
 /// The length of a row.
 pub const CROW_LEN: usize = 256;
+/// What a held option that leaves adds to `ns` (the legs that stay that are not held options are counted below it).
+pub const NS_HELD_LEAVES: i64 = 256;
 /// The length of what a statement's head says for its rows: the rate, the tolerance, T and the lines.
 pub const CHEAD_LEN: usize = 32;
 
@@ -54,7 +56,8 @@ impl CHead {
 /// the token legs that stay count; `m`, what all gain from `a` to `q`; `ba`, `bl`, the bands of all and of those
 /// that leave; (`dda`, `dua`, `ra`) the two sums of the group that is open and R of the groups closed, of all the
 /// legs, and (`dds`, `dus`, `rs`) of those that stay; `rl`, what the legs that leave can lose, each alone; `pa`,
-/// `ps`, `po`, the options' premiums (17.8h; nothing in stage 1). `g` is the chain of the legs, `h` the chain of
+/// `ps`, the premiums of all the option legs and of those that stay; `po`, what the option legs pay of their
+/// premiums where they leave, all of them (17.8i). `g` is the chain of the legs, `h` the chain of
 /// those that stay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CRow {
@@ -83,7 +86,8 @@ pub struct CRow {
     /// tolerance on it (docs 17.8i).
     pub ddb: i64,
     pub dub: i64,
-    /// How many of the legs that stay are not held options (a futures leg is one; a token leg none).
+    /// How many of the legs that stay are not held options (a futures leg is one; a token leg none); and, by
+    /// [`NS_HELD_LEAVES`], how many held options leave.
     pub ns: i64,
     pub g: [u8; 32],
     pub h: [u8; 32],
@@ -182,7 +186,7 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
         return Some(None);
     }
     // (A head whose rates are no rates: no right row. The end holds the head to the terms.)
-    if !(0..=BPS).contains(&head.rate) || !(0..=BPS).contains(&head.tolerance) {
+    if !(0..=BPS).contains(&head.rate) || !(0..=BPS).contains(&head.tolerance) || head.lines < 0 {
         return Some(None);
     }
     if kind == KIND_C_STEP {
@@ -231,7 +235,7 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
         // An option leg (docs 17.8i; review T14's list). Wrong before anything: a strike out of its market's
         // range, a premium below nothing, a day at or before the statement's time (an ended leg leaves by the
         // day's transaction), and where a leaving or a mark names it (nobody exercises before the day).
-        if o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.day <= t0 || (kind == crate::covered::KIND_C_LEAVE && part == Part::Leaves) || matches!(part, Part::Marked(_)) {
+        if o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.day <= t0 || ((kind == crate::covered::KIND_C_LEAVE || kind == KIND_C_MARK) && part != Part::Stays) || matches!(part, Part::Marked(_)) {
             return Some(None);
         }
         let wk = worth(l.size, l.scale, o.strike)?;
@@ -275,6 +279,9 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
         r.dda = add(r.dda, dl)?;
         r.dua = add(r.dua, du)?;
         r.pa = add(r.pa, premium)?;
+        // (What it pays of its premium where it leaves: a holder's, whole; a writer's, less what it lost. Of every
+        // option leg: a step that names one leg may take every leg.)
+        r.po = add(r.po, if o.held { premium } else { sub(premium, (-d).max(0))?.max(0) })?;
         match part {
             Part::Stays => {
                 if kind != KIND_C_MARK {
@@ -295,8 +302,11 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
                 r.rl = add(r.rl, lost(dl, du))?;
                 // (Its band where it leaves alone: its entry's part and what it loses by a move of the tolerance.)
                 r.bl = add(r.bl, add(e, 0.max(sub(va, v(lob)?)?).max(sub(va, v(upb)?)?))?)?;
-                // (What its leaving pays of its premium: a holder's, whole; a writer's, less what it lost.)
-                r.po = add(r.po, if o.held { premium } else { sub(premium, (-d).max(0))?.max(0) })?;
+                // (A held option that leaves is counted in the same number, by 256: an end is not shown the leg
+                // named, and a step's rule reads whether it is a held option.)
+                if o.held {
+                    r.ns = add(r.ns, NS_HELD_LEAVES)?;
+                }
             }
         }
         return Some(Some(r));

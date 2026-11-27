@@ -2468,7 +2468,7 @@ pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at
         force.unwrap_or(true)
     } else {
         let before = if i == 1 { crate::crow::CRow::ZERO } else { s.rows[i - 2] };
-        match (force, crate::covered::c_row_judged_of(obj.s.st.kind, prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
+        match (force, crate::covered::c_row_judged_at(obj.s.st.kind, obj.s.st.t0, prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
             (Some(v), _) => v,
             (None, Some(v)) => v,
             (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),
@@ -2655,7 +2655,7 @@ pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEn
         force.unwrap_or(true)
     } else {
         let before = if i == 1 { crate::crow::CRow::ZERO } else { s.rows[i - 2] };
-        match (force, crate::covered::c_enter_row_judged(prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
+        match (force, crate::covered::c_enter_row_judged_at(obj.s.st.t0, prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
             (Some(v), _) => v,
             (None, Some(v)) => v,
             (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),

@@ -539,9 +539,18 @@ impl Account {
     /// a second party's; a bond.
     pub fn c_check(&self) -> Result<()> {
         // (Its futures legs as an account's are; a token leg has a size, a scale and a discount.)
-        let (spot, futures): (Vec<XLeg>, Vec<XLeg>) = self.legs.iter().partition(|l| l.dir == DIR_SPOT);
+        let (spot, rest): (Vec<XLeg>, Vec<XLeg>) = self.legs.iter().partition(|l| l.dir == DIR_SPOT);
+        // (An option leg, docs 17.2, 17.8i: a size and an entry as a futures leg's; a strike within its market's
+        // limit; a day after the time it entered; a premium not below nothing, whose worth is counted.)
+        let (options, futures): (Vec<XLeg>, Vec<XLeg>) = rest.into_iter().partition(|l| crate::crow::option_of(l).is_some());
         if !futures.is_empty() {
             Account { legs: futures, ..self.clone() }.check()?;
+        }
+        if options.iter().any(|l| {
+            let o = crate::crow::option_of(l).expect("an option leg");
+            !crate::thin::leg_size_ok(l) || l.entry <= 0 || l.entry > l.price_max || o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.day <= leg_time(l) || worth(l.size, l.scale, o.premium).is_none()
+        }) {
+            return Err(Error::Invalid("an option leg has a size and an entry as a futures leg's, a strike within its market's limit, a day after the time it entered, and a premium not below nothing".into()));
         }
         if spot.iter().any(|l| l.size <= 0 || l.scale <= 0 || !(1..=BPS).contains(&l.entry) || l.price_max <= 0 || worth(l.size, l.scale, l.price_max).is_none()) {
             return Err(Error::Invalid("a token leg has an amount, a scale, a price limit its worth is counted at, and a discount of 1 to 10000 basis points".into()));
@@ -557,6 +566,12 @@ impl Account {
     /// sums. `None`: the script takes neither verdict (a sum does not fit). `Some(None)`: the statement is not the
     /// rule's. Else what the account becomes and the outputs that say so.
     pub fn c_end(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64) -> Option<Option<COutcome>> {
+        self.c_end_as(kind, s, claimer, held, t0, true)
+    }
+
+    /// As `c_end`; `strict`: a step's statement says the rule's fee (else whatever it says, the outcome has the
+    /// rule's: how a step is stated).
+    fn c_end_as(&self, kind: i64, s: &CSaid, claimer: &[u8; 32], held: i64, t0: i64, strict: bool) -> Option<Option<COutcome>> {
         if kind == KIND_C_SPLIT {
             return self.c_split_end(s, claimer, held, t0);
         }
@@ -582,6 +597,14 @@ impl Account {
         }
         // What is asked: R with the last group closed, of all the legs and of those that stay (docs 17.4, 17.8h).
         let (ra, rs) = row.closed()?;
+        // The premiums of all the option legs and of those that stay; what the option legs that leave pay of
+        // theirs; how many legs that stay are not held options, and whether a held option leaves (docs 17.8i).
+        let (pa, ps, po, rl) = (row.pa, row.ps, row.po, row.rl);
+        if pa < 0 || ps < 0 || ps > pa || po < 0 || row.ns < 0 {
+            return Some(None);
+        }
+        let pl = sub(pa, ps)?;
+        let (ns_stay, held_leaves) = (row.ns % crate::crow::NS_HELD_LEAVES, row.ns / crate::crow::NS_HELD_LEAVES > 0);
         // (A note's least is no coin of the account's: it stays with the user where every leg leaves.)
         let coins = self.a_margin;
         let m = sub(coins, NOTE_MIN)?;
@@ -602,7 +625,7 @@ impl Account {
             }
             // (No more than the coins: what a token leg counts leaves no coin that is not there.)
             let short = sub(m, s.amount)? < 0;
-            if add(sub(m, s.amount)?, tk)? < add(ra, ls)? || short {
+            if add(sub(m, s.amount)?, tk)? < add(add(ra, pa)?, ls)? || short {
                 return Some(None);
             }
             let left = sub(coins, s.amount)?;
@@ -617,10 +640,12 @@ impl Account {
         let wl = sub(w, ws)?;
         let mut fee = 0;
         let mut owing = false;
+        // (Of the premiums the legs that leave pay: what the coins pay, and what is set against what they gained.)
+        let (mut prem, mut set) = (0i64, 0i64);
         if kind == KIND_C_LEAVE {
             if !all {
                 // (A leg that lost: the coins pay it, and what stays is at the level of an entry: N65.)
-                let stands = if gl >= 0 { add(m, tk)? >= add(rs, ls)? } else { add(m, gl)? >= 0 && add(add(m, gain)?, tk)? >= rs };
+                let stands = if gl >= 0 { add(m, tk)? >= add(add(rs, ps)?, ls)? } else { add(m, gl)? >= 0 && add(add(m, gain)?, tk)? >= add(rs, ps)? };
                 if !stands {
                     return Some(None);
                 }
@@ -634,7 +659,8 @@ impl Account {
             // by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
             let up = add(self.t.mmr_bps, g)?;
             let band_all = row.band()?;
-            let fee_all = over(ra, self.t.liq_fee_bps, up, false)?;
+            // (Of what is asked: R and the premiums.)
+            let fee_all = over(add(ra, pa)?, self.t.liq_fee_bps, up, false)?;
             // (What the legs that stay lost, together.)
             let nls = sub(0, sub(gain, gl)?)?.max(0);
             let mut sx = add(gain, row.m)?;
@@ -642,38 +668,55 @@ impl Account {
                 sx = sub(sx, band_all)?.max(0);
             }
             let e = sub(add(m, tk)?, owes)?;
-            if add(e, sx)? >= 0 {
+            // (Due: below the premiums.)
+            if add(e, sx)? >= pa {
                 return Some(None);
             }
             if !all {
-                if gl < 0 {
-                    // The leg named lost: it leaves alone where the account lacks less after it than before
-                    // (docs 17.4), its fee no more than the coins hold beyond what it lost and what the legs
-                    // that stay lost (review 47, F73).
-                    fee = rate_down(wl, self.t.liq_fee_bps)?.min(sub(add(m, gl)?, nls)?.max(0));
-                    // (What it lacks after is counted before the fee: review T13, W2.)
-                    let before = sub(sub(ra, e)?, gain)?.max(0);
-                    let after = sub(rs, add(e, gain)?)?.max(0);
+                // The fee of the leg named: of its worth; of an option (it adds nothing to the legs' worth), of what
+                // it can lose alone and its premium, by the fee's rate over the rate.
+                let base = if wl == 0 { over(add(rl, pl)?, self.t.liq_fee_bps, up, false)? } else { rate_down(wl, self.t.liq_fee_bps)? };
+                // (What the leg named pays of its premium where it leaves alone: an option's premium is PA less PS;
+                // a holder's whole, a writer's less what it lost. `po` is of every option leg.)
+                let pol = if wl != 0 { 0 } else if held_leaves { pl } else { add(pl, gl.min(0))?.max(0) };
+                if held_leaves && ns_stay != 0 {
+                    // A held option is named alone only where every leg that stays is a held option (review
+                    // T12, E13): else every leg leaves.
+                    all = true;
+                } else if gl < 0 {
+                    // The leg named lost: the coins pay what it lost, then of its premium what they can; it
+                    // leaves alone where the account lacks less after it than before (docs 17.4; counted before
+                    // the fee), its fee no more than the coins hold beyond those, what the legs that stay lost
+                    // and the premiums that stay (review 47, F73; review T14, O4).
+                    let pay = sub(0, gl)?;
+                    prem = pol.min(sub(m, pay)?.max(0));
+                    fee = base.min(sub(sub(sub(sub(m, pay)?, prem)?, nls)?, ps)?.max(0));
+                    let before = sub(sub(add(ra, pa)?, e)?, gain)?.max(0);
+                    let after = sub(add(rs, ps)?, sub(add(e, gain)?, prem)?)?.max(0);
                     if tk != 0 {
                         // (An account that holds tokens is not taken whole: the leg named leaves alone, and the
                         // account owes what the coins do not pay. Review T13, W1.)
-                        owing = add(m, gl)? < 0;
-                    } else if after >= before || add(m, gl)? < 0 {
+                        owing = m < pay;
+                    } else if after >= before || m < pay {
                         all = true;
                     }
                 } else {
                     // The leg named gained: only where no leg that stays has lost (each alone: review T14,
-                    // O2); an account that holds tokens is not taken whole; with none, it leaves alone where
-                    // the account lacks less after it (what it gained leaves for its user), and else every leg
-                    // leaves.
+                    // O2). Its premium is set against what it gained beyond its band, and the coins pay the
+                    // rest of it. An account that holds tokens is not taken whole; with none, it leaves alone
+                    // where the account lacks less after it and the coins hold the premiums that stay (O3),
+                    // and else every leg leaves.
                     if ls != 0 {
                         return Some(None);
                     }
-                    fee = rate_down(wl, self.t.liq_fee_bps)?;
+                    set = pol.min(sub(gl, row.bl)?.max(0));
+                    prem = sub(pol, set)?.min(m.max(0));
+                    fee = base.min(sub(sub(m, prem)?, ps)?.max(0));
                     if tk == 0 {
-                        let before = sub(sub(ra, sub(m, owes)?)?, gain)?.max(0);
-                        let after = sub(rs, sub(add(sub(m, owes)?, gain)?, gl)?)?.max(0);
-                        if after >= before {
+                        let left = sub(sub(m, owes)?, prem)?;
+                        let before = sub(sub(add(ra, pa)?, sub(m, owes)?)?, gain)?.max(0);
+                        let after = sub(add(rs, ps)?, sub(add(left, gain)?, gl)?)?.max(0);
+                        if after >= before || left < ps {
                             all = true;
                         }
                     }
@@ -692,19 +735,25 @@ impl Account {
         let v;
         let outcome;
         if all {
+            // Every leg leaves, in the order loss, premium, fee: the coins pay what the legs lost together; what
+            // the legs that leave pay of their premiums is set against what they gained beyond the band, and the
+            // coins pay the rest of it as far as they go (what they do not pay is not owed: 17.3); then the fee.
             let room = m.max(0);
             pay = 0;
+            let mut x = 0;
             if gain < 0 {
                 pay = sub(0, gain)?.min(room);
-                asked = sub(0, pay)?;
             } else {
-                // (The band of every leg leaving, by a step or by its user's statement: the tolerance of what the
-                // legs are worth, and R by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
-                asked = sub(gain, row.band()?)?.max(0);
-                // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
-                asked = sub(asked, asked.min(owes))?;
+                x = sub(gain, row.band()?)?.max(0);
             }
-            fee = fee.min(sub(room, pay)?);
+            set = po.min(x);
+            prem = sub(po, set)?.min(sub(room, pay)?);
+            // (What the account owes its shard is set against what its legs ask of it: review 64, F112. What is
+            // asked is below nothing by what the coins pay, of loss and of premium.)
+            asked = sub(x, set)?;
+            asked = sub(sub(sub(asked, asked.min(owes))?, pay)?, prem)?;
+            fee = fee.min(sub(sub(room, pay)?, prem)?);
+            pay = add(pay, prem)?;
             let paid = sub(sub(held, pay)?, fee)?;
             let note = Left { sid, legs: self.legs.clone(), key: self.a_key, asked };
             let mut o = vec![(Out { key: true, to: self.a_key, value: paid }, false)];
@@ -720,8 +769,9 @@ impl Account {
                 pay = sub(0, gl)?;
                 asked = gl;
             } else {
-                // (The band of a leg that leaves alone: the row's.)
-                asked = sub(gl, row.bl)?.max(0);
+                // (The band of a leg that leaves alone: the row's. Its premium is set against what it gained
+                // beyond that.)
+                asked = sub(sub(gl, row.bl)?.max(0), set)?;
                 // (And the account owes that much less.)
                 setoff = asked.min(owes);
                 asked = sub(asked, setoff)?;
@@ -737,6 +787,9 @@ impl Account {
                 asked = sub(0, pay)?;
                 when = when.max(add(add(t0, self.t.late_daa)?, self.dispute_daa)?);
             }
+            // (The coins pay of the leg's premium what the rule found: with what it lost, in the note.)
+            asked = sub(asked, prem)?;
+            pay = add(pay, prem)?;
             fee = fee.min(sub(room1, pay)?);
             let owes = add(owes, more)?;
             let left = sub(sub(coins, pay)?, fee)?;
@@ -754,7 +807,7 @@ impl Account {
             v = o;
             outcome = (Some(after), 0, note);
         }
-        if s.amount != fee {
+        if strict && s.amount != fee {
             return Some(None);
         }
         Some(out(v, outcome.0, outcome.1, fee, outcome.2))
@@ -791,12 +844,13 @@ impl Account {
         }
         // (No more than the coins: what a token leg counts leaves no coin that is not there.)
         let short = sub(sub(coins, s.amount)?, NOTE_MIN)? < 0;
-        if add(sub(sub(coins, s.amount)?, NOTE_MIN)?, row.tk)? < add(rs, ls)? || short {
+        if add(sub(sub(coins, s.amount)?, NOTE_MIN)?, row.tk)? < add(add(rs, row.ps)?, ls)? || short {
             return Some(None);
         }
         // (The leg that moves, alone: what it can lose at either end of a move of the rate.)
         let lost = if gl < 0 { sub(0, gl)? } else { 0 };
-        if sub(s.amount, NOTE_MIN)? < add(row.rl, lost)? {
+        // (And its premium: an option moves with it. Docs 17.4, 17.8i.)
+        if sub(s.amount, NOTE_MIN)? < add(add(row.rl, sub(row.pa, row.ps)?)?, lost)? {
             return Some(None);
         }
         let k = s.skip as usize - 1;
@@ -834,7 +888,7 @@ impl Account {
             return Some(None);
         }
         let thin = kept < row.bl;
-        if add(sub(coins, NOTE_MIN)?, row.tk)? < add(ra, ls)? || thin {
+        if add(sub(coins, NOTE_MIN)?, row.tk)? < add(add(ra, row.pa)?, ls)? || thin {
             return Some(None);
         }
         let k = s.skip as usize - 1;
@@ -877,7 +931,7 @@ impl Account {
         if kind == KIND_C_TOK_OUT {
             ok = ok && *claimer == self.a_key && t0 >= quiet && s.amount == 0 && owes == 0;
             time = when;
-            if ok && add(m, tk)? < add(rs, ls)? {
+            if ok && add(m, tk)? < add(add(rs, row.ps)?, ls)? {
                 ok = false;
             }
         } else {
@@ -927,7 +981,7 @@ impl Account {
         if self.c_end_judged(kind, s, claimer, outs, held, t0) == Some(false) {
             return Some(0);
         }
-        self.c_rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_row_judged_of(kind, &before.g, i.checked_sub(1).map(|k| &self.legs[k]), l, before, row, i as i64 + 1, s))
+        self.c_rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_row_judged_at(kind, t0, &before.g, i.checked_sub(1).map(|k| &self.legs[k]), l, before, row, i as i64 + 1, s))
     }
 
     /// As `Account::rows_wrong_point_by`, of a covered account's rows: the first row that does not carry the chain
@@ -981,14 +1035,19 @@ impl Account {
         } else {
             amount
         };
-        // (A step is stated by the prices that show it due if any do.)
-        let rows = if kind == KIND_C_MARK { self.c_trace_marked(a, skip, amount) } else if tok { self.c_trace_tok(kind, a, skip) } else if kind == KIND_C_STEP { self.c_step_prices(a).and_then(|q| self.c_trace_step(a, &q, skip)) } else { self.c_trace(a, skip) }.ok_or_else(|| no("a sum of its trace is beyond what is counted (or the leg named is no token leg, where tokens leave or are sold)"))?;
+        // (A step is stated by the prices that show it due if any do. A statement is stated at its time: an option
+        // leg's row reads it; and with the lines of its held options that ask its user least.)
+        let named = |i: usize, l: &XLeg| (skip == ALL || skip == i as i64 + 1) && (l.dir != DIR_SPOT) == !tok;
+        let part = |i: usize, l: &XLeg| if !named(i, l) { Part::Stays } else if kind == KIND_C_MARK { Part::Marked(amount) } else { Part::Leaves };
+        let q = if kind == KIND_C_STEP { self.c_step_prices(a) } else { Some(a.to_vec()) };
+        let head = self.c_head_least(kind, t0, a);
+        let rows = if tok && usize::try_from(skip - 1).ok().and_then(|k| self.legs.get(k)).is_some_and(|l| l.dir != DIR_SPOT) { None } else { q.and_then(|q| self.c_trace_at(kind, t0, &head, a, &q, part)) }.ok_or_else(|| no("a sum of its trace is beyond what is counted (or the leg named is no token leg, where tokens leave or are sold)"))?;
         let lc = if skip >= 1 { self.legs.get(skip as usize - 1).map(chain_of_one).unwrap_or([0; 32]) } else { [0; 32] };
-        let mut s = CSaid { amount, skip, lc, head: self.c_head(), rows };
+        let mut s = CSaid { amount, skip, lc, head, rows };
         // (A step states its fee: the rule's.)
         if kind == KIND_C_STEP {
-            for fee in self.c_fees(&s) {
-                s.amount = fee;
+            if let Some(Some(o)) = self.c_end_as(kind, &s, &claimer, held, t0, false) {
+                s.amount = o.fee;
                 if let Some(Some(o)) = self.c_end(kind, &s, &claimer, held, t0) {
                     return Ok((self.c_stated(kind, &s, &o, t0, held, claimer), s, o));
                 }
@@ -999,21 +1058,24 @@ impl Account {
         Ok((self.c_stated(kind, &s, &o, t0, held, claimer), s, o))
     }
 
-    /// The fees a step of this trace can be stated with: of the leg named, of all the legs, and those capped by the
-    /// coins (what `c_end` then holds the statement to).
-    fn c_fees(&self, s: &CSaid) -> Vec<i64> {
-        let Some(row) = s.rows.last() else { return vec![] };
-        let one = rate_down(row.w - row.ws, self.t.liq_fee_bps).unwrap_or(0);
-        // (Of every leg: the fee of what is asked. Review T13, W3.)
-        let all = row.closed().and_then(|(ra, _)| over(ra, self.t.liq_fee_bps, self.t.mmr_bps + self.t.g_bps, false)).unwrap_or(0);
-        let room = (self.a_margin - NOTE_MIN).max(0);
-        let pay = if row.gain < 0 { row.gain.saturating_neg().min(room) } else { 0 };
-        // (And of an account that holds tokens: the fee of the leg named, as far as the coins go after its loss.)
-        let lost = row.gl.saturating_neg().max(0).min(room);
-        // (Of a leg that lost and leaves alone: no more than the coins hold beyond what it lost and what the legs
-        // that stay lost.)
-        let cap = (self.a_margin - NOTE_MIN + row.gl - (row.gl - row.gain).max(0)).max(0);
-        vec![one, one.min(cap), all.min(room - pay), one.min(cap).min(room - lost), one.min(room - lost), one.min(room)]
+    /// The head of a statement of `kind` at the time `t0` and the prices `a`: this account's, with the lines of its
+    /// held options that ask least (a bit a leg; in a step the lines are of nothing whatever is said). Docs 17.8i.
+    pub fn c_head_least(&self, kind: i64, t0: i64, a: &[i64]) -> CHead {
+        let head = self.c_head();
+        let held: Vec<usize> = self.legs.iter().enumerate().filter(|(_, l)| crate::crow::option_of(l).is_some_and(|o| o.held)).map(|(i, _)| i).collect();
+        if kind == KIND_C_STEP || held.is_empty() {
+            return head;
+        }
+        let asked = |lines: i64| self.c_trace_at(KIND_C_TAKE, t0, &CHead { lines, ..head }, a, a, |_, _| Part::Stays).and_then(|r| r.last().and_then(|x| x.closed())).map(|(ra, _)| ra);
+        let mut best = (asked(0), 0i64);
+        for pick in 1..(1i64 << held.len()) {
+            let lines = held.iter().enumerate().filter(|(k, _)| pick >> k & 1 == 1).map(|(_, i)| 1i64 << i).sum();
+            let got = asked(lines);
+            if got.is_some() && (best.0.is_none() || got < best.0) {
+                best = (got, lines);
+            }
+        }
+        CHead { lines: best.1, ..head }
     }
 
     fn c_stated(&self, kind: i64, s: &CSaid, o: &COutcome, t0: i64, held: i64, claimer: [u8; 32]) -> Stated {
@@ -1321,8 +1383,15 @@ fn i9(v: i64) -> Vec<u8> {
 /// `KpfTCRow` on a row of an entry: as a row of a covered account's statement in which nothing leaves; and the
 /// last row is of the leg said, at its entry.
 pub fn c_enter_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64, s: &CEnterSaid) -> Option<bool> {
+    c_enter_row_judged_at(0, prev, leg_before, l, before, row, i, s)
+}
+
+/// As `c_enter_row_judged`, of an entry stated at the time `t0` (an option leg the account holds reads it; an
+/// option is not the leg an entry says: it enters by 17.8's seventh step).
+#[allow(clippy::too_many_arguments)]
+pub fn c_enter_row_judged_at(t0: i64, prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64, s: &CEnterSaid) -> Option<bool> {
     // (A token leg enters by no entry: the last row of one is wrong whatever it sums.)
-    if i == s.rows.len() as i64 && l.dir == DIR_SPOT {
+    if i == s.rows.len() as i64 && (l.dir == DIR_SPOT || crate::crow::option_of(l).is_some()) {
         return if row.g != [0; 32] && blake2b(&[&prev[..], &leg_bytes(l)].concat()) != row.g { None } else { Some(false) };
     }
     // (The script finds the row of another leg than the one said wrong before it computes: so does this.)
@@ -1332,7 +1401,7 @@ pub fn c_enter_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, 
     if row.g != [0; 32] && blake2b(&[&prev[..], &leg_bytes(l)].concat()) == row.g && *prev == before.g && opened && last && !(*l == s.leg && l.entry == row.a) {
         return Some(false);
     }
-    c_row_judged_with(KIND_C_ENTER, 0, &s.head, 0, 0, &[0; 32], prev, &g2, leg_before, l, before, row, i)
+    c_row_judged_with(KIND_C_ENTER, t0, &s.head, 0, 0, &[0; 32], prev, &g2, leg_before, l, before, row, i)
 }
 
 impl Account {
@@ -1377,7 +1446,7 @@ impl Account {
         let (ra, _) = row.closed()?;
         let life = add(a.t.late_daa, ck(a.dispute_daa.checked_mul(2))?)?;
         let next = add(t0, ck(life.checked_mul(2))?)?;
-        if add(add(sub(a.a_margin, NOTE_MIN)?, row.gain)?, row.tk)? < ra {
+        if add(add(sub(a.a_margin, NOTE_MIN)?, row.gain)?, row.tk)? < add(ra, row.pa)? {
             return Some(None);
         }
         let after = Account { b_min_counter: next, ..a.clone() };
@@ -1391,7 +1460,7 @@ impl Account {
         if Account::c_enter_end(marked, s, claimer, held, t0).is_some_and(|o| !o.is_some_and(|(_, x)| x == *outs)) {
             return Some(0);
         }
-        marked.0.c_rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_enter_row_judged(&before.g, i.checked_sub(1).map(|k| &marked.0.legs[k]), l, before, row, i as i64 + 1, s))
+        marked.0.c_rows_wrong_point_by(&s.rows, c, &|i, l, before, row| c_enter_row_judged_at(t0, &before.g, i.checked_sub(1).map(|k| &marked.0.legs[k]), l, before, row, i as i64 + 1, s))
     }
 
     /// The statement of the entry of `leg` (its entry its price) into this covered account holding `held`, with
@@ -1408,8 +1477,10 @@ impl Account {
         }
         let marked = self.c_marked(&leg, more, t0).ok_or_else(|| no("the account is at six legs or before its time, or the leg is no futures leg within its bounds, or the coins are beyond what is counted"))?;
         let prices: Vec<i64> = a.iter().copied().chain([leg.entry]).collect();
-        let rows = marked.0.c_trace_of(KIND_C_ENTER, &prices, &prices, |_, _| Part::Stays).ok_or_else(|| no("a sum of its trace is beyond what is counted, or two legs of one market next to one another are stated at two prices (a leg that enters next to a leg of its market enters at that leg's price)"))?;
-        let s = CEnterSaid { add: more, r, leg, head: marked.0.c_head(), place: rows.len() as i64, rows };
+        // (Stated at its time, with the lines of the account's held options that ask its user least.)
+        let head = marked.0.c_head_least(KIND_C_ENTER, t0, &prices);
+        let rows = marked.0.c_trace_at(KIND_C_ENTER, t0, &head, &prices, &prices, |_, _| Part::Stays).ok_or_else(|| no("a sum of its trace is beyond what is counted, or two legs of one market next to one another are stated at two prices (a leg that enters next to a leg of its market enters at that leg's price)"))?;
+        let s = CEnterSaid { add: more, r, leg, head, place: rows.len() as i64, rows };
         let held = held.checked_add(more).ok_or_else(|| no("what it holds is beyond what is counted"))?;
         let (after, outs) = Account::c_enter_end(&marked, &s, &self.a_key, held, t0).flatten().ok_or_else(|| no("the user does not stand at its maintenance with the leg, at these prices"))?;
         let st = Stated { position: marked.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_C_ENTER, t0, arg: s.arg(), outs, bond: marked.0.c_bond(), claimer: self.a_key, held };

@@ -233,6 +233,14 @@ contract KpfTCEnd(int init_version) {
         } else {
             if (int(byte[8](row.slice(176, 184))) < 0) { band = band - int(byte[8](row.slice(176, 184))); }
         }
+        // The premiums of all the option legs and of those that stay; what the option legs that leave pay of theirs;
+        // what the legs that leave can lose, each alone; how many legs that stay are not held options and, by 256,
+        // how many held options leave (docs 17.8i).
+        int pa = int(byte[8](row.slice(144, 152)));
+        int ps = int(byte[8](row.slice(152, 160)));
+        int po = int(byte[8](row.slice(160, 168)));
+        int ns = int(byte[8](row.slice(184, 192)));
+        if (pa < 0 || ps < 0 || ps > pa || po < 0 || ns < 0) { ok = 0; }
         // Where a position has its asks: the legs counted, and the time before which the user states nothing
         // again. A statement of the user's writes its own time and twice the longest a statement lives (the
         // lateness and two dispute periods): between two of them the account is free for a step.
@@ -252,7 +260,7 @@ contract KpfTCEnd(int init_version) {
             if (ok == 1) {
                 // (No more than the coins: what a token leg counts leaves no coin that is not there.)
                 if (m - amount < 0) { ok = 0; }
-                if (m - amount + tk < rall + ls) { ok = 0; }
+                if (m - amount + tk < rall + pa + ls) { ok = 0; }
             }
             if (ok == 1) {
                 due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 67) + byte[]((coins - amount) as byte[8]) + mv.slice(75, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
@@ -270,6 +278,12 @@ contract KpfTCEnd(int init_version) {
             }
             int fee = 0;
             int owing = 0;
+            // (Of the premiums the legs that leave pay: what the coins pay, and what is set against what they gained.)
+            int prem = 0;
+            int sof = 0;
+            // (What the leg named pays of its premium where it leaves alone: an option's premium is PA less PS; a
+            // holder's whole (a held option that leaves is counted in NS by 256), a writer's less what it lost.)
+            int pol = 0;
             int setoff = 0;
             int wl = 0;
             int liq = int(byte[8](tb.slice(LIQFEE_AT, LIQFEE_AT + 8)));
@@ -278,12 +292,12 @@ contract KpfTCEnd(int init_version) {
                 if (kind == 8) {
                     if (all == 0) {
                         if (gl >= 0) {
-                            if (m + tk < rst + ls) { ok = 0; }
+                            if (m + tk < rst + ps + ls) { ok = 0; }
                         } else {
                             if (m + gl < 0) { ok = 0; }
                             // (What stays is at the level of an entry: without the leg it may be asked more.
                             // docs 17.4, N65.)
-                            if (m + gain + tk < rst) { ok = 0; }
+                            if (m + gain + tk < rst + ps) { ok = 0; }
                         }
                     }
                 } else {
@@ -298,27 +312,46 @@ contract KpfTCEnd(int init_version) {
                         sx = sx - band;
                         if (sx < 0) { sx = 0; }
                     }
-                    if (m + tk - owes + sx >= 0) { ok = 0; }
+                    // (Due: below the premiums.)
+                    if (m + tk - owes + sx >= pa) { ok = 0; }
                 }
             }
             if (ok == 1) {
                 if (kind == 9) {
                     if (all == 0) {
-                        if (gl < 0) {
-                            // The leg named lost: it leaves alone where the account lacks less after it than
-                            // before (docs 17.4), its fee no more than the coins hold beyond what it lost and
-                            // what the legs that stay lost.
-                            fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
-                            // (What the legs that stay lost, together: review T13, W3.)
-                            int cap = m + gl;
+                        // The fee of the leg named: of its worth; of an option (it adds nothing to the legs' worth),
+                        // of what it can lose alone and its premium, by the fee's rate over the rate.
+                        fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
+                        if (wl == 0) {
+                            fee = int(byte[8](row.slice(136, 144))) + pa - ps;
+                            if (up > 0) { fee = (fee / up) * liq + ((fee % up) * liq) / up; } else { fee = 0; }
+                        }
+                        if (wl == 0) {
+                            pol = pa - ps;
+                            if (ns < 256) {
+                                if (gl < 0) { pol = pol + gl; }
+                                if (pol < 0) { pol = 0; }
+                            }
+                        }
+                        if (ns >= 256 && ns % 256 != 0) {
+                            // A held option is named alone only where every leg that stays is a held option
+                            // (review T12, E13): else every leg leaves.
+                            all = 1;
+                        } else if (gl < 0) {
+                            // The leg named lost: the coins pay what it lost, then of its premium what they can;
+                            // it leaves alone where the account lacks less after it than before (docs 17.4;
+                            // counted before the fee), its fee no more than the coins hold beyond those, what
+                            // the legs that stay lost together and the premiums that stay.
+                            prem = m + gl;
+                            if (prem < 0) { prem = 0; }
+                            if (prem > pol) { prem = pol; }
+                            int cap = m + gl - prem - ps;
                             if (gain - gl < 0) { cap = cap + gain - gl; }
                             if (cap < 0) { cap = 0; }
                             if (fee > cap) { fee = cap; }
-                            int bf = rall - (m + tk - owes) - gain;
+                            int bf = rall + pa - (m + tk - owes) - gain;
                             if (bf < 0) { bf = 0; }
-                            // (Counted before the fee: a fee does not turn a step of one leg into one of every leg.
-                            // Review T13, W2.)
-                            int af = rst - (m + tk - owes + gain);
+                            int af = rst + ps - (m + tk - owes + gain - prem);
                             if (af < 0) { af = 0; }
                             if (tk != 0) {
                                 // (An account that holds tokens is not taken whole: the leg named leaves alone,
@@ -329,26 +362,34 @@ contract KpfTCEnd(int init_version) {
                                 all = 1;
                             }
                         } else {
-                            // The leg named gained: it is named only where no leg that stays has lost (each
-                            // alone: a gain of one market is no coin for a loss of another; review T14, O2); an
-                            // account that holds tokens is not taken whole; and with none, it leaves alone where
-                            // the account lacks less after it (what it gained leaves for its user), and else
-                            // every leg leaves.
+                            // The leg named gained: only where no leg that stays has lost (each alone: review
+                            // T14, O2). Its premium is set against what it gained beyond its band, and the coins
+                            // pay the rest of it. An account that holds tokens is not taken whole; with none, it
+                            // leaves alone where the account lacks less after it and the coins hold the premiums
+                            // that stay (O3), and else every leg leaves.
                             if (ls != 0) { ok = 0; }
-                            fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
+                            sof = gl - int(byte[8](row.slice(80, 88)));
+                            if (sof < 0) { sof = 0; }
+                            if (sof > pol) { sof = pol; }
+                            prem = pol - sof;
+                            if (m < 0) { prem = 0; } else if (prem > m) { prem = m; }
+                            int capg = m - prem - ps;
+                            if (capg < 0) { capg = 0; }
+                            if (fee > capg) { fee = capg; }
                             if (tk == 0) {
-                                int bg = rall - (m - owes) - gain;
+                                int bg = rall + pa - (m - owes) - gain;
                                 if (bg < 0) { bg = 0; }
-                                int ag = rst - (m - owes + gain - gl);
+                                int ag = rst + ps - (m - owes - prem + gain - gl);
                                 if (ag < 0) { ag = 0; }
-                                if (ag >= bg) { all = 1; }
+                                if (ag >= bg || m - owes - prem < ps) { all = 1; }
                             }
                         }
                     }
                     if (all == 1) {
-                        // (The fee of a step of every leg is of what is asked: R by the fee's rate over the rate.)
+                        // (The fee of a step of every leg is of what is asked, R and the premiums, by the fee's
+                        // rate over the rate.)
                         fee = 0;
-                        if (up > 0) { fee = (rall / up) * liq + ((rall % up) * liq) / up; }
+                        if (up > 0) { fee = ((rall + pa) / up) * liq + (((rall + pa) % up) * liq) / up; }
                     }
                 }
             }
@@ -362,17 +403,27 @@ contract KpfTCEnd(int init_version) {
                 if (all == 1) {
                     int room = m;
                     if (room < 0) { room = 0; }
+                    // In the order loss, premium, fee: the coins pay what the legs lost together; what the legs
+                    // that leave pay of their premiums is set against what they gained beyond the band, and the
+                    // coins pay the rest of it as far as they go (the rest is not owed: 17.3); then the fee. What
+                    // is asked is below nothing by what the coins pay, of loss and of premium.
                     if (gain < 0) {
                         pay = 0 - gain;
                         if (pay > room) { pay = room; }
-                        asked = 0 - pay;
                     } else {
                         asked = gain - band;
                         if (asked < 0) { asked = 0; }
-                        // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
-                        if (asked > owes) { asked = asked - owes; } else { asked = 0; }
                     }
-                    if (fee > room - pay) { fee = room - pay; }
+                    sof = po;
+                    if (sof > asked) { sof = asked; }
+                    prem = po - sof;
+                    if (prem > room - pay) { prem = room - pay; }
+                    asked = asked - sof;
+                    // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
+                    if (asked > owes) { asked = asked - owes; } else { asked = 0; }
+                    asked = asked - pay - prem;
+                    if (fee > room - pay - prem) { fee = room - pay - prem; }
+                    pay = pay + prem;
                     due = byte[](0x01) + mv.slice(1, 33) + byte[]((held - pay - fee) as byte[8]);
                     if (fee > 0) {
                         due = due + byte[](0x01) + byte[](claimer) + byte[](fee as byte[8]);
@@ -386,6 +437,8 @@ contract KpfTCEnd(int init_version) {
                         // (The band of a leg that leaves alone: the row's.)
                         asked = gl - int(byte[8](row.slice(80, 88)));
                         if (asked < 0) { asked = 0; }
+                        // (Its premium is set against what it gained beyond its band.)
+                        asked = asked - sof;
                         // (What the account owes its shard is set against what the leg asks of it: the account
                         // owes that much less. Review 64, F112.)
                         setoff = asked;
@@ -407,6 +460,9 @@ contract KpfTCEnd(int init_version) {
                         int grace = t0 + int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111)));
                         if (when < grace) { when = grace; }
                     }
+                    // (The coins pay of the leg's premium what the rule found: with what it lost, in the note.)
+                    asked = asked - prem;
+                    pay = pay + prem;
                     if (fee > room1 - pay) { fee = room1 - pay; }
                     due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(224, 256))) + mv.slice(0, 67) + byte[]((coins - pay - fee) as byte[8]) + mv.slice(75, 76) + byte[]((owes + more) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - fee) as byte[8]);
                     if (fee > 0) {
