@@ -101,7 +101,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -734,7 +734,7 @@ fn t7_b4_a_marks_note_is_counted_in_its_class_and_the_books_are_shown_as_they_ar
         // The books: argument 4. Of a called shard, opened, 68 bytes (`KpfTMarkNoteC` counts the amount in its
         // class); of one that is not called, their hash (`KpfTMarkNote` reads no claim: docs 17.8e).
         let open = if called { s.books_open() } else { s.books_hash().to_vec() };
-        assert_eq!(open.len(), if called { 68 } else { 32 });
+        assert_eq!(open.len(), if called { 101 } else { 32 }); // (17.8j, A1: with the root's push.)
         assert!(matches!(&args_of(&mut b.clone(), 1)[4], Arg::V(ArtifactValue::Bytes(x)) if x[..] == open[..]), "argument 4 is the books, opened where the shard is called");
         for (lie, at) in [("another sum of the gross", 1usize), ("another hash of the rows", 9), ("another amount paid to the first class", 42), ("another amount owed to the second", 51), ("another amount paid to the second", 60)] {
             let mut other = open.clone();

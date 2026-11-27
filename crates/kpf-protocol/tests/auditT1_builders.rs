@@ -7660,7 +7660,7 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
             3 => -7,
             _ => 0,
         };
-        let s = Shard { t: terms, rows: rows.into(), owner, held, expiry: time, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis, called, claims: Default::default() };
+        let s = Shard { t: terms, rows: rows.into(), owner, held, expiry: time, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis, called, claims: Default::default(), root: Shard::root_opened() };
         let shard = shard_made45(s, 70);
         let most = s.draw_max(&prices);
         let amount = match if tame { [0, 6, 7, 8][r.range(0, 4) as usize] } else { r.range(0, 9) } {
@@ -7739,7 +7739,7 @@ fn t1b_r45_the_end_of_a_draw_is_the_models_on_random_books() {
     println!("T1b R45 (review T5) the trace: of {nones} draws the end over the rows gave no verdict of, {none_now_wrong} have a point that is answered wrong; of {wrongs} the end answered wrong, {wrong_now_unanswered} (books with a row beyond 64 bits) have no point answered wrong and one nobody answers; {no_trace} draws have no trace the rule makes (a sum beyond 64 bits); the model's functions of a point differ from the script's arithmetic on {} draws, the first: {:?}", trace_model_differs.len(), trace_model_differs.first());
     assert!(trace_model_differs.is_empty(), "the model of a row or of an end and the script differ");
     // ---- the outputs: the two numbers of the shard stay as they were.
-    let s = Shard { t: w.terms(), rows: [ShardRow::of(RowHead::of(&w.fut(0, 1, LONG, P10)), -10 * w.markets[0].p.scale, 10 * w.markets[0].p.scale), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -100 * KAS1, called: 0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::of(RowHead::of(&w.fut(0, 1, LONG, P10)), -10 * w.markets[0].p.scale, 10 * w.markets[0].p.scale), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -100 * KAS1, called: 0, claims: Default::default(), root: Shard::root_opened() };
     let shard = shard_made45(s, 70);
     let prices = [P10, 0, 0, 0];
     let most = s.draw_max(&prices);
@@ -7773,7 +7773,7 @@ fn t1b_r45_a_short_rows_worth_is_rounded_down_which_is_for_the_owner() {
     let w = ow();
     let owner = xk(&w.b);
     let head = RowHead { scale: 10, ..RowHead::of(&w.fut(0, 1, LONG, P10)) };
-    let s = Shard { t: w.terms(), rows: [ShardRow::of(head, -15, 15), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::of(head, -15, 15), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default(), root: Shard::root_opened() };
     let prices = [7, 0, 0, 0];
     // 15 * 7 / 10 = 10.5: counted 10. The requirement: 5.5 % and 2.25 % of 10, each rounded up: 1 + 1.
     assert_eq!((s.equity(&prices), s.requirement(&prices)), (Some(50 * KAS1 - 10), Some(2)));
@@ -7806,7 +7806,7 @@ fn t1b_fixed_f69_a_draw_whose_price_nobody_answers_costs_its_claimer_the_bond() 
     let real = RowHead::of(&w.fut(0, 1, LONG, P10));
     let made = RowHead::of(&XLeg { market: [0x6d; 32], ..w.fut(1, 1, LONG, P10) });
     // Side B is short 10 units of the first and 1,000 of the second, each entered at 10.
-    let s = Shard { t: w.terms(), rows: [ShardRow::of(real, -10 * scale, 10 * scale), ShardRow::of(made, -1_000 * scale, 1_000 * scale), ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -10_100 * KAS1, called: 0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::of(real, -10 * scale, 10 * scale), ShardRow::of(made, -1_000 * scale, 1_000 * scale), ShardRow::EMPTY, ShardRow::EMPTY].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: -10_100 * KAS1, called: 0, claims: Default::default(), root: Shard::root_opened() };
     // (Review T9, docs 17.8d: a price's answer opens the shard's id by the seed of its opening and its committee,
     // and reads no row. A shard made by hand has the id that opening gives it, of the committee of the world's
     // markets: so that the price of the row the committee DOES price can be cited, and what is left unanswered
@@ -7932,7 +7932,7 @@ fn t1b_fixed_f70_a_shard_is_opened_with_eight_zero_bytes_for_its_basis_its_call_
 fn t1b_fixed_f71_the_model_gives_no_verdict_where_the_script_computes_an_equity_that_does_not_fit() {
     let w = ow();
     let owner = xk(&w.b);
-    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: i64::MAX, called: 0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: i64::MAX, called: 0, claims: Default::default(), root: Shard::root_opened() };
     let shard = shard_made45(s, 70);
     let (st, d) = draw_by_hand45(&shard, s.held + 1, [0; 4], owner).unwrap();
     let (model, script) = (s.draw_end_judged(&d, &owner, T0), draw_end_as_the_script45(&s, &d, &owner));
@@ -8063,7 +8063,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_as_the_model_says() {
     let mut classes = [0; 2];
     let mut parts = vec![];
     for case in 0..240 {
-        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default() };
+        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default(), root: Shard::root_opened() };
         let mut booked: Vec<XLeg> = vec![];
         for _ in 0..r.range(1, 9) {
             let i = r.range(0, 5) as usize;
@@ -8190,7 +8190,7 @@ fn t1b_r46_a_note_that_legs_left_is_applied_once_to_the_rows_it_names_and_pays_i
     let w = ow();
     let owner = xk(&w.b);
     let (l1, l2, l3) = (XLeg { entry: P10 * 9 / 10, ..w.fut(0, 10, LONG, P10) }, w.fut(1, 4, SHORT, P10), w.fut(0, 3, SHORT, P10 * 11 / 10));
-    let empty = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: 20 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default() };
+    let empty = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: 20 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 0, basis: 0, called: 0, claims: Default::default(), root: Shard::root_opened() };
     let s = empty.booked(&l1).unwrap().booked(&l2).unwrap().booked(&l3).unwrap();
     let scale = w.markets[0].p.scale;
     assert_eq!((s.rows[0].net, s.rows[0].gross, s.rows[1].net, s.basis), (-7 * scale, 13 * scale, 4 * scale, (-90 + 33 + 40) * KAS1), "the books: side B short 10 at 9 and long 3 at 11 of the first market, long 4 at 10 of the second");
@@ -8290,7 +8290,7 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     let owner = xk(&w.b);
     let key = xk(&w.a);
     // (Round 55: the shard owes the note: a note of the rest is counted when it is written.)
-    let of = |held: i64, called: i64| shard_made45(Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 30 * KAS1, basis: 0, called, claims: Default::default() }, 74);
+    let of = |held: i64, called: i64| shard_made45(Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 30 * KAS1, basis: 0, called, claims: Default::default(), root: Shard::root_opened() }, 74);
     let rest = RestNote { sid: [0x5d; 32], key, amount: 30 * KAS1 };
     let f = [fund(xk(&w.f), 73, 1_000)];
     let apply = |shard: &OLive<Shard>, r: RestNote| rest_apply(&w.lib, shard, &note_made46(shard, r, 75, 6_050), &w.script("KpfTRest"), w.payer(&w.f, &f));
@@ -8460,7 +8460,7 @@ fn cov47(w: &OW, legs: &[XLeg], coins: i64, bm: i64) -> OLive<Account> {
 
 /// A shard with the legs in its books as the statement of an entry will write them (rows and basis), under the same id.
 fn shard_with47(w: &OW, legs: &[XLeg], held: i64, called: i64) -> OLive<Shard> {
-    let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0, claims: Default::default() };
+    let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0, claims: Default::default(), root: Shard::root_opened() };
     for l in legs {
         s = s.booked(l).expect("booked");
     }
@@ -10418,7 +10418,7 @@ fn t1b_r52_a_note_is_spent_only_where_a_leg_of_it_is_no_leg_of_the_books_and_nev
     let owner = xk(&w.b);
     let (mut spent, mut kept, mut applied, mut neither, mut named) = (0, 0, 0, 0, 0);
     for case in 0..170 {
-        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0, claims: Default::default() };
+        let mut s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held: r.range(0, 200) * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis: 0, called: 0, claims: Default::default(), root: Shard::root_opened() };
         let mut booked: Vec<XLeg> = vec![];
         for _ in 0..r.range(1, 9) {
             let i = r.range(0, 5) as usize;
@@ -11037,7 +11037,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Review T6, second round, K1: `KpfTCallPay` is 2,523: the payment that makes a claim whole pays its key
     // the part and what the claim's note held, in one output.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2110)]);
 }
 
 // ================================================================================================================
@@ -11232,7 +11232,7 @@ fn t1b_r54_the_end_of_a_call_is_the_models_at_the_edges_and_on_random_shards() {
     let mk = w.markets[0].clone();
     let (pm, sc) = (mk.p.price_max, mk.p.scale);
     let head = |i: usize| RowHead::of(&w.fut(i, 1, LONG, P10));
-    let base = |rows: [ShardRow; 4], held: i64, basis: i64| Shard { t: w.terms(), rows: rows.into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis, called: 0, claims: Default::default() };
+    let base = |rows: [ShardRow; 4], held: i64, basis: i64| Shard { t: w.terms(), rows: rows.into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed: 0, basis, called: 0, claims: Default::default(), root: Shard::root_opened() };
     let e = ShardRow::EMPTY;
     let row = |i: usize, net: i64, gross: i64| ShardRow::of(head(i), net * sc, gross * sc);
     let fee = w.terms().keeper_fee_min;
@@ -11901,7 +11901,7 @@ fn share_as_the_script54(held: i64, owed: i64, amount: i64) -> Option<i64> {
 
 /// A called shard of no row that holds `held` and owes `owed` by claims, as an output stands.
 fn owing54(w: &OW, held: i64, owed: i64) -> OLive<Shard> {
-    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed, basis: 0, called: T0, claims: Default::default() };
+    let s = Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&w.b), held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: SID47, owed, basis: 0, called: T0, claims: Default::default(), root: Shard::root_opened() };
     OLive { value: (held as u64) + CALL_HOLD as u64, s, id: Some(Hash::from_bytes([0x72; 32])), op: op(97), daa: 6_700 }
 }
 
@@ -12415,7 +12415,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1854), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTShardPrice", 2318), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1854), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTShardPrice", 2326), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -13059,7 +13059,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2567), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -13858,7 +13858,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Round 58: the three that changed again.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1761, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3017, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1761, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3039, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -14152,7 +14152,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 3017), ("KpfTOpenC", 684)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 3039), ("KpfTOpenC", 684)]);
 }
 
 // ================================================================================================================
@@ -14600,7 +14600,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 7520), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2716)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3039), ("KpfTChange", 1761), ("KpfTCRow", 7520), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2716)]);
 }
 
 // ================================================================================================================
@@ -15356,7 +15356,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3847), ("KpfTCRow", 7520), ("KpfTCEnd", 5871), ("KpfTCSplit", 2716), ("KpfTCMark", 2573), ("KpfTCEnter", 2069), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3847), ("KpfTCRow", 7520), ("KpfTCEnd", 5871), ("KpfTCSplit", 2716), ("KpfTCMark", 2573), ("KpfTCEnter", 2069), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================

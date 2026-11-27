@@ -511,7 +511,7 @@ fn the_price_of_a_row_of_options_is_answered_with_its_underlying_s() {
     // (A row of calls on market 1: its key has the market plain, a day and a strike. Docs 17.8d.)
     let ohead = RowHead { key: kpf_protocol::books::Key { market: m.id(), day: 9_000, of: kpf_protocol::books::OF_CALLS, strike: 1 }, scale, price_max: m.p.price_max };
     // A shard that counts options on 20 units of market 1, and holds 50 KAS.
-    let s = Shard { t: w.terms(), rows: [ShardRow::of(ohead, 20 * scale, 20 * scale), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner: xk(&w.b), held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0, owed: 0, claims: Default::default() }.seeded(&SEED, &m.committee_id);
+    let s = Shard { t: w.terms(), rows: [ShardRow::of(ohead, 20 * scale, 20 * scale), ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY].into(), owner: xk(&w.b), held: 50 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 200 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() }.seeded(&SEED, &m.committee_id);
     let shard = OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 };
     let stated = |st: &Stated, said: &[u8]| -> OLive<Stated> {
         let f = [fund(xk(&w.b), 30)];

@@ -100,7 +100,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -1119,9 +1119,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1838)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110), ("KpfTStepPrice", 1838)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 752), ("KpfTCallPay", 2567), ("KpfTShardEnd", 1748), ("KpfTShardPrice", 2318), ("KpfTCallEnd", 1854)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1748), ("KpfTShardPrice", 2326), ("KpfTCallEnd", 1854)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);
@@ -1162,7 +1162,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // zero. Review T9, Q1; docs 17.8e.)
     // (Docs 17.8h: an entry stated was 5,599: its statement says a head and a place, 40 bytes, and its row is 232
     // bytes where it was 120; `KpfTEnterS` is 2 bytes more. Docs 17.8i: 5,754 with a row of 232 bytes; of 256, 24 more.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_778, 7_123, 7_175, 7_771));
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_833, 7_123, 7_175, 7_771)); // (17.8j, A1: the root, 33 bytes, and 22 of script.)
 }
 
 // ================================================================================================================
@@ -1333,7 +1333,7 @@ fn p33b(h: &[u8; 32]) -> Vec<u8> {
 /// the three numbers; the hash is now made by each script, of the 27 bytes it is shown).
 fn head_of(gross: i64, claims: &[u8]) -> Vec<u8> {
     assert_eq!(claims.len(), 27);
-    [&[0x08u8][..], &sm8(gross)[..], claims].concat()
+    [&[0x08u8][..], &sm8(gross)[..], claims, &p33b(&Shard::root_opened())[..]].concat()
 }
 /// The claims' three numbers of nothing, 27 bytes.
 fn no_claims() -> Vec<u8> {
@@ -1342,7 +1342,8 @@ fn no_claims() -> Vec<u8> {
 /// The state's hash of the shard `s` with the 41 bytes `head` where its books' own would be, written out as the
 /// scripts hash it (the reviewer's own: `Shard::hash` is asserted against it).
 fn shard_hash_with(s: &Shard, head: &[u8]) -> [u8; 32] {
-    let books = blake2b(&[&head[..9], &p33b(&blake2b(&s.rows_bytes()))[..], &p33b(&blake2b(&head[9..]))[..]].concat());
+    // (The root of the dated rows' tree, its push, after the claims' numbers: docs 17.8j, 1.)
+    let books = blake2b(&[&head[..9], &p33b(&blake2b(&s.rows_bytes()))[..], &head[36..], &p33b(&blake2b(&head[9..36]))[..]].concat());
     blake2b(&[p33b(&blake2b(&[s.terms(), p33b(&books)].concat())), s.moving()].concat())
 }
 /// The state's hash of the shard `s` in the form of before this change: its fixed part of its terms and the hash
@@ -1524,7 +1525,7 @@ fn t3r2_every_script_that_shows_the_rows_holds_the_41_bytes_and_takes_no_shard_o
         assert!(accepted(b, &w.keys), "{what}: the control");
         let head = s.books_head();
         // (Review T6, docs 17.8c: 36 bytes, the claims' three numbers plain, where it was 41 with their hash.)
-        assert_eq!((head.len(), shard_hash_with(s, &head), units(s)), (36, s.hash(), s.gross_sum()), "{what}");
+        assert_eq!((head.len(), shard_hash_with(s, &head), units(s)), (69, s.hash(), s.gross_sum()), "{what}");
         assert!(matches!(&args_of(&mut b.clone(), 1)[*at], Arg::V(ArtifactValue::Bytes(x)) if x[..] == head[..]) && matches!(&args_of(&mut b.clone(), 1)[*at - 1], Arg::V(ArtifactValue::Bytes(x)) if x[..] == s.rows_bytes()[..]), "{what}: the 41 bytes are argument {at}, after the rows");
         let (g, claims) = (s.gross_sum(), s.claims.bytes());
         // (Review T6: where a hash of the claims was shown with a bit flipped or as nothing, the three numbers
@@ -1819,7 +1820,7 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
             }
             // (Whoever hashes the rows hashes the 36 bytes with them, every time. Review T6, docs 17.8c: the last
             // 27 hashed by the script; `KpfTCallPay` writes the shard with the 36 bytes it made, `ng`.)
-            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36)))").count() + code.matches("ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36)))").count(), "{}", p.display());
+            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36)))").count() + code.matches("ng.slice(0, 9) + p33(blake2b(rw)) + ng.slice(36, 69) + p33(blake2b(ng.slice(9, 36)))").count(), "{}", p.display());
             assert_eq!((code.matches("gb.slice(9, 41)").count(), code.matches("byte[41] gbook").count()), (0, 0), "{}", p.display());
             assert_eq!(code.matches("ng.slice(0, 9)").count() > 0, p.file_stem().unwrap() == "KpfTCallPay", "{}", p.display());
             assert_eq!(code.matches("blake2b(rows)").count(), 0, "{}", p.display());

@@ -5004,6 +5004,20 @@ list to build from, and read, before it is built.**
 | ZZ8 (D) | A call's step over ended legs needs a note of each day; an owing account cannot state the leaving of an ended leg that gained | With D's list: a call's step is shown two days' notes at the most, and an account with ended legs of more days has them leave first; a leaving that names an ended leg is taken from an account that owes, what it gained set against that |
 | ZZ9 | Before the leaf under a silent committee a loss is counted nowhere until "none"; an ended row at a price is asked nothing while its legs have not paid; `KpfTRowIn` with three paths | said; measured with A2 |
 
+**A1 as it is built** (the engine; the whole workspace 777 tests, none failed; `s477` to `s482`, the scripts' part
+run after `s463`: `s478_a1_root_sil.py`, `s480_a1_marknote_c.py`). The books' hash is of the sum of the gross, the
+hash of the four rows, the root, the hash of the claims' numbers; a shard is opened with the root of a tree of
+the head leaf alone (`cc9fc119...2d50`, `Shard::root_opened`, a constant of `KpfTShardOpen`). What a script is
+shown beside the rows is 69 bytes (the sum, the claims' three numbers, the root's push); `KpfTMarkNoteC`, which
+opens the books with no row, 101. `KpfTEnterS` keeps a futures row's ninth field; `KpfTLeft`, `KpfTLeftAll` and
+their twins write the empty row only where it is nothing; `KpfTCallPay` reads the sum of the gross and no row
+(106 bytes less). Measured: an entry stated 5,833 bytes (5,778); a note of one leg applied 3,686 (3,622); a
+claim paid 4,438 (4,511). The earlier reviews' tests that wrote the 36 bytes by hand say the 69; review T9's
+K1, which held that an entry writes nothing over the ninth field and that a row emptied with a number there is
+stuck, holds the opposite now: the field is kept, the head stands with no unit while it is not nothing, takes
+its market's leg again, and the market has no second row beside it. No root other than the opened one exists
+yet: nothing writes a leaf (A2).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

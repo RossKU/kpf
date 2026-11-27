@@ -854,7 +854,7 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
         "byte[] rs = slotOf(j, slotLen);",
         // (Review T6, docs 17.8c: the claims' three numbers are shown plain, 27 bytes, and hashed here, where
         // their hash was shown: `byte[](0x20) + gb.slice(9, 41)`.)
-        "byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv);",
+        "byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36))))))) + mv);",
         "byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);",
         "require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));",
         "require(at == point || verdict == 0);",

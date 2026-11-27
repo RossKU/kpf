@@ -70,7 +70,7 @@ contract KpfTCallPay(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry claim(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, byte[32] key, int amount, int paid, int amount2, int paid2, int f) {
+    entry claim(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[69] gbook, byte[171] moving, byte[32] key, int amount, int paid, int amount2, int paid2, int f) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -85,13 +85,13 @@ contract KpfTCallPay(int init_version) {
         byte[] gb = byte[](gbook);
         // The shard (an object with no second key), called, and no row of it has a unit: the four rows are empty
         // and the sum of their gross units is nothing.
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         int called = int(byte[8](mv.slice(130, 138)));
         require(called != 0);
-        byte[] none = byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
-        require(rw == none + none + none + none);
+        // (No row has a unit: the sum of the gross. A futures row may stand with no unit, as its market's head
+        // in the tree: docs 17.8j, 2; review T16, Z3.)
         require(int(byte[8](gb.slice(1, 9))) == 0);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
@@ -178,8 +178,8 @@ contract KpfTCallPay(int init_version) {
         require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
         require(tx.outputs[m].value >= due);
         // The shard: what it holds less the payment; what it has paid, more; what it owes as it is.
-        byte[] ng = gb.slice(0, 9) + i9(d1 + p1) + gb.slice(18, 27) + i9(d2 + p2);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        byte[] ng = gb.slice(0, 9) + i9(d1 + p1) + gb.slice(18, 27) + i9(d2 + p2) + gb.slice(36, 69);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + ng.slice(36, 69) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value - pay);
         if (whole == 1) {
             require(OpCovOutputCount(id) == 1);
@@ -193,7 +193,7 @@ contract KpfTCallPay(int init_version) {
         goesOn();
     }
 
-    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[36] gbook, byte[171] moving, int ctime, byte[32] body) {
+    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[69] gbook, byte[171] moving, int ctime, byte[32] body) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -208,13 +208,13 @@ contract KpfTCallPay(int init_version) {
         byte[] gb = byte[](gbook);
         // The shard (an object with no second key), called, and no row of it has a unit: the four rows are empty
         // and the sum of their gross units is nothing.
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         int called = int(byte[8](mv.slice(130, 138)));
         require(called != 0);
-        byte[] none = byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
-        require(rw == none + none + none + none);
+        // (No row has a unit: the sum of the gross. A futures row may stand with no unit, as its market's head
+        // in the tree: docs 17.8j, 2; review T16, Z3.)
         require(int(byte[8](gb.slice(1, 9))) == 0);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
@@ -233,8 +233,8 @@ contract KpfTCallPay(int init_version) {
         require(d2 == c2);
         // The call of this shard: it is spent, and what it held returns to the shard's output.
         require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(CALL) + i9(ctime) + p33(body)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
-        byte[] ng = gb.slice(0, 9) + i9(0) + i9(0) + i9(0);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 76) + byte[](0 as byte[8]) + mv.slice(84, 130) + byte[](0 as byte[8]) + mv.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        byte[] ng = gb.slice(0, 9) + i9(0) + i9(0) + i9(0) + gb.slice(36, 69);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + ng.slice(36, 69) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 76) + byte[](0 as byte[8]) + mv.slice(84, 130) + byte[](0 as byte[8]) + mv.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value + tx.inputs[n].value);
         goesOn();
     }

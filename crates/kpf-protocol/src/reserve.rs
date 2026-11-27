@@ -261,6 +261,8 @@ pub struct Shard {
     pub owed: i64,
     /// The claims' numbers of a called shard (docs 17.8c): three of nothing while it is not called.
     pub claims: Claims,
+    /// The root of the tree of its dated rows (docs 17.8j, 1): of the head leaf alone while it has none.
+    pub root: [u8; 32],
 }
 
 /// The claims' numbers of a called shard (docs 17.8c), beside what it owes by claims of the first class (`owed`,
@@ -288,11 +290,17 @@ impl Shard {
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: Places::default(), owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default() }
+        Shard { t, rows: Places::default(), owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default(), root: Shard::root_opened() }
     }
 
     pub fn terms(&self) -> Vec<u8> {
         self.shell().terms()
+    }
+
+    /// The root of a tree of dated rows with the head leaf alone: what a shard is opened with (`KpfTShardOpen`'s
+    /// constant).
+    pub fn root_opened() -> [u8; 32] {
+        crate::books::Books::opened().root()
     }
 
     /// The four rows the scripts take, 420 bytes.
@@ -310,16 +318,16 @@ impl Shard {
         blake2b(&self.claims.bytes())
     }
 
-    /// What a script that shows the rows is shown beside them, 36 bytes: the sum of the gross and the claims'
-    /// three numbers, plain.
+    /// What a script that shows the rows is shown beside them, 69 bytes: the sum of the gross and the claims'
+    /// three numbers, plain, and the root of the dated rows' tree.
     pub fn books_head(&self) -> Vec<u8> {
-        [i9(self.gross_sum()), self.claims.bytes()].concat()
+        [i9(self.gross_sum()), self.claims.bytes(), p33(&self.root)].concat()
     }
 
     /// The books' hash (docs 17.6, 17.8a): of the sum of the rows' gross units, of the hash of the rows, and of the
     /// hash of the claims' numbers. A script that touches no row carries it as 32 bytes.
     pub fn books_hash(&self) -> [u8; 32] {
-        blake2b(&[i9(self.gross_sum()), p33(&blake2b(&self.rows_bytes())), p33(&self.claims_hash())].concat())
+        blake2b(&[i9(self.gross_sum()), p33(&blake2b(&self.rows_bytes())), p33(&self.root), p33(&self.claims_hash())].concat())
     }
 
     pub fn fixed_hash(&self) -> [u8; 32] {
@@ -616,7 +624,8 @@ impl Shard {
         if self.held.checked_sub(self.owed).is_none_or(|free| free < need) && need > before {
             return no("the row's gate: what the shard holds, less what it owes, is below the upper requirement of the leg's row with the leg, and the leg raises it");
         }
-        s.rows[r] = ShardRow::of(head, net, gross);
+        // (The row's ninth field, the count of its market's leaves in the tree, stays: 17.8j, 2.)
+        s.rows[r] = ShardRow { entered: self.rows[r].entered, ..ShardRow::of(head, net, gross) };
         s.basis = b;
         // (The shard's time: no draw before the entry is settled or ended. Review 51, F82. And an entry's time is
         // a lateness after the last: what this entry writes is a lateness or more after what the shard says.
@@ -651,10 +660,10 @@ impl Shard {
         self.claims.paid1.saturating_add(self.claims.paid2) > 0
     }
 
-    /// The books as `KpfTMarkNote` is shown them, 68 bytes: the sum of the rows' gross units, the hash of the
-    /// rows, and the claims' three numbers.
+    /// The books as `KpfTMarkNoteC` is shown them, 101 bytes: the sum of the rows' gross units, the hash of the
+    /// rows, the claims' three numbers, and the root of the dated rows' tree.
     pub fn books_open(&self) -> Vec<u8> {
-        [i9(self.gross_sum()), blake2b(&self.rows_bytes()).to_vec(), self.claims.bytes()].concat()
+        [i9(self.gross_sum()), blake2b(&self.rows_bytes()).to_vec(), self.claims.bytes(), p33(&self.root)].concat()
     }
 
     /// What a called shard counts of an amount asked by a note of the legs `legs` (docs 17.8c): of the second
@@ -711,7 +720,8 @@ impl Shard {
             }
             row.net = row.net.checked_sub(units).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
             row.gross -= l.size;
-            if row.net == 0 && row.gross == 0 {
+            // (A row that counts leaves of its market in the tree keeps its head with no unit: 17.8j, 2.)
+            if row.net == 0 && row.gross == 0 && row.entered == 0 {
                 (row.key, row.scale, row.price_max) = (Key::HEAD, 0, 0);
             }
             s.basis = s.basis.checked_sub(basis).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;

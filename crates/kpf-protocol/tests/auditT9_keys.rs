@@ -101,7 +101,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -563,6 +563,9 @@ fn t9_k1_a_leg_enters_the_futures_row_of_its_market_and_no_other() {
     println!("T9 K1: the market of nothing: the account's side: {:?}", enters(&w, &base, zero, 0, &base.s).map(|_| "an entry is stated on the account's side; the shard's refuses"));
 }
 
+/// (17.8j, 2, since: the nine bytes are a futures row's count of its market's leaves in the tree. An entry keeps
+/// them; a row is emptied only where they are nothing; `KpfTCallPay` reads the sum of the gross. The test below
+/// holds that, where it held the opposite.)
 /// K1, the nine bytes of what was entered. No script writes them other than nothing (`KpfTShardOpen` and
 /// `KpfTEnterS` write nine bytes of nothing; `KpfTLeft` and `KpfTLeftAll` keep what is there). On a row made by
 /// hand with 7 there: an entry writes nothing over it (and does not keep it); the last leg leaving leaves a row of
@@ -579,20 +582,22 @@ fn t9_k1_what_was_entered_is_written_by_nothing_and_a_row_made_with_it_is_stuck_
     let odd = live(&base, Shard { rows: [stale, E, E, E].into(), ..base.s });
     let kept = after(&odd.s, &leg, 0, ShardRow { entered: 7, ..with_leg(head, &stale, &leg) });
     let zeroed = after(&odd.s, &leg, 0, with_leg(head, &stale, &leg));
-    assert_eq!((enters(&w, &odd, leg, 0, &kept), enters(&w, &odd, leg, 0, &zeroed), odd.s.entered(&leg, 0, T0).ok()), (Some(false), Some(true), Some(zeroed)), "an entry writes nothing where 7 was entered");
+    // (17.8j, 2: the field is the count of the market's leaves in the tree, and an entry keeps it. It wrote nothing.)
+    assert_eq!((enters(&w, &odd, leg, 0, &kept), enters(&w, &odd, leg, 0, &zeroed), odd.s.entered(&leg, 0, T0).ok()), (Some(true), Some(false), Some(kept)), "an entry keeps what the field says");
     // The last leg leaves.
     let note = note_t9(&w, &odd, vec![leg_entered(&leg, 0)]);
     let (next, at, paid, rest) = odd.s.left(&note.s).unwrap();
     assert_eq!((at.clone(), paid, rest.is_none()), (vec![0], 0, true));
-    assert_eq!(next.rows[0], ShardRow { entered: 7, ..E }, "the model: the head emptied, what was entered kept");
+    assert_eq!(next.rows[0], ShardRow { entered: 7, ..ShardRow::of(head, 0, 0) }, "the model: the head stands with no unit while the field is not nothing");
     assert!(leaves(&w, &odd, &note, &at, next), "the engine: the same");
     assert!(!leaves(&w, &odd, &note, &at, Shard { rows: [E; 4].into(), ..next }), "the engine does not write the empty row");
-    let stuck = live(&base, next);
-    let again = after(&stuck.s, &leg, 0, with_leg(head, &E, &leg));
-    assert_eq!(enters(&w, &stuck, leg, 0, &again), Some(false), "a row of no market with 7 entered is entered");
-    assert!(stuck.s.entered(&leg, 0, T0).is_err());
-    let beside = after(&stuck.s, &leg, 1, with_leg(head, &E, &leg));
-    assert_eq!(enters(&w, &stuck, leg, 1, &beside), Some(true), "(control) the empty row beside it");
+    // The head that stands takes its market's leg again, and the market has no second row beside it.
+    let stands = live(&base, next);
+    let again = after(&stands.s, &leg, 0, ShardRow { entered: 7, ..with_leg(head, &E, &leg) });
+    assert_eq!(enters(&w, &stands, leg, 0, &again), Some(true), "a head of no unit with 7 in its field takes its market's leg");
+    assert!(stands.s.entered(&leg, 0, T0).is_ok());
+    let beside = after(&stands.s, &leg, 1, with_leg(head, &E, &leg));
+    assert!(enters(&w, &stands, leg, 1, &beside) != Some(true) && stands.s.entered(&leg, 1, T0).is_err(), "no second row of the market beside its head");
 }
 
 // ----------------------------------------------------------------------------------------------------------------
