@@ -178,7 +178,6 @@ contract KpfTShardRowD(int init_version) {
             require((sd.length - 184) % 56 == 0);
             require(ne <= 4);
         }
-        require(at <= nd + 1);
         byte[] z8 = byte[](0 as byte[8]);
         byte[] z9 = byte[](0x08) + z8;
         byte[] hk = byte[](0x20) + z8 + z8 + z8 + z8 + z9 + z9 + z9;
@@ -186,6 +185,8 @@ contract KpfTShardRowD(int init_version) {
         byte[] lf = byte[](leaf);
         byte[] root = gb.slice(37, 69);
         int ok = 1;
+        // (A point beyond the one after the last row is of nothing: right, with nothing shown. Review T17, V1.)
+        if (at <= nd + 1) {
         if (nd == 0) {
             // No dated row is said: right where the head's leaf, shown, names none.
             require(lf.slice(0, 60) == hk);
@@ -269,8 +270,8 @@ contract KpfTShardRowD(int init_version) {
                                         int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
                                         int rate = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) + g;
                                         // (A call counts the row at the price moved the tolerance in the
-                                        // shard's favour, up where it holds calls or wrote puts, and at the
-                                        // lower rate.)
+                                        // shard's favour, up where it holds calls or wrote puts (down with no
+                                        // net unit, as a futures row: review T17, V2), and at the lower rate.)
                                         int q = p;
                                         if (kind == 11) {
                                             rate = rate - g - g;
@@ -278,7 +279,7 @@ contract KpfTShardRowD(int init_version) {
                                             q = (p * (BPS - g)) / BPS;
                                             int fav = 0;
                                             if (net > 0 && of == 1) { fav = 1; }
-                                            if (net <= 0 && of == 2) { fav = 1; }
+                                            if (net < 0 && of == 2) { fav = 1; }
                                             if (fav == 1) {
                                                 q = (p * (BPS + g) + BPS - 1) / BPS;
                                                 if (q > pm) { q = pm; }
@@ -336,6 +337,7 @@ contract KpfTShardRowD(int init_version) {
                     }
                 }
             }
+        }
         }
         require(ok == verdict);
         ends(j, rs, slotLen, verdict, c1, position, bond, claimer, dkey, rkey);

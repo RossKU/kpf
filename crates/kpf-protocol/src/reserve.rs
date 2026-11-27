@@ -1214,9 +1214,11 @@ impl Shard {
         self.call_end_judged(&Draw { amount: 0, prices: p.into() }, 1, i64::MAX / 2).is_some_and(|(ok, _)| ok)
     }
 
-    /// The shard called at `t0`, having paid `pay`; and the call, at the prices `p`.
+    /// The shard called at `t0`, having paid `pay`; and the call, at the prices `p`. (The call names the market of
+    /// every futures row that has a unit: a head of no unit is in no list. Review T17, V4. With units in dated rows
+    /// the list is the trace's: with the call's step for option legs, 17.8j's step C.)
     pub fn called_at(&self, p: impl Into<Places<i64>>, t0: i64, pay: i64) -> (Shard, Called) {
-        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head()), prices: p.into() })
+        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| if r.gross != 0 || r.net != 0 { r.head() } else { RowHead::default() }), prices: p.into() })
     }
 
     /// The outputs of a call that is the rule's: the shard called, the call, and the fee to the caller.
@@ -1281,7 +1283,8 @@ impl Shard {
     /// after, what is paid, and the claim as it goes on where it is not whole.
     pub fn claim_paid_at(&self, c: &Claim, landed: i64) -> Result<(Shard, i64, Option<Claim>)> {
         let no = |why: &str| Err(Error::Invalid(format!("the claim is not paid: {why}")));
-        if c.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.gross_sum() != 0 {
+        // (By the sum of the gross of every row, as `KpfTCallPay`: a market's head of no unit may stand. T17, V3.)
+        if c.sid != self.sid || self.called == 0 || self.gross_sum() != 0 {
             return no("a claim is paid by its shard, called, once no row of it has a unit");
         }
         if self.claims_time().is_none_or(|t| landed < t) {
@@ -1321,7 +1324,7 @@ impl Shard {
     /// `KpfTCallPay.off`: the call ends where no row has a unit and nothing is owed by claims: the shard not
     /// called.
     pub fn call_off(&self, call: &Called) -> Result<Shard> {
-        if call.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.gross_sum() != 0 || self.claims.paid1 != self.owed || self.claims.paid2 != self.claims.owed2 {
+        if call.sid != self.sid || self.called == 0 || self.gross_sum() != 0 || self.claims.paid1 != self.owed || self.claims.paid2 != self.claims.owed2 {
             return Err(Error::Invalid("a call ends where its shard is called, no row of it has a unit and what it has paid its claims is what it owes them".into()));
         }
         Ok(Shard { called: 0, owed: 0, claims: Claims::default(), ..*self })
@@ -1609,10 +1612,12 @@ impl Shard {
     /// the shard's favour and at the lower rate. `None` beyond 64 bits.
     pub fn dated_adds(&self, row: &crate::books::Row, p: i64, call: bool) -> Option<(i64, i64, i64)> {
         let calls = row.key.of == crate::books::OF_CALLS;
+        // (A call's price is moved up only where the row's worth to the shard rises with it: it holds calls, or
+        // wrote puts. With no net unit, down, as a futures row. Review T17, V2.)
         let (g, holds) = (self.t.g_bps, row.net > 0);
         let q = if !call {
             p
-        } else if holds == calls {
+        } else if (holds && calls) || (row.net < 0 && !calls) {
             (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(row.price_max)
         } else {
             p.checked_mul(BPS - g)? / BPS
@@ -1702,8 +1707,12 @@ impl Shard {
     /// computes no verdict: a sum beyond 64 bits; a hash carried that is no leaf's key; a call's row of an ended
     /// day with a unit (another script's: D).
     pub fn trace_dated_judged(&self, books: &crate::books::Books, t: &Traced, k: usize, call: bool, t0: i64) -> Option<bool> {
-        if k == 0 || k > t.dated.len() + 1 || t.rows.len() != SHARD_ROWS {
+        if k == 0 || t.rows.len() != SHARD_ROWS {
             return Some(false);
+        }
+        // (A point beyond the one after the last row is of nothing: right. Review T17, V1.)
+        if k > t.dated.len() + 1 {
+            return Some(true);
         }
         let head = books.row(&Key::HEAD)?;
         let last4 = t.rows[SHARD_ROWS - 1];

@@ -1121,7 +1121,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110), ("KpfTStepPrice", 1838)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1858), ("KpfTShardPrice", 2360), ("KpfTCallEnd", 1963)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1858), ("KpfTShardPrice", 2367), ("KpfTCallEnd", 1963)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);

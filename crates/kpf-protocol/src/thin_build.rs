@@ -3239,6 +3239,11 @@ pub fn shard_draw(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
 
 /// The trace a draw or a call says at the prices `dr` gives, one a row (docs 17.8b).
 fn trace_of(shard: &crate::reserve::Shard, dr: &crate::reserve::Draw, kind: i64) -> Result<crate::reserve::Traced> {
+    // (A shard whose tree has leaves says a row a leaf: its trace is made over its books, `Shard::traced_with`, and
+    // stated and answered by the builders that take a trace. Review T17, V4.)
+    if shard.root != crate::reserve::Shard::root_opened() {
+        return invalid("the shard's tree has leaves: its draw or call says its dated rows, by a trace made over its books");
+    }
     shard.traced(dr, kind == crate::reserve::KIND_CALL).ok_or_else(|| Error::Invalid("the shard's rows at these prices are beyond what a script computes: nobody states or answers this".into()))
 }
 
@@ -3628,8 +3633,8 @@ pub fn shard_row_d(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
     draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
-    if k < 1 || k as usize > t.dated.len() + 1 {
-        return invalid("a dated row of a trace is a point 101 to one beyond its last");
+    if k < 1 {
+        return invalid("a dated row of a trace is a point from 101");
     }
     if books.root() != shard.root {
         return invalid("the books shown are not the shard's");
@@ -3672,8 +3677,8 @@ pub fn shard_price_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserv
     draw_open(obj, shard, t)?;
     let q = &obj.s;
     let c = &q.st;
-    if at < 5 {
-        return invalid("a price of the list is a point from 5 (the points 1 to 4 are the rows': `shard_row`)");
+    if !(5..=100).contains(&at) {
+        return invalid("a price of the list is a point from 5 to 100 (the points 1 to 4 are the rows': `shard_row`; from 101 the dated rows': `shard_row_d`)");
     }
     let e = (at - 4) as usize;
     let en = t.list.get(e - 1);

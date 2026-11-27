@@ -12420,7 +12420,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2360), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2367), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }

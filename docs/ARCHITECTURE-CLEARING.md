@@ -5103,6 +5103,29 @@ the 85.5 is answered wrong at its end. **Measured: a dated row answered is 8,635
 (`KpfTCallEnd`), are changed and not tested at the engine by me: for the review. Nothing reads `KpfTCStep`'s
 list differently (the call's object is the list, as it was).
 
+**Review T17** (the engine; `docs/audit/REVIEW-T17-dated-rows.md`, `tests/auditT17_dated_rows.rs`, fourteen tests).
+The tree's two scripts hold: on books at random, 2,800 transactions of `KpfTRowIn` (431 taken, 2,369 with one
+thing changed refused) and 3,000 of `KpfTRowOut` (338 and 2,662); every one taken wrote the model's shard, no
+list was cut, no leaf orphaned, no count made to disagree with the tree. The trace's own script holds: 826
+points of traces of shards of one to sixty-three leaves, 322 traces said otherwise wrong at their point, no
+wrong trace right at every point, no statement of a length both forms take. **The trace did not hold, by a
+script that was not meant to answer it.**
+
+| Finding | What | Closed by (`s499_t17_fixes.py`) |
+|---|---|---|
+| V1 (high) | `KpfTShardPrice` answers every point beyond the list's last price "of nothing: right, with nothing cited". Before A3 no point above 8 meant anything; the points from 101 are the dated rows', and each was such a point. A wrong dated row was so answered right at its own point, with no leaf shown, by whoever landed first: in the test's shard a draw of 78 KAS stood where the dated rows allow 66.5. My engine test had every dated point answered by the dated rows' script alone | **`KpfTShardPrice` answers no point above 100. `KpfTShardRowD` answers a point beyond the one after its last row right, with nothing shown**, so that no point is one nobody answers. Which script answers which point: 0, the ends; 1 to 4, `KpfTShardRow`; 5 to 100, `KpfTShardPrice` (beyond the list: of nothing); from 101, `KpfTShardRowD` |
+| V2 (low) | A call counted a dated row at the price moved up where the clearing side holds calls, wrote puts, or has puts and no net unit. Where the row's worth does not rise with the price the move only raises the gross's worth: against the shard, by the rate on the gross of twice the tolerance of the row's gross worth | Closed for a row of no net unit: down, as a futures row of none. **Stands for held calls and written puts out of the money beyond the move** (4,755 of 6,649 and 2,007 of 6,781 at random): for the last phase, with the rates (the price that leaves the shard better of the two, computed) |
+| V3 (medium; the model) | `Shard::claim_paid_at` and `call_off` still asked four empty rows where `KpfTCallPay` reads the sum of the gross: the builders refused what the script takes | the model reads the sum |
+| V4 (low; the model) | The model's call named the market of a futures row of no unit, which the trace does not: another object than the one on chain. The builders that take a draw stated the four rows' trace whatever the tree | The model's call names the markets of rows that have a unit. A builder that makes a trace from a draw refuses a shard whose tree has leaves (its trace is made over its books). **Left for step C**: with units in dated rows the call's list is the trace's, and the model's call is made of four rows |
+
+The review's four tests of its findings hold the closed rule (V2's in its two parts), and its copy of the
+favour's direction was changed with the rule. The whole workspace: 797 tests (796 passed in the one run of all; the one that failed, review T5's helper that sent every point above 4 to the prices' script, sends the points from 101 to the dated rows' script and passes in its file: a right statement of a shard with no leaf is so answered right at the points 101, 2^62 and the largest number). `KpfTShardPrice` is 2,367
+bytes (2,360), `KpfTShardRowD` 5,747 (5,745). Read and not run by the review, and for step D: a written day's
+leaf is taken out with the last row of its day and the day listed again "not written"; a call over an ended
+row with a unit has no answer until `KpfTShardRowE`. Not reached: sequences of listings with entries and
+leavings; `KpfTCStep` under a call with heads of no unit; `KpfTDrawNote` and `KpfTDrawEntry` over a statement
+with dated rows.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

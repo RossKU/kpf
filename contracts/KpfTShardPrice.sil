@@ -136,6 +136,8 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
         require(at >= 5);
+        // (The points from 101 are the dated rows' of a trace, and KpfTShardRowD's: docs 17.8j, 6; review T17, V1.)
+        require(at <= 100);
         // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
         require(sd.length >= 184);
         int ne = (sd.length - 184) / 56;

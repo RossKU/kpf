@@ -304,12 +304,19 @@ fn t17_v1_a_wrong_dated_row_is_answered_right_at_its_own_point_by_the_prices_scr
             // (Control: the row is wrong at its point by the dated rows' own script, and right there by nobody.)
             assert_eq!(s.trace_dated_judged(&b, lie, k as usize, call, T0), Some(false), "{what}: the model");
             assert_eq!(dated_taken(&w, &live, s, &b, lie, k), (false, true), "{what}: KpfTShardRowD");
-            // The same point, answered right by the prices' script: nothing cited, no leaf shown.
-            let q = w.pointed(&live, trace_dated_point(k as usize));
-            let (bb, right) = shard_price_t(&w.lib, &q, s, SEED, lie, trace_dated_point(k as usize), &price, None, xk(&w.c), w.payer(&w.c, &f), None).unwrap();
-            assert!(right, "{what}: the builder says the point is beyond the list");
-            let sg = signed(&format!("V1 {what}: the dated point {k} answered right by KpfTShardPrice"), &bb, &w.keys);
-            assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &st.again().hash()), "V1 is open: the wrong statement stands again ({what})");
+            // Closed: the prices' script answers no point from 101. Its builder refuses; and at the engine an answer
+            // of the point made as the point 100's ("of nothing: right") is refused, with the place 100 and with
+            // the place the point's.
+            let point = trace_dated_point(k as usize);
+            let q = w.pointed(&live, point);
+            assert!(shard_price_t(&w.lib, &q, s, SEED, lie, point, &price, None, xk(&w.c), w.payer(&w.c, &f), None).is_err(), "V1 (closed): {what}: the builder");
+            let (mut bb, _) = shard_price_t(&w.lib, &q, s, SEED, lie, 100, &price, None, xk(&w.c), w.payer(&w.c, &f), Some(true)).unwrap();
+            assert!(!accepted(&bb, &w.keys), "V1 (closed): {what}: the dated point {k} answered as the point 100");
+            let args = args_of(&mut bb, 1);
+            let at = (1..args.len()).find(|i| matches!((&args[*i - 1], &args[*i]), (Arg::V(ArtifactValue::Int(x)), Arg::V(ArtifactValue::Int(100))) if *x == point)).expect("the point and the place answered");
+            args[at] = int_arg(point);
+            assert!(!accepted(&bb, &w.keys), "V1 (closed): {what}: the dated point {k} answered right by KpfTShardPrice");
+            let _ = &st;
             taken += 1;
         }
         // Every dated point of the trace that asks nothing, and the point beyond the last, the same way.
@@ -317,9 +324,20 @@ fn t17_v1_a_wrong_dated_row_is_answered_right_at_its_own_point_by_the_prices_scr
         let live = w.stated(&shard, &st, &none.said());
         for k in 1..=nd + 1 {
             let q = w.pointed(&live, trace_dated_point(k as usize));
-            let (bb, _) = shard_price_t(&w.lib, &q, s, SEED, &none, trace_dated_point(k as usize), &price, None, xk(&w.c), w.payer(&w.c, &f), None).unwrap();
-            assert!(accepted(&bb, &w.keys), "V1 is open: the dated point {k} of a trace that asks nothing is answered right");
+            assert!(shard_price_t(&w.lib, &q, s, SEED, &none, trace_dated_point(k as usize), &price, None, xk(&w.c), w.payer(&w.c, &f), None).is_err(), "V1 (closed): the dated point {k} of a trace that asks nothing");
             taken += 1;
+        }
+        // (A point from 9 to 100 is still of nothing, and the prices' script's: right, with nothing cited.)
+        let q = w.pointed(&live, 100);
+        let (bb, right) = shard_price_t(&w.lib, &q, s, SEED, &none, 100, &price, None, xk(&w.c), w.payer(&w.c, &f), None).unwrap();
+        assert!(right && accepted(&bb, &w.keys), "the point 100 is of nothing");
+        // And a point beyond the one after the last row is of nothing, and the dated rows' script's: right, by
+        // the model and at the engine, so that no point is one nobody answers.
+        let st = Stated { arg: t.arg(), ..st0 };
+        let live = w.stated(&shard, &st, &t.said());
+        for k in [nd + 2, nd + 40] {
+            assert_eq!(s.trace_dated_judged(&b, &t, k as usize, call, T0), Some(true));
+            assert_eq!(dated_taken(&w, &live, s, &b, &t, k), (true, false), "V1 (closed): the point beyond the last, {k}");
         }
     }
     // What it is worth: the draw that the four rows alone allow, said with dated rows that ask nothing, is right at
@@ -343,8 +361,10 @@ fn t17_v1_a_wrong_dated_row_is_answered_right_at_its_own_point_by_the_prices_scr
     let q = w.pointed(&live, 0);
     let (bb, right) = shard_end_t(&w.lib, &q, s, &t2, &w.script("KpfTShardEnd"), xk(&w.c), w.payer(&w.c, &f), None).unwrap();
     assert!(right && accepted(&bb, &w.keys), "the end of a draw whose dated rows ask nothing is right by its sums");
+    // (Closed: and it is wrong at its dated rows, by the one script that answers them.)
+    assert_eq!(dated_taken(&w, &live, s, &b, &t2, 2), (false, true), "V1 (closed): the row that asks nothing is answered wrong, and right by nobody");
     let _ = st0;
-    println!("V1: {taken} wrong dated points answered right by KpfTShardPrice; a draw of {without} sompi stands where the dated rows allow {with}");
+    println!("V1 (closed): {taken} wrong dated points that KpfTShardPrice answered right are answered by it no more; a draw of {without} sompi, where the dated rows allow {with}, is wrong at its rows");
 }
 
 // ================================================================================================================
@@ -1571,7 +1591,8 @@ fn row_at(row: &Row, q: i64, rate: i64, more: &[i64]) -> (i128, i128, i128) {
 fn call_prices(row: &Row, p: i64, g: i64) -> (i64, i64) {
     let down = ((p as i128 * (BPS - g) as i128) / BPS as i128) as i64;
     let up = up_t(p, BPS + g).min(row.price_max);
-    if (row.net > 0) == (row.key.of == OF_CALLS) { (up, down) } else { (down, up) }
+    // (After V2: up only where the row's worth to the shard rises with the price; with no net unit, down.)
+    if (row.net > 0 && row.key.of == OF_CALLS) || (row.net < 0 && row.key.of != OF_CALLS) { (up, down) } else { (down, up) }
 }
 
 /// 3. `Shard::dated_adds` on 60,000 rows at random (strikes at the price, at each end of the move, a sompi either
@@ -1648,7 +1669,7 @@ fn t17_v2_a_call_counts_some_dated_rows_at_the_price_moved_against_the_shard() {
             (1, _) => "holds puts (counted down)",
             (-1, _) => "wrote puts (counted up)",
             (_, 1) => "calls, no net unit (counted down)",
-            _ => "puts, no net unit (counted up)",
+            _ => "puts, no net unit (counted down)",
         };
         let e = by.entry(what).or_default();
         e.0 += 1;
@@ -1660,9 +1681,8 @@ fn t17_v2_a_call_counts_some_dated_rows_at_the_price_moved_against_the_shard() {
     for (what, (n, against, most)) in &by {
         println!("{what}: {n} rows, {against} counted at the price that leaves the shard worse (by {most} sompi at the most)");
     }
-    assert_eq!((by["wrote calls (counted down)"].1, by["holds puts (counted down)"].1, by["calls, no net unit (counted down)"].1), (0, 0, 0), "a row counted down is counted in the shard's favour");
-    assert_eq!(by["puts, no net unit (counted up)"].0, by["puts, no net unit (counted up)"].1, "V2 is open: puts of no net unit are always counted against the shard");
-    assert!(by["holds calls (counted up)"].1 > 0 && by["wrote puts (counted up)"].1 > 0, "V2 is open: held calls and written puts out of the money are counted against the shard");
+    assert_eq!((by["wrote calls (counted down)"].1, by["holds puts (counted down)"].1, by["calls, no net unit (counted down)"].1, by["puts, no net unit (counted down)"].1), (0, 0, 0, 0), "a row counted down is counted in the shard's favour; V2 (closed for a row of no net unit)");
+    assert!(by["holds calls (counted up)"].1 > 0 && by["wrote puts (counted up)"].1 > 0, "V2 stands in part (the last phase): held calls and written puts out of the money are counted against the shard");
 
     // At the engine: a shard of 175 KAS whose one row is a thousand units of a series at the price 10. The rate on
     // the gross (1.75 %) of its gross worth is 175 KAS at 10, 174.125 at 9.95, 175.875 at 10.05.
@@ -1676,6 +1696,12 @@ fn t17_v2_a_call_counts_some_dated_rows_at_the_price_moved_against_the_shard() {
         (s.root, s.dgross, s.held, s.basis) = (b.root(), gross, 175 * KAS1, 0);
         let shard = live(&base, s);
         let tr = s.traced_with(&b, &Draw { amount: 0, prices: [P10, 0, 0, 0].into() }, true, T0).unwrap();
+        if sign == 0 {
+            // (Closed for a row of no net unit: counted at the price moved down, and the shard is not called.)
+            assert_eq!(end_sums(&tr), (0, 9_950 * KAS1, 0, 0), "{what}: the gross's worth at 9.95, nothing else");
+            assert_eq!(s.call_trace_end_judged(&tr, T0, shard.value as i64).map(|x| x.0), Some(false), "V2 (closed): {what}: no call");
+            continue;
+        }
         assert_eq!(end_sums(&tr), (0, 10_050 * KAS1, 0, 0), "{what}: the gross's worth at 10.05, nothing else");
         assert_eq!((up_t(10_000 * KAS1, rg), up_t(9_950 * KAS1, rg), up_t(10_050 * KAS1, rg)), (s.held, s.held - 875 * KAS1 / 1_000, s.held + 875 * KAS1 / 1_000));
         let st = statement(&w, &shard, true, &tr);
@@ -1951,10 +1977,11 @@ fn t17_v3_the_model_refuses_the_claims_of_a_called_shard_whose_heads_count_leave
     let c = OLive { s: Rest { sid: s.sid, key: xk(&w.w), amount: 30 * KAS1 }.claim(), value: NOTE_MIN as u64, id: base.id, op: op(71), daa: 6_600 };
     let fl = [KeyUtxo { daa: s.claims_time().unwrap() as u64, ..fund(xk(&w.f), 36) }];
     // The model: refused with the head, taken of the same shard with four empty rows.
-    assert!(s.claim_paid_at(&c.s, i64::MAX).is_err(), "V3 is open: the model pays no claim while a head stands");
-    assert!(claim_pay_c(&w.lib, &on, &c, &pay_s, w.payer(&w.f, &fl)).is_err(), "V3 is open: the builder refuses");
     let (next_t, paid, left) = twin.claim_paid_at(&c.s, i64::MAX).expect("the twin of four empty rows pays");
     assert_eq!((paid, left), (30 * KAS1, None));
+    // (Closed: the model pays as the script does, the head and the root as they are; and the builder builds it.)
+    assert_eq!(s.claim_paid_at(&c.s, i64::MAX).ok(), Some((Shard { rows: s.rows, root: s.root, ..next_t }, paid, left)), "V3 (closed): the model pays the claim while a head stands");
+    assert!(claim_pay_c(&w.lib, &on, &c, &pay_s, w.payer(&w.f, &fl)).is_ok(), "V3 (closed): the builder builds it");
     // The engine: the claim is paid, the head and the root as they are.
     let next = Shard { rows: s.rows, root: s.root, ..next_t };
     let b = claim_pay_as_c(&w.lib, &on, &c, next, paid, left, &pay_s, w.payer(&w.f, &fl)).unwrap();
@@ -1964,9 +1991,9 @@ fn t17_v3_the_model_refuses_the_claims_of_a_called_shard_whose_heads_count_leave
     // The call ends: the model refuses, the engine takes it.
     let after = live(&base, next);
     let call = OLive { s: Called { sid: s.sid, time: s.called, heads: Default::default(), prices: Default::default() }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_500 };
-    assert!(next.call_off(&call.s).is_err() && call_off(&w.lib, &after, &call, &pay_s, w.payer(&w.f, &fl)).is_err(), "V3 is open: the model ends no call while a head stands");
     let ended_t = Shard { rows: twin.rows, root: twin.root, ..next }.call_off(&call.s).expect("the twin's call ends");
     let ended = Shard { rows: s.rows, root: s.root, ..ended_t };
+    assert!(next.call_off(&call.s).ok() == Some(ended) && call_off(&w.lib, &after, &call, &pay_s, w.payer(&w.f, &fl)).is_ok(), "V3 (closed): the model ends the call while a head stands");
     let b = call_off_as(&w.lib, &after, &call, ended, &pay_s, w.payer(&w.f, &fl)).unwrap();
     signed("V3: the call of a shard whose head counts two leaves ended", &b, &w.keys);
     assert_eq!((ended.called, ended.rows[0].entered, ended.root), (0, 2, s.root));
@@ -1997,8 +2024,8 @@ fn t17_v4_the_models_call_lists_a_head_of_no_unit_that_the_trace_does_not() {
     let prices = [P10, P10, 0, 0];
     let t = s.traced_with(&b1, &Draw { amount: 0, prices: prices.into() }, true, T0).unwrap();
     let (_, call) = s.called_at(&prices, T0, 0);
-    assert_eq!((t.list.len(), call.list().len()), (1, 2), "V4 is open: the trace lists one market, the model's call two");
-    assert_ne!(Called::hash_of(&s.sid, T0, &t.list_bytes()), call.hash(), "V4 is open: the call the script writes is not the model's");
+    assert_eq!((t.list.len(), call.list().len()), (1, 1), "V4 (closed): the trace lists one market, and the model's call the same");
+    assert_eq!(Called::hash_of(&s.sid, T0, &t.list_bytes()), call.hash(), "V4 (closed): the call the script writes is the model's");
     // (And the builders of a draw and a call state the trace of the four rows alone, whatever the tree: wrong at
     // the point 101 for this shard, by the model.)
     let four = s.traced(&Draw { amount: 0, prices: prices.into() }, true).unwrap();

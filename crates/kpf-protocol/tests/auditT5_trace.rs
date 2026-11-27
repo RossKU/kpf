@@ -409,6 +409,14 @@ fn taken_as(w: &World, q: &OLive<Pointed>, s: &Shard, raw: &[u8], t: &Traced, at
     (take(true), take(false))
 }
 fn taken_raw(w: &World, q: &OLive<Pointed>, s: &Shard, raw: &[u8], at: i64, cite: Option<&Cited>) -> (bool, bool) {
+    // (17.8j, 6; review T17, V1: the points from 101 are the dated rows' of a trace, and `KpfTShardRowD`'s. A shard
+    // of no leaf says no dated row: right at 101 where the head's leaf names none, and of nothing beyond it.)
+    if at > 100 {
+        let f = [fund(xk(&w.w), 77)];
+        let t = Traced::read(raw);
+        let take = |v: bool| t.as_ref().is_some_and(|t| shard_row_d(&w.lib, q, s, &kpf_protocol::books::Books::opened(), t, at - 100, &w.script("KpfTShardRowD"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|(b, _)| accepted(&b, &w.keys)));
+        return (take(true), take(false));
+    }
     let take = |v: bool| answer_raw(w, q, s, raw, at, v, cite).is_some_and(|b| accepted(&b, &w.keys));
     (take(true), take(false))
 }
@@ -1254,7 +1262,7 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     // 4,829; KpfTChange 1,728; KpfTShardRow is new. Second round: the day held as eight bytes (R1) is three bytes
     // in each of KpfTShardPrice (2,700 from 2,697) and KpfTShardRow (2,098 from 2,095); the others as they were.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTShardEnd", 1858), ("KpfTCallEnd", 1963), ("KpfTShardPrice", 2360), ("KpfTCStep", 5319), ("KpfTChange", 1886), ("KpfTShardRow", 2169)]);
+    assert_eq!(sizes, vec![("KpfTShardEnd", 1858), ("KpfTCallEnd", 1963), ("KpfTShardPrice", 2367), ("KpfTCStep", 5319), ("KpfTChange", 1886), ("KpfTShardRow", 2169)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
     let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)].into(), ..two.s }, ..two.clone() };
