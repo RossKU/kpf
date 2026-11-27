@@ -4833,7 +4833,7 @@ at the worst price of the move, exactly; the upper stays along the line of nothi
 unpaid on another 28,000 paths, and on 30,000 paths a variant of a user's hedge by the clock at ticks of 3.5,
 4 and 4.5 %. **Found on the way, in the walk and not in the form** (`s472_model_owes.py`): the walk counted
 what an account's coins did not pay at a leg's day as unpaid at once. A covered call whose call ended in the
-money (the long had gained twice as much) was so "unpaid" by 57,248 on one path in 15,000 with today's rule, and
+money (the long had gained twice as much) was so "unpaid" (by 57,248 on the path looked at) on one or two paths of 30,000 with today's rule, and
 four times as often with a call that comes later, which is how it was seen. The form says it is owed (16.18;
 17.8g, C) and set against what the account is paid later: the walk now carries it so (coins below nothing; unpaid
 where the account is gone), and every variant leaves nobody unpaid. One sentence of 17.4 changes with it: the
