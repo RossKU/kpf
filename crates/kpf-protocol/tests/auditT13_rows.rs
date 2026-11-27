@@ -608,38 +608,50 @@ fn t13_w2_closed_the_fee_does_not_turn_a_step_of_one_leg_into_a_step_of_every_le
 }
 
 
-/// W3. A hedge of 100 units (the long gained 100, the short lost 100), a long of another market that gained 3,
-/// and a small long of a third that lost 0.4; coins 2.1 KAS above a note's least. The account is due. The step
-/// that names the small leg cures it, for no fee (the fee is no more than the coins hold beyond what the legs
-/// that stay lost, each alone: the hedge's short counts its 100). The step that names the hedge's short takes
-/// every leg, pays its stater all the coins, and the 2.6 the legs had gained together are below the band on what
-/// they are worth: the user is paid nothing. Whoever states the step chooses.
+/// W3 (closed). A hedge of 100 units of market 0 at 11 (from 10), a long of 10 of market 1 that gained 3, a long
+/// of 1 of market 2 that lost 0.4; coins 2.1 KAS above a note's least; due. As the stage was first built, the
+/// step that cures (the small leg) paid its stater nothing, and the step that named the hedge's short took every
+/// leg for all the coins, the 2.6 KAS the legs gained together falling under a band of the gross worth: the user
+/// lost 4.7 KAS by the stater's choice. Closed: what the legs that stay lost is what they lost together; the
+/// fee and the band of a step of every leg are of what is asked (the net); and a leg that gained, named, leaves
+/// alone where the account lacks less after it.
 #[test]
-fn t13_w3_the_step_that_cures_pays_nothing_and_the_step_that_ends_the_account_pays_the_coins() {
+fn t13_w3_closed_a_step_by_what_is_asked() {
     let w = world();
     let legs = [fleg(&w, 0, 100, LONG, P10), fleg(&w, 0, 100, SHORT, P10), fleg(&w, 1, 10, LONG, P10), fleg_c(&w, 2, 100, LONG, P10)];
     let a = [P10 * 11 / 10, P10 * 11 / 10, P10 * 103 / 100, P10 * 96 / 100];
     let m = 21 * KAS1 / 10;
     let acct = cov(&w, &legs, NOTE_MIN + m);
+    // The cure: the small leg leaves, for the fee of its worth (0.5 % of 9.6).
     let (_, cure, e) = ruled(&w, &acct, KIND_C_STEP, 0, 4, &a, &w.f).expect("the step that names the small leg");
     assert_eq!(e, (true, false));
     let after = cure.after.clone().unwrap();
-    assert_eq!((cure.fee, after.legs.len(), after.a_margin, cure.note.unwrap().asked), (0, 3, NOTE_MIN + m - 4 * KAS1 / 10, -4 * KAS1 / 10));
-    // (And it is cured: no step is due on what stays, at these prices.)
-    assert!((1..=3).all(|k| after.c_state(KIND_C_STEP, 0, k, &a[..3], T0, after.a_margin, xk(&w.f)).is_err()));
+    let fee = 48 * KAS1 / 1_000;
+    assert_eq!((cure.fee, after.legs.len(), after.a_margin, cure.note.unwrap().asked), (fee, 3, NOTE_MIN + m - 4 * KAS1 / 10 - fee, -4 * KAS1 / 10), "W3 is open: the step that cures pays nothing");
+    assert!((1..=3).all(|k| after.c_state(KIND_C_STEP, 0, k, &a[..3], T0, after.a_margin, xk(&w.f)).is_err()), "cured: no step is due on what stays");
+    // The hedge's short named (the coins do not pay it): every leg leaves, for the fee and the band of what is
+    // asked: 6.193 KAS (the hedge nothing; 5.5 % of 103 and of 9.6), so 0.563 and 1.126. The user is paid its
+    // coins less the fee, and the 2.6 its legs gained together less the band.
+    let asked = acct.s.c_trace(&a, 0).unwrap().last().unwrap().closed().unwrap().0;
+    let (fee_all, band_all) = (asked * 50 / 550, (asked * 100 + 549) / 550);
+    assert_eq!((asked, fee_all, band_all), (6_193 * KAS1 / 1_000, 563 * KAS1 / 1_000, 1_126 * KAS1 / 1_000));
     let (_, end, e) = ruled(&w, &acct, KIND_C_STEP, 0, 2, &a, &w.f).expect("the step that names the hedge's short");
     assert_eq!(e, (true, false));
-    assert_eq!((end.after.is_none(), end.fee, end.paid, end.note.unwrap().asked), (true, m, NOTE_MIN, 0), "W3 is closed, or its numbers moved");
-    // (The legs that gained are not named while another has lost.)
+    assert_eq!((end.after.is_none(), end.fee, end.paid, end.note.unwrap().asked), (true, fee_all, NOTE_MIN + m - fee_all, 26 * KAS1 / 10 - band_all), "W3 is open: every leg for all the coins");
+    // (A leg that gained is not named while the legs that stay lost together.)
     assert!(acct.s.c_state(KIND_C_STEP, 0, 1, &a, T0, NOTE_MIN + m, xk(&w.f)).is_err() && acct.s.c_state(KIND_C_STEP, 0, 3, &a, T0, NOTE_MIN + m, xk(&w.f)).is_err());
-    // With a tenth of a KAS less the account is still due after the small leg left (the long of market 1 can lose
-    // more by the lower rate than the coins and what the legs gained), and then the only right step names the
-    // hedge's short and takes every leg: no step of the long that would have to leave.
+    // With a tenth of a KAS less the account is still due after the small leg left. The long of market 1, which
+    // would have to leave, gained beside a hedge that lost nothing together: it is named, and leaves alone.
     let (_, _, o) = cov(&w, &legs, NOTE_MIN + 2 * KAS1).s.c_state(KIND_C_STEP, 0, 4, &a, T0, NOTE_MIN + 2 * KAS1, xk(&w.f)).unwrap();
     let left = o.after.unwrap();
     let again: Vec<Option<bool>> = (1..=3).map(|k| left.c_state(KIND_C_STEP, 0, k, &a[..3], T0, left.a_margin, xk(&w.f)).ok().map(|v| v.2.after.is_none())).collect();
-    assert_eq!(again, vec![None, Some(true), None]);
-    println!("T13 W3: the step that names the leg that lost 0.4: fee 0, the account stands with 1.7 KAS and legs that gained 3 together. The step that names the hedge's short: every leg leaves, fee {} (all the coins), the user asks nothing of the 2.6 KAS its legs gained (the band on a worth of 2,312.6 is 23.1)", end.fee);
+    assert_eq!(again, vec![None, Some(true), Some(false)], "the hedge's long is not named; its short takes every leg; the long of market 1 leaves alone");
+    let next = OLive { s: left.clone(), value: left.a_margin as u64, ..acct.clone() };
+    let (_, long, e) = ruled(&w, &next, KIND_C_STEP, 0, 3, &a[..3], &w.f).expect("the long of market 1 is named");
+    let rest = long.after.clone().unwrap();
+    assert_eq!((e, rest.legs.len(), long.note.unwrap().asked), ((true, false), 2, 3 * KAS1 - 103 * KAS1 / 100));
+    assert!((1..=2).all(|k| rest.c_state(KIND_C_STEP, 0, k, &a[..2], T0, rest.a_margin, xk(&w.f)).is_err()), "the hedge alone is not due");
+    println!("T13 W3 (closed): the step that cures pays the fee of its leg ({fee}); the step that names the hedge's short takes every leg for the fee and the band of what is asked ({fee_all}, {band_all}); a leg that gained beside a hedge is named and leaves alone");
 }
 
 // ================================================================================================================

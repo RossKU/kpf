@@ -444,3 +444,202 @@ fn an_account_at_the_level_of_a_take_is_stepped_in_time_and_pays_whole() {
     assert_eq!(unpaid_built, 0);
     assert!(steps > 5_000 && alone > 500 && paths_loose > 50 && unpaid_loose > 0);
 }
+
+// ---------------------------------------------------------------- review T13, W3: a step by what is asked (the net)
+
+/// A step as review T13's W3 would have it (proposed; the scripts have `step(.., true)` with W2's change):
+/// - the band and the fee of a step of every leg are of what is asked (R, the net), not of the gross worth: the
+///   band R by twice the tolerance over the rate (rounded up), the fee R by the fee's rate over the rate (rounded
+///   down). (For one leg alone both are what they were: R is then the rate on its worth.)
+/// - "what the legs that stay lost" is what they lost together (`nls`), not each alone: in the cap of a leg's
+///   fee, and where a leg that gained is named (only where the legs that stay have not lost together).
+/// - a leg that gained, named, leaves alone where the account lacks less after it (what it gained leaves for
+///   the user's key, less the leg's band); else every leg.
+/// `greedy` only says how the test reads it: nothing here depends on who states.
+fn step_net(legs: &[Leg], m: i64, a: &[i64; MARKETS], i: usize) -> Option<Stepped> {
+    let q = worst_q(legs, a);
+    let row = trace(legs, a, &q, UP, Out::Leg(i))?;
+    let (ra, rs) = row.closed();
+    let band_all = (ra * 2 * TOL + UP - 1) / UP;
+    let s = row.g + row.m;
+    let x = if s < 0 { s } else { (s - band_all).max(0) };
+    if m + x >= 0 {
+        return None;
+    }
+    let before = (ra - m - row.g).max(0);
+    let nls = (-(row.g - row.gl)).max(0);
+    let mut stays: Vec<Leg> = legs.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, x)| *x).collect();
+    let (mut coins, mut paid, mut unpaid, mut out, mut fee) = (m, 0, 0, 0, 0);
+    let mut all = false;
+    if row.gl >= 0 {
+        if nls != 0 {
+            return None;
+        }
+        fee = rate_down(row.w - row.ws, LIQ).min(m.max(0));
+        let after = (rs - (m + row.g - row.gl)).max(0);
+        if after < before {
+            out = (row.gl - row.bl).max(0);
+            coins = m - fee;
+        } else {
+            all = true;
+        }
+    } else {
+        fee = rate_down(row.w - row.ws, LIQ).min((m + row.gl - nls).max(0));
+        let after = (rs - (m + row.g)).max(0);
+        if after < before && m + row.gl >= 0 {
+            paid = -row.gl;
+            coins = m + row.gl - fee;
+        } else {
+            all = true;
+        }
+    }
+    if all {
+        stays.clear();
+        let room = m.max(0);
+        (paid, unpaid, out) = (0, 0, 0);
+        if row.g < 0 {
+            paid = (-row.g).min(room);
+            unpaid = -row.g - paid;
+        } else {
+            out = (row.g - band_all).max(0);
+        }
+        fee = (ra * LIQ / UP).min(room - paid);
+        coins = 0;
+    }
+    Some(Stepped { stays, coins, paid, unpaid, out, fee, all })
+}
+
+/// What a user has when its account has been stepped to rest: the coins left in it (or paid back), what was paid
+/// out to its key, and what its legs that stay have gained at the prices (counted as it would be paid, whole).
+fn walked(legs: &[Leg], m: i64, a: &[i64; MARKETS], net: bool, greedy: bool) -> (i64, i64, i64) {
+    let (mut legs, mut m) = (legs.to_vec(), m);
+    let (mut user, mut fees, mut unpaid) = (0i64, 0i64, 0i64);
+    for _ in 0..12 {
+        if legs.is_empty() {
+            break;
+        }
+        // Every right step, each leg named; whoever states takes the one that pays it most (or least).
+        let mut options: Vec<Stepped> = (0..legs.len()).filter_map(|k| if net { step_net(&legs, m, a, k) } else { step(&legs, m, a, k, true) }).collect();
+        if options.is_empty() {
+            break;
+        }
+        options.sort_by_key(|o| (if greedy { -o.fee } else { o.fee }, o.all));
+        let done = options.remove(0);
+        fees += done.fee;
+        unpaid += done.unpaid;
+        user += done.out;
+        if done.all {
+            // (What is left of the coins when the loss and the fee are paid returns to the user.)
+            user += (m.max(0) - done.paid - done.fee).max(0);
+            m = 0;
+        } else {
+            m = done.coins;
+        }
+        legs = done.stays;
+    }
+    let rest: i64 = legs.iter().map(|x| x.gained(a[x.market])).sum();
+    (user + m + rest, fees, unpaid)
+}
+
+#[test]
+fn a_step_by_what_is_asked_costs_a_user_no_more_than_its_risk_whoever_chooses_the_leg() {
+    // Review T13, W3, in its numbers (prices of five digits): a hedge of 100 units of market 0 at 11 (from 10), a
+    // long of 10 of market 1 that gained 3, a long of 1 of market 2 that lost 0.4; coins 2.1.
+    let a = [11_000, 10_300, 9_600];
+    let legs = [
+        Leg { market: 0, long: true, units: 100, entry: 10_000 },
+        Leg { market: 0, long: false, units: 100, entry: 10_000 },
+        Leg { market: 1, long: true, units: 10, entry: 10_000 },
+        Leg { market: 2, long: true, units: 1, entry: 10_000 },
+    ];
+    let m = 2_100;
+    // As built: the step that cures (the small leg) pays its stater nothing, and the step that names the hedge's
+    // short takes every leg, for all the coins; the 2,600 the legs gained together are under the band of the
+    // gross worth.
+    let cure = step(&legs, m, &a, 3, true).unwrap();
+    let end = step(&legs, m, &a, 1, true).unwrap();
+    assert_eq!((cure.all, cure.fee, cure.coins), (false, 0, 1_700));
+    assert_eq!((end.all, end.fee, end.out, end.unpaid), (true, 2_100, 0, 0));
+    let (kind_built, greedy_built) = (walked(&legs, m, &a, false, false), walked(&legs, m, &a, false, true));
+    assert_eq!((kind_built.0, greedy_built.0, greedy_built.1), (1_700 + 3_000, 0, 2_100), "as built: the user has 4,700 or nothing, by the stater's choice");
+    // By what is asked: the cure pays the fee of the leg it takes (48, of 9,600); every leg, the fee and the band of
+    // the net: what is asked is 6,198 (the hedge nothing, the long 5,670, the small leg 528), the fee a
+    // hundredth-and-a-tenth of it (563) and the band two of those (1,127): the user is paid its coins and what the
+    // legs gained less those.
+    let asked = trace(&legs, &a, &worst_q(&legs, &a), UP, Out::None).unwrap().closed().0;
+    let (fee_all, band_all) = (asked * LIQ / UP, (asked * 2 * TOL + UP - 1) / UP);
+    assert_eq!((asked, fee_all, band_all), (6_198, 563, 1_127));
+    let cure = step_net(&legs, m, &a, 3).unwrap();
+    let end = step_net(&legs, m, &a, 1).unwrap();
+    assert_eq!((cure.all, cure.fee, cure.coins), (false, 48, 1_652));
+    assert_eq!((end.all, end.fee, end.out, end.unpaid), (true, fee_all, 2_600 - band_all, 0));
+    let (kind_net, greedy_net) = (walked(&legs, m, &a, true, false), walked(&legs, m, &a, true, true));
+    assert_eq!((kind_net.0, greedy_net.0), (1_652 + 3_000, 2_100 - fee_all + 2_600 - band_all));
+    // With a tenth less of coins the account is still due when the small leg has left. As built the only right
+    // step then names the hedge's short and takes every leg (the long that would have to leave gained, and is
+    // not named while the hedge's short "lost"). By what is asked the long is named: it leaves alone.
+    let left = step(&legs, 2_000, &a, 3, true).unwrap();
+    assert!(!left.all && step(&left.stays, left.coins, &a, 2, true).is_none() && step(&left.stays, left.coins, &a, 1, true).is_some_and(|o| o.all));
+    let left = step_net(&legs, 2_000, &a, 3).unwrap();
+    let long = step_net(&left.stays, left.coins, &a, 2).expect("the long is named");
+    assert_eq!((long.all, long.stays.len(), long.out), (false, 2, 3_000 - rate_up(103_000, 2 * TOL)));
+    assert!(step_net(&long.stays, long.coins, &a, 0).is_none() && step_net(&long.stays, long.coins, &a, 1).is_none(), "the hedge alone is not due");
+
+    // E1 and E3 as they were closed stay closed.
+    let a2 = [10_000, 10_000, 10_000];
+    let e1 = [Leg { market: 0, long: true, units: 10, entry: 9_700 }, Leg { market: 1, long: false, units: 10, entry: 9_200 }];
+    assert!(step_net(&e1, 5_000, &a2, 0).is_none(), "a leg that gained is named beside legs that lost together");
+    let e3 = [Leg { market: 0, long: true, units: 10, entry: 8_000 }, Leg { market: 1, long: false, units: 10, entry: 8_600 }];
+    assert!(step_net(&e3, 1_000, &a2, 1).is_some_and(|o| o.all && o.unpaid == 0));
+
+    // In time: the accounts of the walk above, whoever watches naming the leg that pays it most, or least. The
+    // shard is unpaid nothing either way and by either rule; what the choice costs the users is counted.
+    // Twice: accounts as the legs fall, and accounts that hold a hedge (a long and a short of 2,000 units of one
+    // market, next to one another) before their other legs: what W3 is of.
+    let mut seen = vec![];
+    for hedged in [false, true] {
+    let (mut cost_built, mut cost_net, mut fees) = (0i64, 0i64, [0i64; 4]);
+    let (mut stepped, mut differ_built, mut differ_net) = (0, 0, 0);
+    let (mut worst_built, mut worst_net) = (0i64, 0i64);
+    for path in 0..30_000u64 {
+        let mut r = Rng(0x1000_0000_0000_0001 + path * 0x9e37_79b9);
+        let mut p = [5_000 + r.below(5_000), 20_000 + r.below(20_000), 100 + r.below(900)];
+        let mut legs = r.legs(&p);
+        if hedged {
+            let market = r.below(MARKETS as i64) as usize;
+            legs.truncate(4);
+            legs.insert(0, Leg { market, long: false, units: 2_000, entry: p[market] });
+            legs.insert(0, Leg { market, long: true, units: 2_000, entry: p[market] });
+        }
+        let q: Vec<i64> = legs.iter().map(|x| p[x.market]).collect();
+        let row = trace(&legs, &p, &q, UP, Out::None).unwrap();
+        let m = row.closed().0 + row.ls + r.below(1 + (row.closed().0 * BPS / UP) / 200);
+        for x in p.iter_mut() {
+            let d = rate_up(*x, LO);
+            *x = (*x + r.below(2 * d + 1) - d).max(1);
+        }
+        let got: Vec<(i64, i64, i64)> = [(false, false), (false, true), (true, false), (true, true)].iter().map(|(net, greedy)| walked(&legs, m, &p, *net, *greedy)).collect();
+        for (k, g) in got.iter().enumerate() {
+            assert_eq!(g.2, 0, "path {path}: the shard is unpaid ({k})");
+            fees[k] += g.1;
+        }
+        if got[0].1 + got[1].1 + got[2].1 + got[3].1 > 0 || got[0].0 != got[1].0 {
+            stepped += 1;
+        }
+        // (What the choice moves of what the user has, either way: the stater that takes least does not always
+        // leave the user most, since it leaves legs that are stepped again.)
+        cost_built += (got[0].0 - got[1].0).abs();
+        cost_net += (got[2].0 - got[3].0).abs();
+        worst_built = worst_built.max((got[0].0 - got[1].0).abs());
+        worst_net = worst_net.max((got[2].0 - got[3].0).abs());
+        differ_built += (got[0].0 != got[1].0) as i64;
+        differ_net += (got[2].0 != got[3].0) as i64;
+    }
+    println!("W3 in the model, {}: 30,000 accounts after one move of the lower rate, {stepped} stepped. As built: the stater's choice changes what the user has on {differ_built} accounts, by {cost_built} in all, {worst_built} the most on one; fees {} (the stater that takes least) and {} (most). By what is asked: on {differ_net}, by {cost_net}, {worst_net} the most; fees {} and {}. The shard unpaid nothing in all four", if hedged { "accounts that hold a hedge" } else { "accounts as the legs fall" }, fees[0], fees[1], fees[2], fees[3]);
+    seen.push((cost_built, cost_net, worst_built, worst_net, fees));
+    }
+    // What the choice moves is less by what is asked, in all and on the worst account; and beside a hedge, where
+    // the gross worth is many times what is asked, much less.
+    assert!(seen.iter().all(|s| s.1 < s.0 && s.3 <= s.2), "{seen:?}");
+    assert!(seen[1].1 * 3 < seen[1].0 && seen[1].4[3] * 2 < seen[1].4[1], "{seen:?}");
+}

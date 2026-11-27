@@ -35,9 +35,11 @@ pragma silverscript ^0.1.0;
 //      the coins and what a step would leave of G and of what the legs gain to those prices (less the band where
 //      it is above nothing) are below nothing. The leg named lost: it leaves alone where the account lacks less
 //      without it (R and what it has, before and after) and the coins pay it, its fee no more than the coins hold
-//      beyond what it lost and what the legs that stay lost (review 47); an account that holds tokens is not
-//      taken whole: the leg leaves alone, owing what the coins do not pay. Else every leg leaves, for the fee of
-//      W, of what is left when the loss is paid. Named a leg that gained while another lost: wrong.
+//      beyond what it lost and what the legs that stay lost together (review 47); an account that holds tokens
+//      is not taken whole: the leg leaves alone, owing what the coins do not pay. The leg named gained: wrong
+//      where the legs that stay lost together; else it leaves alone where the account lacks less after it (or
+//      holds tokens). Else every leg leaves; the fee and the band of that are of what is asked (R by the fee's
+//      rate, and by twice the tolerance, over the rate: review T13, W3), of what is left when the loss is paid.
 // Where one leg leaves: the account without it (the second chain), its coins less what the leg lost and the fee;
 // the fee to the claimer; and the note that the leg left: what the shard is asked (what it gained beyond the band;
 // below zero what it lost, and the note holds those coins).
@@ -278,9 +280,11 @@ contract KpfTCEnd(int init_version) {
                     // Due by the prices the rows say (each within the lower rate of its row's): what a step would
                     // leave the account is below nothing. What the legs gained to those prices counts less the
                     // band where it is above nothing, and no less than nothing (docs 17.8g, D).
+                    // (The band of a step of every leg is of what is asked, the net: R by twice the tolerance over
+                    // the rate. Review T13, W3.)
                     int sx = gain + int(byte[8](row.slice(64, 72)));
                     if (sx >= 0) {
-                        sx = sx - ((w / BPS) * (g + g) + ((w % BPS) * (g + g) + BPS - 1) / BPS);
+                        if (up > 0) { sx = sx - ((rall / up) * (g + g) + ((rall % up) * (g + g) + up - 1) / up); }
                         if (sx < 0) { sx = 0; }
                     }
                     if (m + tk - owes + sx >= 0) { ok = 0; }
@@ -294,7 +298,9 @@ contract KpfTCEnd(int init_version) {
                             // before (docs 17.4), its fee no more than the coins hold beyond what it lost and
                             // what the legs that stay lost.
                             fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
-                            int cap = m + gl - ls;
+                            // (What the legs that stay lost, together: review T13, W3.)
+                            int cap = m + gl;
+                            if (gain - gl < 0) { cap = cap + gain - gl; }
                             if (cap < 0) { cap = 0; }
                             if (fee > cap) { fee = cap; }
                             int bf = rall - (m + tk - owes) - gain;
@@ -312,16 +318,25 @@ contract KpfTCEnd(int init_version) {
                                 all = 1;
                             }
                         } else {
-                            if (ls != 0) { ok = 0; }
-                            if (tk != 0) {
-                                fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
-                            } else {
-                                all = 1;
+                            // The leg named gained: it is named only where the legs that stay have not lost
+                            // together; an account that holds tokens is not taken whole; and with none, it leaves
+                            // alone where the account lacks less after it (what it gained leaves for its user),
+                            // and else every leg leaves.
+                            if (gain - gl < 0) { ok = 0; }
+                            fee = (wl / BPS) * liq + ((wl % BPS) * liq) / BPS;
+                            if (tk == 0) {
+                                int bg = rall - (m - owes) - gain;
+                                if (bg < 0) { bg = 0; }
+                                int ag = rst - (m - owes + gain - gl);
+                                if (ag < 0) { ag = 0; }
+                                if (ag >= bg) { all = 1; }
                             }
                         }
                     }
                     if (all == 1) {
-                        fee = (w / BPS) * liq + ((w % BPS) * liq) / BPS;
+                        // (The fee of a step of every leg is of what is asked: R by the fee's rate over the rate.)
+                        fee = 0;
+                        if (up > 0) { fee = (rall / up) * liq + ((rall % up) * liq) / up; }
                     }
                 }
             }
@@ -341,7 +356,8 @@ contract KpfTCEnd(int init_version) {
                         if (pay > room) { pay = room; }
                         asked = 0 - pay;
                     } else {
-                        asked = gain - ((w / BPS) * g2 + ((w % BPS) * g2 + BPS - 1) / BPS);
+                        asked = gain;
+                        if (up > 0) { asked = gain - ((rall / up) * g2 + ((rall % up) * g2 + up - 1) / up); }
                         if (asked < 0) { asked = 0; }
                         // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
                         if (asked > owes) { asked = asked - owes; } else { asked = 0; }

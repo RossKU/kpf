@@ -154,6 +154,16 @@ pub(crate) fn worth(n: i64, sc: i64, p: i64) -> Option<i64> {
 pub(crate) fn rate_up(w: i64, r: i64) -> Option<i64> {
     add(ck((w / BPS).checked_mul(r))?, add(ck((w % BPS).checked_mul(r))?, BPS - 1)? / BPS)
 }
+/// `x` by `num` over `den`, as the scripts compute it without the product leaving 64 bits: rounded up, or down.
+/// Nothing where `den` is nothing.
+fn over(x: i64, num: i64, den: i64, up: bool) -> Option<i64> {
+    if den <= 0 {
+        return Some(0);
+    }
+    let rest = ck((x % den).checked_mul(num))?;
+    add(ck((x / den).checked_mul(num))?, if up { add(rest, den - 1)? / den } else { rest / den })
+}
+
 pub(crate) fn rate_down(w: i64, r: i64) -> Option<i64> {
     add(ck((w / BPS).checked_mul(r))?, ck((w % BPS).checked_mul(r))? / BPS)
 }
@@ -604,9 +614,16 @@ impl Account {
             // Due by the prices the rows say: what a step would leave the account is below nothing. What the legs
             // gained to those prices counts less the band where it is above nothing, and no less than nothing
             // (docs 17.8g, D).
+            // (The band and the fee of a step of every leg are of what is asked, the net: R by twice the
+            // tolerance, and by the fee's rate, over the rate. Review T13, W3.)
+            let up = add(self.t.mmr_bps, g)?;
+            let band_all = over(ra, add(g, g)?, up, true)?;
+            let fee_all = over(ra, self.t.liq_fee_bps, up, false)?;
+            // (What the legs that stay lost, together.)
+            let nls = sub(0, sub(gain, gl)?)?.max(0);
             let mut sx = add(gain, row.m)?;
             if sx >= 0 {
-                sx = sub(sx, rate_up(w, add(g, g)?)?)?.max(0);
+                sx = sub(sx, band_all)?.max(0);
             }
             let e = sub(add(m, tk)?, owes)?;
             if add(e, sx)? >= 0 {
@@ -617,7 +634,7 @@ impl Account {
                     // The leg named lost: it leaves alone where the account lacks less after it than before
                     // (docs 17.4), its fee no more than the coins hold beyond what it lost and what the legs
                     // that stay lost (review 47, F73).
-                    fee = rate_down(wl, self.t.liq_fee_bps)?.min(sub(add(m, gl)?, ls)?.max(0));
+                    fee = rate_down(wl, self.t.liq_fee_bps)?.min(sub(add(m, gl)?, nls)?.max(0));
                     // (What it lacks after is counted before the fee: review T13, W2.)
                     let before = sub(sub(ra, e)?, gain)?.max(0);
                     let after = sub(rs, add(e, gain)?)?.max(0);
@@ -629,18 +646,24 @@ impl Account {
                         all = true;
                     }
                 } else {
-                    if ls != 0 {
+                    // The leg named gained: only where the legs that stay have not lost together; an account
+                    // that holds tokens is not taken whole; with none, it leaves alone where the account lacks
+                    // less after it (what it gained leaves for its user), and else every leg leaves.
+                    if nls != 0 {
                         return Some(None);
                     }
-                    if tk != 0 {
-                        fee = rate_down(wl, self.t.liq_fee_bps)?;
-                    } else {
-                        all = true;
+                    fee = rate_down(wl, self.t.liq_fee_bps)?;
+                    if tk == 0 {
+                        let before = sub(sub(ra, sub(m, owes)?)?, gain)?.max(0);
+                        let after = sub(rs, sub(add(sub(m, owes)?, gain)?, gl)?)?.max(0);
+                        if after >= before {
+                            all = true;
+                        }
                     }
                 }
             }
             if all {
-                fee = rate_down(w, self.t.liq_fee_bps)?;
+                fee = fee_all;
             }
         }
         // (Not every leg while the account holds a token leg: its tokens leave, or are sold, first.)
@@ -659,7 +682,9 @@ impl Account {
                 pay = sub(0, gain)?.min(room);
                 asked = sub(0, pay)?;
             } else {
-                asked = sub(gain, rate_up(w, g2)?)?.max(0);
+                // (The band of every leg leaving, by a step or by its user's statement, is of what is asked: R by
+                // twice the tolerance over the rate. Review T13, W3.)
+                asked = sub(gain, over(ra, g2, add(self.t.mmr_bps, g)?, true)?)?.max(0);
                 // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
                 asked = sub(asked, asked.min(owes))?;
             }
@@ -963,14 +988,15 @@ impl Account {
     fn c_fees(&self, s: &CSaid) -> Vec<i64> {
         let Some(row) = s.rows.last() else { return vec![] };
         let one = rate_down(row.w - row.ws, self.t.liq_fee_bps).unwrap_or(0);
-        let all = rate_down(row.w, self.t.liq_fee_bps).unwrap_or(0);
+        // (Of every leg: the fee of what is asked. Review T13, W3.)
+        let all = row.closed().and_then(|(ra, _)| over(ra, self.t.liq_fee_bps, self.t.mmr_bps + self.t.g_bps, false)).unwrap_or(0);
         let room = (self.a_margin - NOTE_MIN).max(0);
         let pay = if row.gain < 0 { row.gain.saturating_neg().min(room) } else { 0 };
         // (And of an account that holds tokens: the fee of the leg named, as far as the coins go after its loss.)
         let lost = row.gl.saturating_neg().max(0).min(room);
         // (Of a leg that lost and leaves alone: no more than the coins hold beyond what it lost and what the legs
         // that stay lost.)
-        let cap = (self.a_margin - NOTE_MIN + row.gl - row.ls).max(0);
+        let cap = (self.a_margin - NOTE_MIN + row.gl - (row.gl - row.gain).max(0)).max(0);
         vec![one, one.min(cap), all.min(room - pay), one.min(cap).min(room - lost), one.min(room - lost), one.min(room)]
     }
 

@@ -4347,7 +4347,7 @@ nothing, no account stuck, none due after its own statement.
 |---|---|---|
 | W1 (high) | **a due account that holds a token leg and a partly hedged group took no step**: a leg that does not make the account lack less sent the step to every leg, and every leg is refused beside a token leg. A long of 10 and a short of 9 of one market with a tenth of a token: due at 9, short 0.7 KAS at 8, and nobody could end it. Any dust of tokens did it | **closed**: an account that holds tokens is not taken whole, so the leg named that lost leaves alone, the account owing what the coins do not pay (as before this stage: 16.18); "lacks less" decides between the leg and every leg only where no token is held |
 | W2 (low) | the fee was counted in what the account lacks after: a sompi more of coins turned a step of one leg (fee 2.189) into a step of every leg (fee 4.589) | **closed**: what the account lacks after is counted before the fee |
-| W3 (medium) | **whoever steps chooses the leg, and is paid most for the worst choice**: the fee of a leg alone is capped by what the legs that stay lost each alone, a hedge's losing leg whole, so the step that cures pays nothing; a leg named that the coins do not pay (a hedge's loser) takes every leg, for the coins as fee, and what the legs gained together falls under a band of the gross worth. In its numbers: a user loses 4.7 KAS by the stater's choice. In the walks, where both were right: 205.9 KAS of fees a leg alone against 891.2 for every leg. The choice was there before; netting widens it | **open**: the fee and the band of a step of every leg by what is asked (the net) and not by the gross worth, and the cap of a leg's fee by what its group lost: in the model first (E8, no longer left for the last phase) |
+| W3 (medium) | **whoever steps chooses the leg, and is paid most for the worst choice**: the fee of a leg alone is capped by what the legs that stay lost each alone, a hedge's losing leg whole, so the step that cures pays nothing; a leg named that the coins do not pay (a hedge's loser) takes every leg, for the coins as fee, and what the legs gained together falls under a band of the gross worth. In its numbers: a user loses 4.7 KAS by the stater's choice. In the walks, where both were right: 205.9 KAS of fees a leg alone against 891.2 for every leg. The choice was there before; netting widens it | **closed, below** (a step by what is asked): the model first, then the script. E8 with it, no longer left for the last phase |
 | W4 (low; the model; not of this stage) | with every price stated the tolerance off against the shard and moves of the whole lower rate, the shard is unpaid on 45 of 4,000 accounts, 0.41 KAS the most; at 3.5 % none. "An account at the level of a take is due at no price" holds at one price | said here: the upper rate holds the lower and twice the tolerance, to the rounding |
 | W5, W6, W9 (low) | the model and the script part where no coin moves: a step's price at the least number (the script subtracts before it compares); row 1 shown a leg before (the script reads none); a token leg worth 9 x 10^18 (the script counted its worth at the upper end before it saw a token leg) | **closed**: the model takes the script's part in the first two; the script counts a token leg's worth at its row's price alone |
 | W7 (low) | the bands of a row (of all, of those that leave) are computed and held by the row and read by no end: the ends count a band from the worth, as before; the scripts' head comments were of the rule before | the comments are of the rule; the bands' use with W3 |
@@ -4371,6 +4371,41 @@ is too small by a thousandth (0.05094867 at the least here). So on such an accou
 wins by nobody being able to answer, and the stater loses its bond. The threshold of review 50 (F77) was set
 for accounts whose own output is larger. To do: the quarter paid apart only from a bond that leaves room (a
 threshold above the least bond's quarter), or the least bond larger; with the fee's base (W3).
+
+**A step by what is asked** (review T13, W3; `s432_step_net.py`; the model first:
+`research_account_rows.rs`, `a_step_by_what_is_asked_costs_a_user_no_more_than_its_risk_whoever_chooses_the_leg`).
+Whoever steps chooses the leg; so no choice may pay it more than the risk it takes away. Three changes, all in
+`KpfTCEnd` (4,471 bytes) and its model, no number more in a row:
+
+- **The fee and the band of every leg leaving are of what is asked**: R of all the legs (the net, the last
+  group closed) by the fee's rate over the rate, rounded down; and by twice the tolerance over the rate, rounded
+  up. For an account of one leg both are what they were (R is then the rate on its worth). The band is so
+  what a price stated the tolerance off can move of what the legs gained together, and no more: the legs of a
+  group say one price. A user's own leaving of every leg has the same band; the test of a step that is due
+  counts it.
+- **What the legs that stay lost is what they lost together**, where a step reads it: in the cap of the fee of
+  a leg that leaves alone (the coins it leaves pay what the legs that stay lost at the prices stated), and
+  where a leg that gained is named (only where the legs that stay have not lost together: E1 holds; a hedge's
+  losing leg no longer counts whole against its other leg).
+- **A leg that gained, named, leaves alone where the account lacks less after it** (what it gained, less its
+  band, leaves for its user), and else every leg leaves; an account that holds tokens is not taken whole, as
+  before.
+
+In W3's numbers: the step that cures now pays the fee of its leg (0.048 KAS) and leaves the account as it was
+but for that leg; the step that names the hedge's short takes every leg for 0.563 of fee and 1.126 of band (of
+6.193 asked), the user paid its coins and the 2.6 its legs gained less those: by the stater's choice it has 1.7
+KAS less, where it had 4.7 less and nothing left. With a tenth of a KAS less of coins, the long that has to
+leave is named and leaves alone (as built first it could not be named, and every leg left). **In the model**,
+30,000 accounts after a move of the lower rate, whoever steps taking the step that pays it most, or least: the
+shard is unpaid nothing by either rule and either stater. What the choice moves of what users have: as the
+legs fall, 445 million in all by the gross worth and 317 by what is asked (the most on one account 1.32
+million and 0.83); **of accounts that hold a hedge beside their legs, 2,090 million and 458**, the fees of the
+stater that takes most 3,004 million and 1,500. The choice is not gone (a leg the coins do not pay still takes
+every leg, with no token held): what it pays is now of the risk taken away.
+
+**What is not read** (W7): a row's band of all the legs (BA) is read by no end (the band of every leg is of R;
+of a leg alone, of its worth, counted by the end as before). It stays for the option leg, whose band is not a
+rate on a worth (17.5); if stage 2 does not read it, it leaves the row in the last phase.
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
