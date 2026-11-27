@@ -323,6 +323,13 @@
       "source": "contracts/KpfTLeftAllD.sil",
       "source_sha256": "4321cdeb9b48c78d5828c88545290f802af56f93a18568956118fe89af41b80a"
     },
+    "KpfTLeftAllDC": {
+      "artifact": "KpfTLeftAllDC.json",
+      "artifact_sha256": "5403d532160ea3a23f4e9e59ba78f8fd73ebfa28fe6454b72605eedcf29cbca4",
+      "script_len": 12580,
+      "source": "contracts/KpfTLeftAllDC.sil",
+      "source_sha256": "0e54bb4d519c8f7f98b3b75b820c96d48758c30b4c944b5def57d3cb3a892b8d"
+    },
     "KpfTLeftC": {
       "artifact": "KpfTLeftC.json",
       "artifact_sha256": "6fb8cf1fb1247bfcffeb621eff1803ee99c8b9d741d06518eea04139b9cb6c8f",
@@ -336,6 +343,13 @@
       "script_len": 2726,
       "source": "contracts/KpfTLeftD.sil",
       "source_sha256": "ba6c7034506467d4702e2403073c13e5dd70b7fb819cc6f2712dd8a03cf54bf2"
+    },
+    "KpfTLeftDC": {
+      "artifact": "KpfTLeftDC.json",
+      "artifact_sha256": "5f7ff0ef5979266fbf94309a3c28584ab3539aff761c208ae65fb233b2a4ea8e",
+      "script_len": 3006,
+      "source": "contracts/KpfTLeftDC.sil",
+      "source_sha256": "c9861d43a8eb9483953cc240ccfcc4386664503a5adcc005fc8101eaa104cf47"
     },
     "KpfTLeftVoid": {
       "artifact": "KpfTLeftVoid.json",

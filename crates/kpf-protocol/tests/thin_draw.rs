@@ -4833,3 +4833,93 @@ fn a_calls_step_takes_an_option_leg_at_what_it_is_worth_exercised() {
     assert!(call_step(&w.lib, &acct, &acct.s, None, &call, &step_s, w.payer(&w.f, &f)).is_ok_and(|(b, _)| accepted(&b, &w.keys)), "an option of the day after the call's time");
     println!("C1: {said:#?}");
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, C2: a called shard with option legs: every account stepped, every note applied, the claims paid, the call
+// ended (`KpfTCStep`, `KpfTLeftAllDC`, `KpfTLeftDC`, `KpfTCallPay`).
+
+/// A shard has a long of ten and a call held at 11 of one user, and the same call written by another (entries at
+/// 10). It is called at 12. The first account is stepped: its note, of two legs, asks 30 KAS; applied to the called
+/// shard (`KpfTLeftAllDC`) it takes the long out of its row and the call out of its leaf, and what it asks is a
+/// claim. The second is stepped: it lost 10 KAS, which its note holds; applied (`KpfTLeftDC`), the shard holds 10
+/// more and the series' row is empty. No row has a unit: the claim is paid and the call ends. Another shard after
+/// an application is refused; neither script takes a shard that is not called; the note that an option did not
+/// enter is applied to the called shard and asks nothing.
+#[test]
+fn a_called_shard_with_option_legs_is_stepped_applied_paid_and_ended() {
+    use kpf_protocol::books::{Books, Key, OF_CALLS};
+    use kpf_protocol::reserve::{CALL_HOLD, NOTE_STEP};
+    let w = world();
+    let base = seeded(&w);
+    let h = w.head(0);
+    let scale = h.scale;
+    let day = 1_000_000;
+    let (ctime, p12) = (6_400, P10 / 10 * 12);
+    let k11 = Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 11 };
+    let f = [fund(xk(&w.f), 36)];
+    // The books: listed, and the three legs entered at 6,000 (long before the call).
+    let long = kpf_protocol::covered::leg_entered(&fleg(&w, 0, 10, LONG, P10), 6_000);
+    let opt = |way: i64| XLeg { committee: kpf_protocol::covered::leg_more(6_000, day, P10 / 10 * 11, KAS1 / 2), ..oleg(&w, 0, way, 10, P10 / 10 * 11, P10, day, KAS1 / 2) };
+    let (held_call, written_call) = (opt(3), opt(4));
+    let (s1, b1) = base.s.row_in(&Books::opened(), k11, scale, h.price_max, 0, 1, Some(2)).unwrap();
+    let s2 = s1.entered(&long, 0, 6_000).unwrap();
+    let (s3, b3) = Shard { expiry: 0, ..s2 }.entered_d(&b1, &held_call, 6_000).unwrap();
+    let (s4, b4) = Shard { expiry: 0, ..s3 }.entered_d(&b3, &written_call, 6_000).unwrap();
+    assert_eq!((b4.row(&k11).unwrap().net, s4.dgross, s4.rows[0].gross), (0, 20 * scale, 10 * scale));
+    // Called at 12.
+    let (called_s, call_s) = Shard { held: 50 * KAS1, ..s4 }.called_at_with(&b4, [p12, 0, 0, 0], ctime, 0);
+    assert_eq!(call_s.list().len(), 1);
+    let shard = OLive { s: called_s, value: (called_s.held + SHARD_CARRIER) as u64, ..base.clone() };
+    let call = OLive { s: call_s, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_500 };
+    // The first account: a long and the call held. Its step's note asks 30.
+    let acct_a = cov(&w, &shard, &[long, held_call], 60 * KAS1);
+    let (b, step_a) = call_step(&w.lib, &acct_a, &acct_a.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &f)).unwrap();
+    let sg = signed("the account of a long and a held call stepped under the call", &b, &w.keys);
+    assert_eq!((step_a.note.asked, step_a.young, step_a.note.legs.len()), (30 * KAS1, 0, 2));
+    let note_a = nth(&sg, 2, step_a.note.clone(), 6_600);
+    let (b, after_a, books_a, claim_a) = left_apply_dc(&w.lib, &shard, &b4, &note_a, NOTE_STEP, step_a.young, &w.script("KpfTLeftAllDC"), w.payer(&w.f, &f)).unwrap();
+    let sg = signed("a step's note of a futures leg and an option leg applied to the called shard", &b, &w.keys);
+    let claim_a = claim_a.expect("what the note asks is a claim");
+    assert_eq!((after_a.rows[0].gross, after_a.dgross, after_a.owed, books_a.row(&k11).unwrap().net, claim_a.amount1, claim_a.amount2), (0, 10 * scale, 30 * KAS1, 10 * scale, 30 * KAS1, 0), "the long and the held call are out; the claim is of the first class");
+    for (what, wrong) in [("the root as before", Shard { root: shard.s.root, ..after_a }), ("the sum as before", Shard { dgross: shard.s.dgross, ..after_a }), ("nothing owed", Shard { owed: 0, ..after_a }), ("the futures row as it was", Shard { rows: shard.s.rows, ..after_a })] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &wrong.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    let shard_a = nth(&sg, 0, after_a, 6_610);
+    let claim_note = nth(&sg, 2, claim_a, 6_610);
+    // The second account: the call written. It lost 10 KAS, which its note holds.
+    let acct_b = cov(&w, &shard, &[written_call], 40 * KAS1);
+    let (b, step_b) = call_step(&w.lib, &acct_b, &acct_b.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &f)).unwrap();
+    let sg = signed("the account of a written call stepped under the call", &b, &w.keys);
+    assert_eq!((step_b.note.asked, step_b.pay), (-10 * KAS1, 10 * KAS1));
+    let note_b = nth(&sg, 2, step_b.note.clone(), 6_620);
+    let (b, after_b, books_b, claim_b) = left_apply_dc(&w.lib, &shard_a, &books_a, &note_b, NOTE_STEP, step_b.young, &w.script("KpfTLeftDC"), w.payer(&w.f, &f)).unwrap();
+    let sg = signed("a step's note of one option leg applied to the called shard", &b, &w.keys);
+    assert_eq!((after_b.dgross, after_b.held, after_b.gross_sum(), books_b.root(), claim_b), (0, 60 * KAS1, 0, b1.root(), None), "no row has a unit, and the shard holds the 10 KAS more");
+    let shard_b = nth(&sg, 0, after_b, 6_630);
+    // No row has a unit: the claim is paid, and the call ends.
+    let fl = [KeyUtxo { daa: after_b.claims_time().unwrap() as u64, ..fund(xk(&w.f), 37) }];
+    let (b, after_c, paid, left) = claim_pay_c(&w.lib, &shard_b, &claim_note, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the claim of the first account paid", &b, &w.keys);
+    assert_eq!((paid, left, after_c.held), (30 * KAS1, None, 30 * KAS1));
+    // (The payment that makes a claim whole pays its key the part and what the claim's note held, in one output.)
+    assert!(pays(&sg, &xk(&w.w), 30 * KAS1 + NOTE_MIN));
+    let shard_c = nth(&sg, 0, after_c, 6_900);
+    let (b, ended) = call_off(&w.lib, &shard_c, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+    signed("the call ended", &b, &w.keys);
+    assert_eq!((ended.called, ended.owed, ended.rows[0].entered, ended.root), (0, 0, 2, b1.root()), "the shard is not called; its head counts the two leaves of the series listed");
+    // A shard that is not called: neither script applies a note to it.
+    let open = OLive { s: Shard { held: 50 * KAS1, ..s4 }, ..shard.clone() };
+    let own = kpf_protocol::reserve::Left { sid: s4.sid, legs: vec![written_call], key: xk(&w.w), asked: 0 };
+    let t = left_apply_dc_of(&w.lib, &open, &b4, &left_note(&open, &own, 7), &own, own.hash(), NOTE_LEFT_TAG, 0, &[], open.s.left_d(&b4, &own, NOTE_MIN).unwrap().0, 0, None, &w.script("KpfTLeftDC"), w.payer(&w.f, &f));
+    assert!(t.is_err() || !accepted(&t.unwrap(), &w.keys), "KpfTLeftDC on a shard that is not called");
+    // The note that an option did not enter, on the called shard: applied, nothing asked.
+    let un = kpf_protocol::covered::Unentered { sid: called_s.sid, leg: written_call, key: xk(&w.w) };
+    let unote = OLive { s: un, value: NOTE_MIN as u64, id: base.id, op: op(93), daa: 6_640 };
+    let (b, after_u, _) = unentered_apply_dc(&w.lib, &shard, &b4, &unote, &w.script("KpfTLeftDC"), w.payer(&w.f, &f)).unwrap();
+    signed("the note that an option did not enter applied to the called shard", &b, &w.keys);
+    assert_eq!((after_u.dgross, after_u.owed), (10 * scale, 0));
+}
+
+const NOTE_LEFT_TAG: i64 = kpf_protocol::reserve::NOTE_LEFT;

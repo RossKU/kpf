@@ -3067,6 +3067,80 @@ pub fn left_apply_d_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, 
     d.finish()
 }
 
+/// `KpfTLeftDC.apply`, `KpfTLeftAllDC.apply` (docs 17.8j, C2): a note with option legs applied to a CALLED shard
+/// whose tree is `books`: an account's own (`tag` 6) or a call's step's (`tag` 9, with what its young legs gained).
+/// The shard and the books after, and the claim written, which says its class.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn left_apply_dc(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::reserve::Left>, tag: i64, young: i64, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books, Option<crate::reserve::Claim>)> {
+    let (next, after, at, paid, claim) = shard.s.left_d_class(books, &note.s, tag, young, note.value as i64)?;
+    let b = left_apply_dc_of(lib, shard, books, note, &note.s, note.s.hash_as(tag, young), tag, young, &at, next, paid, claim, script, p)?;
+    Ok((b, next, after, claim))
+}
+
+/// As `left_apply_dc`, of the note that an option leg did not enter (tag 8: it asks nothing).
+pub fn unentered_apply_dc(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::covered::Unentered>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books)> {
+    let left = note.s.as_left();
+    let (next, after, at, paid, claim) = shard.s.left_d_class(books, &left, crate::reserve::NOTE_LEFT, 0, crate::reserve::NOTE_MIN)?;
+    let b = left_apply_dc_of(lib, shard, books, note, &left, note.s.hash(), crate::covered::NOTE_UNENTERED, 0, &at, next, paid, claim, script, p)?;
+    Ok((b, next, after))
+}
+
+/// As `left_apply_dc`, the note's hash and kind and the outputs said (for whoever tests what the scripts refuse).
+/// A note of one leg by `KpfTLeftDC`, of several by `KpfTLeftAllDC`.
+#[allow(clippy::too_many_arguments)]
+pub fn left_apply_dc_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, young: i64, at: &[usize], next: crate::reserve::Shard, paid: i64, claim: Option<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let s = &shard.s;
+    if n.legs.is_empty() || n.legs.len() > 6 {
+        return invalid("a note of one to six legs");
+    }
+    let (mut b, mut rows, mut leaves, mut places, mut besides) = (books.clone(), vec![], vec![], vec![], vec![]);
+    let mut futures = at.iter();
+    for l in &n.legs {
+        if crate::crow::option_of(l).is_some() {
+            let (head, units, basis) = crate::reserve::Shard::book_of_option(l)?;
+            let shown = b.shown(&head.key).ok_or_else(|| Error::Invalid("an option leg's series is not in the shard's books".into()))?;
+            leaves.extend(leaf138(&shown.row));
+            places.push(shown.place as i64);
+            besides.extend(beside192(&shown.beside));
+            rows.push(0i64);
+            b = b.moved(&head.key, units.checked_neg().unwrap_or(0), -l.size, basis.checked_neg().unwrap_or(0))?;
+        } else {
+            let r = futures.next().ok_or_else(|| Error::Invalid("a row a futures leg of the note".into()))?;
+            leaves.extend(vec![0u8; 138]);
+            places.push(0);
+            besides.extend(vec![0u8; 192]);
+            rows.push(*r as i64);
+        }
+    }
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving())];
+    let name = if n.legs.len() == 1 {
+        if crate::crow::option_of(&n.legs[0]).is_none() {
+            return invalid("a note of one futures leg is applied by the futures' script");
+        }
+        args.extend([bv(crate::thin::leg_bytes(&n.legs[0])), iv(0), bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(young), bv(leaves), iv(places[0]), bv(besides)]);
+        "KpfTLeftDC"
+    } else {
+        args.extend([bv(n.legs.iter().flat_map(crate::thin::leg_bytes).collect()), bv(rows.iter().flat_map(|r| sm8(*r)).collect()), bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(young), bv(leaves), bv(places.iter().flat_map(|r| sm8(*r)).collect()), bv(besides)]);
+        "KpfTLeftAllDC"
+    };
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, name, "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
+    let taken = crate::reserve::held_for(n.asked, note.value as i64);
+    let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(c) = &claim {
+        d.out(c.value() as u64, hash_spk(lib, &c.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
+    d.finish()
+}
+
 /// `KpfTLeftVoid.void`: a note of legs one of which is no leg of the shard's books is spent, the shard as it is
 /// (it is applied by nothing, and would end every draw). `k`: the leg that is not in the books (`Shard::gone_at`).
 pub fn left_void(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {

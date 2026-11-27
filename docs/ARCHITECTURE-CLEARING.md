@@ -5394,6 +5394,29 @@ their files with the measures of now). With C4, the model's call made with the s
   rate (1,857,000 the poorer where the account has no fee for it). For the last phase: the option leg's branch
   in a twin of its own.
 
+**C2 as it is built: a called shard with option legs** (the engine; `s527_c2_left_dc.py`: the two scripts are
+written from the twins for a called shard with the dated branch of `KpfTLeftD` and `KpfTLeftAllD`, run after
+`s514` and `s517`; the library has 84 scripts; the whole workspace 822 tests, none failed, in one run).
+- **`KpfTLeftDC.apply`** (3,006 bytes; `KpfTLeftC` 1,984): a note of one option leg (an account's own; that it
+  did not enter; a call's step's) applied to a called shard: the leg out of its leaf, what is asked counted in
+  its class. **`KpfTLeftAllDC.apply`** (12,580 bytes; `KpfTLeftAllC` 5,169): of two to six legs of which some
+  have a day.
+- **The model**: `Shard::left_d_class` (the legs out of their rows, a futures leg's among the four and an
+  option leg's in the tree; what is asked as `left_class` has it, a leg young by the time it entered whatever
+  it is).
+- **At the engine, the whole of a call** (`thin_draw.rs`,
+  `a_called_shard_with_option_legs_is_stepped_applied_paid_and_ended`; entries at 10, the call at 12): the
+  account of a long and a held call is stepped (its note asks 30 KAS) and its note applied (the long out of its
+  row, the call out of its leaf, a claim of the first class of 30; four other shards after refused); the
+  account that wrote the same call is stepped (it lost 10, which its note holds) and its note applied (the
+  shard holds 10 more; no row has a unit); **the claim is paid and the call ends**, the shard not called and
+  its head counting the two leaves of the series still listed. Neither script takes a shard that is not
+  called; the note that an option did not enter is applied to the called shard and asks nothing.
+- **This closes the call's half of review T18's U3**: the dead ends 1 to 3 of the list above. What stands is
+  the day's (4 and 5: step D).
+- **Measured**: a step's note of a futures leg and an option leg applied to a called shard is **15,463 bytes**
+  (the heaviest of the form: the last phase, with `KpfTLeftAllD`); of one option leg 5,326.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

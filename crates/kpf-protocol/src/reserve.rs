@@ -697,6 +697,72 @@ impl Shard {
         Ok((s, b, vec![], pay, (owed > 0).then_some(Rest { sid: n.sid, key: n.key, amount: owed })))
     }
 
+    /// `KpfTLeftDC.apply`, `KpfTLeftAllDC.apply` (and their twins for a shard that is not called): `left_class` of a
+    /// note of which some legs are option legs, with the shard's tree `books` (docs 17.8j, 9 and C2). Each option
+    /// leg out of its dated row, each futures leg out of its row among the four; what is asked as `left_class` has
+    /// it: paid as far as the shard holds where it is not called, counted in its class where it is, a leg young by
+    /// the time it entered whatever it is.
+    #[allow(clippy::type_complexity)]
+    pub fn left_d_class(&self, books: &crate::books::Books, n: &Left, tag: i64, young: i64, holds: i64) -> Result<(Shard, crate::books::Books, Vec<usize>, i64, Option<Claim>)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the note that legs left is not applied: {why}")));
+        let step = tag == NOTE_STEP;
+        if (!step && (tag != NOTE_LEFT || young != 0)) || (step && (self.called == 0 || young < 0)) {
+            return no("it is an account's own (6), or a call's step's (9), which is of a called shard and says what its young legs gained");
+        }
+        if step && ((young != 0 && !n.legs.iter().any(|l| self.young(l))) || (n.asked > 0 && n.legs.iter().all(|l| self.young(l)))) {
+            return no("a step's note is held to its legs: nothing of the young's where no leg is young, nothing asked above nothing where every leg is");
+        }
+        if n.sid != self.sid || n.legs.is_empty() || n.legs.len() > 6 {
+            return no("it is to another shard, or not of one to six legs");
+        }
+        if books.root() != self.root {
+            return no("the books shown are not the shard's");
+        }
+        let beyond = || Error::Invalid("the books are beyond what is counted".into());
+        let (mut b, mut s, mut at) = (books.clone(), *self, vec![]);
+        for l in &n.legs {
+            if crate::crow::option_of(l).is_some() {
+                let (head, units, basis) = Shard::book_of_option(l)?;
+                let Some(row) = b.row(&head.key) else { return no("an option leg is in no row of the shard's tree") };
+                if (row.scale, row.price_max) != (head.scale, head.price_max) || row.gross < l.size {
+                    return no("an option leg's row is of another scale or limit, or has fewer units than the leg");
+                }
+                b = b.moved(&head.key, units.checked_neg().ok_or_else(beyond)?, -l.size, basis.checked_neg().ok_or_else(beyond)?)?;
+                s.basis = s.basis.checked_sub(basis).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
+                s.dgross = s.dgross.checked_sub(l.size).filter(|x| *x >= 0).ok_or_else(beyond)?;
+            } else {
+                let (head, units, basis) = Shard::book_of(l)?;
+                let Some(r) = s.rows.iter().position(|row| row.head() == head) else { return no("a leg is in no row of the shard") };
+                let row = &mut s.rows[r];
+                if row.gross < l.size {
+                    return no("a row has fewer units than the leg");
+                }
+                row.net = row.net.checked_sub(units).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
+                row.gross -= l.size;
+                if row.net == 0 && row.gross == 0 && row.entered == 0 {
+                    (row.key, row.scale, row.price_max) = (Key::HEAD, 0, 0);
+                }
+                s.basis = s.basis.checked_sub(basis).filter(|x| *x != i64::MIN).ok_or_else(beyond)?;
+                at.push(r);
+            }
+        }
+        s.root = b.root();
+        if n.asked < 0 {
+            s.held = s.held.checked_add(held_for(n.asked, holds)).ok_or_else(beyond)?;
+        }
+        let (pay, a1, a2) = if self.called == 0 {
+            let pay = n.asked.max(0).min(s.held);
+            (pay, n.asked.max(0) - pay, 0)
+        } else {
+            let (a1, a2) = self.classed(n.asked, &n.legs, step);
+            (0, a1, a2.checked_add(young).ok_or_else(beyond)?)
+        };
+        s.held -= pay;
+        s.owed = s.owed.checked_add(a1).ok_or_else(beyond)?;
+        s.claims.owed2 = s.claims.owed2.checked_add(a2).ok_or_else(beyond)?;
+        Ok((s, b, at, pay, (a1 > 0 || a2 > 0).then_some(Claim { sid: n.sid, key: n.key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 })))
+    }
+
     /// The shard's committee is the leg's, for a leg that enters: the shard's id is the hash of `seed`, of that
     /// committee, and of the terms and periods of the accounts under it (`KpfTEnterS`; review 51, F80).
     pub fn of_committee(&self, seed: &[u8; 32], l: &XLeg) -> bool {
