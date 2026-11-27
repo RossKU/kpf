@@ -5,3 +5,4 @@
 /run/
 /brand/video/*.wav
 /brand/video/*.mp4
+/crates/kpf-cli/kpf-out/
