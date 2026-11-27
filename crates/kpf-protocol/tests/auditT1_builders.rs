@@ -8983,7 +8983,8 @@ fn t1b_r47_what_a_shard_is_good_for_falls_by_no_statement_of_a_covered_accounts_
             } else if r.range(0, 2) == 0 {
                 // The most the rule gives.
                 let last = x.c_trace(&a, 0).unwrap().last().copied().unwrap_or(kpf_protocol::crow::CRow::ZERO);
-                m - NOTE_MIN - (rate_up(last.w, up) + last.ls)
+                // (By what is asked, R: docs 17.8h; review T13, W8.)
+                m - NOTE_MIN - (last.closed().unwrap().0 + last.ls)
             } else {
                 r.range(1, m.max(2))
             };
@@ -14596,7 +14597,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4193), ("KpfTStepPrice", 1837), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2614)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4240), ("KpfTStepPrice", 1837), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2614)]);
 }
 
 // ================================================================================================================
@@ -14987,7 +14988,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCMark", 2546), ("KpfTMarkNote", 1188), ("KpfTCRow", 4193), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1837), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2546), ("KpfTMarkNote", 1188), ("KpfTCRow", 4240), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1837), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15348,7 +15349,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3757), ("KpfTCRow", 4193), ("KpfTCEnd", 4384), ("KpfTCSplit", 2614), ("KpfTCMark", 2546), ("KpfTCEnter", 1994), ("KpfTStepPrice", 1837), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3757), ("KpfTCRow", 4240), ("KpfTCEnd", 4374), ("KpfTCSplit", 2614), ("KpfTCMark", 2546), ("KpfTCEnter", 1994), ("KpfTStepPrice", 1837), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15482,7 +15483,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4384), ("KpfTCTok", 3757), ("KpfTChange", 1761), ("KpfTCRow", 4193), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4374), ("KpfTCTok", 3757), ("KpfTChange", 1761), ("KpfTCRow", 4240), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

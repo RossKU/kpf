@@ -202,7 +202,8 @@ fn step(legs: &[Leg], m: i64, a: &[i64; MARKETS], i: usize, guard: bool) -> Opti
         }
     } else {
         fee = rate_down(row.w - row.ws, LIQ).min((m + row.gl - row.ls).max(0));
-        let after = (rs - (m + row.g - fee)).max(0);
+        // (Counted before the fee: review T13, W2.)
+        let after = (rs - (m + row.g)).max(0);
         if after < before && (m + row.gl >= 0 || !guard) {
             let pay = (-row.gl).min(m.max(0));
             paid = pay;

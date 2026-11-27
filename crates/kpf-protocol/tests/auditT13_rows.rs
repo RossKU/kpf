@@ -195,59 +195,60 @@ fn handed(w: &World, acct: &OLive<Account>, kind: i64, s: &CSaid, claimer: &Keyp
 }
 
 // ================================================================================================================
-// W1. A due account that holds a token leg and a partly hedged group takes no step.
+// W1 (closed). A due account that holds a token leg and a partly hedged group is stepped.
 
 /// A long of 10 and a short of 9 of one market, entered at 10, and a tenth of a token; the coins half a KAS above
 /// a note's least. At 9 the long lost 10 and the short gained 9: the account is under by the price the rows say.
-/// Named, the long: without it the account lacks more (the short alone), so every leg would leave, and every leg
-/// is refused beside a token leg. Named, the short: it gained while the long lost. Named, the token leg: no
-/// statement of this kind names one. A sale of tokens is of an account that owes, and this one owes nothing.
-/// At 8 the account has lost 0.7 KAS more than it holds, tokens counted, and still takes no step.
-/// The same account with the token leg's 0.8 KAS as coins in its place is stepped, of every leg, at once.
+/// As the stage was first built (W1), no step of anyone's was right: without the long the account lacks more, so
+/// every leg would leave, and every leg is refused beside a token leg. Closed: an account that holds tokens is
+/// not taken whole; the long, named, leaves alone, the coins paying what they can and the account owing the rest
+/// (16.18). Then the short, which gained beside no leg that lost, is named; and the tokens of an account that
+/// owes are sold. Named first, the short is wrong (the long lost: E1), and the token leg is named by no step.
 #[test]
-fn t13_w1_a_due_account_with_a_token_leg_and_a_partly_hedged_group_takes_no_step() {
+fn t13_w1_closed_a_due_account_with_a_token_leg_and_a_partly_hedged_group_is_stepped() {
     let w = world();
     let (long, short, tok) = (fleg(&w, 0, 10, LONG, P10), fleg(&w, 0, 9, SHORT, P10), tleg_c(&w, 1, 10));
     let coins = NOTE_MIN + KAS1 / 2;
     let acct = cov(&w, &[long, short, tok], coins);
     acct.s.c_check().expect("a covered account of the form");
-    let mut unpaid_at_8 = 0;
     for price in [P10 * 9 / 10, P10 * 8 / 10] {
         let a = [price, price, P10];
         let q = acct.s.c_step_prices(&a).unwrap();
-        let rows = acct.s.c_trace_step(&a, &q, 1).unwrap();
-        let last = *rows.last().unwrap();
+        let last = *acct.s.c_trace_step(&a, &q, 1).unwrap().last().unwrap();
         let (m, tk) = (coins - NOTE_MIN, last.tk);
         assert_eq!(tk, 8 * KAS1 / 10 + 1);
-        // Due, by the end's own test: the coins, the tokens and what the legs gained to the prices said.
         assert!(last.gain + last.m < 0 && m + tk + last.gain + last.m < 0, "the account is due at {price}");
-        if price == P10 * 8 / 10 {
-            unpaid_at_8 = -(m + tk + last.gain);
+        // Named, the short (it gained while the long lost) and the token leg: no step.
+        for skip in [2i64, 3] {
+            assert!(acct.s.c_state(KIND_C_STEP, 0, skip, &a, T0, coins, xk(&w.f)).is_err(), "a step that names leg {skip} at {price}");
         }
-        // The model: no step, whichever leg is named.
-        for skip in 1..=3 {
-            assert!(acct.s.c_state(KIND_C_STEP, 0, skip, &a, T0, coins, xk(&w.f)).is_err(), "W1 is closed: a step that names leg {skip} at {price}");
-        }
-        // No sale of the tokens: the account owes nothing.
-        assert!(acct.s.c_state(kpf_protocol::covered::KIND_C_TOK_SOLD, 0, 3, &a, T0, coins, xk(&w.f)).is_err());
-        // The engine: the end of a step that names the long, or the short, is answered wrong, whatever fee it says.
-        if price == P10 * 9 / 10 {
-            for skip in [1i64, 2] {
-                let leg = acct.s.legs[skip as usize - 1];
-                let rows = acct.s.c_trace_step(&a, &q, skip).unwrap();
-                for fee in [0, 45 * KAS1 / 100] {
-                    let s = CSaid { amount: fee, skip, lc: chain_of_one(&leg), head: acct.s.c_head(), rows: rows.clone() };
-                    assert_eq!(handed(&w, &acct, KIND_C_STEP, &s, &w.f), (Some(false), (false, true)), "W1 is closed: the step that names leg {skip} for a fee of {fee}");
-                }
-            }
-        }
+        // Named, the long: it leaves alone; the coins pay what they hold above a note's least, no fee, and the
+        // account owes the rest. The engine takes the end right, and not wrong.
+        let lost = 10 * (P10 - price);
+        let (s, o, e) = ruled(&w, &acct, KIND_C_STEP, 0, 1, &a, &w.f).expect("W1 is open: no step names the long");
+        let after = o.after.clone().unwrap();
+        assert_eq!(after.legs, vec![short, tok]);
+        assert_eq!((after.a_margin, after.b_margin, s.amount, o.note.clone().unwrap().asked, e), (NOTE_MIN, lost - m, 0, -m, (true, false)), "at {price}");
+        // The account that goes on: the short gained beside no leg that lost, and is named; it leaves alone (an
+        // account that holds tokens is not taken whole), what it gained beyond the band set against what is owed.
+        let next = OLive { s: after.clone(), value: after.a_margin as u64, ..acct.clone() };
+        // (On the model: the account now holds a note's least, its statement's bond is the least bond, and the
+        // answer of a disputed end would pay a quarter of it in an output a block does not take beside the
+        // account's own: docs 17.8h, after review T13.)
+        let (_, s2, o2) = next.s.c_state(KIND_C_STEP, 0, 1, &[price, P10], T0, next.value as i64, xk(&w.f)).expect("the short is named, the long gone");
+        let after2 = o2.after.clone().unwrap();
+        assert_eq!((after2.legs.clone(), s2.amount, after2.a_margin, o2.note.clone().map(|n| n.asked)), (vec![tok], 0, NOTE_MIN, Some(0)), "the second step at {price}");
+        assert!(after2.b_margin < after.b_margin && after2.b_margin > 0, "what the short gained is set against what is owed: {} then {}", after.b_margin, after2.b_margin);
+        // And the tokens of an account that owes are sold.
+        let last2 = OLive { s: after2.clone(), value: after2.a_margin as u64, ..acct.clone() };
+        // (At or after the time the account says: a step that made it owe wrote it. 16.18.)
+        assert!(last2.s.b_min_counter > T0 && last2.s.c_state(kpf_protocol::covered::KIND_C_TOK_SOLD, 0, 1, &[P10], last2.s.b_min_counter, last2.value as i64, xk(&w.f)).is_ok(), "the tokens of an account that owes are sold");
     }
-    assert_eq!(unpaid_at_8, 7 * KAS1 / 10 - 1, "what the shard is not paid at 8");
     // The same legs with the tokens' 0.8 KAS as coins: stepped at once, of every leg.
     let plain = cov(&w, &[long, short], coins + 8 * KAS1 / 10);
     let (_, o, e) = ruled(&w, &plain, KIND_C_STEP, 0, 1, &[P10 * 9 / 10; 2], &w.f).expect("a step");
     assert_eq!((o.after.is_none(), e), (true, (true, false)));
-    println!("T13 W1: long 10, short 9, a tenth of a token, coins 0.5 KAS above a note's least: due at 9 and at 8, no step of anyone's is right (model: 6 statements; engine: 4 ends answered wrong); at 8 the shard is short {unpaid_at_8} sompi and the account still stands");
+    println!("T13 W1 (closed): long 10, short 9, a tenth of a token, coins 0.5 KAS above a note's least: due at 9 and at 8, the long named leaves alone and the account owes the rest; then the short; then the tokens are sold");
 }
 
 // ================================================================================================================
@@ -488,7 +489,7 @@ fn t13_a_steps_price_and_a_head_at_their_edges() {
     }
     // W5 as it stands: wrong by the rule and by the model; the engine takes neither verdict (the script subtracts
     // before it compares). Nobody is paid for answering it; the statement falls when its point lapses.
-    assert_eq!(w5, Some((Some(false), (false, false))), "W5 is closed (or the model changed)");
+    assert_eq!(w5, Some((None, (false, false))), "W5 (closed): the model and the engine take neither verdict");
     println!("T13 a step's price and a head at their edges: {n} rows; the rule, the model and the engine agree on all but W5 (a step's price of -(2^63 - 1): wrong by the model, answered by neither verdict)");
 }
 
@@ -509,7 +510,7 @@ fn t13_w9_a_token_legs_row_is_not_answered_where_its_worth_at_the_upper_end_does
         got.push(row_both(&w, &acct, KIND_C_TAKE, &s, 2));
     }
     assert_eq!(got[0], (Some(true), (true, false)), "a token leg worth 9 * 10^17");
-    assert_eq!(got[1], (Some(true), (false, false)), "W9 is closed (or the model changed)");
+    assert_eq!(got[1], (Some(true), (true, false)), "W9 (closed): a token leg's row is answered right whatever its worth at the upper end");
     println!("T13 W9: a token leg worth 9 * 10^18 sompi at its row's price: right by the model, answered by neither verdict at the engine");
 }
 
@@ -549,7 +550,7 @@ fn t13_held_the_leg_before_is_asked_where_the_row_stands_on_the_row_before() {
         n += 1;
     }
     // W6: the model says of row 1 shown a leg before that the script takes neither verdict.
-    assert_eq!(c_row_judged_of(KIND_C_TAKE, &g[0], Some(&legs[1]), &legs[0], &CRow::ZERO, &s.rows[0], 1, &s), None, "W6 is closed");
+    assert_eq!(c_row_judged_of(KIND_C_TAKE, &g[0], Some(&legs[1]), &legs[0], &CRow::ZERO, &s.rows[0], 1, &s), Some(true), "W6 (closed): the model reads no leg before of the first row, as the script");
     // The chain two rows before, false: row 1 says a chain of its own.
     let mut bent = s.clone();
     bent.rows[0].g = [0x66; 32];
@@ -580,38 +581,32 @@ fn t13_held_the_leg_before_is_asked_where_the_row_stands_on_the_row_before() {
 // ================================================================================================================
 // W2, W3. Which step: the fee inside "lacks less", and the stater's choice of the leg.
 
-/// W2. A long of 100 and a short of 48 of one market from 10, at 9.95: the long lost 5, the short gained 2.4. With
-/// coins that pay the long, the account is due. The fee of the long (4.975) is no more than the coins hold beyond
-/// its loss; and the fee counts in what the account lacks after. So with coins of 7.1 KAS the long leaves alone
-/// (fee 2.1), and with a sompi more than 7.189 every leg leaves, for a fee of all that is left.
+/// W2 (closed). A long of 100 and a short of 48 of one market from 10, at 9.95: the long lost 5, the short gained
+/// 2.4. With coins that pay the long, the account is due up to 25.88 KAS. As first built, the fee counted in what
+/// the account lacks after, and above 7.189 KAS of coins every leg left, for a fee of all that was left. Closed:
+/// what it lacks after is counted before the fee, and the long leaves alone at every amount of coins that pays
+/// it, for the fee of its worth or what the coins hold beyond its loss.
 #[test]
-fn t13_w2_a_sompi_more_of_coins_turns_a_step_of_one_leg_into_a_step_of_every_leg() {
+fn t13_w2_closed_the_fee_does_not_turn_a_step_of_one_leg_into_a_step_of_every_leg() {
     let w = world();
     let legs = [fleg(&w, 0, 100, LONG, P10), fleg(&w, 0, 48, SHORT, P10)];
     let a = [P10 * 995 / 1_000; 2];
     let step = |m: i64| cov(&w, &legs, NOTE_MIN + m).s.c_state(KIND_C_STEP, 0, 1, &a, T0, NOTE_MIN + m, xk(&w.f)).ok().map(|(_, s, o)| (o.after.is_some(), s.amount));
-    // From the coins that pay the leg (5 KAS) up to where the account is not due any more.
-    let (mut lo, mut hi) = (5 * KAS1, 20 * KAS1);
-    assert_eq!((step(lo).map(|x| x.0), step(hi).map(|x| x.0)), (Some(true), Some(false)));
-    while hi - lo > 1 {
-        let mid = (lo + hi) / 2;
-        if step(mid).unwrap().0 {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (alone, all) = (step(lo).unwrap(), step(hi).unwrap());
-    // (What the long alone can lose more than the short alone: the rate on 52 units less the rate on 48, at 9.95.)
     let edge = up_of(52 * a[0], 550) - up_of(48 * a[0], 550);
-    assert_eq!((lo, alone, hi, all), (5 * KAS1 + edge - 1, (true, edge - 1), 5 * KAS1 + edge, (false, hi - 26 * KAS1 / 10)), "W2 is closed, or its edge moved");
-    // Both at the engine, as the model states them.
-    for m in [lo, hi] {
-        let (_, o, e) = ruled(&w, &cov(&w, &legs, NOTE_MIN + m), KIND_C_STEP, 0, 1, &a, &w.f).unwrap();
-        assert_eq!(e, (true, false));
-        println!("T13 W2: coins {m} above a note's least: {}, the fee {}, the user's key {} and the account {:?}", if o.after.is_some() { "the long leaves alone" } else { "every leg leaves" }, o.fee, o.paid, o.after.map(|x| (x.legs.len(), x.a_margin)));
+    let whole = 4_975 * KAS1 / 1_000;
+    for m in [5 * KAS1, 5 * KAS1 + edge - 1, 5 * KAS1 + edge, 5 * KAS1 + edge + 1, 8 * KAS1, 5 * KAS1 + whole, 12 * KAS1, 20 * KAS1, 25 * KAS1] {
+        assert_eq!(step(m), Some((true, whole.min(m - 5 * KAS1))), "W2 is open: coins {m} above a note's least");
     }
+    assert_eq!(step(26 * KAS1), None, "not due");
+    assert_eq!(step(5 * KAS1 - 1), Some((false, 5 * KAS1 - 1 - 26 * KAS1 / 10)), "the coins do not pay the long: every leg leaves, the fee what is left when the 2.6 they lost together are paid");
+    // At the engine, either side of where the fee turned it.
+    for m in [5 * KAS1 + edge - 1, 5 * KAS1 + edge, 12 * KAS1] {
+        let (_, o, e) = ruled(&w, &cov(&w, &legs, NOTE_MIN + m), KIND_C_STEP, 0, 1, &a, &w.f).unwrap();
+        assert_eq!((o.after.is_some(), e), (true, (true, false)));
+    }
+    println!("T13 W2 (closed): the long leaves alone at every amount of coins that pays it; the fee is its worth's or what the coins hold beyond its loss");
 }
+
 
 /// W3. A hedge of 100 units (the long gained 100, the short lost 100), a long of another market that gained 3,
 /// and a small long of a third that lost 0.4; coins 2.1 KAS above a note's least. The account is due. The step
@@ -874,7 +869,7 @@ fn t13_held_the_rows_of_an_entry_a_sompi_off_and_its_last_row() {
 /// now gives, how often it is refused (R is above the rate on W by the rounding of the ends), and how often the
 /// rule gives more (legs counted together).
 #[test]
-fn t13_w8_the_walk_of_good_for_no_longer_takes_the_most_a_take_gives() {
+fn t13_w8_closed_the_most_a_take_gives_is_by_what_is_asked_and_not_by_the_rate_on_the_worth() {
     let w = world();
     let mut r = Rng(0x13_0008);
     let (mut same, mut refused, mut more, mut most_more) = (0, 0, 0, 0i64);
@@ -902,7 +897,8 @@ fn t13_w8_the_walk_of_good_for_no_longer_takes_the_most_a_take_gives() {
         }
     }
     println!("T13 W8: of 5,000 accounts as review 47's walk makes them, the take it calls the most the rule gives is the most on {same}, is refused on {refused} (R above the rate on W by the rounding), and is below the most on {more} (by up to {most_more} sompi)");
-    assert!(more > 1_000 && same + more + refused == 5_000, "W8 is closed, or the accounts changed");
+    // (W8 is closed where review 47's walk takes the most by R: `auditT1_builders.rs`. This counts how far the two part.)
+    assert!(more > 1_000 && same + more + refused == 5_000, "the accounts changed");
 }
 
 // ================================================================================================================

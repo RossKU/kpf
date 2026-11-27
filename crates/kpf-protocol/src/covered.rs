@@ -307,7 +307,8 @@ fn c_row_judged_with(kind: i64, head: &CHead, amount: i64, skip: i64, lc: &[u8; 
                 return None;
             }
         }
-        None if i <= 1 => {}
+        // (The script reads no leg before of the first row: review T13, W6.)
+        _ if i <= 1 => {}
         _ => return None,
     }
     let leaves = skip == i || skip == ALL;
@@ -319,7 +320,7 @@ fn c_row_judged_with(kind: i64, head: &CHead, amount: i64, skip: i64, lc: &[u8; 
         return Some(false);
     }
     let part = if !leaves { Part::Stays } else if kind == KIND_C_MARK { Part::Marked(amount) } else { Part::Leaves };
-    Some(crow_after(kind, head, before, leg_before, l, row.a, row.q, part)? == Some(*row))
+    Some(crow_after(kind, head, before, leg_before.filter(|_| i > 1), l, row.a, row.q, part)? == Some(*row))
 }
 
 /// What a statement on a covered account makes of it.
@@ -617,18 +618,15 @@ impl Account {
                     // (docs 17.4), its fee no more than the coins hold beyond what it lost and what the legs
                     // that stay lost (review 47, F73).
                     fee = rate_down(wl, self.t.liq_fee_bps)?.min(sub(add(m, gl)?, ls)?.max(0));
+                    // (What it lacks after is counted before the fee: review T13, W2.)
                     let before = sub(sub(ra, e)?, gain)?.max(0);
-                    let after = sub(rs, sub(add(e, gain)?, fee)?)?.max(0);
-                    if after >= before {
+                    let after = sub(rs, add(e, gain)?)?.max(0);
+                    if tk != 0 {
+                        // (An account that holds tokens is not taken whole: the leg named leaves alone, and the
+                        // account owes what the coins do not pay. Review T13, W1.)
+                        owing = add(m, gl)? < 0;
+                    } else if after >= before || add(m, gl)? < 0 {
                         all = true;
-                    } else if add(m, gl)? < 0 {
-                        // (The coins do not pay the leg. An account that holds tokens is not taken whole: the
-                        // leg leaves alone, and the account owes what the coins do not pay.)
-                        if tk != 0 {
-                            owing = true;
-                        } else {
-                            all = true;
-                        }
                     }
                 } else {
                     if ls != 0 {
@@ -1288,7 +1286,7 @@ pub fn c_enter_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, 
     // (The script finds the row of another leg than the one said wrong before it computes: so does this.)
     let last = i == s.rows.len() as i64;
     let g2 = two_before(&s.rows, i);
-    let opened = if i > 1 { leg_before.is_some_and(|b| blake2b(&[&g2[..], &leg_bytes(b)].concat()) == before.g) } else { leg_before.is_none() };
+    let opened = i <= 1 || leg_before.is_some_and(|b| blake2b(&[&g2[..], &leg_bytes(b)].concat()) == before.g);
     if row.g != [0; 32] && blake2b(&[&prev[..], &leg_bytes(l)].concat()) == row.g && *prev == before.g && opened && last && !(*l == s.leg && l.entry == row.a) {
         return Some(false);
     }

@@ -17,8 +17,12 @@ pragma silverscript ^0.1.0;
 // A dispute names one point (KpfTPoint): 2i - 1 row i (KpfTCRow), 2i the price of row i (KpfTStepPrice), 0 the end
 // (KpfTCEnd). A point nobody answers costs the claimer its bond: the prices are the claimer's to show.
 //
-// KpfTCRow: the answer of a point 2i - 1. Row i is right when, for the leg the trace has there (a futures leg), its
-// price is above zero and within the market's limit, its sums are the sums before with the leg's at that price, its
+// KpfTCRow: the answer of a point 2i - 1. Row i is right when, for the leg the trace has there (a futures or a
+// token leg), its price is above zero and within the market's limit, a step's second price is within the lower
+// rate of it (any other statement's is the same), a leg of the market of the leg before says that row's prices
+// and a leg of another closes the group (the leg before is shown, and held to the row before's chain), its sums
+// are the sums before with the leg's at those prices (what it gains to the two ends of a move of the rate among
+// them: crow.rs), its
 // second chain is the one before with the leg (or as it is, where the leg leaves), and, where the leg leaves alone,
 // it is the leg the statement names by its chain. A point beyond the trace is of nothing: answered right here.
 //   answer(who, ageb, slotLen, position, kind, t0, said, outs, bond, claimer, window, late, held, dkey,
@@ -268,6 +272,13 @@ contract KpfTCRow(int init_version) {
             if (ok == 1) {
                 int scale = int(byte[8](lg.slice(67, 75)));
                 int size = int(byte[8](lg.slice(85, 93)));
+                // (A token leg adds nothing to what is asked: its worth is counted at its row's price alone, whatever
+                // it is at the ends. Review T13, W9.)
+                if (dir == 7) {
+                    lo = a;
+                    up = a;
+                    q = a;
+                }
                 int worth = quoteAt(size, scale, a);
                 int d = worth - quoteAt(size, scale, int(byte[8](lg.slice(103, 111))));
                 // (What the leg gains from the row's price to each end, and to the step's price.)

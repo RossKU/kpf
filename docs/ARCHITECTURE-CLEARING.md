@@ -4334,6 +4334,44 @@ against the engine among them, rewritten where the rule changed (below).
 - **Not built here**: the place of an entry (the leg that enters is the last, and its head says so: E2); the
   option leg (stage 2); a leaving of a group (E7).
 
+**Review T13** (`docs/audit/REVIEW-T13-rows.md`; the engine; `tests/auditT13_rows.rs`, fifteen tests). **The
+scripts are the model's and the rule's to the sompi; the rule had one hole, of this stage.** Attacked and held:
+each of a row's 21 numbers a sompi off in every kind (1,806 rows, and 134 of an entry: wrong, and not right); a
+row after a bent row before, the group closing at the ends of 64 bits (2,856 rows: the engine takes the model's
+verdict on every one); the leg before (22 answers: it cannot be played, no right statement has a row nobody can
+answer, no wrong one escapes); the ends a sompi either side and the head's three numbers (43); on the model,
+12,000 accounts through 13,224 takes of the most and 9,535 steps at the markets' prices: the shard unpaid
+nothing, no account stuck, none due after its own statement.
+
+| Finding | What it is | What is done |
+|---|---|---|
+| W1 (high) | **a due account that holds a token leg and a partly hedged group took no step**: a leg that does not make the account lack less sent the step to every leg, and every leg is refused beside a token leg. A long of 10 and a short of 9 of one market with a tenth of a token: due at 9, short 0.7 KAS at 8, and nobody could end it. Any dust of tokens did it | **closed**: an account that holds tokens is not taken whole, so the leg named that lost leaves alone, the account owing what the coins do not pay (as before this stage: 16.18); "lacks less" decides between the leg and every leg only where no token is held |
+| W2 (low) | the fee was counted in what the account lacks after: a sompi more of coins turned a step of one leg (fee 2.189) into a step of every leg (fee 4.589) | **closed**: what the account lacks after is counted before the fee |
+| W3 (medium) | **whoever steps chooses the leg, and is paid most for the worst choice**: the fee of a leg alone is capped by what the legs that stay lost each alone, a hedge's losing leg whole, so the step that cures pays nothing; a leg named that the coins do not pay (a hedge's loser) takes every leg, for the coins as fee, and what the legs gained together falls under a band of the gross worth. In its numbers: a user loses 4.7 KAS by the stater's choice. In the walks, where both were right: 205.9 KAS of fees a leg alone against 891.2 for every leg. The choice was there before; netting widens it | **open**: the fee and the band of a step of every leg by what is asked (the net) and not by the gross worth, and the cap of a leg's fee by what its group lost: in the model first (E8, no longer left for the last phase) |
+| W4 (low; the model; not of this stage) | with every price stated the tolerance off against the shard and moves of the whole lower rate, the shard is unpaid on 45 of 4,000 accounts, 0.41 KAS the most; at 3.5 % none. "An account at the level of a take is due at no price" holds at one price | said here: the upper rate holds the lower and twice the tolerance, to the rounding |
+| W5, W6, W9 (low) | the model and the script part where no coin moves: a step's price at the least number (the script subtracts before it compares); row 1 shown a leg before (the script reads none); a token leg worth 9 x 10^18 (the script counted its worth at the upper end before it saw a token leg) | **closed**: the model takes the script's part in the first two; the script counts a token leg's worth at its row's price alone |
+| W7 (low) | the bands of a row (of all, of those that leave) are computed and held by the row and read by no end: the ends count a band from the worth, as before; the scripts' head comments were of the rule before | the comments are of the rule; the bands' use with W3 |
+| W8 (low) | review 47's walk of "good for" took the most by the rate on the worth, below what the rule gives on 1,335 accounts of 5,000 | **closed**: it takes the most by R |
+
+**After review T13** (`s419_t13_fixes.py`; every test passes, 755; the reviewer's tests of W1, W2, W5, W6 and W9
+assert the findings closed). `KpfTCEnd` is 4,374 bytes, `KpfTCRow` 4,240. As a step now is: the leg named lost;
+**an account that holds tokens is not taken whole**, so the leg leaves alone and the account owes what the coins
+do not pay; with no token held it leaves alone where the account lacks less without it (what it lacks after,
+counted before the fee) and the coins pay it, and else every leg leaves. W1's account, at the engine: the long
+named leaves alone, the coins paying what they hold above a note's least and the account owing 9.5; then the
+short (it gained, beside no leg that lost) is named, what it gained set against what is owed; then the tokens
+of an account that owes are sold.
+
+**Found while closing them (X1; not of this stage; open).** An account that holds a note's least and no more
+(what a step that made it owe leaves) can have a statement stated and applied, but **the answer of a disputed
+point of it is a transaction no block takes**: the statement's bond is then the least bond (0.2 KAS), the script
+pays a quarter of a bond lost in an output of its own where a quarter is 0.05 KAS or more, and beside the
+account's own output of 0.2 KAS (which weighs 200,000 of a block's 500,000 by itself) an output of 0.05 KAS
+is too small by a thousandth (0.05094867 at the least here). So on such an account whoever disputes a step
+wins by nobody being able to answer, and the stater loses its bond. The threshold of review 50 (F77) was set
+for accounts whose own output is larger. To do: the quarter paid apart only from a bond that leaves room (a
+threshold above the least bond's quarter), or the least bond larger; with the fee's base (W3).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

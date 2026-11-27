@@ -19,20 +19,25 @@ pragma silverscript ^0.1.0;
 // KpfTCEnd: the answer of the point 0. The end is right when the last row's chain is the account's legs', the
 // account has nothing of a second party's, and by the last row's sums (m: the user's coins less a note's least,
 // which stays with the user whatever happens and is no coin of the account's in any test; up: the maintenance
-// rate and the tolerance; the band: twice the tolerance of what the legs that leave are worth):
+// rate and the tolerance; the band: twice the tolerance of what the legs that leave are worth; R: what the legs can
+// lose by a move of `up`, legs of one market next to one another counted together, of all the legs and of those that
+// stay, the last group closed here: docs 17.4, 17.8h). The statement's head (the rate, the tolerance, T) is held to
+// the terms and the account's times.
 // The account's moving part has, where a position has its asks, the legs counted and the time before which its
 // user states nothing again. A take and a leaving are stated at or after that time, and write their own time and
 // twice the longest a statement lives; a step is held to no time and writes none (docs 14.2).
-//   7, a take (the user's key; no leg leaves): the coins that stay are at `up` of W and at LS. (Of an account of
+//   7, a take (the user's key; no leg leaves): the coins that stay are at R and at LS. (Of an account of
 //      no leg: stated with no row.) outs: the account with the amount less; the amount to the user.
 //   8, a leaving (the user's key). Of every leg (-1): the account ends. Of one leg that gained: the coins are at
-//      `up` of WS and at LS. Of one that lost: the coins pay what it lost. (The account's only leg leaving alone
-//      leaves an account of no leg.)
-//   9, a step (anyone; the fee is stated): the coins and G are below the maintenance, counted the tolerance less, of
-//      W. The leg named lost, and the coins pay what it lost, the fee of its worth, and what the legs that stay
-//      have lost (a fee is not taken before a loss: review 47): it leaves. Else (it lost and they do not; or no
-//      leg lost) every leg leaves, for the fee of W, of what is left when the loss is paid. Named a leg that gained
-//      while another lost: wrong.
+//      R of what stays and at LS. Of one that lost: the coins pay what it lost, and with G they are at R of what
+//      stays (the level of an entry). (The account's only leg leaving alone leaves an account of no leg.)
+//   9, a step (anyone; the fee is stated): due by the prices its rows say, each within the lower rate of its row's:
+//      the coins and what a step would leave of G and of what the legs gain to those prices (less the band where
+//      it is above nothing) are below nothing. The leg named lost: it leaves alone where the account lacks less
+//      without it (R and what it has, before and after) and the coins pay it, its fee no more than the coins hold
+//      beyond what it lost and what the legs that stay lost (review 47); an account that holds tokens is not
+//      taken whole: the leg leaves alone, owing what the coins do not pay. Else every leg leaves, for the fee of
+//      W, of what is left when the loss is paid. Named a leg that gained while another lost: wrong.
 // Where one leg leaves: the account without it (the second chain), its coins less what the leg lost and the fee;
 // the fee to the claimer; and the note that the leg left: what the shard is asked (what it gained beyond the band;
 // below zero what it lost, and the note holds those coins).
@@ -294,14 +299,17 @@ contract KpfTCEnd(int init_version) {
                             if (fee > cap) { fee = cap; }
                             int bf = rall - (m + tk - owes) - gain;
                             if (bf < 0) { bf = 0; }
-                            int af = rst - (m + tk - owes + gain - fee);
+                            // (Counted before the fee: a fee does not turn a step of one leg into one of every leg.
+                            // Review T13, W2.)
+                            int af = rst - (m + tk - owes + gain);
                             if (af < 0) { af = 0; }
-                            if (af >= bf) {
+                            if (tk != 0) {
+                                // (An account that holds tokens is not taken whole: the leg named leaves alone,
+                                // and the account owes what the coins do not pay. docs 16.18; review T13, W1.)
+                                if (m + gl < 0) { owing = 1; }
+                            } else if (af >= bf || m + gl < 0) {
+                                // (The account does not lack less without the leg, or the coins do not pay it.)
                                 all = 1;
-                            } else if (m + gl < 0) {
-                                // (The coins do not pay the leg. An account that holds tokens is not taken whole:
-                                // the leg leaves alone, and the account owes what the coins do not pay. docs 16.18.)
-                                if (tk != 0) { owing = 1; } else { all = 1; }
                             }
                         } else {
                             if (ls != 0) { ok = 0; }

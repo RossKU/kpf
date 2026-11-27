@@ -152,7 +152,11 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
         return Some(None);
     }
     if kind == KIND_C_STEP {
-        if q < 0 || sub(q, a)?.abs() > rate_up(a, head.lower())? {
+        // (The script takes the two differences before it compares: a price whose distance does not fit is
+        // answered by neither verdict. Review T13, W5.)
+        let (over, under) = (sub(q, a)?, sub(a, q)?);
+        let dq = rate_up(a, head.lower())?;
+        if q < 0 || over > dq || under > dq {
             return Some(None);
         }
     } else if q != a {
