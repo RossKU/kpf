@@ -151,6 +151,10 @@ path = "tests/pinned.rs"
 required-features = ["legacy"]
 
 [[test]]
+name = "crow_model"
+path = "tests/crow_model.rs"
+
+[[test]]
 name = "research_account_rows"
 path = "tests/research_account_rows.rs"
 

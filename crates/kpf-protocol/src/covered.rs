@@ -138,22 +138,22 @@ fn p33(h: &[u8; 32]) -> Vec<u8> {
 fn ck(v: Option<i64>) -> Option<i64> {
     v.filter(|x| *x != i64::MIN)
 }
-fn add(a: i64, b: i64) -> Option<i64> {
+pub(crate) fn add(a: i64, b: i64) -> Option<i64> {
     ck(a.checked_add(b))
 }
-fn sub(a: i64, b: i64) -> Option<i64> {
+pub(crate) fn sub(a: i64, b: i64) -> Option<i64> {
     ck(a.checked_sub(b))
 }
-fn worth(n: i64, sc: i64, p: i64) -> Option<i64> {
+pub(crate) fn worth(n: i64, sc: i64, p: i64) -> Option<i64> {
     if sc == 0 {
         return None;
     }
     add(add(ck((n / sc).checked_mul(p))?, ck((n % sc).checked_mul(p / sc))?)?, ck((n % sc).checked_mul(p % sc))? / sc)
 }
-fn rate_up(w: i64, r: i64) -> Option<i64> {
+pub(crate) fn rate_up(w: i64, r: i64) -> Option<i64> {
     add(ck((w / BPS).checked_mul(r))?, add(ck((w % BPS).checked_mul(r))?, BPS - 1)? / BPS)
 }
-fn rate_down(w: i64, r: i64) -> Option<i64> {
+pub(crate) fn rate_down(w: i64, r: i64) -> Option<i64> {
     add(ck((w / BPS).checked_mul(r))?, ck((w % BPS).checked_mul(r))? / BPS)
 }
 
