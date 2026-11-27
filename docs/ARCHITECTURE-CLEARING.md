@@ -3872,6 +3872,21 @@ stated again. For a clearing party of many users that is the limit that is felt 
 here, and is the next question of the form (rows, or accounts' notes, that are objects of their own, so that
 what two users do does not meet in one output).
 
+**Left for a last phase of refactoring and of cost** (the owner of the design, 28 November 2026: the form is
+finished first; what makes a transaction lighter, and the rates, are done together at the end). Each is written
+here when it is found, with its number, and is not built:
+
+| What | What it would give | Why not now |
+|---|---|---|
+| the row's gate judged where an entry is disputed (3, above) | about 400 bytes of an entry | a game in time with a call: a model first |
+| a note of two or three legs by a script of three (`KpfTLeftAll` unrolls six: 4,369 bytes for any note of two to six) | about 1,600 bytes of a note of two or three legs (reckoned) | a script more; a twin for a called shard |
+| an operation a script, for the scripts that still carry more than one (`KpfTCTok`, `KpfTPoint`, `KpfTCallPay`, `KpfTOwed`, `KpfTLiq`, the disputes, `KpfTExit`, `KpfTCancel`) | what the other operations weigh, in each | none is on a common path |
+| `KpfTEnterS`'s stack (244 places, none to spare) | room for a line more in an entry | nothing needs it yet |
+| the most legs an account has (six) | more legs an account | every script that goes over the legs is unrolled to the most: about 540 bytes a leg more (reckoned), in every transaction of several legs |
+| the rows a shard writes whole (four) | more futures markets a shard | 105 bytes a row in every entry and every note applied |
+| **S1's rate** (17.8f): the upper rate on the gross at 3.13 % | a leaving never leaves a shard below its lower level | it is a rate, with the rates; until then S1 is open as review T7 found it |
+| the band where legs leave apart (17.8, 1: a leg's band is at most what that leg gained) | one rule for a band, apart or together | a number, with the rates |
+
 ### 17.8f S1 in numbers: the rate on the gross (a model; no rate changed)
 
 Review T7's S1: a leaving raises its row's requirement, and nothing asks the shard to hold it. An owner's long
