@@ -4633,7 +4633,7 @@ which no test of mine had tried.
 | `KpfTCEnter`, `KpfTCSplit`, `KpfTCMark`, `KpfTCTok` | 2,003, 2,643, 2,507, 3,767 | 2,069, 2,716, 2,573, 3,847 |
 
 The review's seven tests of the findings hold the closed rule now (Y4's as it stands), and its own writing of
-the step's rule was changed by the three lines of Y2 and Y3. Its walks after the fixes: with no token leg, 12,000 accounts (9,939 with options), 5,376 steps: stuck 0, a loss unpaid 0, a premium short 0, due after its user's own statement 0, right steps the model does not state 0 of 11,223. With a
+the step's rule was changed by the three lines of Y2 and Y3. Its walks after the fixes: with no token leg, 12,000 accounts (9,939 with options), 6,524 steps of a leg or of every leg: stuck 0, a loss unpaid 0, a premium short 0, due after its user's own statement 0, right steps the model does not state 0 of 11,223. With a
 token leg in every account: 6,000 accounts, 1,944 steps of a leg: stuck 0 (before: 142 visits), a premium short 0 (before: 331 steps, 881.6 KAS), a loss unpaid 0. The whole workspace: 774 tests, none failed.
 
 **What the review held and a user should be told** (N68 as written): an account that stands by a hedge is **due at
