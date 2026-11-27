@@ -4986,6 +4986,24 @@ held, the price 100: 55 together, 110 one by one. A row alone gives no credit, s
 it is asked far from it. For the last phase, with the rates: the rows of a market counted together (the first
 writing's point 6, with review T16's Z5 and Z10).
 
+**Review T16, second round** (the same report, "Second round"). Both answers taken whole hold: a row asked
+alone is never asked less than it alone can lose, in its three cases, and the trace leaves no dated row out,
+traces none twice and starts nowhere but at the head; with no credit the row carries what is owed and no draw
+is wrong for good. **Steps A1 to A3 and B are buildable with the sentences below; step D is written again as a
+list to build from, and read, before it is built.**
+
+| Finding | What | Decided |
+|---|---|---|
+| ZZ1 (high; D) | Nobody makes a leg that lost at its day leave: the loss is counted and its coins held, so the shard is never unpaid, but a final loss makes no account due and its user gains nothing by leaving. The holder of the other side is paid when the loser chooses (which may be the owner's own account); a premium of an option that ended worthless is paid only if its user chooses; a unit left in every series fills the tree | **From the leaf's writing, anyone's step names an ended leg whose gain less its premium is not above nothing, whatever the account's standing**: it leaves alone, the coins pay, what they do not pay is owed (16.18), the fee the keeper's least |
+| ZZ2 (D) | Which of its three forms an ended leg's row takes was its stater's to say, and no row's script sees the leaf: `KpfTStepPrice` answers the price now right for an ended leg | An ended leg's row says "a price" or "none", held by the shard's note at the price's point; `KpfTStepPrice` answers no ended leg; a step's row of the premium alone is answered wrong by showing the note, both bonds returned |
+| ZZ3 (D) | One price a group makes a long beside a call written on it wrong from the day on | An ended leg's row is of no group and carries the open group's two prices on |
+| ZZ4 (D) | A leaving's end computes no premium; "none" did not say whose premium | A leaving that names an ended option pays its premium as a step does (a holder's set against what it gained, then from the coins; a writer's is its own). By "none" every premium is its user's |
+| ZZ5 (A2) | Nothing said how `KpfTRowIn` knows whether the day's leaf stands | None stands where neither the leaf before the new row nor the key it names is of the row's market and day; else the leaf is shown by its path. `KpfTRowOut` by anyone once the leaf is written is shown the leaf by a second path |
+| ZZ6 (A3) | The futures answers derive the list's count from the statement's length; the points and the layout were not said; a futures head of no unit still reads a price | A draw and a call say: the amount, the two counts, the list, the four rows, **a third count and the dated rows**. `KpfTShardRow`, `KpfTShardEnd`, `KpfTCallEnd` and `KpfTShardPrice` read the counts as written. The points: 0 the end, 1 to 4 the futures rows, the prices as today, **100 and k the dated row k**, one beyond the last. A row whose gross is nothing reads no price, a futures head among them |
+| ZZ7 (B) | The mark is read by six scripts | `KpfTCEnter`, `KpfTCallEnter`, `KpfTDrawEntry`, `KpfTStepPrice`, `KpfTEnterS` and `KpfTEnterOff`, in B. A premium below what an output holds stays in the account, and is said |
+| ZZ8 (D) | A call's step over ended legs needs a note of each day; an owing account cannot state the leaving of an ended leg that gained | With D's list: a call's step is shown two days' notes at the most, and an account with ended legs of more days has them leave first; a leaving that names an ended leg is taken from an account that owes, what it gained set against that |
+| ZZ9 | Before the leaf under a silent committee a loss is counted nowhere until "none"; an ended row at a price is asked nothing while its legs have not paid; `KpfTRowIn` with three paths | said; measured with A2 |
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
