@@ -71,7 +71,7 @@ contract KpfTCallPay(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry claim(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, byte[32] key, int amount) {
+    entry claim(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, byte[32] key, int amount, int paid, int amount2, int paid2, int f) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -84,47 +84,117 @@ contract KpfTCallPay(int init_version) {
         byte[] tb = byte[](terms);
         byte[] rw = byte[](rows);
         byte[] gb = byte[](gbook);
-        // The shard (an object with no second key), called, and no row of it has a unit.
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The shard (an object with no second key), called, and no row of it has a unit: the four rows are empty
+        // and the sum of their gross units is nothing.
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
-        require(int(byte[8](mv.slice(130, 138))) != 0);
+        int called = int(byte[8](mv.slice(130, 138)));
+        require(called != 0);
         byte[] none = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
         require(rw == none + none + none + none);
+        require(int(byte[8](gb.slice(1, 9))) == 0);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
-        require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
+        // What it holds; what it owes by claims of the first class (which does not fall when one is paid); what
+        // it has paid to them; and the same two numbers of the second class (docs 17.8c).
         int held = int(byte[8](mv.slice(67, 75)));
         int owed = int(byte[8](mv.slice(76, 84)));
-        require(amount > 0);
+        int d1 = int(byte[8](gb.slice(10, 18)));
+        int c2 = int(byte[8](gb.slice(19, 27)));
+        int d2 = int(byte[8](gb.slice(28, 36)));
+        // Not before the call's time, a lateness and three dispute periods: every statement of before the call is
+        // applied by then, and its note counted. An input that landed then shows it.
+        require(f >= 0);
+        require(f < tx.inputs.length);
+        require(OpTxInputDaaScore(f) >= called + int(byte[8](mv.slice(94, 102))) + 3 * int(byte[8](mv.slice(103, 111))));
+        // The claim: its two amounts and what it has been paid of each, no amount above what its class is owed (a
+        // note is not taken at its word: one of more was never counted).
+        require(paid >= 0);
+        require(paid <= amount);
         require(amount <= owed);
+        require(paid2 >= 0);
+        require(paid2 <= amount2);
+        require(amount2 <= c2);
+        require(amount + amount2 > 0);
         require(held >= 0);
-        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
-        int pay = amount;
-        if (held < owed) {
+        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(amount) + i9(paid) + i9(amount2) + i9(paid2)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        // All the shard ever held for its claims: a payment does not change it, and every coin that reaches the
+        // shard raises it (so what an account pays late is the claims' and not the owner's: review 65, F114).
+        int w = held + d1 + d2;
+        // The first class: the claim's part of w over what is owed, rounded down; above 3,000,000,000 sompi owed
+        // both are counted in a larger unit (what is owed rounded up, w down), so that no product is beyond a
+        // script's numbers.
+        int e1 = amount;
+        if (w < owed) {
             int u = 1;
             if (owed >= 3000000000) { u = 1000; }
             if (owed >= 3000000000000) { u = 1000000; }
             if (owed >= 3000000000000000) { u = 1000000000; }
             if (owed >= 3000000000000000000) { u = 1000000000000; }
-            int h = held / u;
+            int h = w / u;
             int o = (owed - 1) / u + 1;
-            pay = (amount / o) * h + ((amount % o) * h) / o;
+            e1 = (amount / o) * h + ((amount % o) * h) / o;
         }
-        if (pay > 0) {
-            int m = tx.outputs.length - 1 - 4 * j;
-            require(m >= tx.inputs.length);
-            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
-            require(tx.outputs[m].value >= pay);
+        int p1 = e1 - paid;
+        if (p1 > held) { p1 = held; }
+        if (p1 > owed - d1) { p1 = owed - d1; }
+        if (p1 < 0) { p1 = 0; }
+        // The second class, of what is held beyond what the first is owed: nothing while that is nothing.
+        int s = w - owed;
+        int e2 = 0;
+        if (s > 0) {
+            e2 = amount2;
+            if (s < c2) {
+                int u2 = 1;
+                if (c2 >= 3000000000) { u2 = 1000; }
+                if (c2 >= 3000000000000) { u2 = 1000000; }
+                if (c2 >= 3000000000000000) { u2 = 1000000000; }
+                if (c2 >= 3000000000000000000) { u2 = 1000000000000; }
+                int h2 = s / u2;
+                int o2 = (c2 - 1) / u2 + 1;
+                e2 = (amount2 / o2) * h2 + ((amount2 % o2) * h2) / o2;
+            }
         }
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 76) + byte[]((owed - amount) as byte[8]) + mv.slice(84, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        int p2 = e2 - paid2;
+        if (p2 > s - d2) { p2 = s - d2; }
+        if (p2 > c2 - d2) { p2 = c2 - d2; }
+        if (p2 < 0) { p2 = 0; }
+        // A part below a note's least waits. The payment that makes the claim whole pays its key the part and what
+        // the claim's note held, in one output, whatever the part's size (review T6, K1: the last part of a claim
+        // is its user's, not whoever pays it's).
+        int pay = p1 + p2;
+        int whole = 0;
+        if (paid + p1 == amount && paid2 + p2 == amount2) { whole = 1; }
+        int due = pay;
+        if (whole == 1) {
+            due = pay + tx.inputs[n].value;
+        } else {
+            require(pay >= NOTE_MIN);
+        }
+        int m = tx.outputs.length - 1 - 4 * j;
+        require(m >= tx.inputs.length);
+        require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(key))));
+        require(tx.outputs[m].value >= due);
+        // The shard: what it holds less the payment; what it has paid, more; what it owes as it is.
+        byte[] ng = gb.slice(0, 9) + i9(d1 + p1) + gb.slice(18, 27) + i9(d2 + p2);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value - pay);
+        if (whole == 1) {
+            require(OpCovOutputCount(id) == 1);
+        } else {
+            // The claim again, with what it has been paid, holding what it held.
+            require(OpCovOutputCount(id) == 2);
+            int c1 = OpCovOutputIdx(id, 1);
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(amount) + i9(paid + p1) + i9(amount2) + i9(paid2 + p2))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].value >= tx.inputs[n].value);
+        }
         goesOn();
     }
 
-    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, int ctime, byte[32] body) {
+    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, int ctime, byte[32] body) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -137,24 +207,35 @@ contract KpfTCallPay(int init_version) {
         byte[] tb = byte[](terms);
         byte[] rw = byte[](rows);
         byte[] gb = byte[](gbook);
-        // The shard (an object with no second key), called, and no row of it has a unit.
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // The shard (an object with no second key), called, and no row of it has a unit: the four rows are empty
+        // and the sum of their gross units is nothing.
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
-        require(int(byte[8](mv.slice(130, 138))) != 0);
+        int called = int(byte[8](mv.slice(130, 138)));
+        require(called != 0);
         byte[] none = byte[](0x20) + z32 + byte[](0x20) + z32 + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
         require(rw == none + none + none + none);
+        require(int(byte[8](gb.slice(1, 9))) == 0);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
-        require(OpCovOutputCount(id) == 1);
         int c = OpCovOutputIdx(id, 0);
+        // What it holds; what it owes by claims of the first class (which does not fall when one is paid); what
+        // it has paid to them; and the same two numbers of the second class (docs 17.8c).
         int held = int(byte[8](mv.slice(67, 75)));
         int owed = int(byte[8](mv.slice(76, 84)));
-        require(owed == 0);
+        int d1 = int(byte[8](gb.slice(10, 18)));
+        int c2 = int(byte[8](gb.slice(19, 27)));
+        int d2 = int(byte[8](gb.slice(28, 36)));
+        require(OpCovOutputCount(id) == 1);
+        // The call ends where what was paid is what is owed, of both classes: the numbers are written as nothing.
+        require(d1 == owed);
+        require(d2 == c2);
         // The call of this shard: it is spent, and what it held returns to the shard's output.
         require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(CALL) + i9(ctime) + p33(body)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 130) + byte[](0 as byte[8]) + mv.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        byte[] ng = gb.slice(0, 9) + i9(0) + i9(0) + i9(0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36))))))) + mv.slice(0, 76) + byte[](0 as byte[8]) + mv.slice(84, 130) + byte[](0 as byte[8]) + mv.slice(138, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value + tx.inputs[n].value);
         goesOn();
     }

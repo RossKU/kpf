@@ -112,7 +112,7 @@ contract KpfTEnterS(int init_version) {
     int constant MARGIN_MAX = 1152921504606846975;
     int constant LEGS_MAX = 6;
 
-    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[408] rows, byte[41] gbook, byte[171] smoving, byte[32] seed, byte[32] cmt, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
+    entry state(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[171] moving, byte[408] rows, byte[36] gbook, byte[171] smoving, byte[32] seed, byte[32] cmt, int t0, byte[] said, byte[41] outs, int f, sig s1, sig s2) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -130,7 +130,7 @@ contract KpfTEnterS(int init_version) {
         byte[] z8 = byte[](0 as byte[8]);
         // The account as it stands, and its shard: the same id, its owner the account's second key, not called.
         require(blake2b(p33(blake2b(tb + p33(root))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + sm) == byte[32](ss.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + sm) == byte[32](ss.slice(STATE_AT, STATE_AT + 32)));
         require(sm.slice(34, 66) == z32);
         require(mv.slice(34, 66) != z32);
         require(mv.slice(33, 66) == sm.slice(0, 33));
@@ -225,7 +225,7 @@ contract KpfTEnterS(int init_version) {
         require(rn >= 0 - MARGIN_MAX);
         rw = rw.slice(0, 102 * r) + head + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
         // (The sum of the rows' gross units, in the books' hash: docs 17.8a.)
-        gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) + size) as byte[8]) + gb.slice(9, 41);
+        gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) + size) as byte[8]) + gb.slice(9, 36);
         // The shard's time, before which no draw is stated (docs 14.5): no sooner than when this entry is settled
         // or ended (its time, its lateness and two dispute periods). The books a draw reads then have no leg that
         // may yet not enter but one whose entry ended and is not undone, which is shown to end the draw.
@@ -238,7 +238,7 @@ contract KpfTEnterS(int init_version) {
         require(until >= iAt(sm, 85) + iAt(mv, LATE_AT));
         int time = until;
         int c1 = OpCovOutputIdx(id, 1);
-        require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ss.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + sm.slice(0, 85) + byte[](time as byte[8]) + sm.slice(93, 121) + byte[](basis as byte[8]) + sm.slice(129, 171))) + ss.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ss.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + sm.slice(0, 85) + byte[](time as byte[8]) + sm.slice(93, 121) + byte[](basis as byte[8]) + sm.slice(129, 171))) + ss.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c1].value >= tx.inputs[k].value);
         // The statement, on the account marked: the leg at the end of its chain, the coins added, a leg more
         // counted, and a push more (the mark).

@@ -129,7 +129,7 @@ contract KpfTMarkNote(int init_version) {
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left) + i9(0) + i9(0) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);

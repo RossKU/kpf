@@ -3285,7 +3285,43 @@ not need the tree; the tree needs traces. Four commits, each with every test of 
    the earlier reviews' tests had passed for the wrong reason since a point's number changed its meaning, and
    another named places as rows where they are the list's.
 3. **The claims**: no claim paid while a row has a unit, what a called shard has paid (F114), two classes (L1,
-   L4).
+   L4). In three pieces (17.8c). **(a) What a called shard has paid: built and reviewed**
+   (`s310_claims_sil.py`, run after `s294`; `Claims`, `Claim` and `Shard::claim_paid_at` in `reserve.rs`): a
+   shard's state has the claims' three numbers, shown plain beside the rows (36 bytes where 41 were); the note
+   of the rest says four numbers everywhere (three of nothing while its shard is not called); `KpfTCallPay.claim`
+   pays a claim its part of all the shard ever held for its claims, the first class before the second, from
+   the call's time, a lateness and three dispute periods on (an input that landed then shows it), and writes
+   the claim again while it is not whole; `KpfTCallPay.off` ends the call where what was paid is what is owed.
+   At the engine: a shard of 24.7 KAS that owes 45 pays its two claims their parts (one share, whatever the
+   order), stays called, and takes 30 KAS that reach it late: the claims are then paid whole and the call ends
+   with what they left: **F114 is closed in this form.** A part below a note's least waits; a claim that is
+   covered is paid whole whatever its size; no claim is paid before the time; a sompi more, a claim spent while
+   it is not whole, what is owed falling, the call ended with the numbers left: each refused. The second class's
+   part is run on shards made by hand (no script writes a claim of it before (b)).
+   **Review T6** (`docs/audit/REVIEW-T6-claims.md`; its tests `auditT6_claims.rs`, fourteen; the earlier
+   reviews' tests brought along: 24 failed by the change, each as it was meant to; the default workspace 703
+   tests, none failed). **No finding above low; F114 is closed at the engine**, in review 65's own numbers (100
+   KAS held against claims of 120 and 80, then 60 KAS an account pays later: 60 and 40, then 36 and 24, and no
+   end of the call before). No claim paid more than its part and no second class before the first: the model
+   is the script written out line by line on 360,000 random shards and claims; at the engine 1,200 shards made
+   by hand, 7,087 outcomes written otherwise refused, and none of 7,720 taken for claims the model refuses;
+   over 6,000 sequences of two to six claims of both classes with coins arriving between payments, nothing is
+   paid beyond what is held, the second class never has what the first is still owed, what a claim has been
+   paid is its two parts to the sompi whatever the order, and every call ends once what the shard ever held is
+   what it owes.
+
+   | Finding | What it is | Decided |
+   |---|---|---|
+   | K1 (low) | the last part of a claim, where it was below a note's least, asked no output and was whoever paid it's: for any claim paid a part before, up to 0.2 KAS a claim (ten claims of 1 KAS, 8.1 held: an owner that pays in the rest pays each "whole" with no output, and has 1.9 of the users' 10 and their notes' least) | **fixed, and closed at the engine**: the payment that makes a claim whole pays its key the part and what the claim's note held, in one output, whatever its size (the ten users have their 10 KAS and their notes' least; the owner is out what it paid in; 129 payments with another output refused). Whoever pays a claim gains nothing and is out its fee, about 0.011 KAS: a claim is paid by its user, or by the owner, who needs every claim whole to have its shard back |
+   | K2 (low here; F96's kind) | a note that was never counted is paid as a counted one, up to what its class is still owed, and the call ends with the real claims short by it (claims of 30 and 15, a stray of 20 shown first, 45 held: the stray has 20, the 30 has 25 and goes on, the 15 is paid by no outcome, the call ends) | said: the bound makes the call end; it does not protect the claims. A set of the claims counted comes with the tree. Only a wrong statement nobody disputed writes such a note |
+   | K3 (low) | a shard kept before this form did not read back; a claim partly paid has no kept form; no command pays a claim or ends a call | the first fixed (a shard of no claims' numbers is kept as before); the others with the commands of this form |
+   | K4 (low) | "at most 7 parts in ten million less than its exact share" holds near full cover only: at half held a part in a million, at a thousandth 333; under two units in sompi, never above | the sentence of 14.6 is of the unit, not of a ratio |
+   | K5 (low) | a part below a note's least waits, for good if nothing more comes: a claim of A is first paid once what the shard ever held is 0.2 KAS by what it owes over A (in the sequences 50,695 of 84,469 claims shown waited) | said to a user; nothing is taken, the part stays in the shard |
+
+   For (b): a claim counted after another was paid whole (a mark's note applied late, at the engine) has 50 of
+   150 where its part is 75: 17.8c's "second once anything was paid". Measured: `KpfTCallPay` 2,523 bytes
+   (1,691); a claim paid whole 4,455 (3,624; estimated 4,100), a part and written again 4,491, the call's end
+   4,345; a note of one leg applied 4,441 to 4,585 (4,314); an entry stated 5,056 (5,040).
 4. **The tree**: it then touches only the scripts that read one row, and a row's answer.
 
 ### 17.8b A draw and a call as traces, on four rows (17.8a, 2; on paper, reviewed)

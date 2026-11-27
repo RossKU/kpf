@@ -95,7 +95,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0 };
+        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -2111,69 +2111,187 @@ fn a_called_shards_accounts_are_stepped_its_claims_paid_at_one_share_and_its_cal
     let b = call_off_as(&w.lib, &sh3, &call, Shard { called: 0, ..sh3.s }, &pay_s, w.payer(&w.f, &ff));
     assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the call ended while claims are owed");
 
-    // The claims, at one share: 24.7 KAS held against 45 owed. The first (30) is counted in a unit of a thousand
-    // sompi (45 KAS is above 3,000,000,000 sompi): it has at most 7 parts in ten million less than its exact share.
+    // The claims (docs 17.8c): 24.7 KAS held against 45 owed. None is paid before the call's time, a lateness and
+    // three dispute periods: an input that landed then shows the time.
+    use kpf_protocol::reserve::{Claim, Claims};
+    let as_claim = |n: &OLive<Rest>| OLive { s: n.s.claim(), value: n.value, id: n.id, op: n.op, daa: n.daa };
+    let (c1, c3) = (as_claim(&c1), as_claim(&c3));
     let held = sh3.s.held;
-    let (b, sh4, p1) = claim_pay(&w.lib, &sh3, &c1, &pay_s, w.payer(&w.f, &ff)).unwrap();
-    let sg = signed("a claim paid its share", &b, &w.keys);
+    let due = sh3.s.claims_time().unwrap();
+    assert_eq!(due, T0 + w.terms().late_daa + 3 * 50);
+    assert!(claim_pay_c(&w.lib, &sh3, &c1, &pay_s, w.payer(&w.f, &ff)).is_err(), "before the time of the claims");
+    let (next, paid, left) = sh3.s.claim_paid_at(&c1.s, due).unwrap();
+    let b = claim_pay_as_c(&w.lib, &sh3, &c1, next, paid, left, &pay_s, w.payer(&w.f, &ff));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "a claim paid before the time of the claims");
+    assert!(sh3.s.claim_paid_at(&c1.s, due - 1).is_err());
+    let fl = [KeyUtxo { daa: due as u64, ..fund(xk(&w.f), 36) }];
+    // The first (30) is counted in a unit of a thousand sompi (45 KAS is above 3,000,000,000 sompi): it has at
+    // most 7 parts in ten million less than its exact part. It is not whole: it goes on, with what it was paid.
+    let (b, sh4, p1, left1) = claim_pay_c(&w.lib, &sh3, &c1, &pay_s, w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("a claim paid its part", &b, &w.keys);
     let exact = (30 * KAS1 as i128 * held as i128 / (45 * KAS1) as i128) as i64;
     assert!(p1 <= exact && exact - p1 <= exact / 1_000_000, "{p1} against {exact}");
-    assert_eq!((sh4.held, sh4.owed), (held - p1, 15 * KAS1));
+    assert_eq!((sh4.held, sh4.owed, sh4.claims), (held - p1, 45 * KAS1, Claims { paid1: p1, owed2: 0, paid2: 0 }), "what is owed does not fall: what was paid is said beside it");
+    assert_eq!(left1, Some(Claim { paid1: p1, ..c1.s }));
     assert!(pays(&sg, &xk(&w.w), p1));
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (sh3.value - p1 as u64, &hash_spk(&w.lib, &sh4.hash())));
-    for (what, next, paid) in [("a sompi more", Shard { held: held - p1 - 1, ..sh4 }, p1 + 1), ("all of it", Shard { held: held - 30 * KAS1.min(held), ..sh4 }, (30 * KAS1).min(held)), ("the claim paid and still owed", Shard { owed: 45 * KAS1, ..sh4 }, p1), ("the shard no poorer", Shard { held, ..sh4 }, p1)] {
-        let b = claim_pay_as(&w.lib, &sh3, &c1, next, paid, &pay_s, w.payer(&w.f, &ff));
+    assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (c1.value, &hash_spk(&w.lib, &left1.unwrap().hash())), "the claim again");
+    // (A copy of the shard, for the closure: the compiler does not take `..sh3.s` there.)
+    let before: Shard = sh3.s;
+    let paid_as = move |d: i64| -> Shard {
+        let mut x = before;
+        x.held = held - d;
+        x.claims = Claims { paid1: d, owed2: 0, paid2: 0 };
+        x
+    };
+    for (what, next, paid, left) in [
+        ("a sompi more", paid_as(p1 + 1), p1 + 1, Some(Claim { paid1: p1 + 1, ..c1.s })),
+        ("all of it", paid_as(30 * KAS1.min(held)), (30 * KAS1).min(held), None),
+        ("the claim spent while it is not whole", sh4, p1, None),
+        ("the claim again as it was", sh4, p1, Some(c1.s)),
+        ("what is owed falling", Shard { owed: 15 * KAS1, ..sh4 }, p1, left1),
+        ("the shard no poorer", Shard { held, ..sh4 }, p1, left1),
+        ("nothing said of what was paid", Shard { claims: Claims::default(), ..sh4 }, p1, left1),
+    ] {
+        let b = claim_pay_as_c(&w.lib, &sh3, &c1, next, paid, left, &pay_s, w.payer(&w.f, &fl));
         assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}");
     }
-    // The last claim has all that is left: the same share but for what rounding left.
-    let sh4 = nth(&sg, 0, sh4, 6_660);
-    let (b, sh5, p3) = claim_pay(&w.lib, &sh4, &c3, &pay_s, w.payer(&w.f, &ff)).unwrap();
-    let sg = signed("the last claim paid", &b, &w.keys);
-    assert_eq!((p3, sh5.held, sh5.owed), (held - p1, 0, 0));
+    // The other claim (15) has the same part of the same sum, whatever was paid before it.
+    let (sh4, c1) = (nth(&sg, 0, sh4, due as u64 + 10), nth(&sg, 2, left1.unwrap(), due as u64 + 10));
+    let (b, sh5, p3, left3) = claim_pay_c(&w.lib, &sh4, &c3, &pay_s, w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the other claim paid its part", &b, &w.keys);
     assert!((p3 as i128 * 30 - p1 as i128 * 15).abs() <= 30 * 15 * 1_000, "one share: {p1} of 30 and {p3} of 15");
-    // The call ends: the shard is not called, and what the call held is its output's again.
-    let sh5 = nth(&sg, 0, sh5, 6_670);
-    let (b, open) = call_off(&w.lib, &sh5, &call, &pay_s, w.payer(&w.f, &ff)).unwrap();
+    assert_eq!((sh5.owed, sh5.claims.paid1, sh5.held), (45 * KAS1, p1 + p3, held - p1 - p3));
+    let (sh5, c3) = (nth(&sg, 0, sh5, due as u64 + 20), nth(&sg, 2, left3.unwrap(), due as u64 + 20));
+    // Nothing more is paid of what there is (a claim's part less what it was paid is nothing), and the call does
+    // not end while what was paid is not what is owed: the shard stays called.
+    assert!(claim_pay_c(&w.lib, &sh5, &c1, &pay_s, w.payer(&w.f, &fl)).is_err());
+    assert!(call_off(&w.lib, &sh5, &call, &pay_s, w.payer(&w.f, &fl)).is_err());
+    let b = call_off_as(&w.lib, &sh5, &call, Shard { called: 0, owed: 0, claims: Claims::default(), ..sh5.s }, &pay_s, w.payer(&w.f, &fl));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the call ended while claims are owed");
+    // Coins reach the shard late (its owner's, here; what an account that owes pays is the same): they are the
+    // claims', whose parts are of all the shard ever held for them (review 65, F114).
+    let fc = [fund(xk(&w.c), 38)];
+    let (b, sh6) = shard_fund(&w.lib, &sh5, &w.script("KpfTAddC"), 30 * KAS1, w.payer(&w.c, &fc)).unwrap();
+    let sg = signed("coins reach a called shard after its claims were paid their parts", &b, &w.keys);
+    let sh6 = nth(&sg, 0, sh6, due as u64 + 30);
+    let (b, sh7, q1, left) = claim_pay_c(&w.lib, &sh6, &c1, &pay_s, w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the first claim paid whole", &b, &w.keys);
+    assert_eq!((q1, left, sg.tx.outputs.iter().filter(|o| o.script_public_key == hash_spk(&w.lib, &c1.s.hash())).count()), (30 * KAS1 - p1, None, 0), "what it was not paid; spent");
+    assert!(pays(&sg, &xk(&w.w), q1 + c1.value as i64), "what it was not paid, and what its note held");
+    let sh7 = nth(&sg, 0, sh7, due as u64 + 40);
+    assert!(call_off(&w.lib, &sh7, &call, &pay_s, w.payer(&w.f, &fl)).is_err());
+    let (b, sh8, q3, left) = claim_pay_c(&w.lib, &sh7, &c3, &pay_s, w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the last claim paid whole", &b, &w.keys);
+    assert_eq!((q3, left, sh8.claims.paid1, sh8.owed), (15 * KAS1 - p3, None, 45 * KAS1, 45 * KAS1));
+    // The call ends: the shard is not called, owes nothing, and has what the claims left of the late coins.
+    let sh8 = nth(&sg, 0, sh8, due as u64 + 50);
+    let (b, open) = call_off(&w.lib, &sh8, &call, &pay_s, w.payer(&w.f, &fl)).unwrap();
     let sg = signed("the call ends", &b, &w.keys);
-    assert_eq!((open.called, open.owed, open.held, open.rows), (0, 0, 0, [ShardRow::EMPTY; 4]));
-    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (sh5.value + CALL_HOLD as u64, &hash_spk(&w.lib, &open.hash())));
-    let b = call_off_as(&w.lib, &sh5, &call, sh5.s, &pay_s, w.payer(&w.f, &ff));
+    assert_eq!((open.called, open.owed, open.claims, open.held, open.rows), (0, 0, Claims::default(), held + 30 * KAS1 - 45 * KAS1, [ShardRow::EMPTY; 4]));
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (sh8.value + CALL_HOLD as u64, &hash_spk(&w.lib, &open.hash())));
+    let b = call_off_as(&w.lib, &sh8, &call, sh8.s, &pay_s, w.payer(&w.f, &fl));
     assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the call spent and the shard still called");
+    let b = call_off_as(&w.lib, &sh8, &call, Shard { called: 0, ..sh8.s }, &pay_s, w.payer(&w.f, &fl));
+    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "the call ended and the claims' numbers left as they were");
 }
 
-/// A shard that holds more than it owes by claims pays each in full; and one that holds nothing pays nothing, and
-/// its claims are spent all the same, so that its call ends.
+/// A shard that holds more than it owes by claims pays each in full; one that holds less pays a part and the claim
+/// goes on; and a part below a note's least waits (the claim is not spent, and the call does not end).
 #[test]
 fn a_claim_is_paid_no_more_than_it_asks_and_a_shard_of_nothing_pays_nothing() {
+    use kpf_protocol::reserve::{Claim, Claims};
     let w = world();
     let base = seeded(&w);
     let ff = [fund(xk(&w.f), 36)];
     let pay_s = w.script("KpfTCallPay");
     let claim = |amount: i64, k: u8| OLive { s: Rest { sid: base.s.sid, key: xk(&w.w), amount }, value: NOTE_MIN as u64, id: base.id, op: op(70 + k), daa: 6_600 };
-    for (what, held, owed, amount, paid) in [
-        ("more held than owed", 50 * KAS1, 30 * KAS1, 30 * KAS1, 30 * KAS1),
-        ("as much held as owed", 30 * KAS1, 30 * KAS1, 12 * KAS1, 12 * KAS1),
-        ("nothing held", 0, 30 * KAS1, 12 * KAS1, 0),
-        ("a sompi held", 1, 30 * KAS1, 30 * KAS1, 1),
-        ("a sompi held, of a part", 1, 30 * KAS1, 29 * KAS1, 0),
-        ("half, exact below 30 KAS owed", 10 * KAS1 + 1, 20 * KAS1 + 2, 7 * KAS1, 7 * KAS1 / 2),
-        ("a third of 3,000 KAS owed, in thousands of sompi", 1_000 * KAS1, 3_000 * KAS1, 300 * KAS1, 100 * KAS1 - 100 * KAS1 / 300_000_000_000 * 0),
+    for (what, held, owed, amount) in [
+        ("more held than owed", 50 * KAS1, 30 * KAS1, 30 * KAS1),
+        ("as much held as owed", 30 * KAS1, 30 * KAS1, 12 * KAS1),
+        ("nothing held", 0, 30 * KAS1, 12 * KAS1),
+        ("a sompi held", 1, 30 * KAS1, 30 * KAS1),
+        ("a sompi held, of a part", 1, 30 * KAS1, 29 * KAS1),
+        ("half, exact below 30 KAS owed", 10 * KAS1 + 1, 20 * KAS1 + 2, 7 * KAS1),
+        ("a third of 3,000 KAS owed, in thousands of sompi", 1_000 * KAS1, 3_000 * KAS1, 300 * KAS1),
+        ("a claim below a note's least, covered: paid whole whatever its size", 50 * KAS1, 30 * KAS1, NOTE_MIN / 4),
     ] {
         let s = Shard { held, owed, called: 6_400, ..base.s };
         let live = OLive { s, value: (held + SHARD_CARRIER) as u64, ..base.clone() };
-        let c = claim(amount, 1);
-        let (next, p) = s.claim_paid(&c.s).unwrap();
+        let c = OLive { s: claim(amount, 1).s.claim(), value: NOTE_MIN as u64, id: base.id, op: op(71), daa: 6_600 };
+        let fl = [KeyUtxo { daa: s.claims_time().unwrap() as u64, ..fund(xk(&w.f), 36) }];
         let exact = (amount as i128 * held as i128 / owed as i128).min(amount as i128) as i64;
-        assert!(p <= exact && exact - p <= exact / 1_000_000 + 1, "{what}: {p} against {exact}");
-        if owed < 3_000_000_000 || held >= owed {
-            assert_eq!(p, exact, "{what}");
+        match s.claim_paid_at(&c.s, i64::MAX) {
+            Ok((next, p, left)) => {
+                assert!(p <= exact && exact - p <= exact / 1_000_000 + 1, "{what}: {p} against {exact}");
+                if owed < 3_000_000_000 || held >= owed {
+                    assert_eq!(p, exact, "{what}");
+                }
+                assert_eq!((left.is_none(), next.owed, next.claims.paid1), (p == amount, owed, p), "{what}");
+                let (b, n2, p2, l2) = claim_pay_c(&w.lib, &live, &c, &pay_s, w.payer(&w.f, &fl)).unwrap();
+                assert_eq!((n2, p2, l2), (next, p, left));
+                let sg = signed(&format!("{what}: a claim of {amount} paid {p}"), &b, &w.keys);
+                // (The payment that makes a claim whole pays what its note held as well, whatever the part's size.)
+                assert!(pays(&sg, &xk(&w.w), if left.is_none() { p + NOTE_MIN } else { p }), "{what}");
+                if left.is_none() {
+                    let short = claim_pay_as_c(&w.lib, &live, &c, next, p, left, &pay_s, w.payer(&w.f, &fl)).unwrap();
+                    let mut short = short;
+                    let last = short.tx.outputs.len() - 1;
+                    short.tx.outputs[last].value -= 1;
+                    assert!(!accepted(&short, &w.keys), "{what}: a sompi less to the claim's key");
+                }
+                let more = Shard { held: held - p - 1, claims: Claims { paid1: p + 1, ..next.claims }, ..next };
+                let b = claim_pay_as_c(&w.lib, &live, &c, more, p + 1, left.map(|l| Claim { paid1: l.paid1 + 1, ..l }), &pay_s, w.payer(&w.f, &fl));
+                assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a sompi more");
+            }
+            Err(_) => {
+                // A part below a note's least waits: the claim is not spent for it, nor paid it.
+                assert!(exact < NOTE_MIN && exact < amount, "{what}");
+                for (next, paid, left) in [
+                    (Shard { held: held - exact, claims: Claims { paid1: exact, owed2: 0, paid2: 0 }, ..s }, exact, Some(Claim { paid1: exact, ..c.s })),
+                    (Shard { held: held - exact, claims: Claims { paid1: amount, owed2: 0, paid2: 0 }, ..s }, exact, None),
+                    (s, 0, Some(c.s)),
+                ] {
+                    let b = claim_pay_as_c(&w.lib, &live, &c, next, paid, left, &pay_s, w.payer(&w.f, &fl));
+                    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a part below a note's least");
+                }
+            }
         }
-        let _ = paid;
-        let (b, n2, p2) = claim_pay(&w.lib, &live, &c, &pay_s, w.payer(&w.f, &ff)).unwrap();
-        assert_eq!((n2, p2), (next, p));
-        signed(&format!("{what}: a claim of {amount} paid {p}"), &b, &w.keys);
-        let b = claim_pay_as(&w.lib, &live, &c, Shard { held: held - p - 1, ..next }, p + 1, &pay_s, w.payer(&w.f, &ff));
-        assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a sompi more");
+    }
+    let _ = &ff;
+    // The second class (docs 17.8c; no script writes a claim of it yet: the shards and claims are made by hand):
+    // it is paid of what the shard ever held beyond what the first class is owed, and never before it.
+    for (what, held, owed, cl, amounts, want) in [
+        ("the first whole and half the second", 40 * KAS1, 30 * KAS1, Claims { paid1: 0, owed2: 20 * KAS1, paid2: 0 }, (30 * KAS1, 0, 10 * KAS1, 0), Some((35 * KAS1, false))),
+        ("nothing beyond what the first is owed: the second waits", 20 * KAS1, 30 * KAS1, Claims { paid1: 0, owed2: 20 * KAS1, paid2: 0 }, (0, 0, 10 * KAS1, 0), None),
+        ("a claim of the second alone, while the first is still owed", 40 * KAS1, 30 * KAS1, Claims { paid1: 0, owed2: 20 * KAS1, paid2: 0 }, (0, 0, 20 * KAS1, 0), Some((10 * KAS1, false))),
+        ("the first paid already: all that is held is the second's", 15 * KAS1, 30 * KAS1, Claims { paid1: 30 * KAS1, owed2: 20 * KAS1, paid2: 0 }, (0, 0, 20 * KAS1, 0), Some((15 * KAS1, false))),
+        ("the second covered: whole", 25 * KAS1, 30 * KAS1, Claims { paid1: 30 * KAS1, owed2: 20 * KAS1, paid2: 5 * KAS1 }, (0, 0, 20 * KAS1, 5 * KAS1), Some((15 * KAS1, true))),
+        ("a claim of both, the first paid in part before", 30 * KAS1, 40 * KAS1, Claims { paid1: 10 * KAS1, owed2: 10 * KAS1, paid2: 0 }, (40 * KAS1, 10 * KAS1, 10 * KAS1, 0), Some((30 * KAS1, false))),
+    ] {
+        let s = Shard { held, owed, called: 6_400, claims: cl, ..base.s };
+        let live = OLive { s, value: (held + SHARD_CARRIER) as u64, ..base.clone() };
+        let c = OLive { s: Claim { sid: s.sid, key: xk(&w.w), amount1: amounts.0, paid1: amounts.1, amount2: amounts.2, paid2: amounts.3 }, value: NOTE_MIN as u64, id: base.id, op: op(72), daa: 6_600 };
+        let fl = [KeyUtxo { daa: s.claims_time().unwrap() as u64, ..fund(xk(&w.f), 36) }];
+        let got = s.claim_paid_at(&c.s, i64::MAX).ok();
+        assert_eq!(got.map(|(_, p, left)| (p, left.is_none())), want, "{what}");
+        match got {
+            Some((next, p, left)) => {
+                // (No more is paid than is held, and the first class is never left short by the second.)
+                assert!(next.held >= 0 && next.held >= (next.owed - next.claims.paid1).min(next.held), "{what}");
+                assert!(next.claims.paid2 <= (held + cl.paid1 + cl.paid2 - owed).max(0), "{what}: the second class has no more than what is beyond the first");
+                let (b, n2, p2, l2) = claim_pay_c(&w.lib, &live, &c, &pay_s, w.payer(&w.f, &fl)).unwrap();
+                assert_eq!((n2, p2, l2), (next, p, left));
+                signed(&format!("{what}: paid {p}"), &b, &w.keys);
+                let more = Shard { held: next.held - 1, claims: Claims { paid2: next.claims.paid2 + 1, ..next.claims }, ..next };
+                let b = claim_pay_as_c(&w.lib, &live, &c, more, p + 1, left.map(|l| Claim { paid2: l.paid2 + 1, ..l }), &pay_s, w.payer(&w.f, &fl));
+                assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a sompi more to the second class");
+            }
+            None => {
+                let b = claim_pay_as_c(&w.lib, &live, &c, Shard { held: held - KAS1, claims: Claims { paid2: cl.paid2 + KAS1, ..cl }, ..s }, KAS1, Some(Claim { paid2: KAS1, ..c.s }), &pay_s, w.payer(&w.f, &fl));
+                assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: paid all the same");
+            }
+        }
     }
     // A claim of more than is owed, of nothing, to another shard, or on a shard that is not called: not paid.
     let s = Shard { held: 50 * KAS1, owed: 30 * KAS1, called: 6_400, ..base.s };

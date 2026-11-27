@@ -90,7 +90,7 @@ contract KpfTLeft(int init_version) {
         require(OpCovOutputCount(lib) == OpCovInputCount(lib));
     }
 
-    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, byte[111] leg, int r, byte[32] key, int asked, int tag) {
+    entry apply(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, byte[111] leg, int r, byte[32] key, int asked, int tag) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -104,7 +104,7 @@ contract KpfTLeft(int init_version) {
         byte[] rw = byte[](rows);
         byte[] gb = byte[](gbook);
         // The shard (an object with no second key).
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         byte[] lg = byte[](leg);
@@ -150,7 +150,7 @@ contract KpfTLeft(int init_version) {
         if (rn == 0 && rg == 0) { hd = empty; }
         rw = rw.slice(0, 102 * r) + hd + byte[](0x08) + byte[](rn as byte[8]) + byte[](0x08) + byte[](rg as byte[8]) + rw.slice(102 * r + 102, 408);
         // (The sum of the rows' gross units, in the books' hash: docs 17.8a.)
-        gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) - size) as byte[8]) + gb.slice(9, 41);
+        gb = byte[](0x08) + byte[]((int(byte[8](gb.slice(1, 9))) - size) as byte[8]) + gb.slice(9, 36);
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
@@ -185,12 +185,12 @@ contract KpfTLeft(int init_version) {
             require(tx.outputs[m].value >= pay);
         }
         int c = OpCovOutputIdx(id, 0);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= v);
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left) + i9(0) + i9(0) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);
@@ -198,7 +198,7 @@ contract KpfTLeft(int init_version) {
         goesOn();
     }
 
-    entry rest(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[41] gbook, byte[171] moving, byte[32] key, int amount) {
+    entry rest(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[408] rows, byte[36] gbook, byte[171] moving, byte[32] key, int amount) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -212,11 +212,11 @@ contract KpfTLeft(int init_version) {
         byte[] rw = byte[](rows);
         byte[] gb = byte[](gbook);
         // The shard (an object with no second key).
-        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         require(mv.slice(34, 66) == z32);
         require(amount > 0);
-        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+        require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(amount) + i9(0) + i9(0) + i9(0)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         byte[32] id = OpInputCovenantId(j);
         require(OpInputCovenantId(n) == id);
         require(OpCovInputCount(id) == 2);
@@ -243,12 +243,12 @@ contract KpfTLeft(int init_version) {
             require(tx.outputs[m].value >= pay);
         }
         int c = OpCovOutputIdx(id, 0);
-        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 171))) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv.slice(0, 67) + byte[]((held - pay) as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= tx.inputs[j].value - pay);
         if (left > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(left) + i9(0) + i9(0) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);

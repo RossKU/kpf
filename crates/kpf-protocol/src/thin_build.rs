@@ -3217,28 +3217,60 @@ pub fn call_step_as<T>(lib: &[u8; 32], obj: &OLive<T>, account: &Account, stood:
     d.finish()
 }
 
-/// `KpfTCallPay.claim`: anyone pays a claim its share of what its called shard holds, once no row of the shard has
-/// a unit. The claim is spent whole.
-pub fn claim_pay(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, i64)> {
-    let (next, paid) = shard.s.claim_paid(&note.s)?;
-    Ok((claim_pay_as(lib, shard, note, next, paid, script, p)?, next, paid))
+/// `KpfTCallPay.claim` (docs 17.8c): anyone pays a claim its part of all its called shard ever held for its
+/// claims, once no row of the shard has a unit and the time of the claims has come (an input that landed then
+/// shows it: the funder's first coin, the claim or the shard). The claim is written again while it is not whole.
+/// Returns also the shard after, what is paid, and the claim as it goes on.
+#[allow(clippy::type_complexity)]
+pub fn claim_pay_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, i64, Option<crate::reserve::Claim>)> {
+    let landed = p.funds.first().map_or(0, |c| c.daa).max(note.daa).max(shard.daa) as i64;
+    let (next, paid, left) = shard.s.claim_paid_at(&note.s, landed)?;
+    Ok((claim_pay_as_c(lib, shard, note, next, paid, left, script, p)?, next, paid, left))
 }
 
-/// As `claim_pay`, with the outcome given.
+/// As `claim_pay_c`, of a claim none of which was paid (a note of the rest).
+pub fn claim_pay(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, i64)> {
+    let c = OLive { s: note.s.claim(), value: note.value, id: note.id, op: note.op, daa: note.daa };
+    claim_pay_c(lib, shard, &c, script, p).map(|(b, next, paid, _)| (b, next, paid))
+}
+
+/// As `claim_pay`, with the outcome given (the claim spent whole).
 pub fn claim_pay_as(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Rest>, next: crate::reserve::Shard, paid: i64, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let c = OLive { s: note.s.claim(), value: note.value, id: note.id, op: note.op, daa: note.daa };
+    claim_pay_as_c(lib, shard, &c, next, paid, None, script, p)
+}
+
+/// As `claim_pay_c`, with the outcome given: the shard after, what is paid, and the claim as it goes on.
+#[allow(clippy::too_many_arguments)]
+pub fn claim_pay_as_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Claim>, next: crate::reserve::Shard, paid: i64, left: Option<crate::reserve::Claim>, script: &LibScript, p: Payer) -> Result<OBuilt> {
     let (s, n) = (&shard.s, &note.s);
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
-    let args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(n.key.to_vec()), iv(n.amount)];
+    // (The input that shows the time: the latest of the funder's first coin (input 3), the claim (2), the shard.)
+    let coin = p.funds.first().map_or(0, |c| c.daa);
+    let f = if coin >= note.daa && coin >= shard.daa && !p.funds.is_empty() {
+        3
+    } else if note.daa >= shard.daa {
+        2
+    } else {
+        0
+    };
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(n.key.to_vec()),
+        iv(n.amount1), iv(n.paid1), iv(n.amount2), iv(n.paid2), iv(f),
+    ];
     let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTCallPay", "claim", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "claim", 0);
     let value = (shard.value as i64).checked_sub(paid).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("the shard's output holds less than is paid".into()))?;
     d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
     keep(&mut d, script, lid)?;
-    d.fund(p.funds, &p.change_to);
-    if paid > 0 {
-        d.last(paid, &n.key, "the claim's share", &p.change_to);
+    if let Some(left) = left {
+        d.out(note.value, hash_spk(lib, &left.hash()), Some((0, id)), "the claim again", None);
     }
+    d.fund(p.funds, &p.change_to);
+    // (The payment that makes a claim whole pays its key what the claim's note held as well: review T6, K1.)
+    let due = if left.is_none() { paid.saturating_add(note.value as i64) } else { paid };
+    d.last(due, &n.key, "the claim's part", &p.change_to);
     d.finish()
 }
 

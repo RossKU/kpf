@@ -118,6 +118,25 @@ pub struct Shard {
     pub called: i64,
     /// What it owes by claims (where a position has side B's margin): nothing while it is not called.
     pub owed: i64,
+    /// The claims' numbers of a called shard (docs 17.8c): three of nothing while it is not called.
+    pub claims: Claims,
+}
+
+/// The claims' numbers of a called shard (docs 17.8c), beside what it owes by claims of the first class (`owed`,
+/// which does not fall when a claim is paid): what it has paid to the first class, what it owes by claims of the
+/// second, and what it has paid to those.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Claims {
+    pub paid1: i64,
+    pub owed2: i64,
+    pub paid2: i64,
+}
+
+impl Claims {
+    /// 27 bytes: what a script hashes of them.
+    pub fn bytes(&self) -> Vec<u8> {
+        [i9(self.paid1), i9(self.owed2), i9(self.paid2)].concat()
+    }
 }
 
 impl Shard {
@@ -128,7 +147,7 @@ impl Shard {
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0 }
+        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default() }
     }
 
     pub fn terms(&self) -> Vec<u8> {
@@ -145,15 +164,15 @@ impl Shard {
         self.rows.iter().fold(0i64, |a, x| a.saturating_add(x.gross))
     }
 
-    /// The hash of the claims' numbers: three numbers of nothing until the claims are rewritten (docs 17.8a, 3).
+    /// The hash of the claims' numbers (docs 17.8c).
     pub fn claims_hash(&self) -> [u8; 32] {
-        blake2b(&[i9(0), i9(0), i9(0)].concat())
+        blake2b(&self.claims.bytes())
     }
 
-    /// What a script that shows the rows is shown beside them, 41 bytes: the sum of the gross and the hash of the
-    /// claims' numbers.
+    /// What a script that shows the rows is shown beside them, 36 bytes: the sum of the gross and the claims'
+    /// three numbers, plain.
     pub fn books_head(&self) -> Vec<u8> {
-        [i9(self.gross_sum()), self.claims_hash().to_vec()].concat()
+        [i9(self.gross_sum()), self.claims.bytes()].concat()
     }
 
     /// The books' hash (docs 17.6, 17.8a): of the sum of the rows' gross units, of the hash of the rows, and of the
@@ -307,8 +326,36 @@ pub struct Rest {
 }
 
 impl Rest {
+    /// The note as a claim: its amount of the first class, nothing of it paid, nothing of the second.
+    pub fn claim(&self) -> Claim {
+        Claim { sid: self.sid, key: self.key, amount1: self.amount, paid1: 0, amount2: 0, paid2: 0 }
+    }
+
     pub fn hash(&self) -> [u8; 32] {
-        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_REST), p33(&self.key), i9(self.amount)].concat())
+        self.claim().hash()
+    }
+
+    pub fn value(&self) -> i64 {
+        NOTE_MIN
+    }
+}
+
+/// A claim on a shard (docs 17.8c; the note of the rest, tag 7): its amount of the first class and what it has
+/// been paid of it, and the same of the second class. While its shard is not called it is a [`Rest`]: an amount of
+/// the first class, and three numbers of nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Claim {
+    pub sid: [u8; 32],
+    pub key: [u8; 32],
+    pub amount1: i64,
+    pub paid1: i64,
+    pub amount2: i64,
+    pub paid2: i64,
+}
+
+impl Claim {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(12), p33(&self.sid), i9(NOTE_REST), p33(&self.key), i9(self.amount1), i9(self.paid1), i9(self.amount2), i9(self.paid2)].concat())
     }
 
     pub fn value(&self) -> i64 {
@@ -930,26 +977,69 @@ impl Shard {
     /// owed both are counted in a larger unit (what is owed rounded up, what is held down), so that no product
     /// is beyond a script's numbers. The shard after, and what is paid.
     pub fn claim_paid(&self, r: &Rest) -> Result<(Shard, i64)> {
-        if r.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || r.amount <= 0 || r.amount > self.owed || self.held < 0 {
-            return Err(Error::Invalid("a claim is paid by its shard, called, once no row of it has a unit, and is of no more than the shard owes by claims".into()));
+        self.claim_paid_at(&r.claim(), i64::MAX).map(|(s, pay, _)| (s, pay))
+    }
+
+    /// The time from which a called shard pays its claims: the call's time, a lateness and three dispute periods
+    /// (every statement of before the call is applied by then, and its note counted).
+    pub fn claims_time(&self) -> Option<i64> {
+        self.called.checked_add(self.t.late_daa)?.checked_add(self.dispute_daa.checked_mul(3)?)
+    }
+
+    /// `KpfTCallPay.claim` (docs 17.8c): a claim is paid by its called shard, once no row has a unit and an input
+    /// of the transaction landed at `landed`, at or after the time of the claims. W is all the shard ever held
+    /// for its claims (what it holds and what it has paid). The first class: the amount where W covers what is
+    /// owed, else its part of W over what is owed, rounded down (above 3,000,000,000 sompi owed both are counted
+    /// in a larger unit: what is owed rounded up, W down); less what it was paid, and no more than is held or
+    /// than its class is still owed. The second class, of what W has beyond what the first is owed, the same.
+    /// A part below a note's least waits; a claim that is whole thereby is spent whatever its size. The shard
+    /// after, what is paid, and the claim as it goes on where it is not whole.
+    pub fn claim_paid_at(&self, c: &Claim, landed: i64) -> Result<(Shard, i64, Option<Claim>)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the claim is not paid: {why}")));
+        if c.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.gross_sum() != 0 {
+            return no("a claim is paid by its shard, called, once no row of it has a unit");
         }
-        let pay = if self.held >= self.owed {
-            r.amount
-        } else {
-            let u = [(3_000_000_000_000_000_000i64, 1_000_000_000_000i64), (3_000_000_000_000_000, 1_000_000_000), (3_000_000_000_000, 1_000_000), (3_000_000_000, 1_000)].iter().find(|(at, _)| self.owed >= *at).map(|(_, u)| *u).unwrap_or(1);
-            let (h, o) = (self.held / u, (self.owed - 1) / u + 1);
-            (r.amount / o) * h + (r.amount % o) * h / o
+        if self.claims_time().is_none_or(|t| landed < t) {
+            return no("no claim is paid before the call's time, a lateness and three dispute periods");
+        }
+        let (c1, d1, c2, d2, h) = (self.owed, self.claims.paid1, self.claims.owed2, self.claims.paid2, self.held);
+        if c.paid1 < 0 || c.paid1 > c.amount1 || c.amount1 > c1 || c.paid2 < 0 || c.paid2 > c.amount2 || c.amount2 > c2 || c.amount1.checked_add(c.amount2).is_none_or(|x| x <= 0) || h < 0 {
+            return no("its amounts are no less than what it was paid and no more than its shard owes its class");
+        }
+        let beyond = || Error::Invalid("the claim is not paid: a sum is beyond what is counted".into());
+        let w = h.checked_add(d1).and_then(|x| x.checked_add(d2)).ok_or_else(beyond)?;
+        let part = |a: i64, over: i64, of: i64| {
+            let u = [(3_000_000_000_000_000_000i64, 1_000_000_000_000i64), (3_000_000_000_000_000, 1_000_000_000), (3_000_000_000_000, 1_000_000), (3_000_000_000, 1_000)].iter().find(|(at, _)| of >= *at).map(|(_, u)| *u).unwrap_or(1);
+            let (x, o) = (over / u, (of - 1) / u + 1);
+            (a / o) * x + (a % o) * x / o
         };
-        Ok((Shard { held: self.held - pay, owed: self.owed - r.amount, ..*self }, pay))
+        let e1 = if w >= c1 { c.amount1 } else { part(c.amount1, w, c1) };
+        let p1 = (e1 - c.paid1).min(h).min(c1 - d1).max(0);
+        let s = w - c1;
+        let e2 = if s <= 0 {
+            0
+        } else if s >= c2 {
+            c.amount2
+        } else {
+            part(c.amount2, s, c2)
+        };
+        let p2 = (e2 - c.paid2).min(s - d2).min(c2 - d2).max(0);
+        let pay = p1 + p2;
+        let whole = c.paid1 + p1 == c.amount1 && c.paid2 + p2 == c.amount2;
+        if pay < NOTE_MIN && !whole {
+            return no("its part is below a note's least: it waits");
+        }
+        let next = Shard { held: h - pay, claims: Claims { paid1: d1 + p1, owed2: c2, paid2: d2 + p2 }, ..*self };
+        Ok((next, pay, (!whole).then_some(Claim { paid1: c.paid1 + p1, paid2: c.paid2 + p2, ..*c })))
     }
 
     /// `KpfTCallPay.off`: the call ends where no row has a unit and nothing is owed by claims: the shard not
     /// called.
     pub fn call_off(&self, call: &Called) -> Result<Shard> {
-        if call.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.owed != 0 {
-            return Err(Error::Invalid("a call ends where its shard is called, no row of it has a unit and nothing is owed by claims".into()));
+        if call.sid != self.sid || self.called == 0 || self.rows != [ShardRow::EMPTY; SHARD_ROWS] || self.gross_sum() != 0 || self.claims.paid1 != self.owed || self.claims.paid2 != self.claims.owed2 {
+            return Err(Error::Invalid("a call ends where its shard is called, no row of it has a unit and what it has paid its claims is what it owes them".into()));
         }
-        Ok(Shard { called: 0, ..*self })
+        Ok(Shard { called: 0, owed: 0, claims: Claims::default(), ..*self })
     }
 
     /// The form a statement on the shard shows: its terms and the books' hash.

@@ -100,7 +100,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow { head: self.head(0), net: -60 * scale, gross: 140 * scale }, ShardRow { head: self.head(1), net: 10 * scale, gross: 30 * scale }, ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0 };
+        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -341,15 +341,43 @@ fn t3_f116_the_owners_young_leg_asks_nothing_and_the_honest_claim_is_paid_whole(
         let sg = signed("the owner's note applied", &b, &w.keys);
         let sh2 = nth(&sg, 0, sh2, 6_630);
         assert_eq!((sh2.s.rows, sh2.s.owed, sh2.s.held, c_o.is_some()), ([ShardRow::EMPTY; 4], 15 * KAS1 + asks, 20 * KAS1 - fee, asks > 0), "{what}: the books are empty, and what is owed by claims");
-        // The honest claim paid.
-        let (b, _, paid) = claim_pay(&w.lib, &sh2, &c_h, &pay_s, w.payer(&w.f, &ff)).unwrap();
-        let sg = signed(&format!("F116, the owner's leg {what}: the honest claim paid"), &b, &w.keys);
-        assert!(pays(&sg, &xk(&w.w), paid));
-        paid_honest.push(paid);
+        // The honest claim paid. (Review T6, docs 17.8c: from the time of the claims, which a coin that landed
+        // then shows; and its part of what the shard ever held, where that is at least a note's least.)
+        assert!(claim_pay(&w.lib, &sh2, &c_h, &pay_s, w.payer(&w.f, &ff)).is_err(), "a claim is paid before the time of the claims");
+        let fl = [coin(xk(&w.f), 36, sh2.s.claims_time().unwrap())];
+        match claim_pay(&w.lib, &sh2, &c_h, &pay_s, w.payer(&w.f, &fl)) {
+            Ok((b, _, paid)) => {
+                let sg = signed(&format!("F116, the owner's leg {what}: the honest claim paid"), &b, &w.keys);
+                // (Review T6, second round, K1: paid whole, its key has the part and what the claim's note held,
+                // in one output.)
+                assert!(paid == 15 * KAS1 && pays(&sg, &xk(&w.w), paid + c_h.value as i64) && !pays(&sg, &xk(&w.w), paid));
+                paid_honest.push(paid);
+            }
+            Err(_) => {
+                // (What F116 was, as it is now: the honest claim's part of 19.9 KAS over 3,015 owed is 0.099 KAS,
+                // below a note's least: it is not paid and not spent (it was paid the 0.099 and spent). It waits
+                // for coins, as the owner's claim of 3,000 does not: that is paid its 19.8 KAS at once.)
+                let (h, o) = (sh2.s.held / 1_000, (sh2.s.owed - 1) / 1_000 + 1);
+                let part = (15 * KAS1 / o) * h + (15 * KAS1 % o) * h / o;
+                assert!(asks > 0 && part < NOTE_MIN, "{what}: a part of {part}");
+                use kpf_protocol::reserve::{Claim, Claims};
+                let c = OLive { s: c_h.s.claim(), value: c_h.value, id: c_h.id, op: c_h.op, daa: c_h.daa };
+                let next = Shard { held: sh2.s.held - part, claims: Claims { paid1: part, owed2: 0, paid2: 0 }, ..sh2.s };
+                for left in [Some(Claim { paid1: part, ..c.s }), None] {
+                    let b = claim_pay_as_c(&w.lib, &sh2, &c, next, part, left, &pay_s, w.payer(&w.f, &fl));
+                    assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}: a part below a note's least is paid");
+                }
+                let c_o = c_o.expect("the owner's claim");
+                let (b, after, got) = claim_pay(&w.lib, &sh2, &nth(&sg, 2, c_o, 6_630), &pay_s, w.payer(&w.f, &fl)).unwrap();
+                signed(&format!("F116, the owner's leg {what}: the owner's claim paid its part"), &b, &w.keys);
+                assert!(got > 198 * KAS1 / 10 && after.held < KAS1 / 10 && after.owed == sh2.s.owed, "{what}: {got}");
+                paid_honest.push(part);
+            }
+        }
     }
     println!("T3 F116 at the engine: an honest claim of 15 KAS on a called shard of 19.9 KAS, beside the owner's long of 1,000 units that gained 3,000 KAS: paid {} sompi where the owner's leg is young, {} where it is old", paid_honest[0], paid_honest[1]);
     assert_eq!(paid_honest[0], 15 * KAS1, "F116 is open: the honest claim is not paid whole beside the owner's young leg");
-    assert!(paid_honest[1] < KAS1 / 10 && paid_honest[1] > 9 * KAS1 / 100, "(what F116 was) {}", paid_honest[1]);
+    assert!(paid_honest[1] < KAS1 / 10 && paid_honest[1] > 9 * KAS1 / 100, "(what F116 was: the part; it waits now, below a note's least) {}", paid_honest[1]);
 }
 
 // ================================================================================================================
@@ -934,9 +962,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // entry, and still hashes the leg's market to the name its row has. KpfTShardEnd 1,747 from 3,234 and
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5056), ("KpfTEnterS", 2463), ("KpfTLeft", 2374), ("KpfTLeftAll", 4226), ("KpfTLeftVoid", 2017), ("KpfTStepPrice", 1821)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5056), ("KpfTEnterS", 2484), ("KpfTLeft", 2506), ("KpfTLeftAll", 4310), ("KpfTLeftVoid", 2030), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 1691), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2700), ("KpfTCallEnd", 1853)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 730), ("KpfTCallPay", 2523), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2707), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);
@@ -960,7 +988,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     println!("T3 B5: the scripts {sizes:?}; an entry stated: {} bytes (compute {}, storage {}); steps (what, bytes, compute, storage): {steps:?}", entry.mass.size, entry.mass.compute, entry.mass.storage);
     // (Review T5, docs 17.8b: the steps were 6,890, 6,942 and 7,538: the script is 227 bytes longer and the call's
     // object, of two prices here, 112 bytes where it was 368 and one push longer. 17.8b estimated 6,520 to 6,750.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_040, 6_972, 7_024, 7_620));
+    // (Review T6, docs 17.8c: an entry stated was 5,040: `KpfTEnterS` is 21 bytes longer (it hashes the three
+    // numbers of the claims) and is shown 5 bytes fewer beside the rows.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_056, 6_972, 7_024, 7_620));
 }
 
 // ================================================================================================================
@@ -1023,9 +1053,12 @@ fn t3_finding_l4_an_owner_brings_a_call_about_with_its_own_leg_and_keeps_what_yo
         assert_eq!((c_o, sh2.s.rows, sh2.s.owed, sh2.s.held), (None, [ShardRow::EMPTY; 4], asks, 20 * KAS1 - fee), "{what}");
         if let Some(claim) = c_u {
             // (Before the change: the user's claim, paid whole.)
-            let (b, _, got) = claim_pay(&w.lib, &sh2, &nth(&sg1, 2, claim, 6_620), &pay_s, w.payer(&w.f, &ff)).unwrap();
+            // (Review T6, docs 17.8c: from the time of the claims, which a coin that landed then shows.)
+            let fl = [coin(xk(&w.f), 36, sh2.s.claims_time().unwrap())];
+            let (b, _, got) = claim_pay(&w.lib, &sh2, &nth(&sg1, 2, claim, 6_620), &pay_s, w.payer(&w.f, &fl)).unwrap();
             let sg = signed("L4: the old leg's claim paid", &b, &w.keys);
-            assert!(got == 15 * KAS1 && pays(&sg, &xk(&w.w), got), "{what}");
+            // (Review T6, second round, K1: with what the claim's note held, in one output.)
+            assert!(got == 15 * KAS1 && pays(&sg, &xk(&w.w), got + NOTE_MIN), "{what}");
             continue;
         }
         let (b, open) = call_off(&w.lib, &sh2, &call, &pay_s, w.payer(&w.f, &ff)).unwrap();
@@ -1091,15 +1124,21 @@ use kpf_protocol::state::sm8;
 fn p33b(h: &[u8; 32]) -> Vec<u8> {
     [&[0x20u8][..], &h[..]].concat()
 }
-/// The 41 bytes a script that shows the rows is shown beside them: the sum of the gross (a push of eight bytes) and
-/// the hash of the claims' numbers.
-fn head_of(gross: i64, claims: &[u8; 32]) -> Vec<u8> {
-    [&[0x08u8][..], &sm8(gross)[..], &claims[..]].concat()
+/// The 36 bytes a script that shows the rows is shown beside them: the sum of the gross (a push of eight bytes) and
+/// the claims' three numbers, plain, 27 bytes (review T6, docs 17.8c: it was 41 bytes, the last 32 the hash of
+/// the three numbers; the hash is now made by each script, of the 27 bytes it is shown).
+fn head_of(gross: i64, claims: &[u8]) -> Vec<u8> {
+    assert_eq!(claims.len(), 27);
+    [&[0x08u8][..], &sm8(gross)[..], claims].concat()
+}
+/// The claims' three numbers of nothing, 27 bytes.
+fn no_claims() -> Vec<u8> {
+    kpf_protocol::reserve::Claims::default().bytes()
 }
 /// The state's hash of the shard `s` with the 41 bytes `head` where its books' own would be, written out as the
 /// scripts hash it (the reviewer's own: `Shard::hash` is asserted against it).
 fn shard_hash_with(s: &Shard, head: &[u8]) -> [u8; 32] {
-    let books = blake2b(&[&head[..9], &p33b(&blake2b(&s.rows_bytes()))[..], &[0x20u8][..], &head[9..41]].concat());
+    let books = blake2b(&[&head[..9], &p33b(&blake2b(&s.rows_bytes()))[..], &p33b(&blake2b(&head[9..]))[..]].concat());
     blake2b(&[p33b(&blake2b(&[s.terms(), p33b(&books)].concat())), s.moving()].concat())
 }
 /// The state's hash of the shard `s` in the form of before this change: its fixed part of its terms and the hash
@@ -1150,8 +1189,17 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     v.push(("KpfTLeft.rest", b, 5, 0, owing.s, same()));
     // KpfTCallPay.claim and .off: a called shard of no row.
     let called = OLive { s: Shard { owed: 20 * KAS1, called: T0, ..base.s }, ..base.clone() };
-    let (b, ..) = claim_pay(&w.lib, &called, &note_of(&called, Rest { sid: called.s.sid, ..rest }, rest.value(), 96), &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T6, docs 17.8c: a claim is paid from the time of the claims: a coin that landed then shows it.)
+    let fl = [coin(xk(&w.f), 36, called.s.claims_time().unwrap())];
+    let (b, ..) = claim_pay(&w.lib, &called, &note_of(&called, Rest { sid: called.s.sid, ..rest }, rest.value(), 96), &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
     v.push(("KpfTCallPay.claim", b, 5, 0, called.s, same()));
+    // (Review T6: and one of a shard whose three numbers are not nothing: 5 KAS of 20 paid to the first class, 8
+    // owed to the second and 1 of them paid; a claim of 4 of the first class and 2 of the second, none paid.)
+    let part = OLive { s: Shard { held: 50 * KAS1, owed: 20 * KAS1, called: T0, claims: kpf_protocol::reserve::Claims { paid1: 5 * KAS1, owed2: 8 * KAS1, paid2: KAS1 }, ..base.s }, ..base.clone() };
+    let both = kpf_protocol::reserve::Claim { sid: part.s.sid, key: xk(&w.w), amount1: 4 * KAS1, paid1: 0, amount2: 2 * KAS1, paid2: 0 };
+    let (b, _, paid, left) = claim_pay_c(&w.lib, &part, &note_of(&part, both, NOTE_MIN, 96), &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+    assert_eq!((paid, left), (6 * KAS1, None));
+    v.push(("KpfTCallPay.claim (numbers that are not nothing)", b, 5, 0, part.s, same()));
     let done = OLive { s: Shard { owed: 0, ..called.s }, ..called.clone() };
     let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
     let (b, _) = call_off(&w.lib, &done, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
@@ -1260,26 +1308,43 @@ fn t5_the_two_ends_hold_the_32_bytes_they_are_shown_to_the_statements_shard() {
 fn t3r2_every_script_that_shows_the_rows_holds_the_41_bytes_and_takes_no_shard_of_the_old_form() {
     let w = world();
     let cases = shows_the_rows(&w);
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 11);
     let stray_account = cov(&w, &seeded(&w), &[], 20 * KAS1).s.hash();
     let stray_note = Rest { sid: [0x5d; 32], key: xk(&w.w), amount: KAS1 }.hash();
+    assert_eq!(no_claims().len(), 27);
     let (mut refused, mut old) = (0, 0);
     for (what, b, at, obj, s, obj_of) in &cases {
         assert!(accepted(b, &w.keys), "{what}: the control");
         let head = s.books_head();
-        assert_eq!((head.len(), shard_hash_with(s, &head), units(s)), (41, s.hash(), s.gross_sum()), "{what}");
+        // (Review T6, docs 17.8c: 36 bytes, the claims' three numbers plain, where it was 41 with their hash.)
+        assert_eq!((head.len(), shard_hash_with(s, &head), units(s)), (36, s.hash(), s.gross_sum()), "{what}");
         assert!(matches!(&args_of(&mut b.clone(), 1)[*at], Arg::V(ArtifactValue::Bytes(x)) if x[..] == head[..]) && matches!(&args_of(&mut b.clone(), 1)[*at - 1], Arg::V(ArtifactValue::Bytes(x)) if x[..] == s.rows_bytes()[..]), "{what}: the 41 bytes are argument {at}, after the rows");
-        let (g, claims) = (s.gross_sum(), s.claims_hash());
-        let mut flipped = claims;
-        flipped[31] ^= 1;
+        let (g, claims) = (s.gross_sum(), s.claims.bytes());
+        // (Review T6: where a hash of the claims was shown with a bit flipped or as nothing, the three numbers
+        // are shown with a bit flipped, and each a sompi more; then a push's length changed, the 41 bytes of
+        // the form of before, a byte fewer.)
+        let mut flipped = claims.clone();
+        flipped[26] ^= 1;
+        let with = |d: [i64; 3]| -> Vec<u8> { kpf_protocol::reserve::Claims { paid1: s.claims.paid1 + d[0], owed2: s.claims.owed2 + d[1], paid2: s.claims.paid2 + d[2] }.bytes() };
         let mut tag = head.clone();
         tag[0] = 0x09;
-        let mut heads = vec![head_of(g + 1, &claims), head_of(g - 1, &claims), head_of(i64::MAX, &claims), head_of(-g - 1, &claims), head_of(g, &flipped), head_of(g, &[0; 32]), tag, Shard { rows: [ShardRow { head: w.head(3), net: 0, gross: 77 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_head()];
+        let mut heads = vec![head_of(g + 1, &claims), head_of(g - 1, &claims), head_of(i64::MAX, &claims), head_of(-g - 1, &claims), head_of(g, &flipped), head_of(g, &with([1, 0, 0])), tag, Shard { rows: [ShardRow { head: w.head(3), net: 0, gross: 77 }, ShardRow::EMPTY, ShardRow::EMPTY, ShardRow::EMPTY], ..*s }.books_head()];
+        heads.push(head_of(g, &with([0, 1, 0])));
+        heads.push(head_of(g, &with([0, 0, 1])));
+        heads.push(head_of(g, &with([1, 1, 1])));
+        for at in [9usize, 18, 27] {
+            let mut h = head.clone();
+            h[at] = 0x09;
+            heads.push(h);
+        }
+        heads.push([&head[..9], &s.claims_hash()[..]].concat());
+        heads.push(head[..35].to_vec());
+        heads.push([&head[..], &[0u8][..]].concat());
         if g != 0 {
             heads.push(head_of(0, &claims));
         }
         for h in &heads {
-            assert!(!accepted(&with_arg(b, *at, bytes_arg(h)), &w.keys), "{what}: shown other 41 bytes than its shard's ({:?})", &h[..9]);
+            assert!(!accepted(&with_arg(b, *at, bytes_arg(h)), &w.keys), "{what}: shown other bytes than its shard's 36 ({:?})", &h[..9]);
             refused += 1;
         }
         // The shard of the old form, and what is no shard.
@@ -1330,7 +1395,7 @@ fn t3r2_the_sum_of_the_gross_is_kept_through_entries_notes_a_call_and_its_end() 
         assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &next.hash()));
         for other in [sum + 1, sum - 1, sum - leg.size, 0, sum + leg.size] {
             let mut t = b.clone();
-            t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(other, &next.claims_hash())));
+            t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(other, &next.claims.bytes())));
             assert!(other == sum || !accepted(&t, &w.keys), "entry {i}: the shard written with a sum of {other}");
         }
         shard = nth(&sg, 2, next, t0 as u64 + 10);
@@ -1366,7 +1431,7 @@ fn t3r2_the_sum_of_the_gross_is_kept_through_entries_notes_a_call_and_its_end() 
         assert_eq!((said(&next), units(&next)), (after * scale, after * scale), "{what}");
         for other in [after * scale + 1, after * scale - 1, 17 * scale] {
             let mut t = b.clone();
-            t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(other, &next.claims_hash())));
+            t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(other, &next.claims.bytes())));
             assert!(!accepted(&t, &w.keys), "{what}: the shard written with a sum of {other}");
         }
         if let Some(c) = claim {
@@ -1375,12 +1440,30 @@ fn t3r2_the_sum_of_the_gross_is_kept_through_entries_notes_a_call_and_its_end() 
         called = nth(&sg, 0, next, 6_820);
     }
     assert_eq!((called.s.rows, said(&called.s), claims.len(), called.s.owed), ([ShardRow::EMPTY; 4], 0, 1, 120 * KAS1));
-    let (b, next, paid) = claim_pay(&w.lib, &called, &claims[0], &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
-    let sg = signed("the claim paid", &b, &w.keys);
-    assert_eq!((paid, next.held, next.owed, said(&next)), (100 * KAS1 - fee, 0, 0, 0));
-    let (b, open) = call_off(&w.lib, &nth(&sg, 0, next, 6_830), &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
+    // (Review T6, docs 17.8c: a claim is paid from the time of the claims; the shard holds 99.9 KAS of the 120 it
+    // owes: the claim is paid its part (all that is held, to the unit of a thousand sompi), what is owed stands,
+    // and the call does NOT end (it ended here before, 20.1 KAS never paid). Paid up by its owner, the claim is
+    // paid whole and the call ends: the sum is nothing all along.)
+    let due = called.s.claims_time().unwrap();
+    assert!(claim_pay(&w.lib, &called, &claims[0], &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).is_err(), "a claim is paid before the time of the claims");
+    let fl = [coin(xk(&w.f), 36, due)];
+    let c0 = OLive { s: claims[0].s.claim(), value: claims[0].value, id: claims[0].id, op: claims[0].op, daa: claims[0].daa };
+    let (b, next, paid, left) = claim_pay_c(&w.lib, &called, &c0, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the claim paid its part", &b, &w.keys);
+    assert_eq!((paid, next.held, next.owed, next.claims.paid1, said(&next)), (100 * KAS1 - fee, 0, 120 * KAS1, 100 * KAS1 - fee, 0));
+    let (called, c0) = (nth(&sg, 0, next, due as u64 + 10), nth(&sg, 2, left.expect("the claim again"), due as u64 + 10));
+    assert!(call_off(&w.lib, &called, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).is_err(), "the call ends while the claim is not whole");
+    let fc = [fund(xk(&w.c), 38)];
+    let (b, next) = shard_fund(&w.lib, &called, &w.script("KpfTAddC"), 20 * KAS1 + fee, w.payer(&w.c, &fc)).unwrap();
+    let sg = signed("the owner pays its called shard up", &b, &w.keys);
+    assert_eq!(said(&next), 0);
+    let called = nth(&sg, 0, next, due as u64 + 20);
+    let (b, next, paid, left) = claim_pay_c(&w.lib, &called, &c0, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+    let sg = signed("the claim paid whole", &b, &w.keys);
+    assert_eq!((paid, left, next.held, next.owed, next.claims.paid1, said(&next)), (20 * KAS1 + fee, None, 0, 120 * KAS1, 120 * KAS1, 0));
+    let (b, open) = call_off(&w.lib, &nth(&sg, 0, next, due as u64 + 30), &call, &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
     signed("the call ends", &b, &w.keys);
-    assert_eq!((open.called, said(&open), open.rows), (0, 0, [ShardRow::EMPTY; 4]));
+    assert_eq!((open.called, open.owed, open.claims, said(&open), open.rows), (0, 0, kpf_protocol::reserve::Claims::default(), 0, [ShardRow::EMPTY; 4]));
 }
 
 /// Second round, B (2), the ends of the sum. Four rows at the largest a row takes (2^60 - 1 units each, the last
@@ -1425,7 +1508,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     let call = OLive { s: Called { sid: done.s.sid, time: T0, heads: [Head::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: done.id, op: op(91), daa: 6_600 };
     let (b, open) = call_off(&w.lib, &done, &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys));
-    let five = head_of(5, &done.s.claims_hash());
+    let five = head_of(5, &done.s.claims.bytes());
     let mut t = with_arg(&b, 5, bytes_arg(&five));
     object_made(&mut t, &w.lib, 0, &shard_hash_with(&done.s, &five));
     assert!(!accepted(&t, &w.keys), "(the output is still the model's)");
@@ -1437,13 +1520,34 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     let n = note_of(&ten, Left { sid: ten.s.sid, legs: entered(&[l], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
     let (b, after, _) = left_apply(&w.lib, &ten, &n, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys));
-    let three = head_of(3 * scale, &ten.s.claims_hash());
+    let three = head_of(3 * scale, &ten.s.claims.bytes());
     let mut t = with_arg(&b, 5, bytes_arg(&three));
     object_made(&mut t, &w.lib, 0, &shard_hash_with(&ten.s, &three));
-    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&after, &head_of(-7 * scale, &ten.s.claims_hash())));
+    t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&after, &head_of(-7 * scale, &ten.s.claims.bytes())));
     let below_nothing = accepted(&t, &w.keys);
     println!("T3 second round: of objects no script writes: a call ended on books of no row that say a sum of 5: {off_with_a_sum}; a note of 10 units applied to books that say 3, which then say 7 below nothing: {below_nothing}");
-    assert!(off_with_a_sum && below_nothing, "a script compares the sum it is shown with the rows (then say so in 17.8a)");
+    // (Review T6, docs 17.8c and 17.8a, 3: `KpfTCallPay.off` and `.claim` read the sum beside the four rows now: a
+    // call is NOT ended on books of no row that say a sum of 5 (it was). `KpfTLeft.apply` compares nothing still.)
+    assert!(!off_with_a_sum && below_nothing, "the call's end reads the sum; no other script compares the sum it is shown with the rows (then say so in 17.8a)");
+    // (And the same for a claim: a called shard of no row that says a sum of 5 pays no claim.)
+    {
+        let owing = OLive { s: Shard { owed: 20 * KAS1, called: T0, ..base.s }, ..base.clone() };
+        let fl = [coin(xk(&w.f), 36, owing.s.claims_time().unwrap())];
+        let rest = Rest { sid: owing.s.sid, key: xk(&w.w), amount: 20 * KAS1 };
+        let (b, next, _) = claim_pay(&w.lib, &owing, &note_of(&owing, rest, NOTE_MIN, 96), &w.script("KpfTCallPay"), w.payer(&w.f, &fl)).unwrap();
+        assert!(accepted(&b, &w.keys));
+        let five = head_of(5, &owing.s.claims.bytes());
+        let mut t = with_arg(&b, 5, bytes_arg(&five));
+        object_made(&mut t, &w.lib, 0, &shard_hash_with(&owing.s, &five));
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(5, &next.claims.bytes())));
+        assert!(!accepted(&t, &w.keys), "a claim is paid by a shard of no row whose books say a sum of 5");
+        // (The control of the way it is written: the same with the sum of nothing is the builder's own.)
+        let zero = head_of(0, &owing.s.claims.bytes());
+        let mut t = with_arg(&b, 5, bytes_arg(&zero));
+        object_made(&mut t, &w.lib, 0, &shard_hash_with(&owing.s, &zero));
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &shard_hash_with(&next, &head_of(0, &next.claims.bytes())));
+        assert!(accepted(&t, &w.keys));
+    }
 }
 
 /// Second round, B (3) and (4): the scripts that carry a shard's 32 bytes unopened. `KpfTAddC` takes the fixed
@@ -1483,8 +1587,11 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
             if code.contains("blake2b(rw)") || code.contains("blake2b(rows)") || code.contains("byte[408]") {
                 opens.push(p.file_stem().unwrap().to_string_lossy().to_string());
             }
-            // (Whoever hashes the rows hashes the 41 bytes with them, every time.)
-            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + byte[](0x20) + gb.slice(9, 41)").count(), "{}", p.display());
+            // (Whoever hashes the rows hashes the 36 bytes with them, every time. Review T6, docs 17.8c: the last
+            // 27 hashed by the script; `KpfTCallPay` writes the shard with the 36 bytes it made, `ng`.)
+            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36)))").count() + code.matches("ng.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(ng.slice(9, 36)))").count(), "{}", p.display());
+            assert_eq!((code.matches("gb.slice(9, 41)").count(), code.matches("byte[41] gbook").count()), (0, 0), "{}", p.display());
+            assert_eq!(code.matches("ng.slice(0, 9)").count() > 0, p.file_stem().unwrap() == "KpfTCallPay", "{}", p.display());
             assert_eq!(code.matches("blake2b(rows)").count(), 0, "{}", p.display());
         }
     }

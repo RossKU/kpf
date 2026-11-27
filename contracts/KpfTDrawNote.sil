@@ -102,7 +102,9 @@ contract KpfTDrawNote(int init_version) {
                 // (A note of the rest the shard counted: one of more than it owes was never counted, is paid
                 // by nothing, and ends no draw. Review 55, F96.)
                 require(int(byte[8](mv.slice(76, 84))) >= amount);
-                require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(7) + p33(key) + i9(amount)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
+                // (A claim of four numbers, none of it paid: docs 17.8c. One of nothing ends no draw.)
+                require(amount > 0);
+                require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(7) + p33(key) + i9(amount) + i9(0) + i9(0) + i9(0)) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
             }
         } else {
             // A note that a leg of a covered account was marked (kind 13: the leg as it was and its new entry, 119

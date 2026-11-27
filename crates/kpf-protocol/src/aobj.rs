@@ -201,7 +201,9 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
     if none != [0; 32] || v[3] != t.late_daa {
         return Err(bad("a shard has no second key"));
     }
-    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1] })
+    // (The claims' three numbers, where they are kept: a shard kept before they were is one of none.)
+    let claims = if r.at < r.b.len() { crate::reserve::Claims { paid1: r.int()?, owed2: r.int()?, paid2: r.int()? } } else { crate::reserve::Claims::default() };
+    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1], claims })
 }
 
 fn host_bytes(h: &Host) -> Vec<u8> {
@@ -289,7 +291,8 @@ impl AObj {
     pub fn encode(&self) -> Vec<u8> {
         match self {
             AObj::Account(a) => [vec![20], a.terms(), vec![a.legs.len() as u8], a.legs.iter().flat_map(leg_bytes).collect(), a.moving()].concat(),
-            AObj::Shard(s) => [vec![21], s.terms(), s.rows_bytes(), s.moving()].concat(),
+            // (The claims' numbers where there are any: a shard that has none is kept as before they were.)
+            AObj::Shard(s) => [vec![21], s.terms(), s.rows_bytes(), s.moving(), if s.claims == crate::reserve::Claims::default() { vec![] } else { s.claims.bytes() }].concat(),
             AObj::Left(n) => [vec![22], n.sid.to_vec(), vec![n.legs.len() as u8], n.legs.iter().flat_map(leg_bytes).collect(), n.key.to_vec(), i9(n.asked)].concat(),
             AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),
             AObj::Mark(n) => [vec![29], n.sid.to_vec(), leg_bytes(&n.leg), i9(n.entry), n.key.to_vec(), i9(n.asked)].concat(),
