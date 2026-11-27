@@ -99,7 +99,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         // (Review T9, docs 17.8d: a price's answer opens the shard's id by the seed of its opening and its
         // committee. The shard made by hand has the id that opening gives it.)
         let s = s.seeded(&SEED, &self.markets[0].committee_id);
@@ -172,7 +172,7 @@ fn fleg(w: &World, i: usize, units: i64, dir: i64, entry: i64) -> XLeg {
 /// A shard of 100 KAS with no leg, to book legs in by hand (the statement of an entry does it: stage 4).
 fn bare(w: &World) -> OLive<Shard> {
     let x = w.shard();
-    OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..x.s }, ..x }
+    OLive { s: Shard { rows: [ShardRow::EMPTY; 4].into(), basis: 0, ..x.s }, ..x }
 }
 
 fn entered(legs: &[XLeg], t: i64) -> Vec<XLeg> {
@@ -454,7 +454,7 @@ fn t5_r1_closed_a_day_of_nothing_below_zero_is_wrong_at_its_row_and_at_its_price
         let (shard, ..) = two_short(&w, if call { 20 * KAS1 } else { 500 * KAS1 });
         let s = &shard.s;
         let claimer = if call { xk(&w.w) } else { xk(&w.c) };
-        let t = s.traced(&Draw { amount: if call { 0 } else { KAS1 }, prices: up }, call).unwrap();
+        let t = s.traced(&Draw { amount: if call { 0 } else { KAS1 }, prices: up.into() }, call).unwrap();
         let e0 = t.rows[0].at as usize;
         let mut raw = t.said();
         raw[16 + 56 * e0 + 40..16 + 56 * e0 + 48].copy_from_slice(&BELOW);
@@ -535,7 +535,7 @@ fn t5_r1_the_other_numbers_of_nothing_have_one_way_of_being_read() {
         x
     };
     let (shard, l0, _) = two_short(&w, 20 * KAS1);
-    let t = shard.s.traced(&Draw { amount: 0, prices: up }, true).unwrap();
+    let t = shard.s.traced(&Draw { amount: 0, prices: up.into() }, true).unwrap();
     let ro = 24 + 56 * t.list.len();
     let first = (0..2).find(|r| t.rows[*r].at == 0).unwrap();
     let mut run = vec![];
@@ -554,15 +554,15 @@ fn t5_r1_the_other_numbers_of_nothing_have_one_way_of_being_read() {
         run.push(what);
     }
     // The sums of a row before any worth: the same books with row 1 empty.
-    let shifted = OLive { s: Shard { rows: [ShardRow::EMPTY, shard.s.rows[0], shard.s.rows[1], ShardRow::EMPTY], ..shard.s }, ..shard.clone() };
-    let t2 = shifted.s.traced(&Draw { amount: 0, prices: [0, p13, p13, 0] }, true).unwrap();
+    let shifted = OLive { s: Shard { rows: [ShardRow::EMPTY, shard.s.rows[0], shard.s.rows[1], ShardRow::EMPTY].into(), ..shard.s }, ..shard.clone() };
+    let t2 = shifted.s.traced(&Draw { amount: 0, prices: [0, p13, p13, 0].into() }, true).unwrap();
     assert_eq!((t2.rows[0].wn, t2.rows[0].wg, t2.rows[0].sn), (0, 0, 0));
     let raw = below(&below(&below(&t2.said(), ro + 16), ro + 24), ro + 32);
     all_right("the three sums of an empty row 1", &shifted, true, &t2, &raw);
     run.push("the three sums of an empty first row");
     // The count of an empty list, and the last row's sums the end reads: a draw on a shard of no market.
     let none = bare(&w);
-    let t3 = none.s.traced(&Draw { amount: KAS1, prices: [0; 4] }, false).unwrap();
+    let t3 = none.s.traced(&Draw { amount: KAS1, prices: [0; 4].into() }, false).unwrap();
     assert_eq!((t3.list.len(), t3.said().len()), (0, 184));
     let raw = below(&below(&below(&below(&t3.said(), 8), 160), 168), 176);
     all_right("the count of an empty list and the last row's sums", &none, false, &t3, &raw);
@@ -603,7 +603,7 @@ fn t5_r7_a_wrong_statement_with_a_number_of_nothing_below_zero_is_judged_by_the_
     let (shard, ..) = two_short(&w, 500 * KAS1);
     let s = &shard.s;
     let owner = xk(&w.c);
-    let t = s.traced(&Draw { amount: KAS1, prices: up }, false).unwrap();
+    let t = s.traced(&Draw { amount: KAS1, prices: up.into() }, false).unwrap();
     let mut lie = t.clone();
     lie.rows[1..].iter_mut().for_each(|r| r.wn += 1);
     let ro = 24 + 56 * t.list.len();
@@ -660,7 +660,7 @@ fn random_books(w: &World, r: &mut Rng, call: bool) -> (OLive<Shard>, [i64; 4], 
         prices[row] = P10 / 2 + r.below(3 * P10);
         of[row] = Some(m);
     }
-    let mut s = Shard { t: w.terms(), rows, owner: xk(&w.c), held: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Default::default() };
+    let mut s = Shard { t: w.terms(), rows: rows.into(), owner: xk(&w.c), held: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Default::default() };
     // (Review T9, docs 17.8d: the id its opening gives it, so that its prices are answered. It was: "the point 5
     // of the rule's trace" not taken, the shard's id being of chosen bytes: no disagreement of model and engine.)
     s = s.seeded(&SEED, &w.markets[0].committee_id);
@@ -808,7 +808,7 @@ fn t5_b1_the_trace_of_a_draw_and_of_a_call_on_random_shards_the_model_and_the_en
             let m = (0..4).find(|j| s.rows[*j].key.market != [0; 32]).unwrap();
             let mut false_prices = prices;
             false_prices[m] = prices[m] * 105 / 100;
-            if let Some(x) = s.traced(&Draw { amount: d.amount, prices: false_prices }, call) {
+            if let Some(x) = s.traced(&Draw { amount: d.amount, prices: false_prices.into() }, call) {
                 all.push(("a price 5 % from the committee's, the trace the rule makes of it".into(), x));
             }
             for (what, lie) in all {
@@ -853,7 +853,7 @@ fn long_then_short(w: &World) -> OLive<Shard> {
     let x = w.shard();
     let scale = w.markets[0].p.scale;
     let rows = [ShardRow::of(w.head(0), 10 * scale, 30 * scale), ShardRow::of(w.head(1), -60 * scale, 140 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-    OLive { s: Shard { rows, ..x.s }, ..x }
+    OLive { s: Shard { rows: rows.into(), ..x.s }, ..x }
 }
 
 /// B2 and B3: the end reads no row, and R3 (Low): the model of a row is not the script where a sum said is at the
@@ -877,7 +877,7 @@ fn t5_b2_the_end_reads_no_row_and_a_sum_at_the_end_of_64_bits_is_judged_by_the_m
     let shard = long_then_short(&w);
     let s = &shard.s;
     let prices = [P10, P10, 0, 0];
-    let d = Draw { amount: KAS1, prices };
+    let d = Draw { amount: KAS1, prices: prices.into() };
     let t = s.traced(&d, false).unwrap();
     assert_eq!((t.rows[0].sn, t.rows[1].sn), (100 * KAS1, -500 * KAS1));
     let owner = xk(&w.c);
@@ -937,7 +937,7 @@ fn t5_b3_an_entry_no_row_is_of_is_answered_by_nobody_and_its_dispute_lapses_at_t
     let p13 = P10 * 13 / 10;
     let prices = [p13, 0, 0, 0];
     let caller = xk(&w.c);
-    let t = s.traced(&Draw { amount: 0, prices }, true).unwrap();
+    let t = s.traced(&Draw { amount: 0, prices: prices.into() }, true).unwrap();
     let mut lie = t.clone();
     let mut market = [0xff; 32];
     market[7] = 0x7f;
@@ -1051,7 +1051,7 @@ fn t5_b4_a_step_under_a_list_of_five_of_a_price_of_nothing_and_a_call_of_no_mark
     // A shard of no market.
     let none = bare(&w);
     assert!(!none.s.call_due(&[0; 4]) && none.s.call([0; 4], T0, none.value as i64, xk(&w.w)).is_err(), "the model calls a shard of no market");
-    let t = none.s.traced(&Draw { amount: 0, prices: [0; 4] }, true).unwrap();
+    let t = none.s.traced(&Draw { amount: 0, prices: [0; 4].into() }, true).unwrap();
     let raw = t.said();
     assert_eq!((raw.len(), t.list.len()), (184, 0));
     let st = stated_as(&none, KIND_CALL, &raw, call_outs_of(&none, &[], T0, xk(&w.w)).unwrap(), xk(&w.w), T0);
@@ -1118,7 +1118,7 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
         }
         called = nth(&sg, 0, next, 6_820);
     }
-    assert_eq!((called.s.rows, claims.len(), called.s.owed), ([ShardRow::EMPTY; 4], 1, 120 * KAS1), "the long of 10 and the short of 4 gained 120 KAS at 30");
+    assert_eq!((called.s.rows, claims.len(), called.s.owed), ([ShardRow::EMPTY; 4].into(), 1, 120 * KAS1), "the long of 10 and the short of 4 gained 120 KAS at 30");
     // (Review T6, docs 17.8c: the claim is paid its part of what the shard ever held, 99.9 KAS of 120: what is
     // owed stands, the claim goes on and the call does NOT end (it ended here before, 20.1 KAS never paid). The
     // claim and the shard landed after the time of the claims (6,750): the claim's own input shows it. Paid up by
@@ -1138,7 +1138,7 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
     assert_eq!((paid, left, next.held, next.owed, next.claims.paid1), (20 * KAS1 + fee, None, 0, 120 * KAS1, 120 * KAS1));
     let (b, open) = call_off(&w.lib, &nth(&sg, 0, next, 6_850), &call, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).unwrap();
     signed("B4: the call ends", &b, &w.keys);
-    assert_eq!((open.called, open.owed, open.claims, open.rows), (0, 0, kpf_protocol::reserve::Claims::default(), [ShardRow::EMPTY; 4]));
+    assert_eq!((open.called, open.owed, open.claims, open.rows), (0, 0, kpf_protocol::reserve::Claims::default(), [ShardRow::EMPTY; 4].into()));
 }
 
 // ================================================================================================================
@@ -1210,10 +1210,10 @@ fn t5_b6_a_futures_row_and_an_options_row_of_one_market_are_one_entry_and_one_pr
     let fut = w.head(0);
     let opt = RowHead { key: kpf_protocol::books::Key { market: w.markets[0].id(), day: 9_000, of: kpf_protocol::books::OF_CALLS, strike: 1 }, ..fut };
     let rows = [ShardRow::of(fut, -10 * scale, 10 * scale), ShardRow::of(opt, 5 * scale, 5 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-    let shard = OLive { s: Shard { rows, basis: -50 * KAS1, ..x.s }, ..x };
+    let shard = OLive { s: Shard { rows: rows.into(), basis: -50 * KAS1, ..x.s }, ..x };
     let s = &shard.s;
     let (lo, hi) = (P10 * 996 / 1_000, P10 * 1_004 / 1_000);
-    assert!(s.traced(&Draw { amount: KAS1, prices: [lo, hi, 0, 0] }, false).is_none() && s.draw(KAS1, [lo, hi, 0, 0], T0, shard.value as i64).is_err(), "two prices for one market: no trace");
+    assert!(s.traced(&Draw { amount: KAS1, prices: [lo, hi, 0, 0].into() }, false).is_none() && s.draw(KAS1, [lo, hi, 0, 0], T0, shard.value as i64).is_err(), "two prices for one market: no trace");
     let prices = [lo, lo, 0, 0];
     let (st, d) = s.draw(KAS1, prices, T0, shard.value as i64).unwrap();
     let t = s.traced(&d, false).unwrap();
@@ -1254,7 +1254,7 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2317), ("KpfTCStep", 5319), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
-    let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)], ..two.s }, ..two.clone() };
+    let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)].into(), ..two.s }, ..two.clone() };
     let mut out = vec![];
     for (what, shard) in [("two markets", &two), ("four markets", &four)] {
         let prices = if what == "two markets" { [P10, P10, 0, 0] } else { [P10; 4] };
@@ -1313,7 +1313,7 @@ fn t5_b3_the_end_answered_right_again_and_again_shields_no_wrong_row() {
     let s = &shard.s;
     let owner = xk(&w.c);
     let prices = [P10, P10, 0, 0];
-    let t = s.traced(&Draw { amount: KAS1, prices }, false).unwrap();
+    let t = s.traced(&Draw { amount: KAS1, prices: prices.into() }, false).unwrap();
     let mut lie = t.clone();
     lie.rows.iter_mut().for_each(|r| r.wg -= 1);
     let raw = lie.said();

@@ -101,7 +101,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -170,7 +170,7 @@ fn fleg(w: &World, i: usize, units: i64, dir: i64, entry: i64) -> XLeg {
 /// A shard of 100 KAS with no leg, to book legs in by hand (the statement of an entry does it: stage 4).
 fn bare(w: &World) -> OLive<Shard> {
     let x = w.shard();
-    OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..x.s }, ..x }
+    OLive { s: Shard { rows: [ShardRow::EMPTY; 4].into(), basis: 0, ..x.s }, ..x }
 }
 
 fn entered(legs: &[XLeg], t: i64) -> Vec<XLeg> {
@@ -835,7 +835,7 @@ fn t7_b5_the_gate_on_random_rows_is_the_models_and_the_arithmetics() {
         let entry = match r.range(0, 6) { 0 => 1, 1 => r.range(1, 1_000), _ => r.range(1, 500) * P10 / 100 };
         let leg = XLeg { size, entry, ..fleg(&w, 0, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) };
         let owed = if r.range(0, 3) == 0 { 3 * KAS1 } else { 0 };
-        let books = Shard { rows, owed, ..base.s };
+        let books = Shard { rows: rows.into(), owed, ..base.s };
         let (with, without) = gate_by_hand(&books, &leg, 0);
         let with64 = with as i64;
         let held = match r.range(0, 6) { 0 => 0, 1 => with64 + owed - 1, 2 => with64 + owed, 3 => with64 + owed + 1, 4 => with64 / 2, _ => with64 * 3 + 50 * KAS1 }.max(0);

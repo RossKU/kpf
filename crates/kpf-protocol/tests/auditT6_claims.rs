@@ -95,7 +95,7 @@ impl World {
     }
     /// A shard of the clearing party's (`c`), 100 KAS, no row (as `thin_draw.rs`'s `bare`).
     fn bare(&self) -> OLive<Shard> {
-        let s = Shard { t: self.terms(), rows: [ShardRow::EMPTY; 4], owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Claims::default() };
+        let s = Shard { t: self.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Claims::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     /// The statement `st` stated on the shard (its bytes `said`), landed at 6,510.
@@ -248,7 +248,7 @@ fn claim_of(base: &OLive<Shard>, key: [u8; 32], a1: i64, x1: i64, a2: i64, x2: i
 }
 /// The call of the shards made by hand.
 fn call_of(base: &OLive<Shard>) -> OLive<Called> {
-    OLive { s: Called { sid: base.s.sid, time: CALLED, heads: [RowHead::EMPTY; 4], prices: [0; 4] }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_450 }
+    OLive { s: Called { sid: base.s.sid, time: CALLED, heads: [RowHead::EMPTY; 4].into(), prices: [0; 4].into() }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_450 }
 }
 /// What a payment of `p1` to the first class and `p2` to the second writes: the shard after, what is paid, and the
 /// claim as it goes on (none where it is whole by them).
@@ -1289,7 +1289,7 @@ fn t6_b3_no_claim_is_paid_before_the_time_whatever_input_is_named_and_the_period
     // A draw on a called shard, stated by its owner whatever the rule says: its end is answered wrong, and not right.
     let on = shard_of(&base, 50 * KAS1, 30 * KAS1, 7 * KAS1, 0, 0);
     let x = on.s;
-    let d = Draw { amount: KAS1, prices: [0; 4] };
+    let d = Draw { amount: KAS1, prices: [0; 4].into() };
     let said = x.traced(&d, false).expect("a trace").said();
     let outs = Outs::of(&[Out { key: false, to: x.drawn(KAS1, T0).hash(), value: on.value as i64 - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap();
     let st = Stated { position: x.hash(), window: x.dispute_daa, late: x.t.late_daa, kind: KIND_DRAW, t0: T0, arg: blake2b(&said), outs, bond: x.bond(), claimer: xk(&w.c), held: on.value as i64 };
@@ -1524,7 +1524,7 @@ fn t6_b6_a_note_of_the_rest_on_a_shard_that_is_not_called_lives_as_before_and_is
     let (b, s1, rest) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("B6: a note of one leg applied to a shard that is not called and holds less than is asked", &b, &w.keys);
     let rest = rest.expect("a note of the rest");
-    assert_eq!((s1.held, s1.owed, s1.claims, s1.rows, rest), (0, 30 * KAS1, Claims::default(), [ShardRow::EMPTY; 4], Rest { sid: base.s.sid, key, amount: 30 * KAS1 }));
+    assert_eq!((s1.held, s1.owed, s1.claims, s1.rows, rest), (0, 30 * KAS1, Claims::default(), [ShardRow::EMPTY; 4].into(), Rest { sid: base.s.sid, key, amount: 30 * KAS1 }));
     assert!(pays(&sg, &key, 20 * KAS1));
     assert_eq!((&sg.tx.outputs[0].script_public_key, &sg.tx.outputs[2].script_public_key, sg.tx.outputs[2].value), (&hash_spk(&w.lib, &s1.hash()), &hash_spk(&w.lib, &Claim { sid: base.s.sid, key, amount1: 30 * KAS1, paid1: 0, amount2: 0, paid2: 0 }.hash()), NOTE_MIN as u64), "the note of the rest is the claim (30, 0, 0, 0), holding a note's least");
     for (what, shard_as, note_as) in [
@@ -1851,7 +1851,7 @@ fn t6_k3_closed_a_shard_kept_before_the_three_numbers_reads_back_and_a_claim_par
     assert!(AObj::decode(&before[..before.len() - 1]).is_err() && AObj::decode(&[before.clone(), vec![8u8; 9]].concat()).is_err());
     // A statement kept on a shard of no numbers, and on one with numbers: both read back.
     for s in [base.s, shard_of(&base, 7 * KAS1, 30 * KAS1, 12 * KAS1, 0, 0).s] {
-        let d = Draw { amount: KAS1, prices: [0; 4] };
+        let d = Draw { amount: KAS1, prices: [0; 4].into() };
         let said = s.traced(&d, false).expect("a trace").said();
         let outs = Outs::of(&[Out { key: false, to: s.drawn(KAS1, T0).hash(), value: s.held + SHARD_CARRIER - KAS1 }, Out { key: true, to: xk(&w.c), value: KAS1 }]).unwrap();
         let st = Stated { position: s.hash(), window: s.dispute_daa, late: s.t.late_daa, kind: KIND_DRAW, t0: T0, arg: blake2b(&said), outs, bond: s.bond(), claimer: xk(&w.c), held: s.held + SHARD_CARRIER };

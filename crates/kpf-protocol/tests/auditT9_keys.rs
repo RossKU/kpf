@@ -101,7 +101,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows, owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default() };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -173,7 +173,7 @@ fn fleg(w: &World, i: usize, units: i64, dir: i64, entry: i64) -> XLeg {
 /// A shard of 100 KAS with no leg, to book legs in by hand (the statement of an entry does it: stage 4).
 fn bare(w: &World) -> OLive<Shard> {
     let x = w.shard();
-    OLive { s: Shard { rows: [ShardRow::EMPTY; 4], basis: 0, ..x.s }, ..x }
+    OLive { s: Shard { rows: [ShardRow::EMPTY; 4].into(), basis: 0, ..x.s }, ..x }
 }
 
 fn entered(legs: &[XLeg], t: i64) -> Vec<XLeg> {
@@ -384,7 +384,7 @@ fn mleg(w: &World, market: [u8; 32], units: i64, dir: i64) -> XLeg {
 /// shard's time move as the entry of a leg of that size, direction and price moves them (taken of the model's
 /// entry of the same leg of an ordinary market into a shard of no row that holds enough).
 fn after(s: &Shard, leg: &XLeg, r: usize, row: ShardRow) -> Shard {
-    let twin = Shard { rows: [E; 4], held: i64::MAX / 4, ..*s }.entered(&XLeg { market: [0x11; 32], ..*leg }, 0, T0).expect("the twin's entry");
+    let twin = Shard { rows: [E; 4].into(), held: i64::MAX / 4, ..*s }.entered(&XLeg { market: [0x11; 32], ..*leg }, 0, T0).expect("the twin's entry");
     let mut n = Shard { basis: twin.basis, expiry: twin.expiry, ..*s };
     n.rows[r] = row;
     n
@@ -519,7 +519,7 @@ fn t9_k1_a_leg_enters_the_futures_row_of_its_market_and_no_other() {
     // A row of M with a day, a kind, a strike.
     for (what, key) in [("a day", Key { day: 1, ..Key::futures(m) }), ("a kind", Key { of: OF_CALLS, ..Key::futures(m) }), ("a strike", Key { strike: 1, ..Key::futures(m) }), ("a day below nothing", Key { day: -1, ..Key::futures(m) })] {
         let odd_row = ShardRow { key, ..ShardRow::of(head, -5 * sz, 5 * sz) };
-        let odd = live(&base, Shard { rows: [odd_row, E, E, E], ..base.s });
+        let odd = live(&base, Shard { rows: [odd_row, E, E, E].into(), ..base.s });
         let keeps = after(&odd.s, &leg, 0, ShardRow { key, ..with_leg(head, &odd_row, &leg) });
         let over = after(&odd.s, &leg, 0, with_leg(head, &odd_row, &leg));
         let fresh = after(&odd.s, &leg, 0, with_leg(head, &E, &leg));
@@ -576,7 +576,7 @@ fn t9_k1_what_was_entered_is_written_by_nothing_and_a_row_made_with_it_is_stuck_
     let leg = fleg(&w, 0, 1, LONG, P10);
     let head = RowHead::of(&leg);
     let stale = ShardRow { entered: 7, ..with_leg(head, &E, &leg) };
-    let odd = live(&base, Shard { rows: [stale, E, E, E], ..base.s });
+    let odd = live(&base, Shard { rows: [stale, E, E, E].into(), ..base.s });
     let kept = after(&odd.s, &leg, 0, ShardRow { entered: 7, ..with_leg(head, &stale, &leg) });
     let zeroed = after(&odd.s, &leg, 0, with_leg(head, &stale, &leg));
     assert_eq!((enters(&w, &odd, leg, 0, &kept), enters(&w, &odd, leg, 0, &zeroed), odd.s.entered(&leg, 0, T0).ok()), (Some(false), Some(true), Some(zeroed)), "an entry writes nothing where 7 was entered");
@@ -586,7 +586,7 @@ fn t9_k1_what_was_entered_is_written_by_nothing_and_a_row_made_with_it_is_stuck_
     assert_eq!((at.clone(), paid, rest.is_none()), (vec![0], 0, true));
     assert_eq!(next.rows[0], ShardRow { entered: 7, ..E }, "the model: the head emptied, what was entered kept");
     assert!(leaves(&w, &odd, &note, &at, next), "the engine: the same");
-    assert!(!leaves(&w, &odd, &note, &at, Shard { rows: [E; 4], ..next }), "the engine does not write the empty row");
+    assert!(!leaves(&w, &odd, &note, &at, Shard { rows: [E; 4].into(), ..next }), "the engine does not write the empty row");
     let stuck = live(&base, next);
     let again = after(&stuck.s, &leg, 0, with_leg(head, &E, &leg));
     assert_eq!(enters(&w, &stuck, leg, 0, &again), Some(false), "a row of no market with 7 entered is entered");
@@ -629,7 +629,7 @@ fn t9_k1b_two_markets_that_are_one_by_their_numbers_enter_two_rows_and_no_trace_
     let two = live(&base, Shard { expiry: 0, ..s2 });
     let s = &two.s;
     let prices = [P10, P10, 0, 0];
-    let t = s.traced(&Draw { amount: KAS1, prices }, false).expect("the model has a trace");
+    let t = s.traced(&Draw { amount: KAS1, prices: prices.into() }, false).expect("the model has a trace");
     assert_eq!(t.list.len(), 2);
     let (lv, st) = draw_stated(&w, &two, &t);
     let second = t.list[1].market;
@@ -669,7 +669,7 @@ fn t9_k2_a_leg_leaves_the_futures_row_of_its_market_and_no_other() {
     let n2 = note_t9(&w, &good, vec![e0, e1]);
     let (next1, at1, ..) = good.s.left(&n1.s).unwrap();
     let (next2, at2, ..) = good.s.left(&n2.s).unwrap();
-    assert_eq!((at1.clone(), at2.clone(), next1.rows[0], next2.rows), (vec![0], vec![0, 1], E, [E; 4]));
+    assert_eq!((at1.clone(), at2.clone(), next1.rows[0], next2.rows), (vec![0], vec![0, 1], E, [E; 4].into()));
     assert!(leaves(&w, &good, &n1, &at1, next1) && leaves(&w, &good, &n2, &at2, next2), "(control) the notes are applied to the futures rows");
     assert!(!voids(&w, &good, &n1, 0) && !voids(&w, &good, &n2, 0) && !voids(&w, &good, &n2, 1), "(control) a note of legs of the books is spent");
     for (what, key) in [("a day", Key { day: 1, ..Key::futures(l0.market) }), ("a kind", Key { of: OF_CALLS, ..Key::futures(l0.market) }), ("a strike", Key { strike: 1, ..Key::futures(l0.market) })] {
@@ -750,7 +750,7 @@ fn t9_k3_a_price_is_answered_for_the_committee_the_shards_id_is_opened_by() {
     let committee = w.markets[0].committee_id;
     assert!(s.is_of(&SEED, &committee));
     let prices = [P10, P10, 0, 0];
-    let d = Draw { amount: KAS1, prices };
+    let d = Draw { amount: KAS1, prices: prices.into() };
     let t = s.traced(&d, false).unwrap();
     let (lv, _) = draw_stated(&w, &shard, &t);
     let cs = w.script("KpfTCite");
@@ -832,7 +832,7 @@ fn t9_k3_an_entry_no_row_is_of_is_priced_as_any_other_and_the_model_still_names_
     let shard = two_rows(&w);
     let s = shard.s;
     let prices = [P10, P10, 0, 0];
-    let t = s.traced(&Draw { amount: KAS1, prices }, false).unwrap();
+    let t = s.traced(&Draw { amount: KAS1, prices: prices.into() }, false).unwrap();
     let m2 = w.markets[2].id();
     for (what, price, want) in [("priced right", P10, (true, false)), ("priced at twice the committee's", 2 * P10, (false, true))] {
         let more = with_entry(&t, Priced { market: m2, limit: t.list[0].limit, day: 0, price });
@@ -870,7 +870,7 @@ fn t9_k3_the_lists_order_is_of_numbers_where_a_markets_top_bits_are_set() {
     let books = base.s.booked(&mleg(&w, lo, 2, LONG)).unwrap().booked(&mleg(&w, hi, 3, SHORT)).unwrap();
     let shard = live(&base, books);
     let s = shard.s;
-    let t = s.traced(&Draw { amount: KAS1, prices: [P10, P10, 0, 0] }, false).unwrap();
+    let t = s.traced(&Draw { amount: KAS1, prices: [P10, P10, 0, 0].into() }, false).unwrap();
     assert_eq!((t.list[0].market, t.list[1].market, t.rows[0].at, t.rows[1].at), (hi, lo, 1, 0), "the model's order");
     let (lv, _) = draw_stated(&w, &shard, &t);
     assert_eq!((row_taken(&w, &lv, &s, &t, 1), row_taken(&w, &lv, &s, &t, 2)), ((true, false), (true, false)));
@@ -897,9 +897,9 @@ fn t9_k3b_two_rows_of_one_market_with_two_limits_have_no_right_trace() {
     let (scale, pm, m) = (w.markets[0].p.scale, w.markets[0].p.price_max, w.markets[0].id());
     let fut = ShardRow::futures(m, scale, pm, -10 * scale, 10 * scale);
     let dated = |limit: i64| ShardRow { key: Key { market: m, day: 9_000, of: OF_CALLS, strike: 1 }, ..ShardRow::futures(m, scale, limit, 5 * scale, 5 * scale) };
-    let same = live(&base, Shard { rows: [fut, dated(pm), E, E], basis: -50 * KAS1, ..base.s });
-    let odd = live(&base, Shard { rows: [fut, dated(pm - 1), E, E], basis: -50 * KAS1, ..base.s });
-    let d = Draw { amount: KAS1, prices: [P10, P10, 0, 0] };
+    let same = live(&base, Shard { rows: [fut, dated(pm), E, E].into(), basis: -50 * KAS1, ..base.s });
+    let odd = live(&base, Shard { rows: [fut, dated(pm - 1), E, E].into(), basis: -50 * KAS1, ..base.s });
+    let d = Draw { amount: KAS1, prices: [P10, P10, 0, 0].into() };
     let t = same.s.traced(&d, false).unwrap();
     assert_eq!((t.list.len(), t.rows[0].at, t.rows[1].at), (1, 0, 0));
     assert!(odd.s.traced(&d, false).is_none(), "the model: two limits, no trace");
@@ -1033,7 +1033,7 @@ fn t9_k5_an_entry_a_leaving_and_a_void_on_random_books_the_model_and_the_engine(
             }
             *row = x;
         }
-        let shard = live(&base, Shard { rows, ..base.s });
+        let shard = live(&base, Shard { rows: rows.into(), ..base.s });
         let s = &shard.s;
         let market = match r.below(12) {
             0 => [0u8; 32],

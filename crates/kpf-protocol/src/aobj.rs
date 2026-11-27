@@ -206,7 +206,7 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
     }
     // (The claims' three numbers, where they are kept: a shard kept before they were is one of none.)
     let claims = if r.at < r.b.len() { crate::reserve::Claims { paid1: r.int()?, owed2: r.int()?, paid2: r.int()? } } else { crate::reserve::Claims::default() };
-    Ok(Shard { t, rows, owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1], claims })
+    Ok(Shard { t, rows: rows.into(), owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1], claims })
 }
 
 fn host_bytes(h: &Host) -> Vec<u8> {

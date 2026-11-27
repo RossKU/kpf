@@ -17,8 +17,74 @@ use crate::state::{sm8, LONG};
 use crate::state::BPS;
 use crate::thin::{Account, Out, Outs, Stated, KIND_DRAW};
 
-/// The market rows of a shard.
+/// The rows of a shard that the scripts take, until the books are a tree (docs 17.8d, stage 2): the first four places.
 pub const SHARD_ROWS: usize = 4;
+/// The places a row can stand at in a shard's books: the leaves of the tree but the head's.
+pub const PLACES: usize = 63;
+
+/// One of something a place: a row, a price, a row's head. Made of four (the first four places), it has nothing at
+/// the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Places<T>(pub [T; PLACES]);
+
+impl<T: Copy + Default> Default for Places<T> {
+    fn default() -> Self {
+        Places([T::default(); PLACES])
+    }
+}
+
+impl<T: Copy + Default> From<[T; SHARD_ROWS]> for Places<T> {
+    fn from(a: [T; SHARD_ROWS]) -> Self {
+        let mut p = Places::default();
+        p.0[..SHARD_ROWS].copy_from_slice(&a);
+        p
+    }
+}
+
+impl<T: Copy + Default> From<&[T; SHARD_ROWS]> for Places<T> {
+    fn from(a: &[T; SHARD_ROWS]) -> Self {
+        (*a).into()
+    }
+}
+
+impl<T: Copy> From<&Places<T>> for Places<T> {
+    fn from(a: &Places<T>) -> Self {
+        *a
+    }
+}
+
+impl<T> std::ops::Deref for Places<T> {
+    type Target = [T; PLACES];
+    fn deref(&self) -> &[T; PLACES] {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Places<T> {
+    fn deref_mut(&mut self) -> &mut [T; PLACES] {
+        &mut self.0
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Places<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T: Copy + Default + PartialEq> PartialEq<[T; SHARD_ROWS]> for Places<T> {
+    fn eq(&self, o: &[T; SHARD_ROWS]) -> bool {
+        *self == Places::from(*o)
+    }
+}
+
+impl<T: Copy> Places<T> {
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Places<U> {
+        Places(self.0.map(f))
+    }
+}
 /// The least a note holds (`NOTE_MIN` of the scripts).
 pub const NOTE_MIN: i64 = 20_000_000;
 /// What a shard's output holds beside what the shard holds for its users (`SHARD_CARRIER` of `KpfTShardOpen`): a
@@ -95,6 +161,18 @@ pub struct RowHead {
     pub price_max: i64,
 }
 
+impl Default for RowHead {
+    fn default() -> Self {
+        RowHead::EMPTY
+    }
+}
+
+impl Default for ShardRow {
+    fn default() -> Self {
+        ShardRow::EMPTY
+    }
+}
+
 impl RowHead {
     /// No market: an empty row's.
     pub const EMPTY: RowHead = RowHead { key: Key::HEAD, scale: 0, price_max: 0 };
@@ -167,7 +245,7 @@ pub struct Shard {
     /// Its terms, an account's ten: the maintenance rate is the rate on the net, the liquidation fee's rate the rate
     /// on the gross, the tolerance the tolerance.
     pub t: XTerms,
-    pub rows: [ShardRow; SHARD_ROWS],
+    pub rows: Places<ShardRow>,
     pub owner: [u8; 32],
     pub held: i64,
     pub expiry: i64,
@@ -210,16 +288,16 @@ impl Shard {
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: [ShardRow::EMPTY; SHARD_ROWS], owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default() }
+        Shard { t, rows: Places::default(), owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default() }
     }
 
     pub fn terms(&self) -> Vec<u8> {
         self.shell().terms()
     }
 
-    /// The four rows, 420 bytes.
+    /// The four rows the scripts take, 420 bytes.
     pub fn rows_bytes(&self) -> Vec<u8> {
-        self.rows.iter().flat_map(|r| r.bytes()).collect()
+        self.rows.iter().take(SHARD_ROWS).flat_map(|r| r.bytes()).collect()
     }
 
     /// The sum of the rows' gross units (a call ends where it is nothing).
@@ -259,7 +337,7 @@ impl Shard {
 
     /// The row a leg of the head `head` enters: the row of that head, or the first empty one.
     pub fn row_for(&self, head: &RowHead) -> Option<usize> {
-        self.rows.iter().position(|r| r.head() == *head).or_else(|| self.rows.iter().position(|r| *r == ShardRow::EMPTY))
+        self.rows.iter().take(SHARD_ROWS).position(|r| r.head() == *head).or_else(|| self.rows.iter().take(SHARD_ROWS).position(|r| *r == ShardRow::EMPTY))
     }
 
     /// The futures row of a market, where the shard has one.
@@ -270,7 +348,7 @@ impl Shard {
     /// The shard with these rows for its own (four at the most; the others of no market).
     pub fn of_rows(&self, rows: &[ShardRow]) -> Shard {
         let mut s = *self;
-        s.rows = [ShardRow::EMPTY; SHARD_ROWS];
+        s.rows = Places::default();
         s.rows[..rows.len()].copy_from_slice(rows);
         s
     }
@@ -516,7 +594,7 @@ impl Shard {
             return no("it is called");
         }
         let (head, units, basis) = Shard::book_of(l)?;
-        let Some(row) = self.rows.get(r) else { return no("it has four rows") };
+        let Some(row) = self.rows.get(r).filter(|_| r < SHARD_ROWS) else { return no("it has four rows") };
         // (A market of nothing is no row's: the rows of no market have its key.)
         if row.head() != head && (*row != ShardRow::EMPTY || self.rows.iter().any(|x| x.key == head.key)) {
             return no("the row is another market's, or the leg's market has a row of its own");
@@ -782,8 +860,8 @@ pub const CALL_HOLD: i64 = SHARD_CARRIER / 2;
 pub struct Called {
     pub sid: [u8; 32],
     pub time: i64,
-    pub heads: [RowHead; SHARD_ROWS],
-    pub prices: [i64; SHARD_ROWS],
+    pub heads: Places<RowHead>,
+    pub prices: Places<i64>,
 }
 
 impl Called {
@@ -828,7 +906,7 @@ impl Called {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Draw {
     pub amount: i64,
-    pub prices: [i64; SHARD_ROWS],
+    pub prices: Places<i64>,
 }
 
 impl Draw {
@@ -836,7 +914,7 @@ impl Draw {
     /// place the row names (nothing where it names none). What the statement says is the trace: `Shard::traced`.
     pub fn read(said: &[u8]) -> Option<Draw> {
         let t = Traced::read(said)?;
-        let mut prices = [0i64; SHARD_ROWS];
+        let mut prices = Places::<i64>::default();
         for (p, r) in prices.iter_mut().zip(&t.rows) {
             *p = usize::try_from(r.at).ok().and_then(|i| t.list.get(i)).map_or(0, |e| e.price);
         }
@@ -879,7 +957,7 @@ impl Shard {
 
     /// (The worth of the net units summed, of the gross, and what side B's net units are worth: above zero where it
     /// is long.) `None` where a row that has a market has no price within its limit, or a number is beyond 64 bits.
-    fn worths(&self, p: &[i64; SHARD_ROWS]) -> Option<(i64, i64, i64)> {
+    fn worths(&self, p: &Places<i64>) -> Option<(i64, i64, i64)> {
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         for (row, p) in self.rows.iter().zip(p) {
             if row.key.market == [0; 32] {
@@ -899,20 +977,20 @@ impl Shard {
     /// What the shard is asked at the prices `p` (one a row), at its upper level, with `KpfTShardEnd`'s
     /// arithmetic: the maintenance rate of the worth of every row's net units and the rate on the gross of the
     /// worth of every row's gross units, each counted the tolerance more.
-    pub fn requirement(&self, p: &[i64; SHARD_ROWS]) -> Option<i64> {
+    pub fn requirement(&self, p: impl Into<Places<i64>>) -> Option<i64> {
         self.level(p, true)
     }
 
     /// The requirement at its upper level (`up`) or its lower.
-    pub fn level(&self, p: &[i64; SHARD_ROWS], up: bool) -> Option<i64> {
-        let (wn, wg, _) = self.worths(p)?;
+    pub fn level(&self, p: impl Into<Places<i64>>, up: bool) -> Option<i64> {
+        let (wn, wg, _) = self.worths(&p.into())?;
         need_of(wn, wg, &self.t, up)
     }
 
     /// The shard's equity at the prices `p`: what it holds, and what its net units are worth there, less what its
     /// legs were entered at.
-    pub fn equity(&self, p: &[i64; SHARD_ROWS]) -> Option<i64> {
-        let (_, _, sn) = self.worths(p)?;
+    pub fn equity(&self, p: impl Into<Places<i64>>) -> Option<i64> {
+        let (_, _, sn) = self.worths(&p.into())?;
         self.held.checked_add(sn)?.checked_sub(self.basis)
     }
 
@@ -989,7 +1067,7 @@ impl Shard {
 
     /// The first point of a stated draw that is wrong at the committee's prices `c` (one a row): 0 the end, r the
     /// price of row r. `None`: the draw is the rule's.
-    pub fn draw_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+    pub fn draw_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: impl Into<Places<i64>>) -> Option<i64> {
         match self.traced(d, false) {
             Some(t) => self.trace_wrong_point(&t, false, claimer, outs, held, t0, c),
             None => Some(0),
@@ -999,7 +1077,7 @@ impl Shard {
     /// The first point of a stated trace that is wrong, at the committee's prices `c` (one a row of the books):
     /// 0 the end, 1 to 4 a row, 4 + e the price e of the list (docs 17.8b). `None`: it is the rule's.
     #[allow(clippy::too_many_arguments)]
-    pub fn trace_wrong_point(&self, t: &Traced, call: bool, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+    pub fn trace_wrong_point(&self, t: &Traced, call: bool, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: impl Into<Places<i64>>) -> Option<i64> {
         let end = if call { self.call_trace_end_right(t, claimer, outs, held, t0) } else { self.draw_trace_end_right(t, claimer, outs, held, t0) };
         if !end {
             return Some(0);
@@ -1007,6 +1085,7 @@ impl Shard {
         if let Some(r) = (1..=SHARD_ROWS).find(|r| self.trace_row_judged(t, *r, call) != Some(true)) {
             return Some(r as i64);
         }
+        let c: Places<i64> = c.into();
         let cited = |x: &Priced| self.rows.iter().position(|r| r.key.market == x.market).map_or(0, |i| c[i]);
         (1..=t.list.len()).find(|e| !self.trace_price_right(t, *e, cited(&t.list[*e - 1]))).map(|e| 4 + e as i64)
     }
@@ -1040,7 +1119,8 @@ impl Shard {
     }
 
     /// The most the owner draws at the prices `p`.
-    pub fn draw_max(&self, p: &[i64; SHARD_ROWS]) -> i64 {
+    pub fn draw_max(&self, p: impl Into<Places<i64>>) -> i64 {
+        let p: Places<i64> = p.into();
         if self.called != 0 {
             return 0;
         }
@@ -1052,11 +1132,12 @@ impl Shard {
 
     /// The statement of a draw of `amount` at the prices `p` by the shard's owner, on a shard whose output holds
     /// `held`. Refused where the shard would hold less than its requirement at those prices.
-    pub fn draw(&self, amount: i64, p: [i64; SHARD_ROWS], t0: i64, held: i64) -> Result<(Stated, Draw)> {
+    pub fn draw(&self, amount: i64, p: impl Into<Places<i64>>, t0: i64, held: i64) -> Result<(Stated, Draw)> {
+        let p: Places<i64> = p.into();
         let d = Draw { amount, prices: p };
         let outs = Outs::of(&[Out { key: false, to: self.drawn(amount, t0).hash(), value: held - amount }, Out { key: true, to: self.owner, value: amount }]).ok_or_else(|| Error::Invalid("the draw's outputs".into()))?;
         if !self.draw_end_right(&d, &self.owner, &outs, held, t0) {
-            return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero, or it is stated before the time the shard says ({})", self.held, self.requirement(&p), self.expiry)));
+            return Err(Error::Invalid(format!("the shard would hold less than its requirement at these prices (it holds {}, and is asked {:?}), or the amount is not above zero, or it is stated before the time the shard says ({})", self.held, self.requirement(p), self.expiry)));
         }
         let t = self.traced(&d, false).ok_or_else(|| Error::Invalid("the rows at these prices are beyond what is counted: nobody states this draw".into()))?;
         Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_DRAW, t0, arg: t.arg(), outs, bond: self.bond(), claimer: self.owner, held }, d))
@@ -1111,13 +1192,13 @@ impl Shard {
     }
 
     /// Whether a call is due at the prices `p`: what `call_end_judged` computes, for whoever watches.
-    pub fn call_due(&self, p: &[i64; SHARD_ROWS]) -> bool {
-        self.call_end_judged(&Draw { amount: 0, prices: *p }, 1, i64::MAX / 2).is_some_and(|(ok, _)| ok)
+    pub fn call_due(&self, p: impl Into<Places<i64>>) -> bool {
+        self.call_end_judged(&Draw { amount: 0, prices: p.into() }, 1, i64::MAX / 2).is_some_and(|(ok, _)| ok)
     }
 
     /// The shard called at `t0`, having paid `pay`; and the call, at the prices `p`.
-    pub fn called_at(&self, p: &[i64; SHARD_ROWS], t0: i64, pay: i64) -> (Shard, Called) {
-        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head()), prices: *p })
+    pub fn called_at(&self, p: impl Into<Places<i64>>, t0: i64, pay: i64) -> (Shard, Called) {
+        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| r.head()), prices: p.into() })
     }
 
     /// The outputs of a call that is the rule's: the shard called, the call, and the fee to the caller.
@@ -1142,7 +1223,7 @@ impl Shard {
 
     /// The first point of a stated call that is wrong at the committee's prices `c` (one a row): 0 the end, r the
     /// price of row r. `None`: the call is the rule's.
-    pub fn call_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: &[i64; SHARD_ROWS]) -> Option<i64> {
+    pub fn call_wrong_point(&self, d: &Draw, claimer: &[u8; 32], outs: &Outs, held: i64, t0: i64, c: impl Into<Places<i64>>) -> Option<i64> {
         match self.traced(d, true) {
             Some(t) => self.trace_wrong_point(&t, true, claimer, outs, held, t0, c),
             None => Some(0),
@@ -1151,8 +1232,8 @@ impl Shard {
 
     /// The statement of a call at the prices `p` by `claimer` (anyone), on a shard whose output holds `held`.
     /// Refused where the shard is not below its lower level at those prices.
-    pub fn call(&self, p: [i64; SHARD_ROWS], t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, Draw)> {
-        let d = Draw { amount: 0, prices: p };
+    pub fn call(&self, p: impl Into<Places<i64>>, t0: i64, held: i64, claimer: [u8; 32]) -> Result<(Stated, Draw)> {
+        let d = Draw { amount: 0, prices: p.into() };
         let outs = self.call_outs(&d, &claimer, t0, held).ok_or_else(|| Error::Invalid("no call is due at these prices: the shard's equity, each price moved the tolerance in its favour, is at its lower level or above; or the shard is called; or a row that has a market has no price".into()))?;
         let t = self.traced(&d, true).ok_or_else(|| Error::Invalid("the rows at these prices are beyond what is counted: nobody states this call".into()))?;
         Ok((Stated { position: self.hash(), window: self.dispute_daa, late: self.t.late_daa, kind: KIND_CALL, t0, arg: t.arg(), outs, bond: self.call_bond(), claimer, held }, d))
@@ -1356,7 +1437,7 @@ impl Shard {
         list.sort_by_key(|p| p.numbers());
         let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
         let mut rows = vec![];
-        for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate() {
+        for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate().take(SHARD_ROWS) {
             let mut at = 0;
             if row.key.market != [0; 32] {
                 at = list.iter().position(|x| x.market == row.key.market && x.limit == row.price_max)? as i64;
@@ -1502,7 +1583,7 @@ mod trace_tests {
         let (mut right, mut wrong, mut none, mut lies) = (0, 0, 0, 0);
         for _ in 0..40_000 {
             let s = shard(&mut r);
-            let mut prices = [0i64; SHARD_ROWS];
+            let mut prices = Places::<i64>::default();
             for (p, row) in prices.iter_mut().zip(&s.rows) {
                 *p = match r.below(12) {
                     0 => 0,
