@@ -460,7 +460,8 @@ fn step_net(legs: &[Leg], m: i64, a: &[i64; MARKETS], i: usize) -> Option<Steppe
     let q = worst_q(legs, a);
     let row = trace(legs, a, &q, UP, Out::Leg(i))?;
     let (ra, rs) = row.closed();
-    let band_all = (ra * 2 * TOL + UP - 1) / UP;
+    // (The entries' part, of the gross worth; and the leaving's, of what is asked. Review T14, O1.)
+    let band_all = rate_up(row.w, TOL) + (ra * TOL + UP - 1) / UP;
     let s = row.g + row.m;
     let x = if s < 0 { s } else { (s - band_all).max(0) };
     if m + x >= 0 {
@@ -472,7 +473,8 @@ fn step_net(legs: &[Leg], m: i64, a: &[i64; MARKETS], i: usize) -> Option<Steppe
     let (mut coins, mut paid, mut unpaid, mut out, mut fee) = (m, 0, 0, 0, 0);
     let mut all = false;
     if row.gl >= 0 {
-        if nls != 0 {
+        // (Each alone: review T14, O2.)
+        if row.ls != 0 {
             return None;
         }
         fee = rate_down(row.w - row.ws, LIQ).min(m.max(0));
@@ -562,28 +564,52 @@ fn a_step_by_what_is_asked_costs_a_user_no_more_than_its_risk_whoever_chooses_th
     assert_eq!((end.all, end.fee, end.out, end.unpaid), (true, 2_100, 0, 0));
     let (kind_built, greedy_built) = (walked(&legs, m, &a, false, false), walked(&legs, m, &a, false, true));
     assert_eq!((kind_built.0, greedy_built.0, greedy_built.1), (1_700 + 3_000, 0, 2_100), "as built: the user has 4,700 or nothing, by the stater's choice");
-    // By what is asked: the cure pays the fee of the leg it takes (48, of 9,600); every leg, the fee and the band of
-    // the net: what is asked is 6,198 (the hedge nothing, the long 5,670, the small leg 528), the fee a
-    // hundredth-and-a-tenth of it (563) and the band two of those (1,127): the user is paid its coins and what the
-    // legs gained less those.
+    // By what is asked: the cure pays the fee of the leg it takes (48, of 9,600). Every leg: the fee of what is asked
+    // (6,198: the hedge nothing, the long 5,670, the small leg 528; a hundredth-and-a-tenth of it, 563); the band
+    // is the entries' part, the tolerance of the gross worth (11,563 of 2,312,600), and the leaving's, of the net
+    // (564): the 2,600 the legs gained together are under it (review T14, O1: the entries' part is gross), and the
+    // user is paid its coins less the fee.
     let asked = trace(&legs, &a, &worst_q(&legs, &a), UP, Out::None).unwrap().closed().0;
-    let (fee_all, band_all) = (asked * LIQ / UP, (asked * 2 * TOL + UP - 1) / UP);
-    assert_eq!((asked, fee_all, band_all), (6_198, 563, 1_127));
+    let (fee_all, band_all) = (asked * LIQ / UP, rate_up(2_312_600, TOL) + (asked * TOL + UP - 1) / UP);
+    assert_eq!((asked, fee_all, band_all), (6_198, 563, 11_563 + 564));
     let cure = step_net(&legs, m, &a, 3).unwrap();
     let end = step_net(&legs, m, &a, 1).unwrap();
     assert_eq!((cure.all, cure.fee, cure.coins), (false, 48, 1_652));
-    assert_eq!((end.all, end.fee, end.out, end.unpaid), (true, fee_all, 2_600 - band_all, 0));
+    assert_eq!((end.all, end.fee, end.out, end.unpaid), (true, fee_all, 0, 0));
     let (kind_net, greedy_net) = (walked(&legs, m, &a, true, false), walked(&legs, m, &a, true, true));
-    assert_eq!((kind_net.0, greedy_net.0), (1_652 + 3_000, 2_100 - fee_all + 2_600 - band_all));
-    // With a tenth less of coins the account is still due when the small leg has left. As built the only right
-    // step then names the hedge's short and takes every leg (the long that would have to leave gained, and is
-    // not named while the hedge's short "lost"). By what is asked the long is named: it leaves alone.
-    let left = step(&legs, 2_000, &a, 3, true).unwrap();
-    assert!(!left.all && step(&left.stays, left.coins, &a, 2, true).is_none() && step(&left.stays, left.coins, &a, 1, true).is_some_and(|o| o.all));
+    assert_eq!((kind_net.0, greedy_net.0), (1_652 + 3_000, 2_100 - fee_all), "the user has 4,652, or its coins less the fee of the net");
+    // With a tenth less of coins the account is still due when the small leg has left; the long that would have
+    // to leave gained beside a hedge whose short has lost, alone: it is not named (review T14, O2: each alone),
+    // and the step that names the hedge's short takes every leg, for the fee of the net.
     let left = step_net(&legs, 2_000, &a, 3).unwrap();
-    let long = step_net(&left.stays, left.coins, &a, 2).expect("the long is named");
-    assert_eq!((long.all, long.stays.len(), long.out), (false, 2, 3_000 - rate_up(103_000, 2 * TOL)));
-    assert!(step_net(&long.stays, long.coins, &a, 0).is_none() && step_net(&long.stays, long.coins, &a, 1).is_none(), "the hedge alone is not due");
+    assert!(!left.all && step_net(&left.stays, left.coins, &a, 2).is_none());
+    let all = step_net(&left.stays, left.coins, &a, 1).unwrap();
+    assert_eq!((all.all, all.fee, all.unpaid), (true, trace(&left.stays, &a, &worst_q(&left.stays, &a), UP, Out::None).unwrap().closed().0 * LIQ / UP, 0));
+
+    // Review T14, O1. The committee says 10,000 throughout. A long of 1,000 entered at 9,950 and a short of 1,000
+    // next to it entered at 10,050, each within the tolerance of its own statement. Every leg leaves: they gained
+    // 100,000 together by the prices alone. By the band of the net alone nothing is taken (the hedge is asked
+    // nothing): the 100,000 are paid. The band has the entries' part, the tolerance of the gross worth: 100,000.
+    let o1 = [Leg { market: 0, long: true, units: 1_000, entry: 9_950 }, Leg { market: 0, long: false, units: 1_000, entry: 10_050 }];
+    let at = [10_000, 10_000, 10_000];
+    let row = trace(&o1, &at, &[10_000, 10_000], UP, Out::All).unwrap();
+    assert_eq!((row.g, row.closed().0, row.w), (100_000, 0, 20_000_000));
+    assert_eq!((row.closed().0 * 2 * TOL + UP - 1) / UP, 0, "the band of the net alone: nothing");
+    assert_eq!(rate_up(row.w, TOL) + (row.closed().0 * TOL + UP - 1) / UP, 100_000, "the band with the entries' part: what the two entries could be off by");
+    // One leg alone pays what it paid: the tolerance of its worth twice (to the rounding of the rate on the price).
+    let one = trace(&o1[..1], &at, &[10_000], UP, Out::All).unwrap();
+    assert_eq!(rate_up(one.w, TOL) + (one.closed().0 * TOL + UP - 1) / UP, rate_up(one.w, 2 * TOL));
+
+    // Review T14, O2. Stays: a long of market 0 that gained 8,000 and a short of market 1 that lost 8,000 (each
+    // worth 100,000). Named: a long of market 2 that gained 3,000. Coins 100; due. Counted together the legs
+    // that stay lost nothing, and the long was named: 2,000 left for the user's key; market 0 then fell 3 % and
+    // the shard was unpaid 3,000. Each alone: a leg that stays has lost, and the leg that gained is not named.
+    let o2 = [Leg { market: 0, long: true, units: 10, entry: 9_200 }, Leg { market: 1, long: false, units: 10, entry: 9_200 }, Leg { market: 2, long: true, units: 10, entry: 9_700 }];
+    let row = trace(&o2, &at, &worst_q(&o2, &at), UP, Out::Leg(2)).unwrap();
+    assert_eq!((row.g - row.gl, row.ls, row.gl), (0, 8_000, 3_000));
+    assert!(step_net(&o2, 100, &at, 2).is_none(), "a leg that gained is named beside a leg that lost");
+    let whole = step_net(&o2, 100, &at, 1).expect("the short that lost, named: the coins do not pay it");
+    assert_eq!((whole.all, whole.unpaid, whole.out), (true, 0, 0), "every leg leaves: they gained 3,000 together, under the band");
 
     // E1 and E3 as they were closed stay closed.
     let a2 = [10_000, 10_000, 10_000];

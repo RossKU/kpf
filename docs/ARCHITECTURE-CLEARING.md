@@ -4407,6 +4407,18 @@ million and 0.83); **of accounts that hold a hedge beside their legs, 2,090 mill
 stater that takes most 3,004 million and 1,500. The choice is not gone (a leg the coins do not pay still takes
 every leg, with no token held): what it pays is now of the risk taken away.
 
+**After review T14** (O1, O2, below 17.8i; `s440_t14_o1_o2.py`). Two of the three changes above were wrong as
+built, and are now: **the band of every leg leaving is the entries' part, the tolerance of what the legs are
+worth (gross: each leg entered at a price of its own statement), and the leaving's part, R by the tolerance
+over the rate (net: the legs of a group leave at one price)**; one leg pays what it paid, a hedge half of the
+gross band. And **a leg that gained is named only where no leg that stays has lost, each alone** (as before
+the change: together, a gain of one market stood for a loss of another). The fee of every leg on R stands, and
+the cap of a leg's fee by what the legs that stay lost together (the shard can be unpaid by it, by no more
+than one fee, where the prices then part). In W3's numbers now: the cure pays 0.048; every leg, 0.563 of fee,
+and the 2.6 the legs gained are under a band of 12.126 again: the stater's choice costs the user 3.2 KAS where
+it cost 4.7. In the model, of accounts that hold a hedge: 2,090 million as first built, 512 now; the fees of
+the stater that takes most 3,004 million and 1,500; the shard unpaid nothing.
+
 **What is not read** (W7): a row's band of all the legs (BA) is read by no end (the band of every leg is of R;
 of a leg alone, of its worth, counted by the end as before). It stays for the option leg, whose band is not a
 rate on a worth (17.5); if stage 2 does not read it, it leaves the row in the last phase.
@@ -4485,6 +4497,32 @@ first and premiums after, and where a leg leaves alone; the band of a held optio
 17.5's (the entry's part); whether the fee on R and the premiums pays whoever steps an account of held options
 too little or too much; what E13's rule does to a put held against a long (the long named first); and the
 cost: 256 bytes a row (24 more than is built), and what `KpfTCRow` weighs with two kinds of leg more.
+
+**Review T14** (`docs/audit/REVIEW-T14-option-leg.md`; on paper, nothing run; it holds the leg's bytes, the row
+at 256 bytes with its places, each number's rule for an option leg, each end as a line, and thirteen tests of
+the model to write before any script).
+
+*Of the step by what is asked, as it was built (17.8h):* **change**; both closed.
+
+| Finding | What it is | What is done |
+|---|---|---|
+| O1 (high) | the band of every leg on R covers the price the legs leave at and not the prices they entered at (review 43's F65). The committee at 10; a long of 1,000 entered at 9.95 and a short next to it at 10.05, each statement right; every leg leaves: gained 100, R nothing, band nothing, **100 paid from prices alone**; a mirrored account takes the risk between the two entries away | **closed**: the band is the entries' part, the tolerance of the gross worth, and the leaving's, R by the tolerance over the rate. Shown at the engine (the hedge is paid nothing; a sompi more gained is asked) |
+| O2 (medium; new with that change) | "what the legs that stay lost together" nets across markets: a long of X that gained 8,000 and a short of Y that lost 8,000 stay; a long of Z that gained 3,000 is named, 2,000 leave for the user's key; X falls 3 %: the shard unpaid 3,000. A user states the step itself and is paid what a take refuses | **closed**: the guard is "no leg that stays has lost", each alone. Exact would be "a group at a time" (two numbers a row); the whole class closes where a gain in a step is credited and not paid (17.8g, C) |
+| O7 (low) | accounts nobody has a reason to step (a hedge under water: no fee; a hedged account that owes) | a least fee in the terms: the last phase |
+
+*Of the option leg (17.8i):* **change first, then build.** The row's shape is right and 256 bytes hold it.
+
+| Finding | What it is | Decided |
+|---|---|---|
+| O3 (high) | a leg that gained leaves alone beside a held option whose premium stands on that gain: a long from 100 with coins of 61 and a call held for a premium of 100; at 105 the long is named, 39.5 leave for the user's key, and the call's premium is then 44.25 short and not owed | a leg that gained leaves alone only where the coins hold the premiums that stay (m less what is owed, less the fee, at PS); else every leg |
+| O4 (medium) | the fee of a leg alone was capped before the premiums that stay | the cap is after them |
+| O5 (medium) | where every leg leaves, PO was paid from the coins alone | it is set against what the legs gained first (as the model has it); PO as one number is enough |
+| O6 (medium) | the band was not 17.5's: no entry's part for an option (a call struck and entered at 100, the committee at 100.5, named at 99: band nothing, 5 hidden), and twice the tolerance at the leaving where 17.5 has once | one rule with O1: each leg's entry part, and what the legs lose by a move of the tolerance (the two sums and the closed groups at that rate) |
+| O8 (low) | the fee of an option named alone was of its underlying's worth | of what it can lose alone and its premium, by the fee's rate over the rate; an option adds nothing to the legs' worth |
+| O9 (medium; the seventh step's) | "an ended leg's row is wrong" freezes a due account against whoever would step it while no price of the day is written | built as written here; decided before the seventh step (a step passes such a leg by a row that adds its premium alone) |
+| O10, O11 (low) | a token leg adds nothing to NS; "between the ends" is strict; the lines are of nothing in a step whatever the head says | in the text of the second writing |
+
+The second writing of 17.8i follows the review's list; the model's tests come before any script.
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 

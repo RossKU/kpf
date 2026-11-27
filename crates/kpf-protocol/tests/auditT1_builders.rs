@@ -14788,7 +14788,9 @@ fn t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone() {
         let a1 = gained(r.range(4, 25));
         let Some((g1, marked)) = mark(&x, a1, T0) else { panic!("case {case}: a leg that gained 4 % or more is marked") };
         // At one price.
-        assert_eq!(g1 + leaving(&marked, a1, marked.b_min_counter), leaving(&x, a1, T0), "case {case}: a mark and the leaving at one price, against the leaving alone");
+        // (To a sompi: a mark keeps the band of its leg's worth, twice the tolerance rounded once; a leaving of every
+        // leg takes the entries' part and the leaving's, each rounded. Review T14, O1.)
+        assert!((g1 + leaving(&marked, a1, marked.b_min_counter) - leaving(&x, a1, T0)).abs() <= 1, "case {case}: a mark and the leaving at one price, against the leaving alone");
         same += 1;
         // Twice at one price.
         assert!(mark(&marked, a1, marked.b_min_counter).is_none(), "case {case}: a second mark at the same price");
@@ -14799,8 +14801,8 @@ fn t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone() {
             let more = g1 + leaving(&marked, a2, marked.b_min_counter) - leaving(&x, a2, T0);
             // (The band of every leg leaving is of what is asked: R by twice the tolerance over the rate. Review T13, W3.)
             let band = {
-                let (ra, up) = (x.c_trace(&[a2], 0).unwrap()[0].closed().unwrap().0, w.terms().mmr_bps + w.terms().g_bps);
-                (ra / up) * g2 + ((ra % up) * g2 + up - 1) / up
+                let (ra, up, g) = (x.c_trace(&[a2], 0).unwrap()[0].closed().unwrap().0, w.terms().mmr_bps + w.terms().g_bps, w.terms().g_bps);
+                rate_up(worth(&leg, a2), g) + (ra / up) * g + ((ra % up) * g + up - 1) / up + 1
             };
             let truly = if leg.dir == LONG { worth(&leg, a2) - worth(&leg, leg.entry) } else { worth(&leg, leg.entry) - worth(&leg, a2) };
             assert!(more >= 0 && more <= band && g1 + leaving(&marked, a2, marked.b_min_counter) <= truly.max(g1), "case {case}: {more} more than the leaving alone, the band {band}");
@@ -15356,7 +15358,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3758), ("KpfTCRow", 4241), ("KpfTCEnd", 4472), ("KpfTCSplit", 2615), ("KpfTCMark", 2547), ("KpfTCEnter", 1995), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3758), ("KpfTCRow", 4241), ("KpfTCEnd", 4530), ("KpfTCSplit", 2615), ("KpfTCMark", 2547), ("KpfTCEnter", 1995), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15490,7 +15492,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4472), ("KpfTCTok", 3758), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4530), ("KpfTCTok", 3758), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

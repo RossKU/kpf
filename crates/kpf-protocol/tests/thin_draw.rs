@@ -4043,6 +4043,20 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
     assert_eq!((o.after.clone().unwrap().legs, o.after.unwrap().a_margin, o.note.unwrap().asked), (vec![other], need - 10 * KAS1, -10 * KAS1));
     end_answered(&w, "a leg that lost leaves", &cov(&w, &shard, &legs, need), &lv, &s8, true);
 
+    // Review T14, O1. The committee says 10 throughout; a long of 10 entered at 9.95 and a short of 10 next to it
+    // at 10.05, each within the tolerance of its own statement: at 10 they have gained 1 KAS together by the prices
+    // alone, and are asked nothing. Every leg leaves by its user's statement: the band is the entries' part, the
+    // tolerance of the 200 they are worth (1 KAS), and nothing of the net: nothing is asked of the shard. (By the
+    // band of the net alone the KAS was paid.) A sompi more gained, and it is asked.
+    let entered = [fleg(&w, 0, 10, LONG, P10 * 995 / 1_000), fleg(&w, 0, 10, SHORT, P10 * 1_005 / 1_000)];
+    let hedge = cov(&w, &shard, &entered, 10 * KAS1);
+    let (lv, s_all, o, _) = c_applied(&w, "every leg of a hedge entered at two prices leaves", &hedge, KIND_C_LEAVE, 0, kpf_protocol::covered::ALL, &[P10; 2], &w.w);
+    assert_eq!((s_all.rows[1].gain, s_all.rows[1].closed(), o.note.clone().unwrap().asked, o.after.is_none()), (KAS1, Some((0, 0)), 0, true));
+    end_answered(&w, "every leg of a hedge entered at two prices leaves", &hedge, &lv, &s_all, true);
+    let wider = [fleg(&w, 0, 10, LONG, P10 * 995 / 1_000 - 1), entered[1]];
+    let (_, _, o) = cov(&w, &shard, &wider, 10 * KAS1).s.c_state(KIND_C_LEAVE, 0, kpf_protocol::covered::ALL, &[P10; 2], T0, 10 * KAS1, xk(&w.w)).unwrap();
+    assert_eq!(o.note.unwrap().asked, 10);
+
     // A step is due by one price a group. The hedge with a KAS above a note's least loses nothing at any price:
     // it is not due (by the lower rate on what its legs are worth it was, with 220 KAS of them). A long alone that
     // lost 5 at 9.5, with 9: due by the price a lower rate below, which its row says.

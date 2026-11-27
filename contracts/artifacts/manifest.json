@@ -59,10 +59,10 @@
     },
     "KpfTCEnd": {
       "artifact": "KpfTCEnd.json",
-      "artifact_sha256": "68488b75c8d49538732fe4bedfe228022d5d74648836e8e513f6e1712c851d5d",
-      "script_len": 4472,
+      "artifact_sha256": "90f5a041e8f89f416a981cdad60025486d6ec51660d4bd3ad6f75561889aa418",
+      "script_len": 4530,
       "source": "contracts/KpfTCEnd.sil",
-      "source_sha256": "278fbfe81376f684dca3cb60a9a12d94421db3e3533cf2efe6f0b6fb0e1d09b7"
+      "source_sha256": "a9873e8702a11475dde4e5e6345beac09c3089a82cd0f4b4c97bca3e9fce2653"
     },
     "KpfTCEnter": {
       "artifact": "KpfTCEnter.json",

@@ -614,10 +614,11 @@ impl Account {
             // Due by the prices the rows say: what a step would leave the account is below nothing. What the legs
             // gained to those prices counts less the band where it is above nothing, and no less than nothing
             // (docs 17.8g, D).
-            // (The band and the fee of a step of every leg are of what is asked, the net: R by twice the
-            // tolerance, and by the fee's rate, over the rate. Review T13, W3.)
+            // (The fee of a step of every leg is of what is asked, the net: R by the fee's rate over the rate.
+            // Its band: the entries' part, the tolerance of what the legs are worth, and the leaving's part, R
+            // by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
             let up = add(self.t.mmr_bps, g)?;
-            let band_all = over(ra, add(g, g)?, up, true)?;
+            let band_all = add(rate_up(w, g)?, over(ra, g, up, true)?)?;
             let fee_all = over(ra, self.t.liq_fee_bps, up, false)?;
             // (What the legs that stay lost, together.)
             let nls = sub(0, sub(gain, gl)?)?.max(0);
@@ -646,10 +647,11 @@ impl Account {
                         all = true;
                     }
                 } else {
-                    // The leg named gained: only where the legs that stay have not lost together; an account
-                    // that holds tokens is not taken whole; with none, it leaves alone where the account lacks
-                    // less after it (what it gained leaves for its user), and else every leg leaves.
-                    if nls != 0 {
+                    // The leg named gained: only where no leg that stays has lost (each alone: review T14,
+                    // O2); an account that holds tokens is not taken whole; with none, it leaves alone where
+                    // the account lacks less after it (what it gained leaves for its user), and else every leg
+                    // leaves.
+                    if ls != 0 {
                         return Some(None);
                     }
                     fee = rate_down(wl, self.t.liq_fee_bps)?;
@@ -682,9 +684,9 @@ impl Account {
                 pay = sub(0, gain)?.min(room);
                 asked = sub(0, pay)?;
             } else {
-                // (The band of every leg leaving, by a step or by its user's statement, is of what is asked: R by
-                // twice the tolerance over the rate. Review T13, W3.)
-                asked = sub(gain, over(ra, g2, add(self.t.mmr_bps, g)?, true)?)?.max(0);
+                // (The band of every leg leaving, by a step or by its user's statement: the tolerance of what the
+                // legs are worth, and R by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
+                asked = sub(gain, add(rate_up(w, g)?, over(ra, g, add(self.t.mmr_bps, g)?, true)?)?)?.max(0);
                 // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
                 asked = sub(asked, asked.min(owes))?;
             }
