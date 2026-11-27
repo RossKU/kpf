@@ -1113,7 +1113,7 @@ fn t5_b4_the_whole_way_of_a_call_whose_list_is_not_in_the_order_of_its_rows() {
         // object the step does not write, which the engine took: REVIEW-T7, S4. Now the step's output is held to
         // the note's hash and applied as the step wrote it; its legs are old: a claim of the first class.)
         assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "{what}: the step's note is of tag 9");
-        let (b, next, claim) = left_apply_c(&w.lib, &called, &nth(&sg, 2, step.note.clone(), 6_810), kpf_protocol::reserve::NOTE_STEP, step.young, &w.script(script), w.payer(&w.f, &ff)).unwrap();
+        let (b, next, claim) = left_apply_c(&w.lib, &called, &nth(&sg, 2, step.note.clone(), 6_810), kpf_protocol::reserve::NOTE_STEP, step.young, &w.script(left_script_on(&(&called).s, (&nth(&sg, 2, step.note.clone(), 6_810)).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
         let claim = claim.map(|c| { assert_eq!((c.amount2, c.paid1), (0, 0), "{what}"); kpf_protocol::reserve::Rest { sid: c.sid, key: c.key, amount: c.amount1 } });
         let sg = signed(&format!("B4: the note of {what} applied"), &b, &w.keys);
         if let Some(c) = claim {

@@ -310,7 +310,7 @@ fn step_apply_t7(w: &World, shard: &OLive<Shard>, sg: &OSigned, step: &CallStep,
     assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "the step's note is of tag 9");
     assert_ne!(step.note_hash(), step.note.hash());
     let note = nth(sg, 2, step.note.clone(), daa);
-    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script(note.s.legs.len())), p).unwrap();
+    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script_on(&(shard).s, (&note).s.legs.len())), p).unwrap();
     let mut as6 = b.clone();
     assert!(matches!(&args_of(&mut as6, 1)[11], Arg::V(ArtifactValue::Int(9))), "argument 11 is the note's kind");
     args_of(&mut as6, 1)[11] = Arg::V(ArtifactValue::Int(6));
@@ -458,7 +458,7 @@ fn t7_b1_ii_a_pair_entered_and_one_side_leaving_leaves_a_row_the_gate_never_saw(
     let note = o.note.clone().expect("the note that the short left");
     let k = out_of(&sg, &hash_spk(&w.lib, &note.hash())).0;
     let ff = [fund(xk(&w.f), 36)];
-    let (b, naked, claim) = left_apply_c(&w.lib, &live, &nth(&sg, k, note.clone(), 6_600), NOTE_LEFT, 0, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, naked, claim) = left_apply_c(&w.lib, &live, &nth(&sg, k, note.clone(), 6_600), NOTE_LEFT, 0, &w.script(left_script_on(&(&live).s, (&nth(&sg, k, note.clone(), 6_600)).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     ok("S1: the note of the short's leaving applied: no gate", &b, &w.keys);
     let scale = w.markets[0].p.scale;
     assert_eq!((claim, naked.rows[0].net, naked.rows[0].gross, naked.called), (None, -1_005 * scale, 1_005 * scale, 0), "the row is one-sided, and the shard paid the note");
@@ -631,7 +631,7 @@ fn t7_b2_the_class_where_a_note_is_applied_is_the_rules_and_no_other() {
                             next.claims.owed2 += a2;
                             let claim = (a1 + a2 > 0).then_some(Claim { sid: s.sid, key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 });
                             let script = w.script(left_script(legs_n));
-                            let build = |tag: i64, young: i64, next: Shard, pay: i64, claim: Option<Claim>| left_apply_as_c(&w.lib, &shard, &live, tag, young, &at, next, pay, claim, &script, w.payer(&w.f, &ff));
+                            let build = |tag: i64, young: i64, next: Shard, pay: i64, claim: Option<Claim>| left_apply_as_c(&w.lib, &shard, &live, tag, young, &at, next, pay, claim, &w.script(left_script_on(&(&shard).s, (&live).s.legs.len())), w.payer(&w.f, &ff));
                             let took = |r: kpf_protocol::Result<(OBuilt, Shard, Option<Claim>)>| r.is_ok_and(|b| accepted(&b.0, &w.keys));
                             let model = s.left_class(&note, tag, young, holds);
                             assert_eq!(model.is_ok(), valid, "{what}: the model and the rule");
@@ -714,13 +714,13 @@ fn t7_b4_a_marks_note_is_counted_in_its_class_and_the_books_are_shown_as_they_ar
         let s = if called { Shard { held: 20 * KAS1, called: T0, owed: 9 * KAS1, claims: Claims { paid1: paid_before, owed2: 2 * KAS1, paid2: 0 }, ..books } } else { Shard { held: 20 * KAS1, ..books } };
         let shard = OLive { s, value: (s.held + SHARD_CARRIER) as u64, ..base.clone() };
         let note = OLive { s: MarkNote { sid: s.sid, leg: leg_entered(&leg0, time), entry: 2 * P10, key, asked }, value: NOTE_MIN as u64, id: base.id, op: op(61), daa: 6_300 };
-        let (b, next, claim) = mark_apply_c(&w.lib, &shard, &note, &script, w.payer(&w.f, &ff)).unwrap();
+        let (b, next, claim) = mark_apply_c(&w.lib, &shard, &note, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.f, &ff)).unwrap();
         let sg = ok(&format!("B4: the mark's note of {what}"), &b, &w.keys);
         let (pay, a1, a2) = want;
         assert_eq!((s.held - next.held, next.owed - s.owed, next.claims.owed2 - s.claims.owed2, claim), (pay, a1, a2, Some(Claim { sid: s.sid, key, amount1: a1, paid1: 0, amount2: a2, paid2: 0 })), "{what}");
         assert_eq!(pays(&sg, &key, pay), pay > 0, "{what}");
         let c = claim.unwrap();
-        let build = |n2: Shard, c2: Option<Claim>| mark_apply_as_c(&w.lib, &shard, &note, n2, pay, c2, &script, w.payer(&w.f, &ff));
+        let build = |n2: Shard, c2: Option<Claim>| mark_apply_as_c(&w.lib, &shard, &note, n2, pay, c2, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.f, &ff));
         for (lie, n2, c2) in [
             ("the other class", Shard { owed: s.owed + a2, claims: Claims { owed2: s.claims.owed2 + a1, ..s.claims }, ..next }, Some(Claim { amount1: a2, amount2: a1, ..c })),
             ("a sompi more", Shard { owed: next.owed + 1, ..next }, Some(Claim { amount1: a1 + 1, ..c })),
@@ -731,16 +731,19 @@ fn t7_b4_a_marks_note_is_counted_in_its_class_and_the_books_are_shown_as_they_ar
             let r = build(n2, c2);
             assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}: {lie}");
         }
-        // The books, 68 bytes: argument 4.
-        let open = s.books_open();
-        assert_eq!(open.len(), 68);
-        assert!(matches!(&args_of(&mut b.clone(), 1)[4], Arg::V(ArtifactValue::Bytes(x)) if x[..] == open[..]), "argument 4 is the books opened");
+        // The books: argument 4. Of a called shard, opened, 68 bytes (`KpfTMarkNoteC` counts the amount in its
+        // class); of one that is not called, their hash (`KpfTMarkNote` reads no claim: docs 17.8e).
+        let open = if called { s.books_open() } else { s.books_hash().to_vec() };
+        assert_eq!(open.len(), if called { 68 } else { 32 });
+        assert!(matches!(&args_of(&mut b.clone(), 1)[4], Arg::V(ArtifactValue::Bytes(x)) if x[..] == open[..]), "argument 4 is the books, opened where the shard is called");
         for (lie, at) in [("another sum of the gross", 1usize), ("another hash of the rows", 9), ("another amount paid to the first class", 42), ("another amount owed to the second", 51), ("another amount paid to the second", 60)] {
             let mut other = open.clone();
-            other[at] ^= 1;
+            other[at % open.len()] ^= 1;
             assert!(!accepted(&with_arg(&b, 4, bytes_arg(&other)), &w.keys), "{what}: the books shown with {lie}");
         }
-        assert!(!accepted(&with_arg(&b, 4, bytes_arg(&s.books_hash())), &w.keys), "{what}: the books shown as their hash, as before the change");
+        // (Each script takes the books in its own form alone.)
+        let other_form = if called { s.books_hash().to_vec() } else { s.books_open() };
+        assert!(!accepted(&with_arg(&b, 4, bytes_arg(&other_form)), &w.keys), "{what}: the books shown in the other script's form");
         println!("T7 B4, {what}: paid {}, of the first class {}, of the second {}; {} bytes", kas(pay), kas(a1), kas(a2), sg.mass.size);
     }
 }

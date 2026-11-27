@@ -579,7 +579,7 @@ fn bare(w: &World) -> OLive<Shard> {
 /// the note of the rest, and the transaction.
 fn left_all(w: &World, what: &str, shard: &OLive<Shard>, note: &OLive<Left>) -> (OLive<Shard>, i64, Option<Rest>, OSigned) {
     let f = [fund(xk(&w.w), 43)];
-    let (b, next, rest) = left_apply(&w.lib, shard, note, &w.script(left_script(note.s.legs.len())), w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, shard, note, &w.script(left_script_on(&(shard).s, (note).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     let sg = signed(&format!("{what}: a note of {} applied", note.s.legs.len()), &b, &w.keys);
     let paid = (shard.s.held - next.held).max(0);
     (nth(&sg, 0, next, shard.daa + 1), paid, rest, sg)
@@ -654,11 +654,10 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     let s = base.s.booked(&leg).unwrap();
     let shard = OLive { s, ..base.clone() };
     let f = [fund(xk(&w.w), 43)];
-    let script = w.script("KpfTLeft");
     // 130 KAS are asked of a shard that holds 100: it pays the 100, and 30 go on: the note of the rest, counted in
     // what the shard owes when it is written (review 54, F94).
     let n = Left { sid: s.sid, legs: vec![leg], key: xk(&w.c), asked: 130 * KAS1 };
-    let (b, next, rest) = left_apply(&w.lib, &shard, &left_note(&shard, &n, 0), &script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &left_note(&shard, &n, 0), &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &n, 0)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     let sg = signed("legs left: more asked than the shard holds", &b, &w.keys);
     let rest = rest.expect("the rest goes on");
     let k = sg.tx.outputs.len();
@@ -666,7 +665,7 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     assert_eq!(sg.tx.outputs[2].script_public_key, hash_spk(&w.lib, &rest.hash()));
     let at0 = s.left(&n).unwrap().1;
     for (what, owed) in [("the rest written and not counted", 0), ("counted twice", 60 * KAS1)] {
-        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &n, 0), &at0, Shard { owed, ..next }, 100 * KAS1, Some(rest), &script, w.payer(&w.w, &f));
+        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &n, 0), &at0, Shard { owed, ..next }, 100 * KAS1, Some(rest), &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &n, 0)).s.legs.len())), w.payer(&w.w, &f));
         assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
     }
     // The shard holds 50 again: the rest is paid, is owed no more, and nothing goes on.
@@ -698,7 +697,7 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     let called = OLive { s: Shard { called: 6_400, ..s }, ..shard.clone() };
     // (The legs entered long before the call: what they ask is of the first class. Docs 17.8c.)
     let n = Left { legs: entered(&n.legs, 0), ..n.clone() };
-    let (b, cnext, crest) = left_apply(&w.lib, &called, &left_note(&called, &n, 0), &script, w.payer(&w.w, &f)).unwrap();
+    let (b, cnext, crest) = left_apply(&w.lib, &called, &left_note(&called, &n, 0), &w.script(left_script_on(&(&called).s, (&left_note(&called, &n, 0)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     let sg = signed("a note that asks, applied to a called shard: all of it is the rest", &b, &w.keys);
     assert_eq!((cnext.held, cnext.owed, cnext.rows, cnext.basis, cnext.called), (s.held, n.asked, [ShardRow::EMPTY; 4].into(), 0, 6_400), "nothing is paid, and what is asked is owed");
     assert_eq!(crest, Some(Rest { sid: s.sid, key: n.key, amount: n.asked }));
@@ -706,7 +705,7 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     assert_eq!(out_of(&sg, &hash_spk(&w.lib, &crest.unwrap().hash())).1, NOTE_MIN as u64, "the note of the rest");
     assert!(!pays(&sg, &n.key, n.asked.min(s.held)), "a called shard pays no note");
     let (open_next, at, paid, open_rest) = s.left(&n).unwrap();
-    let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at, Shard { called: 6_400, ..open_next }, paid, open_rest, &script, w.payer(&w.w, &f));
+    let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at, Shard { called: 6_400, ..open_next }, paid, open_rest, &w.script(left_script_on(&(&called).s, (&left_note(&called, &n, 0)).s.legs.len())), w.payer(&w.w, &f));
     assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "a called shard pays a note");
     let at_c = called.s.left(&n).unwrap().1;
     for (what, shard_after, note_after) in [
@@ -714,11 +713,11 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
         ("counted twice", Shard { owed: 2 * n.asked, ..cnext }, crest),
         ("a note of a sompi more", cnext, Some(Rest { amount: n.asked + 1, ..crest.unwrap() })),
     ] {
-        let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at_c, shard_after, 0, note_after, &script, w.payer(&w.w, &f));
+        let r = left_apply_as(&w.lib, &called, &left_note(&called, &n, 0), &at_c, shard_after, 0, note_after, &w.script(left_script_on(&(&called).s, (&left_note(&called, &n, 0)).s.legs.len())), w.payer(&w.w, &f));
         assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
     }
     let quiet = Left { asked: 0, ..n.clone() };
-    let (b, out, _) = left_apply(&w.lib, &called, &left_note(&called, &quiet, 1), &script, w.payer(&w.w, &f)).unwrap();
+    let (b, out, _) = left_apply(&w.lib, &called, &left_note(&called, &quiet, 1), &w.script(left_script_on(&(&called).s, (&left_note(&called, &quiet, 1)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     signed("legs left a called shard's books, nothing asked", &b, &w.keys);
     assert_eq!((out.rows, out.basis, out.called), ([ShardRow::EMPTY; 4].into(), 0, 6_400));
     // A note of the rest is not paid by this script while its shard is called.
@@ -727,9 +726,9 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     // What is not applied: a leg that is in no row; a leg larger than its row has; a leg read out of another row;
     // the books left with the leg in them; what the legs were entered at left as it was.
     let other = Left { legs: vec![fleg(&w, 1, 10, LONG, P10)], ..quiet.clone() };
-    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &other, 2), &script, w.payer(&w.w, &f)).is_err());
+    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &other, 2), &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &other, 2)).s.legs.len())), w.payer(&w.w, &f)).is_err());
     let big = Left { legs: vec![fleg(&w, 0, 11, LONG, P10)], ..quiet.clone() };
-    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &big, 3), &script, w.payer(&w.w, &f)).is_err());
+    assert!(left_apply(&w.lib, &shard, &left_note(&shard, &big, 3), &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &big, 3)).s.legs.len())), w.payer(&w.w, &f)).is_err());
     let (good, at, _, _) = s.left(&quiet).unwrap();
     let lies: Vec<(&str, Vec<usize>, Shard)> = vec![
         ("the leg read out of another row", vec![1], good),
@@ -738,10 +737,10 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
         ("more held than there was", at.clone(), Shard { held: good.held + 1, ..good }),
     ];
     for (what, at, next) in lies {
-        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, next, 0, None, &script, w.payer(&w.w, &f));
+        let r = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, next, 0, None, &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &quiet, 4)).s.legs.len())), w.payer(&w.w, &f));
         assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "{what}");
     }
-    let (b, _, _) = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, good, 0, None, &script, w.payer(&w.w, &f)).unwrap();
+    let (b, _, _) = left_apply_as(&w.lib, &shard, &left_note(&shard, &quiet, 4), &at, good, 0, None, &w.script(left_script_on(&(&shard).s, (&left_note(&shard, &quiet, 4)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     assert!(accepted(&b, &w.keys), "the control");
     // A note of two legs is applied by the script of two to six, in one transaction: both legs out and what is
     // asked paid. There is no state of the books between the two (review 48, F76): with one leg left in, with
@@ -750,17 +749,16 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     let both = OLive { s: s.booked(&two).unwrap(), ..shard.clone() };
     let pair = Left { sid: s.sid, legs: vec![leg, two], key: xk(&w.c), asked: 4 * KAS1 };
     let pnote = left_note(&both, &pair, 5);
-    let all = w.script("KpfTLeftAll");
     let (done, at, paid, rest) = both.s.left(&pair).unwrap();
     assert_eq!((done.rows, done.basis, done.held, paid, rest), ([ShardRow::EMPTY; 4].into(), 0, 96 * KAS1, 4 * KAS1, None));
-    let (b, _, _) = left_apply_as(&w.lib, &both, &pnote, &at, done, paid, None, &all, w.payer(&w.w, &f)).unwrap();
+    let (b, _, _) = left_apply_as(&w.lib, &both, &pnote, &at, done, paid, None, &w.script(left_script_on(&(&both).s, (&pnote).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     signed("a note of two legs applied whole", &b, &w.keys);
     let half = Shard { rows: s.rows, basis: s.basis, ..done };
-    let r = left_apply_as(&w.lib, &both, &pnote, &at, half, paid, None, &all, w.payer(&w.w, &f));
+    let r = left_apply_as(&w.lib, &both, &pnote, &at, half, paid, None, &w.script(left_script_on(&(&both).s, (&pnote).s.legs.len())), w.payer(&w.w, &f));
     assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "one leg left in the books");
-    let r = left_apply_as(&w.lib, &both, &pnote, &[at[0], at[0]], done, paid, None, &all, w.payer(&w.w, &f));
+    let r = left_apply_as(&w.lib, &both, &pnote, &[at[0], at[0]], done, paid, None, &w.script(left_script_on(&(&both).s, (&pnote).s.legs.len())), w.payer(&w.w, &f));
     assert!(r.is_err() || !accepted(&r.unwrap().0, &w.keys), "the second leg read out of the first's row");
-    assert!(left_apply(&w.lib, &both, &pnote, &script, w.payer(&w.w, &f)).is_err() || !accepted(&left_apply(&w.lib, &both, &pnote, &script, w.payer(&w.w, &f)).unwrap().0, &w.keys), "by the script of one leg");
+    assert!(left_apply(&w.lib, &both, &pnote, &w.script(left_script_on(&(&both).s, 1)), w.payer(&w.w, &f)).is_err() || !accepted(&left_apply(&w.lib, &both, &pnote, &w.script(left_script_on(&(&both).s, 1)), w.payer(&w.w, &f)).unwrap().0, &w.keys), "by the script of one leg");
 }
 
 /// Until the note that legs left is applied the books have legs that are gone: what they lost reads as the shard's
@@ -919,7 +917,6 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let shard = OLive { s: base.s.booked(&legs[0]).unwrap().booked(&legs[1]).unwrap(), ..base.clone() };
     let a = [P10 * 12 / 10, P10 * 11 / 10];
     let f = [fund(xk(&w.w), 43)];
-    let left_script = w.script("KpfTLeft");
 
     // (a) The long, which gained 20, leaves alone from an account of 100 KAS: asked 20 less 1 % of its 120.
     let acct = cov(&w, &shard, &legs, 100 * KAS1);
@@ -930,7 +927,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let (k, v) = out_of(&sg, &hash_spk(&w.lib, &note.hash()));
     assert_eq!(v, NOTE_MIN as u64);
     end_answered(&w, "a leg that gained leaves alone", &acct, &live, &s, true);
-    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &w.script(left_script_on(&(&shard).s, (&nth(&sg, k, note.clone(), 6_600)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     let ap = signed("its note applied", &b, &w.keys);
     // (The short stays in the row it was booked in; the long's row is no market's again.)
     let alone = base.s.booked(&legs[1]).unwrap();
@@ -965,7 +962,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     let (k, v) = out_of(&sg, &hash_spk(&w.lib, &note.hash()));
     assert_eq!(v, (NOTE_MIN + 5 * KAS1) as u64);
     end_answered(&w, "a leg that lost leaves alone", &acct, &live, &s, true);
-    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &left_script, w.payer(&w.w, &f)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &shard, &nth(&sg, k, note.clone(), 6_600), &w.script(left_script_on(&(&shard).s, (&nth(&sg, k, note.clone(), 6_600)).s.legs.len())), w.payer(&w.w, &f)).unwrap();
     let ap = signed("the note of a leg that lost applied", &b, &w.keys);
     assert_eq!((next.rows, next.basis, next.held, rest, ap.tx.outputs[0].value), (base.s.booked(&legs[0]).unwrap().rows, base.s.booked(&legs[0]).unwrap().basis, 105 * KAS1, None, (105 * KAS1 + SHARD_CARRIER) as u64));
 
@@ -1384,7 +1381,7 @@ fn an_entry_is_stated_with_the_shard_and_the_books_have_the_leg_from_there() {
     // (No output of the fee: what the transaction leaves is its funder's. Review 51, F83.)
     assert!(fee > 0 && !pays(&off, &xk(&w.f), fee));
     let booked = nth(&sg, 2, next, 6_511);
-    let (b, books) = unentered_apply(&w.lib, &booked, &nth(&off, 2, note, 6_701), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, books) = unentered_apply(&w.lib, &booked, &nth(&off, 2, note, 6_701), &w.script(left_script_on(&(&booked).s, 1)), w.payer(&w.f, &ff)).unwrap();
     signed("the note that the leg did not enter, applied", &b, &w.keys);
     assert_eq!((books.rows, books.basis, books.held, books.expiry), (shard.s.rows, shard.s.basis, shard.s.held, T0 + life));
 }
@@ -1626,7 +1623,7 @@ fn no_draw_is_stated_before_an_entry_is_settled_and_one_that_ended_ends_a_draw()
     let e_live = OLive { s: elsewhere.clone(), ..m_live.clone() };
     assert!(draw_entry(&w.lib, &draw, &dst, None, &next, Pending::Marked(&e_live), &script, xk(&w.f), w.payer(&w.f, &ff)).is_err());
     // The note applied: the books are as they were, and the draw of what the shard is good for is the rule.
-    let (b, books) = unentered_apply(&w.lib, &shard, &n_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, books) = unentered_apply(&w.lib, &shard, &n_live, &w.script(left_script_on(&(&shard).s, 1)), w.payer(&w.f, &ff)).unwrap();
     signed("the note that the leg did not enter, applied", &b, &w.keys);
     assert_eq!((books.rows, books.basis, books.equity(&at9)), (base.s.rows, base.s.basis, Some(100 * KAS1)));
 }
@@ -1645,7 +1642,7 @@ fn a_note_of_a_leg_that_is_not_in_the_books_is_spent_and_changes_nothing() {
     // The note that a leg did not enter, of a leg no row has.
     let ghost = kpf_protocol::covered::Unentered { sid: shard.s.sid, leg: absent, key: xk(&w.w) };
     let g_live = OLive { s: ghost, value: NOTE_MIN as u64, id: shard.id, op: op(61), daa: 6_200 };
-    assert!(unentered_apply(&w.lib, &shard, &g_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    assert!(unentered_apply(&w.lib, &shard, &g_live, &w.script(left_script_on(&(&shard).s, 1)), w.payer(&w.f, &ff)).is_err());
     let b = unentered_void(&w.lib, &shard, &g_live, &void, w.payer(&w.f, &ff)).unwrap();
     let sg = signed("a note of a leg that is in no row, spent", &b, &w.keys);
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &shard.s.hash())), "the shard as it is");
@@ -1683,7 +1680,7 @@ fn a_note_of_a_leg_that_is_not_in_the_books_is_spent_and_changes_nothing() {
     let c_live = OLive { s: came, value: NOTE_MIN as u64, id: shard.id, op: op(62), daa: 6_200 };
     let b = unentered_void(&w.lib, &shard, &c_live, &void, w.payer(&w.f, &ff)).unwrap();
     assert!(!accepted(&b, &w.keys), "the note of a leg that is in the books");
-    let (b, books) = unentered_apply(&w.lib, &shard, &c_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, books) = unentered_apply(&w.lib, &shard, &c_live, &w.script(left_script_on(&(&shard).s, 1)), w.payer(&w.f, &ff)).unwrap();
     signed("it is applied", &b, &w.keys);
     assert_eq!((books.rows, books.basis), (base.s.rows, base.s.basis));
 }
@@ -1714,7 +1711,7 @@ fn a_note_that_says_it_holds_more_than_it_does_gives_its_shard_what_it_holds() {
         // A leg of the books: applied.
         let n = Left { sid: shard.s.sid, legs: vec![leg], key: xk(&w.w), asked };
         let live = OLive { value: holds as u64, ..left_note(&shard, &n, 10 + k as u8) };
-        let (b, next, rest) = left_apply(&w.lib, &shard, &live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        let (b, next, rest) = left_apply(&w.lib, &shard, &live, &w.script(left_script_on(&(&shard).s, (&live).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
         let sg = signed(&format!("case {k}: a note saying {asked} and holding {holds}, applied"), &b, &w.keys);
         assert_eq!((next.held, next.rows, next.basis, rest), (held + more, base.s.rows, base.s.basis, None), "case {k}");
         assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value + more as u64, &hash_spk(&w.lib, &next.hash())), "case {k}");
@@ -1741,7 +1738,7 @@ fn a_note_that_says_it_holds_more_than_it_does_gives_its_shard_what_it_holds() {
     let two = OLive { s: shard.s.booked(&fleg(&w, 1, 4, SHORT, P10)).unwrap(), ..shard.clone() };
     let n = Left { sid: two.s.sid, legs: vec![leg, fleg(&w, 1, 4, SHORT, P10)], key: xk(&w.w), asked: -600 * KAS1 };
     let live = OLive { value: (NOTE_MIN + 2 * KAS1) as u64, ..left_note(&two, &n, 50) };
-    let (b, next, _) = left_apply(&w.lib, &two, &live, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).unwrap();
+    let (b, next, _) = left_apply(&w.lib, &two, &live, &w.script(left_script_on(&(&two).s, (&live).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("a note of two legs saying 600 KAS and holding 2, applied", &b, &w.keys);
     assert_eq!((next.held, next.rows, next.basis), (held + 2 * KAS1, base.s.rows, base.s.basis));
 }
@@ -1992,8 +1989,7 @@ use kpf_protocol::covered::CallStep;
 /// after, and the claim of the first class where the note asks (what the tests of before the second class look at).
 #[allow(clippy::type_complexity)]
 fn step_apply(w: &World, shard: &OLive<Shard>, note: &OLive<Left>, young: i64, p: Payer) -> (OBuilt, Shard, Option<Rest>) {
-    let script = w.script(left_script(note.s.legs.len()));
-    let (b, next, claim) = left_apply_c(&w.lib, shard, note, kpf_protocol::reserve::NOTE_STEP, young, &script, p).unwrap();
+    let (b, next, claim) = left_apply_c(&w.lib, shard, note, kpf_protocol::reserve::NOTE_STEP, young, &w.script(left_script_on(&(shard).s, (note).s.legs.len())), p).unwrap();
     assert!(claim.is_none_or(|c| c.amount2 == 0 && c.paid1 == 0), "a claim of the first class");
     (b, next, claim.map(|c| Rest { sid: c.sid, key: c.key, amount: c.amount1 }))
 }
@@ -2715,7 +2711,6 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
     let shard = OLive { s: base.s.booked(&legs[0]).unwrap().booked(&legs[1]).unwrap(), ..base.clone() };
     let acct = cov(&w, &shard, &legs, 40 * KAS1);
     let fw = [fund(xk(&w.w), 44)];
-    let note_script = w.script("KpfTMarkNote");
     let (g2, up) = (2 * acct.s.t.g_bps, acct.s.t.mmr_bps + acct.s.t.g_bps);
     let band = |worth: i64| (worth * g2 + 9_999) / 10_000;
 
@@ -2743,7 +2738,7 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
     // what it was at any price. No row moves.
     let note1 = mark_note(&sg, &w, &note, 6_700);
     assert_eq!(note1.value, NOTE_MIN as u64);
-    let (b, next, rest) = mark_apply(&w.lib, &shard, &note1, &note_script, w.payer(&w.w, &fw)).unwrap();
+    let (b, next, rest) = mark_apply(&w.lib, &shard, &note1, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.w, &fw)).unwrap();
     let sg = signed("the note that a leg was marked, applied", &b, &w.keys);
     assert!(pays(&sg, &xk(&w.w), asked) && rest.is_none());
     assert_eq!((next.held, next.rows, next.owed), (shard.s.held - asked, shard.s.rows, 0));
@@ -2752,9 +2747,9 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
         assert_eq!(next.equity(&p), shard.s.equity(&p));
     }
     // (The shard written with what its legs were entered at as it was, or paying a sompi less: refused.)
-    let b = mark_apply_as(&w.lib, &shard, &note1, Shard { basis: shard.s.basis, ..next }, asked, None, &note_script, w.payer(&w.w, &fw)).unwrap().0;
+    let b = mark_apply_as(&w.lib, &shard, &note1, Shard { basis: shard.s.basis, ..next }, asked, None, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.w, &fw)).unwrap().0;
     assert!(!accepted(&b, &w.keys), "the books as they were");
-    let b = mark_apply_as(&w.lib, &shard, &note1, Shard { held: next.held + 1, ..next }, asked - 1, None, &note_script, w.payer(&w.w, &fw)).unwrap().0;
+    let b = mark_apply_as(&w.lib, &shard, &note1, Shard { held: next.held + 1, ..next }, asked - 1, None, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.w, &fw)).unwrap().0;
     assert!(!accepted(&b, &w.keys), "a sompi less paid");
     // The band is taken once: the leg then leaves at the same price, and the two together ask what the leaving
     // alone asks. Its two notes end the books the same whichever is applied first.
@@ -2768,36 +2763,36 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
 
     // A shard that holds less than is asked pays what it holds and owes the rest; a called one pays nothing.
     let small = OLive { s: Shard { held: 5 * KAS1, ..shard.s }, value: (5 * KAS1 + SHARD_CARRIER) as u64, ..shard.clone() };
-    let (b, next, rest) = mark_apply(&w.lib, &small, &note1, &note_script, w.payer(&w.w, &fw)).unwrap();
+    let (b, next, rest) = mark_apply(&w.lib, &small, &note1, &w.script(mark_script_on(&(&small).s)), w.payer(&w.w, &fw)).unwrap();
     let sg = signed("a mark's note to a shard that holds less", &b, &w.keys);
     assert!(pays(&sg, &xk(&w.w), 5 * KAS1));
     assert_eq!((next.held, next.owed, rest), (0, asked - 5 * KAS1, Some(Rest { sid: shard.s.sid, key: xk(&w.w), amount: asked - 5 * KAS1 })));
     let called = OLive { s: Shard { called: 6_400, ..shard.s }, ..shard.clone() };
     // (Of a leg that entered long before the call: of the first class. Of one that is young at it: of the second.)
     let old1 = OLive { s: MarkNote { leg: kpf_protocol::covered::leg_entered(&note1.s.leg, 0), ..note1.s }, ..note1.clone() };
-    let (b, next, rest) = mark_apply(&w.lib, &called, &old1, &note_script, w.payer(&w.w, &fw)).unwrap();
+    let (b, next, rest) = mark_apply(&w.lib, &called, &old1, &w.script(mark_script_on(&(&called).s)), w.payer(&w.w, &fw)).unwrap();
     signed("a mark's note to a called shard", &b, &w.keys);
     assert_eq!((next.held, next.owed, next.claims.owed2, rest.map(|r| r.amount)), (shard.s.held, asked, 0, Some(asked)));
     let young1 = OLive { s: MarkNote { leg: kpf_protocol::covered::leg_entered(&note1.s.leg, 6_399), ..note1.s }, ..note1.clone() };
-    assert!(mark_apply(&w.lib, &called, &young1, &note_script, w.payer(&w.w, &fw)).is_err(), "of the second class: no note of the rest of the first");
-    let (b, next, claim) = mark_apply_c(&w.lib, &called, &young1, &note_script, w.payer(&w.w, &fw)).unwrap();
+    assert!(mark_apply(&w.lib, &called, &young1, &w.script(mark_script_on(&(&called).s)), w.payer(&w.w, &fw)).is_err(), "of the second class: no note of the rest of the first");
+    let (b, next, claim) = mark_apply_c(&w.lib, &called, &young1, &w.script(mark_script_on(&(&called).s)), w.payer(&w.w, &fw)).unwrap();
     signed("a mark's note of a leg that is young at the call: a claim of the second class", &b, &w.keys);
     assert_eq!((next.held, next.owed, next.claims.owed2, claim.map(|c| (c.amount1, c.amount2))), (shard.s.held, 0, asked, Some((0, asked))));
-    let first = mark_apply_as_c(&w.lib, &called, &young1, Shard { owed: asked, ..called.s }, 0, Some(kpf_protocol::reserve::Claim { sid: shard.s.sid, key: xk(&w.w), amount1: asked, paid1: 0, amount2: 0, paid2: 0 }), &note_script, w.payer(&w.w, &fw));
+    let first = mark_apply_as_c(&w.lib, &called, &young1, Shard { owed: asked, ..called.s }, 0, Some(kpf_protocol::reserve::Claim { sid: shard.s.sid, key: xk(&w.w), amount1: asked, paid1: 0, amount2: 0, paid2: 0 }), &w.script(mark_script_on(&(&called).s)), w.payer(&w.w, &fw));
     assert!(first.is_err() || !accepted(&first.unwrap().0, &w.keys), "a young leg's mark counted in the first class");
     // It is applied whatever the rows hold: to a shard with no unit of the leg's market.
-    let (b, next, _) = mark_apply(&w.lib, &base, &note1, &note_script, w.payer(&w.w, &fw)).unwrap();
+    let (b, next, _) = mark_apply(&w.lib, &base, &note1, &w.script(mark_script_on(&(&base).s)), w.payer(&w.w, &fw)).unwrap();
     signed("a mark's note to a shard whose rows have nothing of the leg", &b, &w.keys);
     assert_eq!((next.rows, next.basis), (base.s.rows, base.s.basis - asked));
     // To another shard it is not applied; and a note that asks other than the leg gained between its two entries
     // (a statement nobody disputed wrote it) is applied by nothing.
     let elsewhere = OLive { s: Shard { sid: [0x77; 32], ..shard.s }, ..shard.clone() };
-    assert!(mark_apply(&w.lib, &elsewhere, &note1, &note_script, w.payer(&w.w, &fw)).is_err());
+    assert!(mark_apply(&w.lib, &elsewhere, &note1, &w.script(mark_script_on(&(&elsewhere).s)), w.payer(&w.w, &fw)).is_err());
     for more in [1, -1, 50 * KAS1] {
         let lie = OLive { s: MarkNote { asked: asked + more, ..note }, ..note1.clone() };
         assert!(shard.s.marked(&lie.s).is_err());
         let said = Shard { held: shard.s.held - asked - more, basis: next_basis(&shard.s, &note), ..shard.s };
-        let b = mark_apply_as(&w.lib, &shard, &lie, said, asked + more, None, &note_script, w.payer(&w.w, &fw)).unwrap().0;
+        let b = mark_apply_as(&w.lib, &shard, &lie, said, asked + more, None, &w.script(mark_script_on(&(&shard).s)), w.payer(&w.w, &fw)).unwrap().0;
         assert!(!accepted(&b, &w.keys), "a note that asks {more} more than the leg gained");
     }
 
@@ -2810,7 +2805,7 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
     let (after2, short_note) = (o2.after.clone().unwrap(), o2.mark.unwrap());
     assert_eq!((short_note.asked, short_note.entry, after2.legs[1].entry, after2.legs[0]), (asked2, ne2, ne2, legs[0]));
     end_answered(&w, "a mark of a short", &acct, &live2, &said2, true);
-    let (b, next, _) = mark_apply(&w.lib, &shard, &mark_note(&sg, &w, &short_note, 6_700), &note_script, w.payer(&w.w, &fw)).unwrap();
+    let (b, next, _) = mark_apply(&w.lib, &shard, &mark_note(&sg, &w, &short_note, 6_700), &w.script(mark_script_on(&(&shard).s)), w.payer(&w.w, &fw)).unwrap();
     signed("the note of a marked short, applied", &b, &w.keys);
     for p in [[P10, P10 * 8 / 10, 0, 0], [P10 * 4, P10 / 4, 0, 0]] {
         assert_eq!((next.equity(&p), next.held), (shard.s.equity(&p), shard.s.held - asked2));
@@ -3747,8 +3742,7 @@ fn what_the_young_legs_of_an_account_gained_is_a_claim_of_the_second_class() {
     let no = nth(&sg, 2, so.note.clone(), 6_620);
 
     // The notes applied to the called shard: the user's is counted of the second class; the owner's asks nothing.
-    let left1 = w.script("KpfTLeft");
-    let (b, sh1, cu) = left_apply_c(&w.lib, &called, &nu, NOTE_STEP, su.young, &left1, w.payer(&w.f, &ff)).unwrap();
+    let (b, sh1, cu) = left_apply_c(&w.lib, &called, &nu, NOTE_STEP, su.young, &w.script(left_script_on(&(&called).s, (&nu).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("a step's note that says what the young gained, applied", &b, &w.keys);
     assert_eq!((sh1.owed, sh1.claims, cu), (0, Claims { paid1: 0, owed2: su.young, paid2: 0 }, Some(Claim { sid: shard.s.sid, key: xk(&w.w), amount1: 0, paid1: 0, amount2: su.young, paid2: 0 })));
     // (Counted otherwise: of the first class; more; none; and the note said to be an account's own.)
@@ -3757,16 +3751,16 @@ fn what_the_young_legs_of_an_account_gained_is_a_claim_of_the_second_class() {
         ("a sompi more", Shard { claims: Claims { owed2: su.young + 1, ..sh1.claims }, ..sh1 }, Some(Claim { amount2: su.young + 1, ..cu.unwrap() })),
         ("no claim written", sh1, None),
     ] {
-        let b = left_apply_as_c(&w.lib, &called, &nu, NOTE_STEP, su.young, &[0], next, 0, claim, &left1, w.payer(&w.f, &ff));
+        let b = left_apply_as_c(&w.lib, &called, &nu, NOTE_STEP, su.young, &[0], next, 0, claim, &w.script(left_script_on(&(&called).s, (&nu).s.legs.len())), w.payer(&w.f, &ff));
         assert!(b.is_err() || !accepted(&b.unwrap().0, &w.keys), "{what}");
     }
-    let as6 = left_apply_as_c(&w.lib, &called, &nu, NOTE_LEFT, 0, &[0], sh1, 0, cu, &left1, w.payer(&w.f, &ff));
+    let as6 = left_apply_as_c(&w.lib, &called, &nu, NOTE_LEFT, 0, &[0], sh1, 0, cu, &w.script(left_script_on(&(&called).s, (&nu).s.legs.len())), w.payer(&w.f, &ff));
     assert!(as6.is_err() || !accepted(&as6.unwrap().0, &w.keys), "a step's note shown as an account's own");
     // (A step's note is held to its legs: what the young gained, where no leg of it is young, is refused.)
     let old_note = OLive { s: Left { legs: entered(&[user_leg], 0), ..nu.s.clone() }, ..nu.clone() };
     assert!(called.s.left_class(&old_note.s, NOTE_STEP, su.young, NOTE_MIN).is_err());
     let (sh1, cu) = (nth(&sg, 0, sh1, 6_630), nth(&sg, 2, cu.unwrap(), 6_630));
-    let (b, sh2, none) = left_apply_c(&w.lib, &sh1, &no, NOTE_STEP, 0, &left1, w.payer(&w.f, &ff)).unwrap();
+    let (b, sh2, none) = left_apply_c(&w.lib, &sh1, &no, NOTE_STEP, 0, &w.script(left_script_on(&(&sh1).s, (&no).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     let sh2 = nth(&signed("the owner's note: nothing asked, nothing counted", &b, &w.keys), 0, sh2, 6_640);
     assert_eq!((none, sh2.s.rows, sh2.s.claims.owed2), (None, [ShardRow::EMPTY; 4].into(), su.young));
 
@@ -3792,24 +3786,24 @@ fn what_the_young_legs_of_an_account_gained_is_a_claim_of_the_second_class() {
     // own (tag 6) is of the second class, whole, where a leg of it is young.
     let asked = 14 * KAS1;
     let own_note = OLive { s: Left { asked, ..nu.s.clone() }, value: NOTE_MIN as u64, id: shard.id, op: op(83), daa: 6_700 };
-    assert!(left_apply(&w.lib, &called, &own_note, &left1, w.payer(&w.f, &ff)).is_err(), "no note of the rest of the first class");
-    let (b, shl, cl) = left_apply_c(&w.lib, &called, &own_note, NOTE_LEFT, 0, &left1, w.payer(&w.f, &ff)).unwrap();
+    assert!(left_apply(&w.lib, &called, &own_note, &w.script(left_script_on(&(&called).s, (&own_note).s.legs.len())), w.payer(&w.f, &ff)).is_err(), "no note of the rest of the first class");
+    let (b, shl, cl) = left_apply_c(&w.lib, &called, &own_note, NOTE_LEFT, 0, &w.script(left_script_on(&(&called).s, (&own_note).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("a young leg's own leaving, applied to its called shard: a claim of the second class", &b, &w.keys);
     assert_eq!((shl.owed, shl.claims.owed2, cl.map(|c| (c.amount1, c.amount2))), (0, asked, Some((0, asked))));
-    let b = left_apply_as_c(&w.lib, &called, &own_note, NOTE_LEFT, 0, &[0], Shard { owed: asked, claims: Claims::default(), ..shl }, 0, Some(Claim { amount1: asked, amount2: 0, ..cl.unwrap() }), &left1, w.payer(&w.f, &ff));
+    let b = left_apply_as_c(&w.lib, &called, &own_note, NOTE_LEFT, 0, &[0], Shard { owed: asked, claims: Claims::default(), ..shl }, 0, Some(Claim { amount1: asked, amount2: 0, ..cl.unwrap() }), &w.script(left_script_on(&(&called).s, (&own_note).s.legs.len())), w.payer(&w.f, &ff));
     assert!(b.is_err() || !accepted(&b.unwrap().0, &w.keys), "a young leg's leaving counted of the first class");
     // (And of a leg that entered T before the call: of the first.)
     let old_own = OLive { s: Left { legs: entered(&[user_leg], T0 - 2 * (w.terms().late_daa + 50)), ..own_note.s.clone() }, ..own_note.clone() };
-    let (b, sho, co) = left_apply_c(&w.lib, &called, &old_own, NOTE_LEFT, 0, &left1, w.payer(&w.f, &ff)).unwrap();
+    let (b, sho, co) = left_apply_c(&w.lib, &called, &old_own, NOTE_LEFT, 0, &w.script(left_script_on(&(&called).s, (&old_own).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("an old leg's own leaving, applied to its called shard: a claim of the first class", &b, &w.keys);
     assert_eq!((sho.owed, sho.claims.owed2, co.map(|c| (c.amount1, c.amount2))), (asked, 0, Some((asked, 0))));
 
     // T29: once anything was paid to a claim, what is counted is of the second class, whatever its legs.
     let paid_before = OLive { s: Shard { owed: 5 * KAS1, claims: Claims { paid1: KAS1, owed2: 0, paid2: 0 }, ..called.s }, ..called.clone() };
-    let (b, shp, cp) = left_apply_c(&w.lib, &paid_before, &old_own, NOTE_LEFT, 0, &left1, w.payer(&w.f, &ff)).unwrap();
+    let (b, shp, cp) = left_apply_c(&w.lib, &paid_before, &old_own, NOTE_LEFT, 0, &w.script(left_script_on(&(&paid_before).s, (&old_own).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("an old leg's note counted after a claim was paid: of the second class", &b, &w.keys);
     assert_eq!((shp.owed, shp.claims.owed2, cp.map(|c| (c.amount1, c.amount2))), (5 * KAS1, asked, Some((0, asked))));
-    let b = left_apply_as_c(&w.lib, &paid_before, &old_own, NOTE_LEFT, 0, &[0], Shard { owed: 5 * KAS1 + asked, ..paid_before.s.left_class(&old_own.s, NOTE_LEFT, 0, NOTE_MIN).map(|x| Shard { claims: paid_before.s.claims, ..x.0 }).unwrap() }, 0, Some(Claim { amount1: asked, amount2: 0, ..cp.unwrap() }), &left1, w.payer(&w.f, &ff));
+    let b = left_apply_as_c(&w.lib, &paid_before, &old_own, NOTE_LEFT, 0, &[0], Shard { owed: 5 * KAS1 + asked, ..paid_before.s.left_class(&old_own.s, NOTE_LEFT, 0, NOTE_MIN).map(|x| Shard { claims: paid_before.s.claims, ..x.0 }).unwrap() }, 0, Some(Claim { amount1: asked, amount2: 0, ..cp.unwrap() }), &w.script(left_script_on(&(&paid_before).s, (&old_own).s.legs.len())), w.payer(&w.f, &ff));
     assert!(b.is_err() || !accepted(&b.unwrap().0, &w.keys), "a note counted late, of the first class");
 }
 
@@ -3867,4 +3861,45 @@ fn a_leg_enters_only_where_its_shard_holds_its_rows_requirement_or_the_row_is_as
     assert!(entry("the same, held", need(200, 600), long200, fleg(&w, 0, 400, SHORT, P10), 0));
     // Another row's legs are not counted: the gate is of the leg's own row.
     assert!(entry("a leg in a second row, the first row's requirement not counted", need(50, 50), long200, fleg(&w, 1, 50, LONG, P10), 1));
+}
+
+/// 17.8e: what only a called shard needs is in scripts of its own. A note is applied to a shard that is not called
+/// by `KpfTLeft` (of several legs: `KpfTLeftAll`; of a mark: `KpfTMarkNote`), which carry nothing of the classes of
+/// claims; to a called shard by their twins `KpfTLeftC`, `KpfTLeftAllC`, `KpfTMarkNoteC`. Each holds its shard to
+/// its state: the same transaction with the other of the pair is refused, both ways.
+#[test]
+fn a_note_is_applied_by_the_script_of_its_shards_state_and_not_by_its_twin() {
+    use kpf_protocol::reserve::MarkNote;
+    let w = world();
+    let base = bare(&w);
+    let f = [fund(xk(&w.f), 61)];
+    let (l0, l1) = (fleg(&w, 0, 2, LONG, P10), fleg(&w, 1, 3, SHORT, P10));
+    let books = base.s.booked(&l0).unwrap().booked(&l1).unwrap();
+    for called in [0i64, 6_400] {
+        let shard = OLive { s: Shard { called, ..books }, ..base.clone() };
+        let (own, twin) = if called == 0 { ("", "C") } else { ("C", "") };
+        // A note of one leg, and of two.
+        for legs in [vec![l0], vec![l0, l1]] {
+            let note = left_note(&shard, &Left { sid: shard.s.sid, legs: entered(&legs, 0), key: xk(&w.w), asked: KAS1 }, 0);
+            let name = if legs.len() == 1 { "KpfTLeft" } else { "KpfTLeftAll" };
+            assert_eq!(left_script_on(&shard.s, legs.len()), format!("{name}{own}"));
+            let (b, _, _) = left_apply_c(&w.lib, &shard, &note, kpf_protocol::reserve::NOTE_LEFT, 0, &w.script(&format!("{name}{own}")), w.payer(&w.f, &f)).unwrap();
+            assert!(accepted(&b, &w.keys), "called {called}: a note of {} applied by {name}{own}", legs.len());
+            let (b, _, _) = left_apply_c(&w.lib, &shard, &note, kpf_protocol::reserve::NOTE_LEFT, 0, &w.script(&format!("{name}{twin}")), w.payer(&w.f, &f)).unwrap();
+            assert!(!accepted(&b, &w.keys), "called {called}: a note of {} applied by the twin {name}{twin}", legs.len());
+            // (And a script of another number of legs is no copy of either: the builder refuses it.)
+            let other = if legs.len() == 1 { "KpfTLeftAll" } else { "KpfTLeft" };
+            assert!(left_apply_c(&w.lib, &shard, &note, kpf_protocol::reserve::NOTE_LEFT, 0, &w.script(other), w.payer(&w.f, &f)).is_err());
+        }
+        // A note of a mark.
+        let mark = OLive { s: MarkNote { sid: shard.s.sid, leg: entered(&[l0], 0)[0], entry: P10 * 11 / 10, key: xk(&w.w), asked: 2 * KAS1 }, value: NOTE_MIN as u64, id: shard.id, op: op(62), daa: 6_300 };
+        assert_eq!(mark_script_on(&shard.s), format!("KpfTMarkNote{own}"));
+        if let Ok((b, _, _)) = mark_apply_c(&w.lib, &shard, &mark, &w.script(&format!("KpfTMarkNote{own}")), w.payer(&w.f, &f)) {
+            assert!(accepted(&b, &w.keys), "called {called}: a mark's note applied by KpfTMarkNote{own}");
+            let (b, _, _) = mark_apply_c(&w.lib, &shard, &mark, &w.script(&format!("KpfTMarkNote{twin}")), w.payer(&w.f, &f)).unwrap();
+            assert!(!accepted(&b, &w.keys), "called {called}: a mark's note applied by the twin");
+        } else {
+            panic!("the mark's note is the rule's");
+        }
+    }
 }

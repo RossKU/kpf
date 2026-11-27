@@ -1521,7 +1521,7 @@ fn t6_b6_a_note_of_the_rest_on_a_shard_that_is_not_called_lives_as_before_and_is
     let leg = fleg(&w, 0, 10, LONG, P10);
     let shard = live_shard(&base, Shard { held: 20 * KAS1, ..base.s.booked(&leg).unwrap() });
     let note = OLive { s: Left { sid: base.s.sid, legs: entered(&[leg], 0), key, asked: 50 * KAS1 }, value: NOTE_MIN as u64, id: base.id, op: op(60), daa: 6_200 };
-    let (b, s1, rest) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, s1, rest) = left_apply(&w.lib, &shard, &note, &w.script(left_script_on(&(&shard).s, (&note).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("B6: a note of one leg applied to a shard that is not called and holds less than is asked", &b, &w.keys);
     let rest = rest.expect("a note of the rest");
     assert_eq!((s1.held, s1.owed, s1.claims, s1.rows, rest), (0, 30 * KAS1, Claims::default(), [ShardRow::EMPTY; 4].into(), Rest { sid: base.s.sid, key, amount: 30 * KAS1 }));
@@ -1586,7 +1586,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3015), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1188), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3015), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");
@@ -1610,7 +1610,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     for (what, held, called, asked) in [("not called, paid whole", 100 * KAS1, 0, 50 * KAS1), ("not called, a note of the rest written", 20 * KAS1, 0, 50 * KAS1), ("called, a claim written", 20 * KAS1, CALLED, 50 * KAS1), ("not called, nothing asked", 20 * KAS1, 0, 0)] {
         let shard = live_shard(&base, Shard { held, called, ..base.s.booked(&leg).unwrap() });
         let note = OLive { s: Left { sid: base.s.sid, legs: entered(&[leg], 0), key, asked }, value: NOTE_MIN as u64, id: base.id, op: op(60), daa: 6_200 };
-        let (b, ..) = left_apply(&w.lib, &shard, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+        let (b, ..) = left_apply(&w.lib, &shard, &note, &w.script(left_script_on(&(&shard).s, (&note).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
         applied.push((what, signed(&format!("sizes: a note of one leg applied, {what}"), &b, &w.keys).mass.size));
     }
     println!("T6 sizes: the scripts {sizes:?}; a claim paid whole {whole} bytes (3,624 before), below a note's least {dust}; paid a part and written again {part}, of both classes {two}; the call's end {off}; a note of one leg applied: {applied:?} (4,314 before, nothing asked)");
@@ -1626,7 +1626,9 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // and is shown 12 bytes more of rows.)
     // (17.8e: 4,971, 5,006, 4,954 and 4,862 before: each 965 bytes less. `KpfTLeft` no longer carries the paying of
     // a note of the rest, which is `KpfTRest`.)
-    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_006, 4_041, 3_989, 3_897]);
+    // (17.8e, 2: a shard that is not called has its notes applied by the script that carries nothing of the classes:
+    // 275 bytes less; the called shard's, the third, by the twin: 4 more, its check of the state.)
+    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![3_731, 3_766, 3_993, 3_622]);
 }
 
 // ================================================================================================================
@@ -1667,10 +1669,10 @@ fn t6_for_piece_b_a_claim_counted_late_and_a_first_part_that_waits_behind_its_se
     // whole because its class is covered, not because it came first. This test asserted the hole: the note
     // counted in the first class, 200 owed.)
     let paid_shard = live_shard(&base, s1);
-    assert!(s1.paid_any() && mark_apply(&w.lib, &paid_shard, &mark, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).is_err(), "T29 is open: a note counted after a payment is of the first class");
-    let first = mark_apply_as(&w.lib, &paid_shard, &mark, Shard { owed: 200 * KAS1, basis: s1.marked_class(&mark.s).unwrap().0.basis, ..s1 }, 0, Some(Rest { sid: base.s.sid, key: xk(&w.f), amount: 100 * KAS1 }), &w.script("KpfTMarkNote"), w.payer(&w.f, &ff));
+    assert!(s1.paid_any() && mark_apply(&w.lib, &paid_shard, &mark, &w.script(mark_script_on(&(&paid_shard).s)), w.payer(&w.f, &ff)).is_err(), "T29 is open: a note counted after a payment is of the first class");
+    let first = mark_apply_as(&w.lib, &paid_shard, &mark, Shard { owed: 200 * KAS1, basis: s1.marked_class(&mark.s).unwrap().0.basis, ..s1 }, 0, Some(Rest { sid: base.s.sid, key: xk(&w.f), amount: 100 * KAS1 }), &w.script(mark_script_on(&(&paid_shard).s)), w.payer(&w.f, &ff));
     assert!(first.is_err() || !accepted(&first.unwrap().0, &w.keys), "T29 is open: the engine counts a note in the first class after a payment");
-    let (b, late, m) = mark_apply_c(&w.lib, &paid_shard, &mark, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).unwrap();
+    let (b, late, m) = mark_apply_c(&w.lib, &paid_shard, &mark, &w.script(mark_script_on(&(&paid_shard).s)), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("for (b): a mark's note applied to a called shard that has paid", &b, &w.keys);
     assert_eq!((late.owed, late.held, late.claims, m), (100 * KAS1, 50 * KAS1, Claims { paid1: 100 * KAS1, owed2: 100 * KAS1, paid2: 0 }, Some(Claim { sid: base.s.sid, key: xk(&w.f), amount1: 0, paid1: 0, amount2: 100 * KAS1, paid2: 0 })));
     let (late, m) = (nth(&sg, 0, late, 6_700), nth(&sg, 2, m.unwrap(), 6_700));
@@ -1697,7 +1699,7 @@ fn t6_for_piece_b_a_claim_counted_late_and_a_first_part_that_waits_behind_its_se
     // were held and Y found nothing.)
     let _ = big;
     let mark200 = OLive { s: MarkNote { sid: base.s.sid, leg: fleg(&w, 0, 10, LONG, P10), entry: 3 * P10, key: xk(&w.f), asked: 200 * KAS1 }, value: NOTE_MIN as u64, id: base.id, op: op(62), daa: 6_300 };
-    let (b, t2, late200) = mark_apply_c(&w.lib, &live_shard(&base, t1), &mark200, &w.script("KpfTMarkNote"), w.payer(&w.f, &ff)).unwrap();
+    let (b, t2, late200) = mark_apply_c(&w.lib, &live_shard(&base, t1), &mark200, &w.script(mark_script_on(&(&live_shard(&base, t1)).s)), w.payer(&w.f, &ff)).unwrap();
     signed("for (b): a note of 200 counted after a claim was paid a part", &b, &w.keys);
     let late200 = late200.unwrap();
     assert_eq!((t2.owed, t2.claims.owed2, late200.amount1, late200.amount2), (200 * KAS1, 200 * KAS1, 0, 200 * KAS1));

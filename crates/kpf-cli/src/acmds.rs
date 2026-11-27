@@ -371,7 +371,7 @@ pub fn shard_note_cmd(a: &Args) -> R<()> {
     // (A note that legs left is applied whole, by the script for its number of legs; a note of the rest is paid.)
     let (name, (b, next, rest)) = match nl.obj.clone() {
         AObj::Left(note) => {
-            let name = tb::left_script(note.legs.len());
+            let name = tb::left_script_on(&shard, note.legs.len());
             let s = script_of(a, &l.lib, name, &mut node, net)?;
             (name, tb::left_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
         }

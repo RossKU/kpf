@@ -309,7 +309,7 @@ fn step_apply_t7(w: &World, shard: &OLive<Shard>, sg: &OSigned, step: &CallStep,
     assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "the step's note is of tag 9");
     assert_ne!(step.note_hash(), step.note.hash());
     let note = nth(sg, 2, step.note.clone(), daa);
-    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script(note.s.legs.len())), p).unwrap();
+    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script_on(&(shard).s, (&note).s.legs.len())), p).unwrap();
     let mut as6 = b.clone();
     assert!(matches!(&args_of(&mut as6, 1)[11], Arg::V(ArtifactValue::Int(9))), "argument 11 is the note's kind");
     args_of(&mut as6, 1)[11] = Arg::V(ArtifactValue::Int(6));
@@ -919,12 +919,12 @@ fn t3_finding_l1_a_young_legs_gain_is_a_claim_where_its_user_leaves_by_statement
     // and of the first class nothing is owed for it. Counted in the first class, the transaction is refused. This
     // test asserted the hole: `claim.amount == next.owed == 48.5 KAS`, at one share with every honest claim.)
     let live_note = nth(&ap, k, note.clone(), quiet as u64 + 50);
-    assert!(left_apply(&w.lib, &called, &live_note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err(), "L1: the young leg's leaving is a claim of the first class");
-    let (nb, next, claim) = left_apply_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    assert!(left_apply(&w.lib, &called, &live_note, &w.script(left_script_on(&(&called).s, (&live_note).s.legs.len())), w.payer(&w.f, &ff)).is_err(), "L1: the young leg's leaving is a claim of the first class");
+    let (nb, next, claim) = left_apply_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &w.script(left_script_on(&(&called).s, (&live_note).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("L1: its note applied to the called shard", &nb, &w.keys);
     let claim = claim.expect("a claim");
     let asked = 4_850_000_000;
-    let first = left_apply_as_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &[0], Shard { owed: asked, claims: called.s.claims, ..next }, 0, Some(Claim { amount1: asked, amount2: 0, ..claim }), &w.script("KpfTLeft"), w.payer(&w.f, &ff));
+    let first = left_apply_as_c(&w.lib, &called, &live_note, NOTE_LEFT, 0, &[0], Shard { owed: asked, claims: called.s.claims, ..next }, 0, Some(Claim { amount1: asked, amount2: 0, ..claim }), &w.script(left_script_on(&(&called).s, (&live_note).s.legs.len())), w.payer(&w.f, &ff));
     assert!(first.is_err() || !accepted(&first.unwrap().0, &w.keys), "L1 is open: the leaving of a young leg is counted in the first class");
     assert_eq!((note.asked, claim.amount1, claim.amount2, next.owed, next.claims.owed2, next.rows), (asked, 0, asked, 0, asked, [ShardRow::EMPTY; 4].into()), "L1 is open: the leaving of a young leg is a claim of the first class");
     // What it does to an honest claim (the model of `KpfTCallPay`, which review T6 ran against the engine): the
@@ -1039,11 +1039,11 @@ fn t3_b4_a_row_is_found_without_its_committee_and_what_holds_one_row_a_market() 
     dated.rows[0].key.day = 1;
     let dated = OLive { s: dated, ..base.clone() };
     let dn = OLive { s: Left { sid: dated.s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 }, value: NOTE_MIN as u64, id: dated.id, op: op(75), daa: 6_050 };
-    assert!(left_apply(&w.lib, &dated, &dn, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err() && dated.s.gone_at(&dn.s) == Some(0), "a row of the leg's market with a day is not the leg's row");
+    assert!(left_apply(&w.lib, &dated, &dn, &w.script(left_script_on(&(&dated).s, (&dn).s.legs.len())), w.payer(&w.f, &ff)).is_err() && dated.s.gone_at(&dn.s) == Some(0), "a row of the leg's market with a day is not the leg's row");
     let odd = OLive { s: odd, ..base.clone() };
     let note = Left { sid: odd.s.sid, legs: vec![leg], key: xk(&w.w), asked: 0 };
     let note_live = OLive { s: note.clone(), value: NOTE_MIN as u64, id: odd.id, op: op(75), daa: 6_050 };
-    let (b, next, rest) = left_apply(&w.lib, &odd, &note_live, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, next, rest) = left_apply(&w.lib, &odd, &note_live, &w.script(left_script_on(&(&odd).s, (&note_live).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("a note of a leg applied to a row whose head says another committee", &b, &w.keys);
     assert_eq!((next.rows, next.basis, rest), ([ShardRow::EMPTY; 4].into(), 0, None));
     // (And it is not spent as a note of no leg of the books.)
@@ -1119,7 +1119,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(books, vec![("KpfTShardOpen", 752), ("KpfTCallPay", 2567), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2317), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
@@ -1375,10 +1375,10 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     v.push(("KpfTEnterS.state", b, 7, 2, booked.s, same()));
     // KpfTLeft.apply and KpfTLeftAll.apply.
     let one = note_of(&booked, Left { sid: booked.s.sid, legs: entered(&[l1], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
-    let (b, ..) = left_apply(&w.lib, &booked, &one, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, ..) = left_apply(&w.lib, &booked, &one, &w.script(left_script_on(&(&booked).s, (&one).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     v.push(("KpfTLeft.apply", b, 5, 0, booked.s, same()));
     let two = note_of(&booked, Left { sid: booked.s.sid, legs: entered(&[l0, l1, l0], 7), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
-    let (b, ..) = left_apply(&w.lib, &booked, &two, &w.script("KpfTLeftAll"), w.payer(&w.f, &ff)).unwrap();
+    let (b, ..) = left_apply(&w.lib, &booked, &two, &w.script(left_script_on(&(&booked).s, (&two).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     v.push(("KpfTLeftAll.apply", b, 5, 0, booked.s, same()));
     // KpfTLeftVoid.void: a note of a leg of a market that has no row.
     let ghost = note_of(&booked, Left { sid: booked.s.sid, legs: entered(&[fleg(w, 2, 3, SHORT, P10)], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
@@ -1726,7 +1726,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
         assert!(e.is_err_and(|e| e.to_string().contains("its books are beyond what is counted")), "a unit more into row {i}");
     }
     let n = note_of(&brim, Left { sid: brim.s.sid, legs: entered(&[last], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
-    let (b, after, _) = left_apply(&w.lib, &brim, &n, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, after, _) = left_apply(&w.lib, &brim, &n, &w.script(left_script_on(&(&brim).s, (&n).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     signed("a leg out of the fullest books", &b, &w.keys);
     assert_eq!(after.gross_sum(), 4 * MARGIN_MAX - scale);
 
@@ -1746,7 +1746,7 @@ fn t3r2_the_sum_at_its_ends_and_what_holds_it_to_the_rows() {
     let l = fleg(&w, 0, 10, LONG, P10);
     let ten = OLive { s: base.s.booked(&l).unwrap(), ..base.clone() };
     let n = note_of(&ten, Left { sid: ten.s.sid, legs: entered(&[l], 0), key: xk(&w.w), asked: 0 }, NOTE_MIN, 75);
-    let (b, after, _) = left_apply(&w.lib, &ten, &n, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, after, _) = left_apply(&w.lib, &ten, &n, &w.script(left_script_on(&(&ten).s, (&n).s.legs.len())), w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys));
     let three = head_of(3 * scale, &ten.s.claims.bytes());
     let mut t = with_arg(&b, 5, bytes_arg(&three));
@@ -1826,5 +1826,5 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
     opens.sort();
     // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
     // (17.8e: `KpfTRest`, which was `KpfTLeft.rest`, is a script of its own.)
-    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTRest", "KpfTShardPrice", "KpfTShardRow"]);
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftVoid", "KpfTRest", "KpfTShardPrice", "KpfTShardRow"]);
 }

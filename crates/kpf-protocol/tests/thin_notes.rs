@@ -104,7 +104,8 @@ fn world() -> World {
         table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
     }
     let funds = vec![fund(xk(&f), 200)];
-    let (g, lib) = lib_genesis_for(1, FLOOR as u64, Some(rid.as_bytes()), Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
+    // (75 scripts: a copy of each holds 7 KAS for the genesis to be within a block's storage mass. Docs 17.8e.)
+    let (g, lib) = lib_genesis_for(1, (FLOOR as u64).max(lib_copy_least(1)), Some(rid.as_bytes()), Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis", &g, &keys);
     let scripts = lib_scripts(&gs.tx, 6_000);
     assert_eq!(scripts.len(), kpf_protocol::thin_artifacts::SCRIPTS.len() + 1, "one copy of each, and a second of the citing script");

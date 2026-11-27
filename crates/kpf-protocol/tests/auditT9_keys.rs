@@ -313,7 +313,7 @@ fn step_apply_t7(w: &World, shard: &OLive<Shard>, sg: &OSigned, step: &CallStep,
     assert_eq!(&sg.tx.outputs[2].script_public_key, &hash_spk(&w.lib, &step.note_hash()), "the step's note is of tag 9");
     assert_ne!(step.note_hash(), step.note.hash());
     let note = nth(sg, 2, step.note.clone(), daa);
-    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script(note.s.legs.len())), p).unwrap();
+    let (b, next, claim) = left_apply_c(&w.lib, shard, &note, NOTE_STEP, step.young, &w.script(left_script_on(&(shard).s, (&note).s.legs.len())), p).unwrap();
     let mut as6 = b.clone();
     assert!(matches!(&args_of(&mut as6, 1)[11], Arg::V(ArtifactValue::Int(9))), "argument 11 is the note's kind");
     args_of(&mut as6, 1)[11] = Arg::V(ArtifactValue::Int(6));
@@ -419,7 +419,7 @@ fn left_name(n: usize) -> &'static str {
 /// Whether the engine takes the note applied with its legs named in the rows `at`, the shard after written `next`.
 fn leaves(w: &World, shard: &OLive<Shard>, note: &OLive<Left>, at: &[usize], next: Shard) -> bool {
     let ff = [fund(xk(&w.f), 36)];
-    left_apply_as(&w.lib, shard, note, at, next, 0, None, &w.script(left_name(note.s.legs.len())), w.payer(&w.f, &ff)).is_ok_and(|b| accepted(&b.0, &w.keys))
+    left_apply_as(&w.lib, shard, note, at, next, 0, None, &w.script(left_script_on(&(shard).s, (note).s.legs.len())), w.payer(&w.f, &ff)).is_ok_and(|b| accepted(&b.0, &w.keys))
 }
 /// Whether the engine takes the note spent as a note of a leg `k` that is no leg of the books.
 fn voids(w: &World, shard: &OLive<Shard>, note: &OLive<Left>, k: usize) -> bool {

@@ -3784,7 +3784,7 @@ difference of the piece when it was built (none measured with the piece taken ou
 |---|---|---|---|
 | with the tree for every row (17.8d, stage 2) | 3,573 | 3,732 | |
 | a market's futures row one of four written whole; the tree for dated rows only | less 607 | less 818 | four futures markets a shard (a row more written whole is 105 bytes in every transaction that shows the rows: eight would be 420 more) |
-| what a called shard alone needs (the class of a claim) in scripts of its own | | less about 410 | a script more in the library; none in what holds |
+| what a called shard alone needs (the class of a claim) in scripts of its own (built: below) | | less 275 | three scripts more in the library; none in what holds |
 | the row's gate judged where an entry is disputed, not where it is stated | less about 400 | | see below: not decided |
 | | about 2,470 to 2,970 | about 2,500 | |
 
@@ -3816,13 +3816,26 @@ closed in `KpfTEnterS`, which makes a row: a market of which a number is nothing
 T9's Q2: the model judges an entry no row is of by its order alone). The default workspace: 723 tests, none
 failed.
 
-**2. A called shard's scripts.** A note applied to a shard that is not called pays or leaves a note of the
+**2. A called shard's scripts (built).** A note applied to a shard that is not called pays or leaves a note of the
 rest; applied to a called shard it is counted in one of two classes, with the young legs' window, a step's
 note of another tag, and what was paid already. The second is rare and is 410 bytes of `KpfTLeft`, 783 of
 `KpfTLeftAll` and 229 of `KpfTMarkNote`, in every application. So: `KpfTLeft`, `KpfTLeftAll` and `KpfTMarkNote`
 take a shard that is not called (and a note of an account's own: no step's note exists without a call), and
 their twins `KpfTLeftC`, `KpfTLeftAllC`, `KpfTMarkNoteC` take a called one; each holds its shard to its state
-(called, or not), so that no note is applied by the wrong one. Nothing of what is held changes.
+(called, or not), so that no note is applied by the wrong one. Nothing of what is held changes. Measured:
+`KpfTLeft` 1,674 bytes (1,949 after the paying of a note of the rest left it; 2,914 before), `KpfTLeftAll`
+4,369 (5,059), `KpfTMarkNote` 1,188 (1,419; and it is shown the books' hash, 32 bytes, where it was shown 68);
+the twins 1,953, 5,063 and 1,423. **A note of one leg applied to a shard that is not called is a transaction of
+3,622 bytes: it was 4,862 before this section, a quarter less.** To a called shard, 3,993. The builders name a
+note's script by its shard's state (`left_script_on`, `mark_script_on`), and the tests of every review apply
+their notes so; given the twin, a builder builds with it, and the engine refuses it both ways, for each of the
+three pairs (`a_note_is_applied_by_the_script_of_its_shards_state_and_not_by_its_twin`). The default workspace:
+724 tests, none failed. No review of its own: the lines are the same lines, in two scripts.
+
+**What a script more costs.** A library's genesis writes a copy of every script, and an output under a
+covenant weighs four million million over what it holds, in a block of 500,000: with 75 scripts a copy holds 7
+KAS for the genesis to be one transaction (6 did for 72). An operation a script, and a twin a state, is paid
+for there, once, by whoever makes a library; it is nothing in a transaction that uses one.
 
 **3. The row's gate, where an entry is disputed: not decided.** The gate (17.8c) is about 500 bytes of every
 entry. Judged at the entry's end instead, the entry would say the four numbers it read (what the shard holds

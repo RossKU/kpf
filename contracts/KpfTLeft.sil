@@ -109,28 +109,15 @@ contract KpfTLeft(int init_version) {
         byte[] lg = byte[](leg);
         // A note to it that one leg left (6: an account's own; 9: a call's step's); or that a leg did not enter
         // (8: its entry ended; it asks nothing).
-        // The call's time (nothing: not called), and whether a leg is young at it: it entered after the call's time
-        // less T, T twice a lateness and a dispute period (docs 17.9), which is the call's step's comparison.
-        int called = int(byte[8](mv.slice(130, 138)));
-        int ywin = 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111))));
-        int anyyoung = 0;
-        if (called != 0 && int(byte[8](lg.slice(34, 42))) > called - ywin) { anyyoung = 1; }
-        int allyoung = anyyoung;
-        require(tag == LEFT || tag == 8 || tag == 9);
+        // Not called: a called shard's notes are applied by KpfTLeftC, which counts what is asked in its class (docs
+        // 17.8c, 17.8e). So no step's note (9), which is of a called shard, and nothing of the young's.
+        require(mv.slice(130, 138) == byte[](0 as byte[8]));
+        require(tag == LEFT || tag == 8);
         if (tag == 8) {
             require(asked == 0);
         }
-        // (A step's note, tag 9, is of a called shard, and is held to its legs, since a note is not taken at its
-        // word: nothing of the young's where no leg is young; nothing asked above nothing where every leg is.)
-        if (tag != 9) { require(young == 0); }
-        if (tag == 9) {
-            require(called != 0);
-            require(young >= 0);
-            if (anyyoung == 0) { require(young == 0); }
-            if (allyoung == 1) { require(asked <= 0); }
-        }
+        require(young == 0);
         byte[] said = i9(asked);
-        if (tag == 9) { said = i9(asked) + i9(young); }
         require(blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(tag) + p33(blake2b(z32 + lg)) + p33(key) + said) == byte[32](ns.slice(STATE_AT, STATE_AT + 32)));
         int held = int(byte[8](mv.slice(67, 75)));
         int basis = int(byte[8](mv.slice(121, 129)));
@@ -178,7 +165,6 @@ contract KpfTLeft(int init_version) {
         // Review 53, F86.)
         int pay = 0;
         int a1 = 0;
-        int a2 = 0;
         int owed = int(byte[8](mv.slice(76, 84)));
         if (asked < 0) {
             int more = tx.inputs[n].value - NOTE_MIN;
@@ -187,29 +173,15 @@ contract KpfTLeft(int init_version) {
             held = held + more;
             v = v + more;
         }
-        if (called == 0) {
-            if (asked > 0) {
-                pay = asked;
-                if (pay > held) { pay = held; }
-                held = held - pay;
-                v = v - pay;
-                // (What is not paid is owed.)
-                a1 = asked - pay;
-            }
-        } else {
-            // Called: nothing is paid, and what is asked is counted in its class (docs 17.8c): of the second,
-            // whole, where a leg of an account's own note is young, or once anything was paid to a claim (a
-            // claim counted late is behind the others: review T4, T29); a step's note as it says.
-            int second = 0;
-            if (int(byte[8](gb.slice(10, 18))) + int(byte[8](gb.slice(28, 36))) > 0) { second = 1; }
-            if (tag != 9 && anyyoung == 1) { second = 1; }
-            if (asked > 0) {
-                if (second == 1) { a2 = asked; } else { a1 = asked; }
-            }
-            a2 = a2 + young;
+        if (asked > 0) {
+            pay = asked;
+            if (pay > held) { pay = held; }
+            held = held - pay;
+            v = v - pay;
+            // (What is not paid is owed.)
+            a1 = asked - pay;
         }
         owed = owed + a1;
-        gb = gb.slice(0, 18) + i9(int(byte[8](gb.slice(19, 27))) + a2) + gb.slice(27, 36);
         if (pay > 0) {
             int m = tx.outputs.length - 1 - 4 * j;
             require(m >= tx.inputs.length);
@@ -219,10 +191,10 @@ contract KpfTLeft(int init_version) {
         int c = OpCovOutputIdx(id, 0);
         require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(blake2b(gb.slice(9, 36))))))) + mv.slice(0, 67) + byte[](held as byte[8]) + mv.slice(75, 76) + byte[](owed as byte[8]) + mv.slice(84, 121) + byte[](basis as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c].value >= v);
-        if (a1 + a2 > 0) {
+        if (a1 > 0) {
             require(OpCovOutputCount(id) == 2);
             int c1 = OpCovOutputIdx(id, 1);
-            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(a1) + i9(0) + i9(a2) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(ns.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(REST) + p33(key) + i9(a1) + i9(0) + i9(0) + i9(0))) + ns.slice(STATE_AT + 32, slotLen))));
             require(tx.outputs[c1].value >= NOTE_MIN);
         } else {
             require(OpCovOutputCount(id) == 1);

@@ -1229,12 +1229,12 @@ fn a_library_with_a_fee_pool_from_the_command_line() {
     let committee = "52".repeat(32);
     let genesis_in = |dir: &str| std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).find(|p| p.to_string_lossy().ends_with("-tx.json")).expect("the genesis transaction").display().to_string();
     // (6 KAS a copy: at 5 the genesis of a library of 63 scripts is above a block's storage mass.)
-    let ld = h.build(&exec, &["lib-create", "--copies", "1", "--value", "6", "--committee", &committee]);
+    let ld = h.build(&exec, &["lib-create", "--copies", "1", "--value", "7", "--committee", &committee]);
     assert!(h.last.contains(&format!("oracle fees: every operation leaves 0.002 KAS in the copy of the script it used; they gather in the library's fee pool for the committee {committee}")), "{}", h.last);
-    assert!(h.last.contains("A copy keeps 6 KAS"), "{}", h.last);
+    assert!(h.last.contains("A copy keeps 7 KAS"), "{}", h.last);
     let genesis = genesis_in(&ld);
     let out = h.ok(&["lib-check", "--lib", &genesis]);
-    assert!(out.contains("its genesis writes the family's scripts and nothing else") && out.contains(&format!("for the committee {committee} (a copy keeps 6 KAS)")), "{out}");
+    assert!(out.contains("its genesis writes the family's scripts and nothing else") && out.contains(&format!("for the committee {committee} (a copy keeps 7 KAS)")), "{out}");
     // Without a committee: a library, and a note.
     let bare = h.build(&exec, &["lib-create", "--copies", "1"]);
     assert!(h.last.contains("NOTE: no --committee: this library has no fee pool"), "{}", h.last);

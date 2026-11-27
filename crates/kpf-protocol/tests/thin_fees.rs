@@ -111,7 +111,8 @@ fn world() -> World {
 #[test]
 fn a_library_is_one_whose_genesis_wrote_its_scripts_and_at_most_the_fee_pool_its_payload_names() {
     let w = world();
-    let funds = vec![fund(xk(&w.f), 200)];
+    // (75 scripts: more than one coin of the funder's. Docs 17.8e.)
+    let funds = vec![fund(xk(&w.f), 200), fund(xk(&w.f), 201)];
     let (g, _) = lib_genesis_for(1, FLOOR as u64, Some(w.rid.as_bytes()), w.payer(&funds)).unwrap();
     assert!(lib_check(&g.tx).is_ok());
     // Without a fee pool: a library still, whose oracle fees nobody collects.

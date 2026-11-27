@@ -2711,12 +2711,41 @@ pub fn enter_off(lib: &[u8; 32], obj: &OLive<crate::covered::Marked>, script: &L
 
 // ---------------------------------------------------------------- the notes of a shard held to its requirement
 
-/// The script that applies a note of so many legs: `KpfTLeft` of one, `KpfTLeftAll` of two to six.
+/// The script that applies a note of so many legs to a shard that is not called: `KpfTLeft` of one, `KpfTLeftAll`
+/// of two to six.
 pub fn left_script(legs: usize) -> &'static str {
     if legs == 1 {
         "KpfTLeft"
     } else {
         "KpfTLeftAll"
+    }
+}
+
+/// The script that applies a note of so many legs to this shard: a called shard's notes are applied by the twins
+/// `KpfTLeftC` and `KpfTLeftAllC`, which count what is asked in its class; the others carry nothing of the classes
+/// (docs 17.8e).
+pub fn left_script_on(shard: &crate::reserve::Shard, legs: usize) -> &'static str {
+    match (shard.called != 0, legs == 1) {
+        (false, true) => "KpfTLeft",
+        (false, false) => "KpfTLeftAll",
+        (true, true) => "KpfTLeftC",
+        (true, false) => "KpfTLeftAllC",
+    }
+}
+
+/// The script a note's applying is built with: the one its shard's state asks for (`state`); or its twin, where
+/// the twin's copy is what is given (the twin then refuses the shard by its state: for whoever tests that).
+fn of_pair(given: &LibScript, state: &'static str) -> &'static str {
+    const PAIRS: [(&str, &str); 3] = [("KpfTLeft", "KpfTLeftC"), ("KpfTLeftAll", "KpfTLeftAllC"), ("KpfTMarkNote", "KpfTMarkNoteC")];
+    PAIRS.iter().find_map(|(a, c)| if state == *a && given.s == *c { Some(*c) } else if state == *c && given.s == *a { Some(*a) } else { None }).unwrap_or(state)
+}
+
+/// The script that applies a note of a mark to this shard: `KpfTMarkNote`, or `KpfTMarkNoteC` for a called one.
+pub fn mark_script_on(shard: &crate::reserve::Shard) -> &'static str {
+    if shard.called != 0 {
+        "KpfTMarkNoteC"
+    } else {
+        "KpfTMarkNote"
     }
 }
 
@@ -2818,7 +2847,7 @@ fn left_apply_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: 
     }
     // (The note's kind, and what a call's step's says its young legs gained: docs 17.8c.)
     args.extend([bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(young)]);
-    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, left_script(n.legs.len()), "apply", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, of_pair(script, left_script_on(s, n.legs.len())), "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
     // (Below zero, what is asked is what the account paid: the note holds it, and the shard takes what the note's
     // output holds above a note's least, and no more than the note says.)
@@ -2865,10 +2894,10 @@ pub fn mark_apply_as_c(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, not
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let args = vec![
-        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.books_open()), bv(s.moving()),
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(if of_pair(script, mark_script_on(s)) == "KpfTMarkNoteC" { s.books_open() } else { s.books_hash().to_vec() }), bv(s.moving()),
         bv(crate::thin::leg_bytes(&n.leg)), iv(n.entry), bv(n.key.to_vec()), iv(n.asked),
     ];
-    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTMarkNote", "apply", args, 0)?;
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, of_pair(script, mark_script_on(s)), "apply", args, 0)?;
     d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &n.hash()), "go", vec![iv(1), iv(1)], "note", 0);
     let value = (shard.value as i64).checked_sub(paid).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
     d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
