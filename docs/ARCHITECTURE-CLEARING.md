@@ -4524,6 +4524,40 @@ the model to write before any script).
 
 The second writing of 17.8i follows the review's list; the model's tests come before any script.
 
+**The second writing of 17.8i** (what is built from: the review's list, `REVIEW-T14-option-leg.md`, "Check list to
+code from", with these words for it). The first writing above stands but for:
+
+- **The row: 256 bytes**, the built row's twenty-one numbers in their places and three more: the two sums of
+  the open group **at the tolerance** (what the legs gain to the price less and plus the tolerance), and NS.
+  **The band of all the legs** (the row's ninth number, read by no end until now) is each leg's **entry's
+  part** and, of the groups that are closed, what they lose by a move of the tolerance. The band of every leg
+  leaving is that and the open group's. For futures legs it is what is built since review T14 (the tolerance
+  of the worth, and R by the tolerance over the rate), to the rounding.
+- **An entry's part**: of a futures leg, the tolerance of its worth; of an option, what it is worth exercised
+  changes by where its entry is moved the tolerance (nothing for one entered further from its strike). **The
+  band of a leg that leaves alone**: its entry's part and what it loses by a move of the tolerance (a futures
+  leg: twice the tolerance of its worth, as built).
+- **An option adds nothing to the legs' worth.** The fee of an option named alone is of what it can lose
+  alone and its premium, by the fee's rate over the rate.
+- **A step, in the order loss, premium, fee.** PO is set against what the legs that leave gained (less their
+  band) before the coins pay it. The fee of a leg alone is capped after the premiums that stay. A leg that
+  gained leaves alone only where no leg that stays has lost, each alone, **and the coins hold the premiums
+  that stay** (O3); else every leg.
+- **The note to the shard** is as it is: what is asked, below nothing by what the coins pay, of loss and of
+  premium together (where a leg gained more than its premium nothing is paid, and where less nothing is
+  asked: one number says both). What the shard's books do with a note that names an option leg is the
+  seventh step's.
+- A token leg adds nothing to NS. A strike is between the ends where it is above the lower and below the
+  upper. In a step every held option between the ends is on its line of nothing, by the row.
+- An ended leg's row is wrong, as written; what a step does beside one while no price of its day is written
+  is decided before the seventh step (O9).
+
+**The order.** (1) The model: the review's tests 1 to 8 and 12 (the row's sums of the four ways against a
+direct count; a step's payments against `stepped_owing`; the band at the tolerance; O3's account; the walk
+with premiums and the fee). (2) `crow.rs` and `KpfTCRow` at 256 bytes, futures and tokens as they are (every
+test of today passing, the band of every leg read from the row). (3) The option leg in the row, and the ends
+with premiums; accounts with option legs made in the tests as objects. (4) The engine's review.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
