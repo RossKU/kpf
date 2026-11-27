@@ -3934,6 +3934,81 @@ book set off), which does not close S1. The choice is 3.13 % (closed; 39 % and 1
 a call still due at once, with at the most 0.74 % less than the lower level), or nothing until the rates are
 set. Whichever: the numbers of many tests move with it, and it is reviewed at the engine.
 
+### 17.8g The day's price, and an ended leg (17.8, 5; on paper, for review)
+
+17.5 says what holds; this says the objects and the transactions, and what of it is built now.
+
+**A. The day's note** (built first, alone: nothing else needs to exist for it).
+
+- **What it is.** An object under the library's id, in the form every object has (a slot of the library and
+  the hash of a state): `blake2b(push8(16) + push(committee) + push(market) + push8(day) + push8(price) +
+  push8(spread))`. A day is a time as a statement's time is. It holds a note's least, from whoever writes it,
+  and has no owner: nobody takes it back.
+- **How it is written** (`KpfTDay.write`, anyone): beside a citation (a copy of `KpfTCite` spent by `cite`) of
+  that committee, that market and the time that is the day, whose price and spread it copies (the six pushes
+  at the head of the citing input, read as `KpfTShardPrice` reads them). So a day's note says what the
+  committee signed for that time and what a chain block took, and nothing else can be written into one.
+- **How it is read.** A transaction that needs the day's price spends the note as an input and writes it
+  again as it is (its state, its value or more): its script holds the note to the hash of the committee, the
+  market, the day and the price it is shown. A note read is one output, so one transaction of a block reads a
+  given note: **`KpfTDay.copy` (anyone) writes a second note of the same state** beside the first, and whoever
+  ends many legs of a day makes the copies it needs. (A citation is read by any number of transactions at
+  once, but only while its block is within the finality depth, and it is 5.6 kB a transaction: the day's note
+  is what stays, and is 32 bytes of state.)
+- **When.** The committee signs when it is asked (its prices are not a feed: decided 22 November 2026): whoever
+  holds a leg of the day, or anyone who will have the keeper's fees of the legs it ends, asks for the price of
+  the day, writes the price's note and the citation's transaction while they hold, and the day's note from
+  them. Nothing can be written before the day, since no price of a time is signed before it.
+- **Two notes of one day that differ** would be a committee that signed two prices for one time: the fault
+  14 has for any price (two citations of one time that differ), and no more here. A reader takes the note it
+  is shown; a note is a public object, and the two are the proof.
+- **What a reader asks of the spread** is what an answer of a price asks (four times the spread within the
+  tolerance of the reader's terms). A day whose only notes have a wider spread is a day with no price for
+  that reader: the fallback.
+
+**B. An ended leg** (built with the account's side, 17.8's sixth step: it needs a leg that has a day).
+
+- **A leg is ended** where its day is at or before the time of the transaction's inputs, as times are held
+  elsewhere (an input that landed at or after the day shows it).
+- **It stays a leg until it leaves.** Nothing new is kept for "a gain that stays": the leg is in the account
+  as it was, and every row that passes it counts it at its day's price (17.5: it adds what it gained or lost
+  there and nothing to the two sums), the price answered by the day's note.
+- **One transaction of anyone's, no statement** (`KpfTDayLeg.end`: the account, not under a statement; the
+  day's note, which goes on; the leg named), for the two cases that need no other price:
+  - *it lost* (what it is worth exercised at the day's price less the same at its entry, and for a held
+    option its premium: together below nothing): the coins pay it, as far as they go, into a note to the
+    shard that says the leg (as a leg that left says it, the amount below nothing: 16); what they do not pay
+    the account owes (16.18). Always, whatever stays.
+  - *it gained and is the account's only leg*: the note to the shard asks what it gained less its premium,
+    for the user's key.
+  The sender has a keeper's fee from the account's coins, the least the terms say.
+- **It gained and other legs stay: by the user's own statement of a leaving** (the kind that is built, with
+  its rows and its dispute period), the leg's row at its day's price. The test of what stays needs the prices
+  of the legs that stay, and a price is stated and answered, not computed: this is the one case that is not
+  one transaction, and it is the user's to make (the gain is its own; until then it counts for the account's
+  standing and is no coin: the model's rule, 17.8, 1). A step and a call's step take it with the others.
+- **The shard's books** have the leg out when its note is applied (an option's row, in the tree: 17.8e).
+- **The fallback** (17.5): where no note of the day can be shown by the day and a time the terms say, the
+  same transaction ends the leg at its entry, shown an input that landed after that time: nothing is asked
+  either way; a held option's premium is its user's coins again, a written option's returns to the owner's
+  key.
+
+**C. M1** (17.8, 1: a step pays what the legs gained less the band of the futures legs, and its test counts no
+band). Proposed: **the test counts it**: a step is due where the coins and what the legs gained, less the band
+the futures legs would give up, and the sum to the price named, are below the premiums. The band stays what it
+is (it is there for the tolerance of a stated price, and a step's price is stated); an account is then stepped
+a band sooner, and pays whole.
+
+**To be said by the review:** whether a day's note that anyone copies and nobody takes back is the right form
+against one written into each shard (the books would hold a day's price in its row: a leaf of 8 bytes more,
+written once by a transaction that spends the shard); what `KpfTDay.write` must hold of the citation beside
+the three pushes (the committee's table of the time; the block's depth); whether "a leg is ended" by an input
+that landed at or after the day can be played by whoever chooses the inputs; the two cases of one
+transaction, and whether a leg that lost may leave while a statement stands on its account; the keeper's fee
+and who can drain an account by ending its legs one at a time; the fallback's time and who gains by a
+committee's silence at a day (17.5 has N72: the written side); M1's two forms; and what of B can be tested
+before option rows exist.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
