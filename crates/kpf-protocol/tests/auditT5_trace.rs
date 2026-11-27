@@ -1254,7 +1254,7 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     // 4,829; KpfTChange 1,728; KpfTShardRow is new. Second round: the day held as eight bytes (R1) is three bytes
     // in each of KpfTShardPrice (2,700 from 2,697) and KpfTShardRow (2,098 from 2,095); the others as they were.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2317), ("KpfTCStep", 5319), ("KpfTChange", 1760), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTShardEnd", 1747), ("KpfTCallEnd", 1853), ("KpfTShardPrice", 2317), ("KpfTCStep", 5319), ("KpfTChange", 1761), ("KpfTShardRow", 2105)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
     let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)].into(), ..two.s }, ..two.clone() };

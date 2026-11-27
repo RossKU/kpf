@@ -1300,8 +1300,13 @@ pub fn row_right(l: &crate::cross::XLeg, before: &Row, row: &Row, left_out: bool
 
 /// `KpfTStepPrice`: whether the price of a row is within the tolerance `g_bps` of the committee's `c`.
 pub fn price_right(l: &crate::cross::XLeg, row: &Row, c: i64, g_bps: i64) -> bool {
+    price_right_at(l, row.a, c, g_bps)
+}
+
+/// The same of a price `a` (a covered account's row has it as an account's has).
+pub fn price_right_at(l: &crate::cross::XLeg, a: i64, c: i64, g_bps: i64) -> bool {
     let p = c.min(l.price_max);
-    row.a > 0 && row.a >= p * (BPS - g_bps) / BPS && row.a <= ((p * (BPS + g_bps) + BPS - 1) / BPS).min(l.price_max)
+    a > 0 && a >= p * (BPS - g_bps) / BPS && a <= ((p * (BPS + g_bps) + BPS - 1) / BPS).min(l.price_max)
 }
 
 /// What a leg's leaving leaves: the account, the claimer's fee, and what the shard is asked to pay A: what the pot

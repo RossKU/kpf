@@ -8484,10 +8484,10 @@ fn c_end_taken47(w: &OW, acct: &OLive<Account>, st: &Stated, s: &CSaid) -> (bool
 }
 
 /// Of the answer of a row.
-fn c_row_taken47(w: &OW, q: &OLive<Pointed>, s: &CSaid, at: i64, prev: &[u8; 32], leg: &XLeg) -> (bool, bool) {
+fn c_row_taken47(w: &OW, q: &OLive<Pointed>, s: &CSaid, at: i64, prev: &[u8; 32], lb: Option<&XLeg>, leg: &XLeg) -> (bool, bool) {
     let take = |v: bool| {
         let f = [fund(xk(&w.w), 33, 1_000)];
-        c_row(&w.lib, q, s, at, prev, leg, &w.script("KpfTCRow"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
+        c_row(&w.lib, q, s, at, prev, lb, leg, &w.script("KpfTCRow"), xk(&w.w), w.payer(&w.w, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys))
     };
     (take(true), take(false))
 }
@@ -8498,10 +8498,20 @@ fn pick47(r: &mut Rng, v: &[i64]) -> i64 {
 
 /// Legs of one to `most` futures of four markets, prices within a tenth of their entries, and coins: enough to take
 /// of (kind 7), about what a leaving turns on (8), too few to stand (9).
+/// (Docs 17.8h: legs of one market that stand next to one another are stated at one price, the later one's.)
+fn one_price(legs: &[XLeg], mut a: Vec<i64>) -> Vec<i64> {
+    for i in (0..legs.len().min(a.len()).saturating_sub(1)).rev() {
+        if legs[i].market == legs[i + 1].market {
+            a[i] = a[i + 1];
+        }
+    }
+    a
+}
+
 fn random_cov47(w: &OW, r: &mut Rng, kind: i64, most: i64) -> (Vec<XLeg>, Vec<i64>, i64) {
     let n = r.range(1, most + 1) as usize;
     let legs: Vec<XLeg> = (0..n).map(|_| w.fut(r.range(0, 4) as usize, r.range(5, 30), if r.range(0, 2) == 0 { LONG } else { SHORT }, P10 * r.range(80, 121) / 100)).collect();
-    let a: Vec<i64> = legs.iter().map(|l| l.entry * r.range(90, 111) / 100).collect();
+    let a: Vec<i64> = one_price(&legs, legs.iter().map(|l| l.entry * r.range(90, 111) / 100).collect());
     let worth: i64 = legs.iter().zip(&a).map(|(l, p)| l.size / l.scale * p).sum();
     let pct = match kind {
         KIND_C_TAKE => r.range(20, 60),
@@ -8552,7 +8562,7 @@ fn t1b_r47_the_end_of_a_covered_accounts_statement_is_the_models_also_where_it_i
         let as_is = Outs::of(&[Out { key: false, to: acct.s.hash(), value: held }]).unwrap();
         let (mut s, base_outs) = match acct.s.c_state(kind0, amount, skip, &a, T0, held, claimer) {
             Ok((st, s, _)) => (s, st.outs),
-            Err(_) => (CSaid { amount, skip, lc: if skip >= 1 { chain_of_one(&legs[skip as usize - 1]) } else { [0; 32] }, rows: acct.s.c_trace(&a, skip).unwrap() }, as_is),
+            Err(_) => (CSaid { amount, skip, lc: if skip >= 1 { chain_of_one(&legs[skip as usize - 1]) } else { [0; 32] }, head: acct.s.c_head(), rows: acct.s.c_trace(&a, skip).unwrap() }, as_is),
         };
         let mut kind = kind0;
         let m = r.range(0, 18);
@@ -8564,10 +8574,10 @@ fn t1b_r47_the_end_of_a_covered_accounts_statement_is_the_models_also_where_it_i
             5 => s.skip = r.range(-2, n + 2),
             6 => claimer = xk(&w.b),
             7 => s.rows[last].gain = pick47(&mut r, &[row.gain + 1, row.gain - KAS1, i64::MAX, -i64::MAX, 0]),
-            8 => s.rows[last].wa = pick47(&mut r, &[row.wa + 1, 0, -1, i64::MAX]),
-            9 => s.rows[last].wb = pick47(&mut r, &[row.wb + 1, row.wa + 1, -1, 0, i64::MAX]),
-            10 => s.rows[last].ea = pick47(&mut r, &[row.ea + 1, -1, i64::MAX, 0]),
-            11 => s.rows[last].eb = pick47(&mut r, &[row.eb + 1, row.eb - 1, i64::MAX, -i64::MAX, 0]),
+            8 => s.rows[last].w = pick47(&mut r, &[row.w + 1, 0, -1, i64::MAX]),
+            9 => s.rows[last].ws = pick47(&mut r, &[row.ws + 1, row.w + 1, -1, 0, i64::MAX]),
+            10 => s.rows[last].ls = pick47(&mut r, &[row.ls + 1, -1, i64::MAX, 0]),
+            11 => s.rows[last].gl = pick47(&mut r, &[row.gl + 1, row.gl - 1, i64::MAX, -i64::MAX, 0]),
             12 => {
                 if r.range(0, 2) == 0 {
                     s.rows[last].h = [0; 32]
@@ -8584,11 +8594,11 @@ fn t1b_r47_the_end_of_a_covered_accounts_statement_is_the_models_also_where_it_i
             },
             14 => kind = [KIND_C_TAKE, KIND_C_LEAVE, KIND_C_STEP][r.range(0, 3) as usize],
             // (Sums at the end of 64 bits: what the coins are held to, or the standing, does not fit.)
-            15 => s.rows[last].ea = i64::MAX,
+            15 => s.rows[last].ls = i64::MAX,
             16 => s.rows[last].gain = pick47(&mut r, &[i64::MAX, -i64::MAX]),
             17 => {
-                s.rows[last].wa = i64::MAX;
-                s.rows[last].wb = pick47(&mut r, &[row.wb, i64::MAX]);
+                s.rows[last].w = i64::MAX;
+                s.rows[last].ws = pick47(&mut r, &[row.ws, i64::MAX]);
             }
             _ => {}
         }
@@ -8609,7 +8619,8 @@ fn t1b_r47_the_end_of_a_covered_accounts_statement_is_the_models_also_where_it_i
         }
     }
     println!("T1b R47 the end of a covered account's statement: 180 statements at the engine: {right} the model calls right, {wrong} wrong, {neither} by neither verdict; the engine parts from the model on {}: {:?}", parts.len(), parts.iter().take(5).collect::<Vec<_>>());
-    assert!(right >= 30 && wrong >= 60 && neither >= 5, "{right} {wrong} {neither}");
+    // (17.8h: 73, 104 and 3 with the row of 232 bytes.)
+    assert!(right >= 30 && wrong >= 60 && neither >= 3, "{right} {wrong} {neither}");
     assert!(parts.is_empty(), "KpfTCEnd and Account::c_end part on {} of 180", parts.len());
 }
 
@@ -8647,7 +8658,7 @@ fn t1b_r47_a_covered_rows_answer_is_the_models_also_where_it_is_malformed() {
             _ => r.range(1, n as i64 + 1),
         };
         let Some(rows) = acct.s.c_trace(&a, skip) else { continue };
-        let mut s = CSaid { amount: 0, skip, lc: if skip >= 1 { chain_of_one(&legs[skip as usize - 1]) } else { [0x33; 32] }, rows };
+        let mut s = CSaid { amount: 0, skip, lc: if skip >= 1 { chain_of_one(&legs[skip as usize - 1]) } else { [0x33; 32] }, head: acct.s.c_head(), rows };
         let chains: Vec<[u8; 32]> = std::iter::once([0u8; 32]).chain(s.rows.iter().map(|x| x.g)).collect();
         let (mut prev, mut leg, mut at) = (chains[i - 1], legs[i - 1], 2 * i as i64 - 1);
         match m {
@@ -8656,10 +8667,10 @@ fn t1b_r47_a_covered_rows_answer_is_the_models_also_where_it_is_malformed() {
                 match r.range(0, 6) {
                     0 => row.a += 1,
                     1 => row.gain += 1,
-                    2 => row.wa -= 1,
-                    3 => row.wb += 1,
-                    4 => row.ea += 1,
-                    _ => row.eb -= 1,
+                    2 => row.w -= 1,
+                    3 => row.ws += 1,
+                    4 => row.ls += 1,
+                    _ => row.gl -= 1,
                 }
             }
             3 => s.rows[i - 1].g = [0; 32],
@@ -8675,9 +8686,9 @@ fn t1b_r47_a_covered_rows_answer_is_the_models_also_where_it_is_malformed() {
             11 if i >= 2 => {
                 let b = &mut s.rows[i - 2];
                 match r.range(0, 3) {
-                    0 => b.wa = i64::MAX,
+                    0 => b.w = i64::MAX,
                     1 => b.gain = -i64::MAX,
-                    _ => b.ea = i64::MAX,
+                    _ => b.ls = i64::MAX,
                 }
             }
             12 => prev = [0x77; 32],
@@ -8688,13 +8699,13 @@ fn t1b_r47_a_covered_rows_answer_is_the_models_also_where_it_is_malformed() {
         let model = if at > 2 * n as i64 {
             Some(true)
         } else {
-            let before = if i == 1 { Row::ZERO } else { s.rows[i - 2] };
-            c_row_judged(&prev, &leg, &before, &s.rows[i - 1], i as i64, &s)
+            let before = if i == 1 { kpf_protocol::crow::CRow::ZERO } else { s.rows[i - 2] };
+            c_row_judged(&prev, i.checked_sub(2).map(|k| &acct.s.legs[k]), &leg, &before, &s.rows[i - 1], i as i64, &s)
         };
         let as_is = Outs::of(&[Out { key: false, to: acct.s.hash(), value: held }]).unwrap();
         let st = stated47(&acct.s, kind, &s, as_is, held, xk(&w.a));
         let q = w.pointed(&w.stated(&acct, &st, &s.said()), at);
-        let engine = c_row_taken47(&w, &q, &s, at, &prev, &leg);
+        let engine = c_row_taken47(&w, &q, &s, at, &prev, (2..=n as i64).contains(&((at + 1) / 2)).then(|| &acct.s.legs[((at + 1) / 2) as usize - 2]), &leg);
         match model {
             Some(true) => right += 1,
             Some(false) => wrong += 1,
@@ -8722,7 +8733,7 @@ fn t1b_r47_a_covered_rows_answer_is_the_models_also_where_it_is_malformed() {
     assert_eq!(acct.s.c_end_judged(KIND_C_TAKE, &more, &st2.claimer, &st2.outs, held, T0), Some(true), "the end reads the last row");
     assert_eq!(acct.s.c_wrong_point(KIND_C_TAKE, &more, &st2.claimer, &st2.outs, held, T0, &a), Some(5), "the model names the row that is one too many");
     let q = w.pointed(&w.stated(&acct, &st2, &more.said()), 5);
-    assert_eq!(c_row_taken47(&w, &q, &more, 5, &s.rows[0].g, &legs[1]), (false, true), "the row that is one too many is answered wrong");
+    assert_eq!(c_row_taken47(&w, &q, &more, 5, &s.rows[0].g, Some(&legs[1]), &legs[1]), (false, true), "the row that is one too many is answered wrong");
 }
 
 fn out_at47(sg: &OSigned, spk: &ScriptPublicKey) -> usize {
@@ -8893,7 +8904,11 @@ fn t1b_fixed_f73_a_step_takes_one_leg_only_where_the_coins_pay_what_the_legs_tha
     };
     let (steps, to_shard, fees, user, left) = run(138 * KAS1);
     assert!(to_shard >= 135 * KAS1, "F73 is open: stepped, the account pays the shard {to_shard} of the 135 KAS it lost and its coins pay");
-    assert_eq!((steps, to_shard, fees, user, left), (1, 135 * KAS1, 28 * KAS1 / 10, NOTE_MIN, None), "every leg leaves: the loss, then the fee of what is left, a note's least to the user");
+    // (Docs 17.4, 17.8h: a leg that lost leaves alone where the account lacks less after it, its fee no more than
+    // the coins hold beyond what it lost and what the legs that stay lost. So the three leave in three steps: the
+    // shard is paid the 135 whole, the stepper the 2.8 the coins have over, at the first; the account goes on, of no
+    // leg, with a note's least. What F73 found is closed the same: no fee before a loss.)
+    assert_eq!((steps, to_shard, fees, user, left.map(|x| (x.legs.len(), x.a_margin))), (3, 135 * KAS1, 28 * KAS1 / 10, 0, Some((0, NOTE_MIN))), "a leg at a time: the loss, then the fee of what is left, a note's least in the account");
     let (steps, to_shard, fees, _, left) = run(200 * KAS1);
     let left = left.expect("the account stands after two legs left");
     assert_eq!((steps, to_shard, fees, left.legs.len(), left.a_margin), (2, 90 * KAS1, 955 * KAS1 / 100, 1, 200 * KAS1 - 90 * KAS1 - 955 * KAS1 / 100), "a leg at a time while the coins pay the rest");
@@ -8952,6 +8967,8 @@ fn t1b_r47_what_a_shard_is_good_for_falls_by_no_statement_of_a_covered_accounts_
             let n = x.legs.len();
             // Prices stated within the tolerance of the fixed ones.
             let a: Vec<i64> = p.iter().map(|v| v / 10_000 * r.range(10_000 - t.g_bps, 10_000 + t.g_bps + 1)).collect();
+            // (One price a market, wherever its legs stand: the last leg's of it. Docs 17.8h.)
+            let a: Vec<i64> = (0..a.len()).map(|i| a[(0..a.len()).rev().find(|j| x.legs[*j].market == x.legs[i].market).unwrap()]).collect();
             let m = x.a_margin;
             // (Round 50: the only leg leaving alone leaves an account of no leg, which takes a take and no more.)
             let kind = if n == 0 { KIND_C_TAKE } else { [KIND_C_TAKE, KIND_C_LEAVE, KIND_C_STEP][r.range(0, 3) as usize] };
@@ -8965,20 +8982,20 @@ fn t1b_r47_what_a_shard_is_good_for_falls_by_no_statement_of_a_covered_accounts_
                 0
             } else if r.range(0, 2) == 0 {
                 // The most the rule gives.
-                let last = x.c_trace(&a, 0).unwrap().last().copied().unwrap_or(Row::ZERO);
-                m - NOTE_MIN - (rate_up(last.wa, up) + last.ea)
+                let last = x.c_trace(&a, 0).unwrap().last().copied().unwrap_or(kpf_protocol::crow::CRow::ZERO);
+                m - NOTE_MIN - (rate_up(last.w, up) + last.ls)
             } else {
                 r.range(1, m.max(2))
             };
             // (Round 50: a statement of the user's is stated at or after the time the account says.)
             let Ok((_, s, o)) = x.c_state(kind, amount, skip, &a, T0.max(x.b_min_counter), m, who) else { continue };
-            let last = s.rows.last().copied().unwrap_or(Row::ZERO);
+            let last = s.rows.last().copied().unwrap_or(kpf_protocol::crow::CRow::ZERO);
             let lone = o.after.is_some() && kind != KIND_C_TAKE;
             let a_after: Vec<i64> = if lone { a.iter().enumerate().filter(|(i, _)| *i as i64 + 1 != skip).map(|(_, v)| *v).collect() } else { a.clone() };
             let asked = o.note.as_ref().map(|n| n.asked).unwrap_or(0);
-            let fall = |floor: bool| good47(&x, &a, floor) - (o.after.as_ref().map(|y| good47(y, &a_after, floor)).unwrap_or(0) - asked);
+            let fall = |floor: bool| good47(&x, &a, floor) - (o.after.as_ref().map(|y| good47(y, &one_price(&y.legs, a_after.clone()), floor)).unwrap_or(0) - asked);
             // An account that is not small: the maintenance of the legs that stay is at least a note's least.
-            let staying = if kind == KIND_C_TAKE { last.wa } else { last.wb };
+            let staying = if kind == KIND_C_TAKE { last.w } else { last.ws };
             let not_small = rate_up(staying, up) >= NOTE_MIN;
             let e = seen.entry((kind, lone)).or_insert((0, i64::MIN, i64::MIN, i64::MIN));
             e.0 += 1;
@@ -9042,7 +9059,7 @@ fn t1b_fixed_f75_the_coins_of_an_account_count_a_notes_least_less_in_every_test(
     assert_eq!(after.s.a_margin, 24 * KAS1 / 10);
     // A sompi more, stated all the same: its end is wrong at the engine.
     let rows = acct.s.c_trace(&[P10], 0).unwrap();
-    let more = CSaid { amount: KAS1 + 1, skip: 0, lc: [0; 32], rows };
+    let more = CSaid { amount: KAS1 + 1, skip: 0, lc: [0; 32], head: acct.s.c_head(), rows };
     let outs = Outs::of(&[Out { key: false, to: acct.s.c_hash(24 * KAS1 / 10 - 1, &acct.s.legs_root()), value: held - KAS1 - 1 }, Out { key: true, to: xk(&w.a), value: KAS1 + 1 }]).unwrap();
     assert_eq!(c_end_taken47(&w, &acct, &stated47(&acct.s, KIND_C_TAKE, &more, outs, held, xk(&w.a)), &more), (false, true), "F75 is open: the take of a sompi more is answered right");
     // 5.5 % down: 2.2 KAS lost; the 2.4 KAS that stay pay it all.
@@ -9400,17 +9417,17 @@ fn t1b_r50_the_count_of_legs_and_the_time_of_a_covered_account() {
     let empty = OLive { s: Account { b_min_counter: 0, ..none.s.clone() }, ..none.clone() };
     let held0 = empty.value as i64;
     let (st0, s0, o0) = empty.s.c_state(KIND_C_TAKE, KAS1, 0, &[], T0, held0, xk(&w.a)).expect("a take with no row");
-    assert_eq!((s0.rows.len(), s0.said().len(), o0.after.as_ref().unwrap().a_margin), (0, 48, empty.s.a_margin - KAS1));
+    assert_eq!((s0.rows.len(), s0.said().len(), o0.after.as_ref().unwrap().a_margin), (0, 80, empty.s.a_margin - KAS1));
     assert_eq!(c_end_taken47(&w, &empty, &st0, &s0), (true, false), "a take of an account of no leg, stated with no row");
     let most = empty.s.a_margin - NOTE_MIN;
     assert!(empty.s.c_state(KIND_C_TAKE, most, 0, &[], T0, held0, xk(&w.a)).is_ok() && empty.s.c_state(KIND_C_TAKE, most + 1, 0, &[], T0, held0, xk(&w.a)).is_err(), "all but a note's least");
     for (kind, skip) in [(KIND_C_LEAVE, ALL), (KIND_C_LEAVE, 1), (KIND_C_STEP, 1)] {
         assert!(empty.s.c_state(kind, 0, skip, &[], T0, held0, xk(&w.w)).is_err() && empty.s.c_state(kind, 0, skip, &[], T0, held0, xk(&w.a)).is_err());
-        let other = CSaid { amount: 0, skip, lc: [0; 32], rows: vec![] };
+        let other = CSaid { amount: 0, skip, lc: [0; 32], head: empty.s.c_head(), rows: vec![] };
         let st = Stated { kind, arg: other.arg(), ..st0 };
         assert_eq!(c_end_taken47(&w, &empty, &st, &other), (false, true), "kind {kind}, skip {skip}, on an account of no leg");
     }
-    let bare = CSaid { amount: KAS1, skip: 0, lc: [0; 32], rows: vec![] };
+    let bare = CSaid { amount: KAS1, skip: 0, lc: [0; 32], head: empty.s.c_head(), rows: vec![] };
     let (stx, _, _) = acct.s.c_state(KIND_C_TAKE, KAS1, 0, &a, T0, 100 * KAS1, xk(&w.a)).unwrap();
     assert_eq!(c_end_taken47(&w, &acct, &Stated { arg: bare.arg(), ..stx }, &bare), (false, true), "a take with no row on an account that has legs");
 
@@ -9418,7 +9435,7 @@ fn t1b_r50_the_count_of_legs_and_the_time_of_a_covered_account() {
     let odd = OLive { s: Account { a_min_counter: 5, ..one.s.clone() }, ..one.clone() };
     assert!(odd.s.c_check().is_err() && odd.s.c_state(KIND_C_TAKE, KAS1, 0, &a[..1], 6_900, odd.value as i64, xk(&w.a)).is_err(), "the model states on an account whose count is not its legs'");
     let rows = odd.s.c_trace(&a[..1], 1).unwrap();
-    let lone = CSaid { amount: 0, skip: 1, lc: chain_of_one(&odd.s.legs[0]), rows };
+    let lone = CSaid { amount: 0, skip: 1, lc: chain_of_one(&odd.s.legs[0]), head: odd.s.c_head(), rows };
     let o = odd.s.c_end(KIND_C_LEAVE, &lone, &xk(&w.a), odd.value as i64, 6_900).unwrap().expect("the end's arithmetic");
     assert_eq!(o.after.as_ref().unwrap().a_min_counter, 4);
     let st = Stated { position: odd.s.hash(), window: odd.s.dispute_daa, late: odd.s.t.late_daa, kind: KIND_C_LEAVE, t0: 6_900, arg: lone.arg(), outs: o.outs, bond: odd.s.bond(), claimer: xk(&w.a), held: odd.value as i64 };
@@ -9618,7 +9635,7 @@ fn enter_by_hand52(w: &OW, acct: &OLive<Account>, m: &Marked, prices: &[i64], sh
     let m = &timed_t3(m, t0);
     let l = *m.0.legs.last().unwrap();
     let rows = m.0.c_trace(prices, 0).unwrap();
-    let said = CEnterSaid { add: m.0.a_margin - acct.s.a_margin, r: r as i64, leg: l, rows };
+    let said = CEnterSaid { add: m.0.a_margin - acct.s.a_margin, r: r as i64, leg: l, head: m.0.c_head(), place: rows.len() as i64, rows };
     let life = acct.s.t.late_daa + 2 * acct.s.dispute_daa;
     let after = Account { b_min_counter: t0 + 2 * life, ..m.0.clone() };
     let held = acct.value as i64 + said.add;
@@ -9857,10 +9874,10 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
         let n = r.range(0, 6) as usize;
         let legs: Vec<XLeg> = (0..n).map(|_| w.fut(r.range(0, 4) as usize, r.range(5, 30), dir(&mut r), P10 * r.range(80, 121) / 100)).collect();
         let leg = w.fut(r.range(0, 4) as usize, r.range(5, 30), dir(&mut r), P10 * r.range(80, 121) / 100);
-        let prices: Vec<i64> = legs.iter().map(|l| l.entry * r.range(90, 111) / 100).chain([leg.entry]).collect();
+        let prices: Vec<i64> = one_price(&[legs.clone(), vec![leg]].concat(), legs.iter().map(|l| l.entry * r.range(90, 111) / 100).chain([leg.entry]).collect());
         let probe = mark51(&Account { t: w.terms(), legs: legs.clone(), a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 0, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: n as i64, b_min_counter: 0, shard: Some(sid52(&w)) }, leg, 0);
         let last = *probe.0.c_trace(&prices, 0).unwrap().last().unwrap();
-        let need = rate_up(last.wa, up) - last.gain + NOTE_MIN;
+        let need = rate_up(last.w, up) - last.gain + NOTE_MIN;
         let coins = match r.range(0, 6) {
             0 => need,
             1 => need - 1,
@@ -9873,7 +9890,7 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
         let base = Account { a_margin: coins - add, legs: legs.clone(), a_min_counter: n as i64, ..probe.0.clone() };
         let mut marked = mark51(&base, leg, add);
         let held = coins;
-        let mut said = CEnterSaid { add, r: 0, leg, rows: marked.0.c_trace(&prices, 0).unwrap() };
+        let mut said = CEnterSaid { add, r: 0, leg, head: marked.0.c_head(), place: prices.len() as i64, rows: marked.0.c_trace(&prices, 0).unwrap() };
         let mut claimer = xk(&w.a);
         let life = t.late_daa + 2 * 50;
         let fallback = Outs::of(&[Out { key: false, to: Account { b_min_counter: T0 + 2 * life, ..marked.0.clone() }.hash(), value: held }]).unwrap();
@@ -9885,8 +9902,8 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
         let m = if rows_case { 0 } else { r.range(0, 15) };
         match m {
             3 => said.rows[li].gain = pick47(&mut r, &[row.gain + 1, row.gain - KAS1, i64::MAX, -i64::MAX]),
-            4 => said.rows[li].wa = pick47(&mut r, &[0, -1, i64::MAX, row.wa + 1]),
-            5 => said.rows[li].ea = pick47(&mut r, &[-1, i64::MAX, row.ea + 1]),
+            4 => said.rows[li].w = pick47(&mut r, &[0, -1, i64::MAX, row.w + 1]),
+            5 => said.rows[li].ls = pick47(&mut r, &[-1, i64::MAX, row.ls + 1]),
             6 => said.rows[li].g = [1; 32],
             7 => {
                 if r.range(0, 2) == 0 {
@@ -9932,10 +9949,10 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
                 let x = &mut said.rows[i - 1];
                 match r.range(0, 5) {
                     0 => x.gain += 1,
-                    1 => x.wa -= 1,
-                    2 => x.wb += 1,
-                    3 => x.ea += 1,
-                    _ => x.eb += 1,
+                    1 => x.w -= 1,
+                    2 => x.ws += 1,
+                    3 => x.ls += 1,
+                    _ => x.gl += 1,
                 }
             }
             2 => said.rows[i - 1].g = [0; 32],
@@ -9944,7 +9961,7 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
                 // The last row at a price that is not the entry of the leg (its sums as that price makes them).
                 let mut p = prices.clone();
                 p[k - 1] += 1;
-                said.rows = marked.0.c_trace(&p, 0).unwrap();
+                said.rows = marked.0.c_trace(&one_price(&all, p), 0).unwrap();
                 prev = if k >= 2 { said.rows[k - 2].g } else { [0; 32] };
                 shown = all[k - 1];
                 at = 2 * k as i64 - 1;
@@ -9960,13 +9977,13 @@ fn t1b_r51_the_end_and_the_rows_of_an_entry_are_the_models_on_random_accounts() 
         let model = if i > k {
             Some(true)
         } else {
-            let before = if i == 1 { Row::ZERO } else { said.rows[i - 2] };
-            c_enter_row_judged(&prev, &shown, &before, &said.rows[i - 1], i as i64, &said)
+            let before = if i == 1 { kpf_protocol::crow::CRow::ZERO } else { said.rows[i - 2] };
+            c_enter_row_judged(&prev, i.checked_sub(2).map(|j| &all[j]), &shown, &before, &said.rows[i - 1], i as i64, &said)
         };
         let st = Stated { arg: said.arg(), ..st };
         let live = OLive { s: st, ..live };
         let q = w.pointed(&live, at);
-        let take = |v: bool| c_enter_row(&w.lib, &q, &said, at, &prev, &shown, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys));
+        let take = |v: bool| c_enter_row(&w.lib, &q, &said, at, &prev, (i >= 2 && i <= k).then(|| &all[i - 2]), &shown, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &f), Some(v)).is_ok_and(|b| taken30(&b.0, &w.keys));
         let engine = (take(true), take(false));
         rows_n[match model {
             Some(true) => 0,
@@ -10168,7 +10185,7 @@ fn t1b_fixed_f79_nothing_is_stated_on_an_object_whose_lateness_is_the_mark_or_mo
     let w = ow();
     let mark = kpf_protocol::thin::LATE_AGAIN;
     let stranger = xk(&w.w);
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
     let f = [fund(xk(&w.w), 33, 1_000)];
     for (late, stated) in [(mark, false), (mark + 7, false), (-1, false), (mark - 1, true), (100, true)] {
         let a = Account { t: XTerms { late_daa: late, ..w.terms() }, legs: vec![], a_key: xk(&w.a), b_key: xk(&w.b), a_margin: 100 * KAS1, b_margin: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, a_min_counter: 0, b_min_counter: 0, shard: Some(sid52(&w)) };
@@ -10327,7 +10344,7 @@ fn t1b_fixed_f81_a_note_of_a_leg_that_never_was_is_spent_and_ends_no_draw_after(
     let held = acct.value as i64;
     let ghost = w.fut(2, 10, SHORT, P10);
     let fake = mark51(&acct.s, ghost, 0);
-    let said = CSaid { amount: KAS1, skip: 0, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: KAS1, skip: 0, lc: [0; 32], head: acct.s.c_head(), rows: vec![] };
     let outs = Outs::of(&[Out { key: false, to: fake.hash(), value: held }]).unwrap();
     let st = stated47(&acct.s, KIND_C_TAKE, &said, outs, held, xk(&w.a));
     let live = w.stated(&acct, &st, &said.said());
@@ -11019,7 +11036,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Review T6, second round, K1: `KpfTCallPay` is 2,523: the payment that makes a claim whole pays its key
     // the part and what the claim's note held, in one output.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1761), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2093)]);
 }
 
 // ================================================================================================================
@@ -11624,7 +11641,7 @@ fn t1b_r54_a_step_under_a_call_is_the_models_on_random_accounts() {
         // The form: the account, or a statement on it (what it says is nothing a step reads).
         let form = r.range(0, 4);
         let claimer = if r.range(0, 2) == 0 { xk(&w.a) } else { xk(&w.w) };
-        let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+        let said = CSaid { amount: 0, skip: 0, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
         let st = stated47(x, [KIND_C_TAKE, KIND_C_LEAVE, KIND_C_STEP][r.range(0, 3) as usize], &said, Outs::of(&[Out { key: false, to: x.hash(), value: v }]).unwrap(), v, claimer);
         let stood = match form { 1 => Some((st.bond, claimer, false)), 2 => Some((st.bond, claimer, true)), _ => None };
         let total = v + stood.map(|(b, _, d)| if d { 2 * b } else { b }).unwrap_or(0);
@@ -11816,7 +11833,7 @@ fn t1b_r54_what_a_step_under_a_call_takes_and_refuses() {
     for form in [1i64, 2, 3, -1] {
         no(&format!("the account as it stands said of form {form}"), with_arg(&b, 9, int_arg(form)));
     }
-    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
     // (Round 55: a statement of a time before the call's, so that it is its landing that counts: F90.)
     let mut st = stated47(x, KIND_C_TAKE, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 50 * KAS1 }]).unwrap(), 50 * KAS1, xk(&w.a));
     st.t0 = 6_490;
@@ -12363,7 +12380,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let six_acct = cov47(&w, &six, NOTE_MIN, 0);
     see("a step of an account of a note's least, six legs", call_step(&w.lib, &six_acct, &six_acct.s, None, &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).map(|x| x.0));
     let rich = cov47(&w, &six, 500 * KAS1, 0);
-    let st = stated47(&rich.s, KIND_C_STEP, &CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] }, Outs::of(&[Out { key: false, to: rich.s.hash(), value: 500 * KAS1 }]).unwrap(), 500 * KAS1, xk(&w.w));
+    let st = stated47(&rich.s, KIND_C_STEP, &CSaid { amount: 0, skip: 0, lc: [0; 32], head: rich.s.c_head(), rows: vec![] }, Outs::of(&[Out { key: false, to: rich.s.hash(), value: 500 * KAS1 }]).unwrap(), 500 * KAS1, xk(&w.w));
     let q = OLive { s: Pointed { st, disputer: xk(&w.b), point: 0 }, value: (500 * KAS1 + 2 * st.bond) as u64, id: rich.id, op: op(94), daa: 6_530 };
     see("a step of six legs over a disputed statement of another key (three payments)", call_step(&w.lib, &q, &rich.s, Some((&st, Some((xk(&w.b), 0)))), &call, &w.script("KpfTCStep"), w.payer(&w.f, &ff)).map(|x| x.0));
     // The note of six legs applied to a called shard: a claim written.
@@ -12395,7 +12412,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2317), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1761), ("KpfTPoint", 2588), ("KpfTShardPrice", 2317), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12416,7 +12433,7 @@ fn t1b_r55_f92_a_bond_under_the_least_payment_is_whoever_steps_as_the_paper_now_
     let acct = cov47(&w, &[leg], 3 * KAS1 / 2, 0);
     let x = &acct.s;
     let f = [fund(xk(&w.b), 56, 1_000)];
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
     let st = stated47(x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 3 * KAS1 / 2 }]).unwrap(), 3 * KAS1 / 2, xk(&w.w));
     assert_eq!(st.bond, 15_000_000);
     let q = OLive { s: Pointed { st, disputer: xk(&w.f), point: 0 }, value: (3 * KAS1 / 2 + 2 * st.bond) as u64, id: acct.id, op: op(95), daa: 6_600 };
@@ -12626,7 +12643,7 @@ fn t1b_fixed_f89_an_account_that_holds_less_than_it_must_pay_is_stepped_for_what
 /// A statement of the user's on `x` (what it says is nothing a step reads) of the time `t0`, with `late` as its
 /// lateness (the mark of one that stands again in it, or not).
 fn stated55(w: &OW, x: &Account, kind: i64, t0: i64, again: bool) -> Stated {
-    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
     let st = Stated { t0, ..stated47(x, kind, &said, Outs::of(&[Out { key: false, to: x.hash(), value: x.a_margin }]).unwrap(), x.a_margin, xk(&w.a)) };
     if again { st.again() } else { st }
 }
@@ -13039,7 +13056,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2567), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2567), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -13258,7 +13275,7 @@ fn t1b_r56_a_hand_over_takes_two_signatures_and_a_lateness_and_changes_one_key()
     let marked = mark51(&x, w.fut(2, 1, LONG, P10), 0);
     assert!(shown53(&w, &b, None, &x.moving(), &x.moving()) && !shown53(&w, &b, Some((0, marked.hash())), &x.moving(), &marked.moving()), "a marked account is handed over");
     refused.set(refused.get() + 1);
-    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 0, lc: [0; 32], head: x.c_head(), rows: vec![] };
     let st = stated47(&x, KIND_C_TAKE, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 50 * KAS1 }]).unwrap(), 50 * KAS1, x.a_key);
     let mut t = b.clone();
     object_made(&mut t, &w.lib, 0, &st.hash());
@@ -13701,7 +13718,7 @@ fn t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor() {
         acct.s.bond_bps = 100;
         let x = &acct.s;
         assert_eq!(x.c_bond(), bond, "the model's bond on an account of {coins}");
-        let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+        let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: x.c_head(), rows: x.c_trace(&[P10], 1).unwrap() };
         for kind in [KIND_C_TAKE, KIND_C_LEAVE, KIND_C_STEP] {
             let st = stated57(x, kind, &said, Outs::of(&[Out { key: false, to: x.hash(), value: coins }]).unwrap(), coins, xk(&w.w));
             let state = |st: &Stated| state_raw(&w.lib, &acct, &x.fixed_hash(), &x.moving(), st, &said.said(), x.form(), &w.script("KpfTChange"), w.payer(&w.w, &fw)).unwrap();
@@ -13742,7 +13759,7 @@ fn t1b_fixed_f100_a_covered_accounts_statements_and_an_entry_have_a_floor() {
         let mut acct = cov47(&w, &[small], coins, 0);
         acct.s.bond_bps = 100;
         let x = &acct.s;
-        let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+        let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: x.c_head(), rows: x.c_trace(&[P10], 1).unwrap() };
         let st = stated57(x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: coins }]).unwrap(), coins, xk(&w.w));
         assert_eq!((st.bond, x.c_end_judged(KIND_C_STEP, &said, &st.claimer, &st.outs, coins, T0)), (NOTE_MIN, Some(false)), "a step of an account that stands is not the rule's");
         let (f1, f2, f3) = ([fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.w), 31, 1_000)], [fund(xk(&w.w), 33, 1_000)]);
@@ -13811,7 +13828,7 @@ fn t1b_r57_a_bond_above_an_accounts_coins_is_posted_and_comes_back_at_the_end_an
     let mut acct = cov47(&w, &[leg], 3 * KAS1 / 10, 0);
     acct.s.bond_bps = 100;
     let x = &acct.s;
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: vec![] };
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, rows: vec![] };
     let st = stated57(x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: x.a_margin }]).unwrap(), x.a_margin, xk(&w.w));
     assert_eq!(st.bond, NOTE_MIN);
     let fb = [fund(xk(&w.b), 56, 1_000)];
@@ -13837,7 +13854,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Round 58: the three that changed again.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1760, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3015, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1761, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3017, 2282), ("KpfTEnterOff", 719, 719)]);
 }
 
 // ================================================================================================================
@@ -13970,7 +13987,7 @@ fn t1b_fixed_f104_an_addition_and_a_hand_over_show_an_input_that_landed_at_the_a
     // F104's round: on the account that says 6,200 and landed at 6,400.
     let x = a1.s.clone();
     let third = only_keys(&[&w.w, &w.f]);
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: x.c_head(), rows: x.c_trace(&[P10], 1).unwrap() };
     let st = stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: a1.value as i64 }]).unwrap(), a1.value as i64, xk(&w.w));
     assert_eq!(x.c_end_judged(KIND_C_STEP, &said, &st.claimer, &st.outs, a1.value as i64, T0), Some(false));
     let (f1, f2, f3) = ([fund(xk(&w.w), 30, 1_000)], [fund(xk(&w.f), 72, 1_000)], [fund(xk(&w.f), 73, 1_000)]);
@@ -14131,7 +14148,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 3015), ("KpfTOpenC", 684)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 3017), ("KpfTOpenC", 684)]);
 }
 
 // ================================================================================================================
@@ -14166,7 +14183,7 @@ fn t1b_fixed_f105_a_statement_out_of_its_time_costs_half_its_bond_whoever_ends_i
     let mut acct = cov47(&w, &[small], 20 * KAS1, 0);
     acct.s.bond_bps = 100;
     let x = acct.s.clone();
-    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], rows: x.c_trace(&[P10], 1).unwrap() };
+    let said = CSaid { amount: 0, skip: 1, lc: [0; 32], head: x.c_head(), rows: x.c_trace(&[P10], 1).unwrap() };
     let step = stated57(&x, KIND_C_STEP, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 20 * KAS1 }]).unwrap(), 20 * KAS1, xk(&w.w));
     let third = only_keys(&[&w.w]);
     let mut by_another = vec![];
@@ -14384,13 +14401,14 @@ fn t1b_r59_the_end_of_a_split_is_the_models_on_random_accounts() {
             let i = r.range(0, 4) as usize;
             XLeg { size: r.range(1, 40) * w.markets[i].p.scale / 4, entry: P10 * r.range(80, 121) / 100, ..w.fut(i, 1, if r.range(0, 2) == 0 { LONG } else { SHORT }, P10) }
         }).collect();
-        let prices: Vec<i64> = (0..n).map(|_| P10 * r.range(85, 116) / 100).collect();
+        let prices: Vec<i64> = one_price(&legs, (0..n).map(|_| P10 * r.range(85, 116) / 100).collect());
         let skip = r.range(1, n as i64 + 1);
         let probe = cov47(&w, &legs, 0, 0).s;
         let rows = probe.c_trace(&prices, skip).expect("a trace");
         let last = rows.last().unwrap().clone();
-        let need_new = NOTE_MIN + rate_up(last.wa - last.wb) + (-last.eb).max(0);
-        let need_stay = NOTE_MIN + rate_up(last.wb) + last.ea;
+        // (Docs 17.8h: the leg that moves is asked what it can lose alone; what stays, R of what stays.)
+        let need_new = NOTE_MIN + last.rl + (-last.gl).max(0);
+        let need_stay = NOTE_MIN + last.closed().unwrap().1 + last.ls;
         let coins = need_new + need_stay + [0i64, 0, 0, -1, 1, 5 * KAS1, 5 * KAS1][r.range(0, 7) as usize];
         let amount = match r.range(0, 9) {
             0 => need_new - 1,
@@ -14410,7 +14428,7 @@ fn t1b_r59_the_end_of_a_split_is_the_models_on_random_accounts() {
         }
         let x = &acct.s;
         let said_skip = match r.range(0, 12) { 0 => 0, 1 => n as i64 + 1, _ => skip };
-        let s = CSaid { amount, skip: said_skip, lc: kpf_protocol::covered::chain_of_one(&legs[skip as usize - 1]), rows };
+        let s = CSaid { amount, skip: said_skip, lc: kpf_protocol::covered::chain_of_one(&legs[skip as usize - 1]), head: x.c_head(), rows };
         let claimer = if r.range(0, 10) == 0 { xk(&w.w) } else { xk(&w.a) };
         let Some((st, _, _)) = split_by_hand59(x, &s, skip as usize - 1, held, claimer, T0) else { continue };
         let model = x.c_end_judged(KIND_C_SPLIT, &s, &st.claimer, &st.outs, held, T0);
@@ -14511,8 +14529,8 @@ fn t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts() {
     let end_says = split_end_taken59(&w, &acct, &bst, &bent);
     let stated_bent = OLive { daa: 6_510, ..w.stated(&acct, &bst, &bent.said()) };
     // (The row of the second leg is the point 3; the chain before it is the first leg's.)
-    let row_says = c_row_taken47(&w, &w.pointed(&stated_bent, 3), &bent, 3, &kpf_protocol::covered::chain_of_one(&long), &short);
-    let honest_row = c_row_taken47(&w, &w.pointed(&OLive { daa: 6_510, ..w.stated(&acct, &st, &said.said()) }, 3), &said, 3, &kpf_protocol::covered::chain_of_one(&long), &short);
+    let row_says = c_row_taken47(&w, &w.pointed(&stated_bent, 3), &bent, 3, &kpf_protocol::covered::chain_of_one(&long), Some(&long), &short);
+    let honest_row = c_row_taken47(&w, &w.pointed(&OLive { daa: 6_510, ..w.stated(&acct, &st, &said.said()) }, 3), &said, 3, &kpf_protocol::covered::chain_of_one(&long), Some(&long), &short);
     assert_eq!((end_says, row_says, honest_row), ((true, false), (false, true), (true, false)), "another chain said for the new account: the end, the row of the leg, and the row of the honest statement");
     // The new account's life.
     let new_live = nth(&a1, i1, new.clone(), 6_700);
@@ -14557,7 +14575,7 @@ fn t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts() {
         let last = rows.last().unwrap().clone();
         let up = w.terms().mmr_bps + w.terms().g_bps;
         let need = |v: i64| NOTE_MIN + (v / 10_000) * up + ((v % 10_000) * up + 9_999) / 10_000;
-        let (need_new, need_stay) = (need(last.wa - last.wb), need(last.wb));
+        let (need_new, need_stay) = (need(last.w - last.ws), need(last.ws));
         let big = cov47(&w, &[l, sh], need_new + need_stay, 0).s;
         let (_, _, o) = big.c_state(KIND_C_SPLIT, need_new, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).expect("a split at both edges");
         assert!(big.c_state(KIND_C_SPLIT, need_new - 1, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).is_err() && big.c_state(KIND_C_SPLIT, need_new + 1, 2, &[P10, P10], T0, need_new + need_stay, xk(&w.a)).is_err());
@@ -14578,7 +14596,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3015), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4193), ("KpfTStepPrice", 1837), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2614)]);
 }
 
 // ================================================================================================================
@@ -14642,6 +14660,7 @@ fn t1b_r60_the_end_and_the_row_of_a_mark_are_the_models_on_random_accounts() {
             let far = if i == k && r.range(0, 4) != 0 { if leg.dir == LONG { r.range(104, 125) } else { r.range(70, 97) } } else { r.range(90, 111) };
             P10 * far / 100
         }).collect();
+        let prices = one_price(&legs, prices);
         let probe = cov47(&w, &legs, 0, 0).s;
         let nearest = probe.mark_entry(&leg, prices[k]);
         let tick = if leg.dir == LONG { 1 } else { -1 };
@@ -14655,38 +14674,39 @@ fn t1b_r60_the_end_and_the_row_of_a_mark_are_the_models_on_random_accounts() {
         };
         let Some(rows) = probe.c_trace_marked(&prices, k as i64 + 1, ne) else { continue };
         let last = rows.last().unwrap().clone();
-        let need = NOTE_MIN + rate_up(last.wa, up) + last.ea;
+        // (Docs 17.8h: what is asked is R of all the legs, with the last group closed, where it was the rate on W.)
+        let need = NOTE_MIN + last.closed().unwrap().0 + last.ls;
         let coins = need + [0i64, 0, 0, -1, 1, 3 * KAS1][r.range(0, 6) as usize];
         let mut acct = cov47(&w, &legs, coins, 0);
         if r.range(0, 10) == 0 {
             acct.s.b_min_counter = T0 + r.range(0, 2);
         }
         let x = &acct.s;
-        let s = CSaid { amount: ne, skip: k as i64 + 1, lc: kpf_protocol::covered::chain_of_one(&leg), rows: rows.clone() };
+        let s = CSaid { amount: ne, skip: k as i64 + 1, lc: kpf_protocol::covered::chain_of_one(&leg), head: x.c_head(), rows: rows.clone() };
         let claimer = if r.range(0, 12) == 0 { xk(&w.w) } else { xk(&w.a) };
-        let Some((st, _, _)) = mark_by_hand60(x, &s, k, last.eb, coins, claimer, T0) else { continue };
+        let Some((st, _, _)) = mark_by_hand60(x, &s, k, last.gl, coins, claimer, T0) else { continue };
         let model = x.c_end_judged(KIND_C_MARK, &s, &st.claimer, &st.outs, coins, T0);
         assert_eq!(end_taken60(&w, &acct, &st, &s, "KpfTCMark"), verdicts(model), "case {case}: {n} legs, leg {k} ({:?}), new entry {ne} (the nearest {nearest:?}), coins {coins} against {need}", leg);
         if claimer == x.a_key && T0 >= x.b_min_counter {
-            let band = rate_up(last.wa - last.wb, 2 * w.terms().g_bps);
-            assert_eq!(model, Some(ne > 0 && last.eb > 0 && last.gain >= band && coins >= need), "case {case}: the model against the rule written out");
+            let band = rate_up(last.w - last.ws, 2 * w.terms().g_bps);
+            assert_eq!(model, Some(ne > 0 && last.gl > 0 && last.gain >= band && coins >= need), "case {case}: the model against the rule written out");
             at_edge += (nearest == Some(ne) || coins == need) as usize;
         }
         // The row of the leg marked: as it is, and with the new entry said a tick off.
         if case % 4 == 0 {
             let prev = Account { legs: legs[..k].to_vec(), ..probe.clone() }.legs_root();
-            let before = if k == 0 { kpf_protocol::thin::Row::ZERO } else { rows[k - 1].clone() };
+            let before = if k == 0 { kpf_protocol::crow::CRow::ZERO } else { rows[k - 1] };
             for bent in [s.clone(), CSaid { amount: ne + 1, ..s.clone() }] {
-                let Some((bst, _, _)) = mark_by_hand60(x, &bent, k, last.eb, coins, xk(&w.a), T0) else { continue };
-                let judged = c_row_judged_of(KIND_C_MARK, &prev, &leg, &before, &rows[k], k as i64 + 1, &bent);
+                let Some((bst, _, _)) = mark_by_hand60(x, &bent, k, last.gl, coins, xk(&w.a), T0) else { continue };
+                let judged = c_row_judged_of(KIND_C_MARK, &prev, k.checked_sub(1).map(|j| &legs[j]), &leg, &before, &rows[k], k as i64 + 1, &bent);
                 let q = w.pointed(&OLive { daa: 6_510, ..w.stated(&acct, &bst, &bent.said()) }, 2 * k as i64 + 1);
-                assert_eq!(c_row_taken47(&w, &q, &bent, 2 * k as i64 + 1, &prev, &leg), verdicts(judged), "case {case}: the row of the leg marked, new entry said {}", bent.amount);
+                assert_eq!(c_row_taken47(&w, &q, &bent, 2 * k as i64 + 1, &prev, k.checked_sub(1).map(|j| &legs[j]), &leg), verdicts(judged), "case {case}: the row of the leg marked, new entry said {}", bent.amount);
                 if judged == Some(true) { rows_right += 1 } else { rows_wrong += 1 }
             }
         }
         if model == Some(true) {
             right += 1;
-            kept = kept.or(Some((acct.clone(), s.clone(), k, last.eb)));
+            kept = kept.or(Some((acct.clone(), s.clone(), k, last.gl)));
         } else {
             wrong += 1;
         }
@@ -14967,7 +14987,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1188), ("KpfTCRow", 2547), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2546), ("KpfTMarkNote", 1188), ("KpfTCRow", 4193), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1837), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15070,7 +15090,7 @@ impl MarketIndex62 for XLeg {
 
 /// The trace the model writes for a statement of `kind` naming `skip` (with `amount` where a mark says its new
 /// entry); where it writes none (a leg named by a kind that does not take it), a take's trace, every leg staying.
-fn trace62(x: &Account, kind: i64, prices: &[i64], skip: i64, amount: i64) -> Option<(Vec<kpf_protocol::thin::Row>, bool)> {
+fn trace62(x: &Account, kind: i64, prices: &[i64], skip: i64, amount: i64) -> Option<(Vec<kpf_protocol::crow::CRow>, bool)> {
     let own = match kind {
         KIND_C_MARK => x.c_trace_marked(prices, skip, amount),
         KIND_C_TOK_OUT | KIND_C_TOK_SOLD => x.c_trace_tok(kind, prices, skip),
@@ -15100,7 +15120,7 @@ fn t1b_r62_the_rows_of_an_account_with_token_legs_are_the_models() {
         let n = r.range(1, 7) as usize;
         let tokens = r.range(0, 4) as usize;
         let legs = legs62(&w, &mut r, n, tokens, &[1, 3_000, 9_999, 10_000, 0, 10_001, -1]);
-        let prices: Vec<i64> = (0..n).map(|_| P10 * r.range(85, 116) / 100).collect();
+        let prices: Vec<i64> = one_price(&legs, (0..n).map(|_| P10 * r.range(85, 116) / 100).collect());
         let kind = kinds[case % 7];
         let skip = match r.range(0, 8) { 0 => 0, 1 => ALL, _ => r.range(1, n as i64 + 1) };
         let acct = cov47(&w, &legs, 500 * KAS1, 0);
@@ -15109,15 +15129,15 @@ fn t1b_r62_the_rows_of_an_account_with_token_legs_are_the_models() {
         let amount = match kind { KIND_C_MARK => prices[k] - if legs[k].dir == SHORT { -P10 / 50 } else { P10 / 50 }, KIND_C_TOK_SOLD | KIND_C_TAKE | KIND_C_SPLIT => KAS1, _ => 0 };
         let Some((rows, own)) = trace62(x, kind, &prices, skip, amount) else { continue };
         let lc = if skip >= 1 { kpf_protocol::covered::chain_of_one(&legs[k]) } else { [0; 32] };
-        let s = CSaid { amount, skip, lc, rows: rows.clone() };
+        let s = CSaid { amount, skip, lc, head: x.c_head(), rows: rows.clone() };
         let st = stated57(x, kind, &s, Outs::of(&[Out { key: false, to: x.hash(), value: 500 * KAS1 }]).unwrap(), 500 * KAS1, xk(&w.a));
         let stated = OLive { daa: 6_510, ..w.stated(&acct, &st, &s.said()) };
         for i in 0..n {
             let prev = Account { legs: legs[..i].to_vec(), ..x.clone() }.legs_root();
-            let before = if i == 0 { kpf_protocol::thin::Row::ZERO } else { rows[i - 1].clone() };
-            let judged = c_row_judged_of(kind, &prev, &legs[i], &before, &rows[i], i as i64 + 1, &s);
+            let before = if i == 0 { kpf_protocol::crow::CRow::ZERO } else { rows[i - 1] };
+            let judged = c_row_judged_of(kind, &prev, i.checked_sub(1).map(|j| &legs[j]), &legs[i], &before, &rows[i], i as i64 + 1, &s);
             let q = w.pointed(&stated, 2 * i as i64 + 1);
-            assert_eq!(c_row_taken47(&w, &q, &s, 2 * i as i64 + 1, &prev, &legs[i]), verdicts(judged), "case {case}: kind {kind}, leg {i} of {n} ({:?}), named {skip}, the model's own trace: {own}", legs[i]);
+            assert_eq!(c_row_taken47(&w, &q, &s, 2 * i as i64 + 1, &prev, i.checked_sub(1).map(|j| &legs[j]), &legs[i]), verdicts(judged), "case {case}: kind {kind}, leg {i} of {n} ({:?}), named {skip}, the model's own trace: {own}", legs[i]);
             if judged == Some(true) { right += 1 } else { wrong += 1 }
             of_tokens += (legs[i].dir == DIR_SPOT) as usize;
             let named = skip == i as i64 + 1;
@@ -15131,7 +15151,8 @@ fn t1b_r62_the_rows_of_an_account_with_token_legs_are_the_models() {
             }
         }
     }
-    assert!(right >= 40 && wrong >= 15 && of_tokens >= 20 && named_wrong >= 5, "{right} {wrong} {of_tokens} {named_wrong}");
+    // (17.8h: 69, 9, 20 and 8.)
+    assert!(right >= 40 && wrong >= 8 && of_tokens >= 20 && named_wrong >= 5, "{right} {wrong} {of_tokens} {named_wrong}");
     println!("T1b R62 the rows: 36 random accounts, a statement of each kind: {right} rows right and {wrong} wrong by the model, {of_tokens} of them token legs' rows, {named_wrong} of a leg named by a kind that does not take it (wrong, each); the engine takes the model's verdict and not the other in every row");
 }
 
@@ -15160,7 +15181,7 @@ fn t1b_r62_the_ends_with_token_legs_take_what_the_models_rule_allows() {
         let some = r.range(0, 3) as usize;
         let legs = legs62(&w, &mut r, n, some, &[500, 1_000, 3_000, 10_000]);
         let tokens = legs.iter().filter(|l| l.dir == DIR_SPOT).count();
-        let prices: Vec<i64> = (0..n).map(|_| P10 * r.range(88, 113) / 100).collect();
+        let prices: Vec<i64> = one_price(&legs, (0..n).map(|_| P10 * r.range(88, 113) / 100).collect());
         // (Coins: ample, or next to nothing, so that a step and a sale are the rule's in some cases.)
         let coins = if case % 3 == 0 { r.range(4, 9) * KAS1 / 2 } else { 300 * KAS1 };
         let acct = cov47(&w, &legs, coins, 0);
@@ -15206,7 +15227,7 @@ fn t1b_r62_the_ends_with_token_legs_take_what_the_models_rule_allows() {
         // The edge of a take with what the tokens count.
         if case % 3 != 0 {
             let last = x.c_trace(&prices, 0).unwrap().last().unwrap().clone();
-            let most = (coins - NOTE_MIN + last.tk - rate_up(last.wa, up) - last.ea).min(coins - NOTE_MIN);
+            let most = (coins - NOTE_MIN + last.tk - last.closed().unwrap().0 - last.ls).min(coins - NOTE_MIN);
             let take = |amount: i64| x.c_state(KIND_C_TAKE, amount, 0, &prices, T0, coins, x.a_key).is_ok();
             if most >= KAS1 {
                 assert!(take(most) && !take(most + 1), "case {case}: the most a take takes with the tokens' sum {} is {most}", last.tk);
@@ -15272,7 +15293,7 @@ fn t1b_r62_tokens_leave_and_are_sold_and_where_what_is_paid_goes() {
     let plain = cov47(&w, &[long, w.fut(2, 3, SHORT, P10)], 60 * KAS1, 0);
     // (Round 62, F109, fixed in round 63: the model states none, and the end, which is now shown the leg, is wrong.)
     assert!(plain.s.c_state(KIND_C_TOK_OUT, 0, 1, &[P10, P10], T0, 60 * KAS1, xk(&w.a)).is_err() && plain.s.c_trace_tok(KIND_C_TOK_OUT, &[P10, P10], 1).is_none(), "F109 is open: the model states a ticket of a futures leg");
-    let fs = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), rows: plain.s.c_trace(&[P10, P10], 1).unwrap() };
+    let fs = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), head: plain.s.c_head(), rows: plain.s.c_trace(&[P10, P10], 1).unwrap() };
     let without = Account { legs: vec![plain.s.legs[1]], a_min_counter: 1, b_min_counter: 6_900, ..plain.s.clone() };
     let f_outs = Outs::with_notes(&[(Out { key: false, to: without.hash(), value: 60 * KAS1 }, false), (Out { key: false, to: Ticket { chain: fs.lc, key: xk(&w.a) }.hash(), value: NOTE_MIN }, true)]).unwrap();
     let fst = stated57(&plain.s, KIND_C_TOK_OUT, &fs, f_outs, 60 * KAS1, xk(&w.a));
@@ -15327,7 +15348,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3757), ("KpfTCRow", 4193), ("KpfTCEnd", 4384), ("KpfTCSplit", 2614), ("KpfTCMark", 2546), ("KpfTCEnter", 1994), ("KpfTStepPrice", 1837), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2588)]);
 }
 
 // ================================================================================================================
@@ -15361,7 +15382,7 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
         if legs.iter().all(|l| l.dir == DIR_SPOT) {
             continue;
         }
-        let prices: Vec<i64> = (0..n).map(|_| P10 * r.range(80, 121) / 100).collect();
+        let prices: Vec<i64> = one_price(&legs, (0..n).map(|_| P10 * r.range(80, 121) / 100).collect());
         let coins = 2 * KAS1 + r.range(0, 10) * KAS1 / 4;
         let owes = if r.range(0, 4) == 0 { r.range(1, 20) * KAS1 / 2 } else { 0 };
         let mut acct = cov47(&w, &legs, coins, owes);
@@ -15385,11 +15406,11 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
             any |= legs.iter().enumerate().any(|(i, l)| l.dir == DIR_SPOT && x.c_state(KIND_C_TOK_SOLD, worth(l, prices[i]), i as i64 + 1, &prices, T0, coins, xk(&w.w)).is_ok());
         }
         let last = x.c_trace(&prices, 0).unwrap().last().unwrap().clone();
-        if coins + last.gain + last.tk - owes < rate_up(last.wa, lo) {
+        if coins + last.gain + last.tk - owes < rate_up(last.w, lo) {
             below += 1;
             if !any {
                 stuck += 1;
-                first = first.or(Some((coins, owes, last.gain, last.tk, last.wa, last.ea, legs.iter().map(|l| l.dir).collect::<Vec<_>>())));
+                first = first.or(Some((coins, owes, last.gain, last.tk, last.w, last.ls, legs.iter().map(|l| l.dir).collect::<Vec<_>>())));
             }
         }
     }
@@ -15411,7 +15432,7 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
         ("a join, the first", no(account_join(&w.lib, &owing, &twin, &shard, &w.script("KpfTJoinC"), w.payer(&w.a, &fa)).map(|b| b.0))),
         ("a join, the second", no(account_join(&w.lib, &twin, &owing, &shard, &w.script("KpfTJoinC"), w.payer(&w.a, &fa)).map(|b| b.0))),
     ];
-    let said = CSaid { amount: KAS1, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), rows: x.c_trace(&[P10, P10], 1).unwrap() };
+    let said = CSaid { amount: KAS1, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), head: x.c_head(), rows: x.c_trace(&[P10, P10], 1).unwrap() };
     for (what, kind) in [("a take", KIND_C_TAKE), ("a leaving", KIND_C_LEAVE), ("a split", KIND_C_SPLIT), ("a mark", KIND_C_MARK), ("tokens leaving", KIND_C_TOK_OUT)] {
         let st = stated57(&x, kind, &said, Outs::of(&[Out { key: false, to: x.hash(), value: 3 * KAS1 }]).unwrap(), 3 * KAS1, xk(&w.a));
         refused.push((what, no(state_raw(&w.lib, &owing, &x.fixed_hash(), &x.moving(), &st, &said.said(), x.form(), &w.script("KpfTChange"), w.payer(&w.a, &fa)))));
@@ -15461,7 +15482,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4384), ("KpfTCTok", 3757), ("KpfTChange", 1761), ("KpfTCRow", 4193), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

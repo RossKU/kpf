@@ -317,8 +317,8 @@ fn t2_a2_split_then_tokens_leave_the_staying_account() {
     // the END (point 0) of such a split is NOT refused by the model -- c_end returns a valid outcome that moves
     // the token leg into a new account. The refusal is enforced only at the ROW point (KpfTCRow). We confirm the
     // row is wrong and run the row dispute at the engine, where it is answered false and the statement dies.
-    let s_tok = CSaid { amount: 10 * KAS1, skip: 2, lc: chain_of_one(&tleg), rows: held.s.c_trace(&a, 2).unwrap() };
-    assert_eq!(c_row_judged_of(KIND_C_SPLIT, &s_tok.rows[0].g, &tleg, &s_tok.rows[0], &s_tok.rows[1], 2, &s_tok), Some(false), "the token leg's row under a split is wrong");
+    let s_tok = CSaid { amount: 10 * KAS1, skip: 2, lc: chain_of_one(&tleg), head: held.s.c_head(), rows: held.s.c_trace(&a, 2).unwrap() };
+    assert_eq!(c_row_judged_of(KIND_C_SPLIT, &s_tok.rows[0].g, Some(&long), &tleg, &s_tok.rows[0], &s_tok.rows[1], 2, &s_tok), Some(false), "the token leg's row under a split is wrong");
     // (For the record: the end itself accepts; the row is the guard.)
     assert!(matches!(held.s.c_end(KIND_C_SPLIT, &s_tok, &xk(&w.w), held.value as i64, T0), Some(Some(_))), "the end of a token-leg split is accepted; the row is the guard");
     {
@@ -327,7 +327,7 @@ fn t2_a2_split_then_tokens_leave_the_staying_account() {
         let live = acct_stated(&w, &held, &st, &s_tok.said());
         // (Point numbering: row i is point 2i-1, its price 2i; the token leg is the 2nd row, point 3.)
         let q = w.pointed(&live, 3);
-        let (b, right) = c_row(&w.lib, &q, &s_tok, 3, &s_tok.rows[0].g, &tleg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &s_tok, 3, &s_tok.rows[0].g, Some(&long), &tleg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(!right, "the token leg's row under a split is answered wrong at the engine");
         signed("a split that names the token leg: its row refused", &b, &w.keys);
     }

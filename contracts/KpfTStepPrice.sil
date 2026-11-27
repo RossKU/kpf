@@ -142,9 +142,9 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         // trace.
         int at0 = 116;
         // (A covered account's own kinds, 7 to 9, say two numbers and a chain before their rows.)
-        if (kind >= 7) { at0 = 48; }
+        if (kind >= 7) { at0 = 80; }
         // (An entry of the new form, kind 10: the coins added, the row and the leg whole before its rows.)
-        if (kind == 10) { at0 = 127; }
+        if (kind == 10) { at0 = 167; }
         require(said.length >= at0);
         int side = int(byte[8](said.slice(0, 8)));
         int amount = int(byte[8](said.slice(8, 16)));
@@ -164,8 +164,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         int rl = 112;
         int ga = 48;
         if (kind >= 7) {
-            rl = 120;
-            ga = 56;
+            rl = 232;
+            ga = 168;
         }
         int n = rows.length / rl;
         require(rows.length == rl * n);
@@ -180,6 +180,7 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         require(i <= n);
         byte[] row = rows.slice(rl * (i - 1), rl * i);
         byte[] before = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        if (kind >= 7) { before = before + before + before; }
         if (i > 1) {
             before = rows.slice(rl * (i - 2), rl * (i - 1));
         }

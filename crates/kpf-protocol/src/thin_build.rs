@@ -2454,7 +2454,7 @@ fn c_open(obj: &OLive<Pointed>, s: &crate::covered::CSaid) -> Result<()> {
 /// on a covered account, the row's chain opened by `prev` and the leg. Returns the verdict (the model's,
 /// `c_row_judged`; with `force` the one given, for whoever tests that the script refuses it).
 #[allow(clippy::too_many_arguments)]
-pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at: i64, prev: &[u8; 32], leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at: i64, prev: &[u8; 32], leg_before: Option<&crate::cross::XLeg>, leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
     c_open(obj, s)?;
     let n = s.rows.len();
     if at < 1 || (at % 2 == 0 && at <= 2 * n as i64) {
@@ -2465,8 +2465,8 @@ pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at
     let right = if i > n {
         force.unwrap_or(true)
     } else {
-        let before = if i == 1 { crate::thin::Row::ZERO } else { s.rows[i - 2] };
-        match (force, crate::covered::c_row_judged_of(obj.s.st.kind, prev, leg, &before, &s.rows[i - 1], i as i64, s)) {
+        let before = if i == 1 { crate::crow::CRow::ZERO } else { s.rows[i - 2] };
+        match (force, crate::covered::c_row_judged_of(obj.s.st.kind, prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
             (Some(v), _) => v,
             (None, Some(v)) => v,
             (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),
@@ -2479,7 +2479,8 @@ pub fn c_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CSaid, at
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.kind)];
     args.extend(point_args_said(q, s.said(), at, rkey, right));
-    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg))]);
+    // (The leg before, which the script holds to the row before's chain: 17.8h.)
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg)), bv(leg_before.map(crate::thin::leg_bytes).unwrap_or_default())]);
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCRow", "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
@@ -2512,7 +2513,7 @@ pub fn c_price_seeded(lib: &[u8; 32], obj: &OLive<Pointed>, account: &Account, s
     }
     let prev = account.legs[..i - 1].iter().fold([0u8; 32], |g, x| crate::committee::blake2b(&[&g[..], &crate::thin::leg_bytes(x)].concat()));
     let before_g = if i >= 2 { s.rows[i - 2].g } else { [0; 32] };
-    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right(l, &s.rows[i - 1], n.price, account.t.g_bps));
+    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right_at(l, s.rows[i - 1].a, n.price, account.t.g_bps));
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(account.moving()), iv(c.kind)];
@@ -2640,7 +2641,7 @@ fn c_enter_open(obj: &OLive<Pointed>, s: &crate::covered::CEnterSaid, marked: Op
 /// `KpfTCRow.answer` on a row of an entry (the point `at`, 2i - 1, or any other that is answered wrong; a point
 /// beyond the trace is of nothing: right).
 #[allow(clippy::too_many_arguments)]
-pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEnterSaid, at: i64, prev: &[u8; 32], leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEnterSaid, at: i64, prev: &[u8; 32], leg_before: Option<&crate::cross::XLeg>, leg: &crate::cross::XLeg, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
     c_enter_open(obj, s, None)?;
     let n = s.rows.len();
     if at < 1 || (at % 2 == 0 && at <= 2 * n as i64) {
@@ -2651,8 +2652,8 @@ pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEn
     let right = if i > n {
         force.unwrap_or(true)
     } else {
-        let before = if i == 1 { crate::thin::Row::ZERO } else { s.rows[i - 2] };
-        match (force, crate::covered::c_enter_row_judged(prev, leg, &before, &s.rows[i - 1], i as i64, s)) {
+        let before = if i == 1 { crate::crow::CRow::ZERO } else { s.rows[i - 2] };
+        match (force, crate::covered::c_enter_row_judged(prev, leg_before, leg, &before, &s.rows[i - 1], i as i64, s)) {
             (Some(v), _) => v,
             (None, Some(v)) => v,
             (None, None) => return invalid("the chain and the leg given do not open the row's chain, or a sum does not fit: the row is answered by neither verdict"),
@@ -2665,7 +2666,8 @@ pub fn c_enter_row(lib: &[u8; 32], obj: &OLive<Pointed>, s: &crate::covered::CEn
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let mut args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(c.position.to_vec()), iv(c.kind)];
     args.extend(point_args_said(q, s.said(), at, rkey, right));
-    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg))]);
+    // (The leg before, which the script holds to the row before's chain: 17.8h.)
+    args.extend([bv(prev.to_vec()), bv(crate::thin::leg_bytes(leg)), bv(leg_before.map(crate::thin::leg_bytes).unwrap_or_default())]);
     let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTCRow", "answer", args, 0)?;
     point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
     Ok((d.finish()?, right))
@@ -2690,7 +2692,7 @@ pub fn c_enter_price(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::cover
     }
     let prev = crate::reserve::Left::chain(&account.legs[..i - 1]);
     let before_g = if i >= 2 { s.rows[i - 2].g } else { [0; 32] };
-    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right(l, &s.rows[i - 1], n.price, account.t.g_bps));
+    let right = force.unwrap_or_else(|| prev == before_g && crate::thin::price_right_at(l, s.rows[i - 1].a, n.price, account.t.g_bps));
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
     let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
     let mut args = vec![bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(account.terms()), bv(account.legs_root().to_vec()), bv(marked.moving()), iv(c.kind)];

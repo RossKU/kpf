@@ -147,6 +147,10 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
     if a <= 0 || a > l.price_max || (l.dir != LONG && l.dir != SHORT && l.dir != DIR_SPOT) {
         return Some(None);
     }
+    // (A head whose rates are no rates: no right row. The end holds the head to the terms.)
+    if !(0..=BPS).contains(&head.rate) || !(0..=BPS).contains(&head.tolerance) {
+        return Some(None);
+    }
     if kind == KIND_C_STEP {
         if q < 0 || sub(q, a)?.abs() > rate_up(a, head.lower())? {
             return Some(None);

@@ -128,10 +128,10 @@ contract KpfTCTok(int init_version) {
         int j = int(byte[8](who.slice(0, 8)));
         byte[] rs = slotOf(j, slotLen);
         require(kind == 14 || kind == 15);
-        require(said.length >= 48);
+        require(said.length >= 80);
         int amount = int(byte[8](said.slice(0, 8)));
         int skip = int(byte[8](said.slice(8, 16)));
-        byte[] rows = said.slice(48, said.length);
+        byte[] rows = said.slice(80, said.length);
         byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(said)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
         byte[32] c0 = blake2b(pre + i9(late) + i9(held));
         int again = late;
@@ -139,16 +139,16 @@ contract KpfTCTok(int init_version) {
         byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
-        int n = rows.length / 120;
-        require(rows.length == 120 * n);
+        int n = rows.length / 232;
+        require(rows.length == 232 * n);
         require(at == 0);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         int ok = 1;
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        byte[] row = z32 + z32 + z32 + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        byte[] row = z32 + z32 + z32 + z32 + z32 + z32 + z32 + byte[](0 as byte[8]);
         if (n >= 1) {
-            row = rows.slice(120 * (n - 1), 120 * n);
+            row = rows.slice(232 * (n - 1), 232 * n);
         } else {
             ok = 0;
         }
@@ -157,7 +157,7 @@ contract KpfTCTok(int init_version) {
         // (Of these kinds the fifth sum is the worth of the token leg named, whole.)
         int tw = int(byte[8](row.slice(40, 48)));
         int tk = int(byte[8](row.slice(48, 56)));
-        if (byte[32](row.slice(56, 88)) != root) { ok = 0; }
+        if (byte[32](row.slice(168, 200)) != root) { ok = 0; }
         if (w < 0) { ok = 0; }
         if (ls < 0) { ok = 0; }
         if (tw < 0) { ok = 0; }
@@ -169,6 +169,18 @@ contract KpfTCTok(int init_version) {
         int m = coins - NOTE_MIN;
         int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
         int up = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) + g;
+        // The head of the statement (docs 17.8h): the rate, the tolerance and T that its rows computed with are the
+        // terms' and the account's, or the end is wrong.
+        if (int(byte[8](said.slice(48, 56))) != up) { ok = 0; }
+        if (int(byte[8](said.slice(56, 64))) != g) { ok = 0; }
+        if (int(byte[8](said.slice(64, 72))) != 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111))))) { ok = 0; }
+        // What is asked: R of the groups that are closed, and of the last what the larger of its two sums lost.
+        int rst = int(byte[8](row.slice(128, 136)));
+        if (0 - int(byte[8](row.slice(112, 120))) > 0 - int(byte[8](row.slice(120, 128)))) {
+            if (int(byte[8](row.slice(112, 120))) < 0) { rst = rst - int(byte[8](row.slice(112, 120))); }
+        } else {
+            if (int(byte[8](row.slice(120, 128))) < 0) { rst = rst - int(byte[8](row.slice(120, 128))); }
+        }
         int liq = int(byte[8](tb.slice(LIQFEE_AT, LIQFEE_AT + 8)));
         int count = int(byte[8](mv.slice(121, 129)));
         int quiet = int(byte[8](mv.slice(130, 138)));
@@ -191,7 +203,7 @@ contract KpfTCTok(int init_version) {
             if (owes != 0) { ok = 0; }
             wtime = when;
             if (ok == 1) {
-                if (m + tk < (w / BPS) * up + ((w % BPS) * up + BPS - 1) / BPS + ls) { ok = 0; }
+                if (m + tk < rst + ls) { ok = 0; }
             }
         } else {
             tkey = p33(claimer);
@@ -209,7 +221,7 @@ contract KpfTCTok(int init_version) {
             }
         }
         if (ok == 1) {
-            byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(88, 120))) + mv.slice(0, 67) + byte[](cafter as byte[8]) + mv.slice(75, 76) + byte[]((owes - toshard) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](wtime as byte[8]) + mv.slice(138, 171))) + byte[]((held + cafter - coins) as byte[8]);
+            byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(200, 232))) + mv.slice(0, 67) + byte[](cafter as byte[8]) + mv.slice(75, 76) + byte[]((owes - toshard) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](wtime as byte[8]) + mv.slice(138, 171))) + byte[]((held + cafter - coins) as byte[8]);
             due = due + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + i9(14) + byte[](0x20) + said.slice(16, 48) + tkey)) + byte[](NOTE_MIN as byte[8]);
             if (toshard > 0) {
                 due = due + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(15) + i9(toshard))) + byte[]((NOTE_MIN + toshard) as byte[8]);

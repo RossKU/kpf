@@ -4281,6 +4281,59 @@ the user's key.
   alone), 9,799 accounts ended, **the shard unpaid nothing**. By "lacks less" alone (any leg named, what the
   coins do not pay owed): unpaid on 162 accounts. An account at the level of a take is due at no price.
 
+**Stage 1 as it is built** (the engine; not yet read by a reviewer). A covered account's statement says its
+head and rows of 232 bytes; `KpfTCRow` computes them (`crow.rs` is its model); the ends test by R; a step is due
+by one price a group. Every test of the workspace passes (740), the reviewers' randomized walks of the model
+against the engine among them, rewritten where the rule changed (below).
+
+- **The scripts** (`s404_account_rows_sil.py`, after the regeneration's last):
+
+  | Script | Bytes before | Now | What changed |
+  |---|---|---|---|
+  | `KpfTCRow` | 2,547 | 4,193 | the leg before shown and held to the row before's chain; the two ends; a step's price; the group closed; fourteen numbers more, compared as bytes |
+  | `KpfTCEnd` | 3,832 | 4,384 | the head held; R twice; a step due by what it would leave; a leg that lost named, by what the account lacks |
+  | `KpfTCEnter` | 1,721 | 1,994 | the head and the place held; R |
+  | `KpfTCSplit` | 2,388 | 2,614 | the head; R of what stays; what the leg that moves can lose alone |
+  | `KpfTCMark` | 2,298 | 2,546 | the head; R |
+  | `KpfTCTok` | 3,492 | 3,757 | the head; R of what stays |
+  | `KpfTStepPrice`, `KpfTChange`, `KpfTEnterS` | | +16, +1, +2 | where the rows begin, and their length |
+
+  No script met the stack's limit. The scripts that grew are answers of a dispute: none is spent where a
+  statement is stated or applied.
+- **What a transaction weighs** (an account of two legs): a take stated 3,631 bytes (3,374 before: 32 for the
+  head and 112 a row); applied 2,608, as before; its end answered 6,293 (5,485); a row answered 6,096. An entry
+  stated 5,754 (5,599).
+- **The model** (`covered.rs`): `CSaid` and `CEnterSaid` say the head (and an entry the place); the traces are
+  `crow::ctrace`; `c_step_prices` finds the prices that show a step due if any do (a group's sum is a line in its
+  price: the end of the lower rate at which it gains least). A row is judged with the leg before, held to the
+  row before's chain opened from the chain two rows before as the rows say it (`None` where it does not open:
+  the script fails there, and takes neither verdict).
+- **Two legs of one market next to one another are stated at one price**: the model writes no trace of two, and
+  a statement that says two has its second row wrong. So a leg that enters next to a leg of its market is
+  stated with that leg at its own entry.
+- **A token leg** stays in the model's trace where a statement that is not of its kinds names it (its row is
+  then wrong and the end sees what it counts), as before.
+- **The tests that changed, and why.** F73 (review 47): three legs that lost 45 each on coins of 138 left in one
+  step; they now leave in three, a leg at a time, the shard paid the 135 whole, the stepper the 2.8 the coins
+  have over at the first, no fee after it, the account going on with a note's least: what F73 found (a fee
+  before a loss) is closed the same. A step whose coins pay the leg named and not its fee is no longer of every
+  leg: the leg leaves alone, for no fee. The walk of "what a shard is good for" (review 47) states one price a
+  market: measured at the prices of two groups of one market that a leaving joins, an account seemed to fall;
+  at one price a market no statement of 21,513 makes it fall. The written-out rules of the split's, the mark's
+  and the take's walks ask R where they asked the rate on a worth. Two counts of statements a walk needs are
+  lower (fewer traces are written of random prices).
+- **New at the engine** (`thin_draw.rs`,
+  `legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together`): a hedge at 11 keeps the 10
+  its short lost and a note's least of 100 (12.1 less than by the rate on its worth), its two rows answered
+  right; the second row shown another leg before, or none, is taken by neither verdict; two prices in one group:
+  the second row wrong; a head of another T, or of a rate a point less with the rows that makes: the end wrong;
+  the two legs with another market's between them asked as two; a leg that lost refused a sompi under the level
+  of an entry of what stays, though the coins pay it; a hedge with a KAS not due, a long alone due by the price
+  a lower rate below, which its row says; a step's price beyond the lower rate, or one that does not show it
+  due: wrong.
+- **Not built here**: the place of an entry (the leg that enters is the last, and its head says so: E2); the
+  option leg (stage 2); a leaving of a group (E7).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

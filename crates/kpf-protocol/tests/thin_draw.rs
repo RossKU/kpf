@@ -948,7 +948,7 @@ fn a_leaving_of_one_leg_or_of_all_writes_one_note_and_the_books_lose_the_legs() 
     assert_eq!((end.s.rows, end.s.basis, end.s.held, paid, rest), ([ShardRow::EMPTY; 4].into(), 0, 100 * KAS1 - note.asked, note.asked, None));
     // The lie the second test is for: the long leaves alone from the poor account, and is asked for.
     let rows = poor.s.c_trace(&a, 1).unwrap();
-    let lone = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&legs[0]), rows };
+    let lone = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&legs[0]), head: poor.s.c_head(), rows };
     let asked = Left { sid: shard.s.sid, legs: vec![legs[0]], key: xk(&w.w), asked: 188 * KAS1 / 10 };
     let outs = Outs::with_notes(&[(Out { key: false, to: poor.s.c_hash(5 * KAS1, &lone.rows[1].h), value: 5 * KAS1 }, false), (Out { key: false, to: asked.hash(), value: NOTE_MIN }, true)]).unwrap();
     let lie = Stated { kind: KIND_C_LEAVE, arg: lone.arg(), outs, ..live.s };
@@ -1011,14 +1011,20 @@ fn a_step_of_a_covered_accounts_liquidation_takes_a_leg_that_lost_or_every_leg()
     // A user that stands is not stepped (10 KAS more).
     assert!(c_state(&w.lib, &cov(&w, &shard, &legs, 199 * KAS1 / 10), &w.script("KpfTChange"), KIND_C_STEP, 0, 1, &a, T0, xk(&w.f), w.payer(&w.f, &f)).is_err());
 
-    // The coins do not pay what the leg named lost and its fee (5.3 KAS; at 9.5 and 9: 5 and 2 lost): every leg
-    // leaves. The coins pay 5.1 of the 7 (a note's least stays), and nothing is left for a fee.
+    // The coins do not pay what the leg named lost (5.1 KAS; at 9.5 and 9: 5 and 2 lost; a note's least stays): every
+    // leg leaves. The coins pay 4.9 of the 7, and nothing is left for a fee.
     let low = [P10 * 95 / 100, P10 * 9 / 10];
-    let small = cov(&w, &shard, &legs, 53 * KAS1 / 10);
+    let small = cov(&w, &shard, &legs, 51 * KAS1 / 10);
     let (live, s, o, sg) = c_applied(&w, "a step: every leg leaves", &small, KIND_C_STEP, 0, 1, &low, &w.f);
     let note = o.note.clone().unwrap();
-    assert_eq!((o.after.clone(), o.fee, o.paid, note.asked, note.legs.clone()), (None, 0, NOTE_MIN, -(53 * KAS1 / 10 - NOTE_MIN), legs.clone()));
-    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &note.hash())).1, (53 * KAS1 / 10) as u64);
+    assert_eq!((o.after.clone(), o.fee, o.paid, note.asked, note.legs.clone()), (None, 0, NOTE_MIN, -(51 * KAS1 / 10 - NOTE_MIN), legs.clone()));
+    assert_eq!(out_of(&sg, &hash_spk(&w.lib, &note.hash())).1, (51 * KAS1 / 10) as u64);
+    // (Docs 17.4, 17.8h.) With 5.3 the coins pay the leg named, and no fee before what the other lost: it leaves
+    // alone, for no fee: the account lacks less after it than before (it is asked for one leg, not two).
+    let mid = cov(&w, &shard, &legs, 53 * KAS1 / 10);
+    let (_, s1, o1, _) = c_applied(&w, "a step: the leg named leaves alone, for no fee", &mid, KIND_C_STEP, 0, 1, &low, &w.f);
+    let after1 = o1.after.clone().unwrap();
+    assert_eq!((after1.legs.clone(), after1.a_margin, s1.amount, o1.note.clone().unwrap().asked), (vec![legs[1]], 53 * KAS1 / 10 - 5 * KAS1, 0, -5 * KAS1));
     end_answered(&w, "a step in which every leg leaves", &small, &live, &s, true);
 
     // An account of one leg: the step takes it and leaves an account of no leg, with the coins that are left. 9
@@ -1104,10 +1110,10 @@ fn the_rows_and_prices_of_a_covered_accounts_statement_are_answered_and_a_point_
     // Each row, disputed, is answered right; the other verdict is refused.
     for i in 1..=2i64 {
         let q = w.pointed(&live, 2 * i - 1);
-        let (b, right) = c_row(&w.lib, &q, &s, 2 * i - 1, &chains[i as usize - 1], &legs[i as usize - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &s, 2 * i - 1, &chains[i as usize - 1], (i as usize).checked_sub(2).map(|k| &legs[k]), &legs[i as usize - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), None).unwrap();
         assert!(right);
         signed(&format!("row {i} answered right"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &s, 2 * i - 1, &chains[i as usize - 1], &legs[i as usize - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), Some(false)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &s, 2 * i - 1, &chains[i as usize - 1], (i as usize).checked_sub(2).map(|k| &legs[k]), &legs[i as usize - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), Some(false)).unwrap();
         assert!(!accepted(&b, &w.keys), "row {i} answered wrong");
     }
     // Rows that are not the rule's: the leg that leaves counted as staying; the staying leg's loss left out; a
@@ -1115,30 +1121,30 @@ fn the_rows_and_prices_of_a_covered_accounts_statement_are_answered_and_a_point_
     let good = &s.rows;
     let mut lies: Vec<(&str, CSaid, i64)> = vec![];
     let mut r = good.clone();
-    r[0].wb = r[0].wa;
+    r[0].ws = r[0].w;
     lies.push(("the leg that leaves counted with those that stay", CSaid { rows: r, ..s.clone() }, 1));
     let mut r = good.clone();
-    r[1].ea = 0;
+    r[1].ls = 0;
     lies.push(("what the leg that stays lost left out", CSaid { rows: r, ..s.clone() }, 3));
     let mut r = good.clone();
     r[1].h = r[0].h;
     lies.push(("the leg that stays passed by", CSaid { rows: r, ..s.clone() }, 3));
     lies.push(("the leg that leaves named by another chain", CSaid { lc: kpf_protocol::covered::chain_of_one(&legs[1]), ..s.clone() }, 1));
     let mut r = good.clone();
-    r[0].eb += 1;
-    r[1].eb += 1;
+    r[0].gl += 1;
+    r[1].gl += 1;
     lies.push(("a sompi more gained by the leg that leaves", CSaid { rows: r, ..s.clone() }, 1));
     for (what, lie, point) in lies {
         let st = Stated { arg: lie.arg(), ..live.s };
         // (Whatever its end: the row is the point.)
-        let wrong = acct.s.rows_wrong_point_by(&lie.rows, &a, &|i, l, before, row| kpf_protocol::covered::c_row_judged(&before.g, l, before, row, i as i64 + 1, &lie));
+        let wrong = acct.s.c_rows_wrong_point_by(&lie.rows, &a, &|i, l, before, row| kpf_protocol::covered::c_row_judged(&before.g, i.checked_sub(1).map(|k| &acct.s.legs[k]), l, before, row, i as i64 + 1, &lie));
         assert_eq!(wrong, Some(point), "{what}");
         let q = w.pointed(&acct_stated(&w, &acct, &st, &lie.said()), point);
         let i = ((point + 1) / 2) as usize;
-        let (b, right) = c_row(&w.lib, &q, &lie, point, &chains[i - 1], &legs[i - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &lie, point, &chains[i - 1], i.checked_sub(2).map(|k| &legs[k]), &legs[i - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), None).unwrap();
         assert!(!right, "{what}");
         signed(&format!("{what}: answered wrong"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &lie, point, &chains[i - 1], &legs[i - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), Some(true)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &lie, point, &chains[i - 1], i.checked_sub(2).map(|k| &legs[k]), &legs[i - 1], &row_script, xk(&w.f), w.payer(&w.w, &f), Some(true)).unwrap();
         assert!(!accepted(&b, &w.keys), "{what}: answered right");
     }
     // A price: within the tolerance of the committee's it is right, beyond it wrong.
@@ -1341,14 +1347,14 @@ fn an_entry_is_stated_with_the_shard_and_the_books_have_the_leg_from_there() {
     let (b, _) = c_enter_end(&w.lib, &q, &marked, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
     assert!(!accepted(&b, &w.keys));
     let q = w.pointed(&live, 1);
-    let (b, right) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], &said.leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let (b, right) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], None, &said.leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(right);
     signed("the row of the leg that enters answered right", &b, &w.keys);
-    let (b, _) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
+    let (b, _) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], None, &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
     assert!(!accepted(&b, &w.keys));
     // A point beyond the trace is of nothing: right.
     let q = w.pointed(&live, 7);
-    let (b, right) = c_enter_row(&w.lib, &q, &said, 7, &[0; 32], &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    let (b, right) = c_enter_row(&w.lib, &q, &said, 7, &[0; 32], None, &leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
     assert!(right);
     signed("a point of an entry that is of nothing", &b, &w.keys);
     // The price of the leg, its own: within the tolerance of the committee price right, beyond it wrong.
@@ -1408,7 +1414,7 @@ fn an_entry_is_refused_or_answered_wrong_and_a_gain_is_margin_for_it() {
             Marked(Account { legs, ..m.0.clone() })
         };
         let rows = m.0.c_trace(prices, 0).unwrap();
-        let said = CEnterSaid { add: m.0.a_margin - acct.s.a_margin, r: r as i64, leg: l, rows };
+        let said = CEnterSaid { add: m.0.a_margin - acct.s.a_margin, r: r as i64, leg: l, head: m.0.c_head(), place: rows.len() as i64, rows };
         let after = Account { b_min_counter: T0 + 2 * life, ..m.0.clone() };
         let held = acct.value as i64 + said.add;
         let st = Stated { position: m.hash(), window: 50, late: w.terms().late_daa, kind: KIND_C_ENTER, t0: T0, arg: said.arg(), outs: Outs::of(&[Out { key: false, to: after.hash(), value: held }]).unwrap(), bond: m.0.bond(), claimer: xk(&w.w), held };
@@ -1482,8 +1488,8 @@ fn an_entry_is_refused_or_answered_wrong_and_a_gain_is_margin_for_it() {
     for (what, bad) in [("no direction", XLeg { dir: 5, ..leg }), ("no size", XLeg { size: 0, ..leg }), ("an entry beyond the limit of its market", XLeg { entry: leg.price_max + 1, ..leg })] {
         assert!(acct.s.c_marked(&bad, 0, T0).is_none(), "{what}");
         let m = mark(&acct.s, bad);
-        let rows = vec![kpf_protocol::thin::Row { a: bad.entry, ..kpf_protocol::thin::Row::ZERO }];
-        let said = CEnterSaid { add: 0, r: 0, leg: bad, rows };
+        let rows = vec![kpf_protocol::crow::CRow { a: bad.entry, q: bad.entry, ..kpf_protocol::crow::CRow::ZERO }];
+        let said = CEnterSaid { add: 0, r: 0, leg: bad, head: kpf_protocol::crow::CHead { rate: 550, tolerance: 50, t: 0, lines: 0 }, place: rows.len() as i64, rows };
         let st = Stated { position: m.hash(), window: 50, late: w.terms().late_daa, kind: KIND_C_ENTER, t0: T0, arg: said.arg(), outs: Outs::of(&[Out { key: false, to: m.0.hash(), value: acct.value as i64 }]).unwrap(), bond: m.0.bond(), claimer: xk(&w.w), held: acct.value as i64 };
         let b = c_enter_state_as(&w.lib, &acct, &shard, &enter, SEED, w.markets[0].committee_id, &st, &said, &shard.s, w.payer(&w.w, &f));
         assert!(b.is_err() || !accepted(&b.unwrap(), &w.keys), "{what}");
@@ -2649,7 +2655,7 @@ fn a_leg_leaves_an_account_for_one_of_its_own_and_each_of_the_two_stands() {
     let lie = |what: &str, amount: i64, skip: i64, claimer: [u8; 32], t0: i64, want: bool| {
         let rows = acct.s.c_trace(&a, skip.max(1)).unwrap();
         let lc = kpf_protocol::covered::chain_of_one(&acct.s.legs[(skip.max(1) - 1) as usize]);
-        let s = CSaid { amount, skip, lc, rows };
+        let s = CSaid { amount, skip, lc, head: acct.s.c_head(), rows };
         let judged = acct.s.c_end(KIND_C_SPLIT, &s, &claimer, acct.value as i64, t0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
         // (Stated with the outputs of the rule where it has any; else with those of the split above.)
@@ -2813,9 +2819,11 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
 
     // The ends that are not the rule's.
     let lie = |what: &str, x: &OLive<Account>, a: &[i64; 2], ne: i64, skip: i64, claimer: [u8; 32], want: bool| {
-        let rows = x.s.c_trace_marked(a, skip.max(1), ne).unwrap();
+        // (No trace is written of a mark at an entry out of the leg's range: such a statement shows the rows of the
+        // nearest one that is.)
+        let rows = x.s.c_trace_marked(a, skip.max(1), ne).or_else(|| x.s.c_trace_marked(a, skip.max(1), ne.max(1))).unwrap();
         let lc = kpf_protocol::covered::chain_of_one(&x.s.legs[(skip.max(1) - 1) as usize]);
-        let s = CSaid { amount: ne, skip, lc, rows };
+        let s = CSaid { amount: ne, skip, lc, head: x.s.c_head(), rows };
         let judged = x.s.c_end(KIND_C_MARK, &s, &claimer, x.value as i64, T0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
         // (Stated with the outputs of the rule where it has any; else with those of the first mark above.)
@@ -2853,10 +2861,10 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
     let row_script = w.script("KpfTCRow");
     for (at, prev, leg) in [(1i64, [0u8; 32], legs[0]), (3, said1.rows[0].g, legs[1])] {
         let q = w.pointed(&live1, at);
-        let (b, right) = c_row(&w.lib, &q, &said1, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &said1, at, &prev, if at == 1 { None } else { Some(&legs[0]) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(right);
         signed(&format!("a mark's row at the point {at} answered right"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &said1, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(false)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &said1, at, &prev, if at == 1 { None } else { Some(&legs[0]) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(false)).unwrap();
         assert!(!accepted(&b, &w.keys), "a mark's row at the point {at} answered wrong");
     }
     let mut kept_more = said1.rows.clone();
@@ -2876,10 +2884,10 @@ fn a_gain_is_taken_out_of_a_leg_that_stays_and_the_band_is_taken_once() {
         let st = Stated { arg: bent.arg(), ..live1.s };
         let live = acct_stated(&w, &acct, &st, &bent.said());
         let q = w.pointed(&live, at);
-        let (b, right) = c_row(&w.lib, &q, &bent, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &bent, at, &prev, if at == 1 { None } else { Some(&legs[0]) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(!right, "{what}");
         signed(&format!("a mark with {what}: the row answered wrong"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &bent, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &bent, at, &prev, if at == 1 { None } else { Some(&legs[0]) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
         assert!(!accepted(&b, &w.keys), "a mark with {what}, answered right");
     }
 }
@@ -2958,7 +2966,7 @@ fn a_token_leg_counts_as_coins_at_a_discount_and_is_named_by_no_statement_of_the
     let m = 10 * KAS1 - NOTE_MIN;
     let a = [P10, P10];
     let rows = acct.s.c_trace(&a, 0).unwrap();
-    assert_eq!((rows[1].tk, rows[1].wa, rows[1].gain, rows[1].ea), (counted(100, P10), 10_000 * KAS1, 0, 0), "the tokens count in the sixth sum and in no other");
+    assert_eq!((rows[1].tk, rows[1].w, rows[1].gain, rows[1].ls), (counted(100, P10), 10_000 * KAS1, 0, 0), "the tokens count in the sixth sum and in no other");
     assert!(counted(100, P10) + m > need, "the tokens carry the long");
 
     // A take: what the tokens count carries the legs, and the user takes its coins out; no more than the coins.
@@ -2976,7 +2984,7 @@ fn a_token_leg_counts_as_coins_at_a_discount_and_is_named_by_no_statement_of_the
     let most = m + counted(100, p_low) - need;
     assert!(most > 0 && most < m);
     let lie = |what: &str, amount: i64, want: bool| {
-        let s = CSaid { amount, skip: 0, lc: [0; 32], rows: acct.s.c_trace(&low, 0).unwrap() };
+        let s = CSaid { amount, skip: 0, lc: [0; 32], head: acct.s.c_head(), rows: acct.s.c_trace(&low, 0).unwrap() };
         let judged = acct.s.c_end(KIND_C_TAKE, &s, &xk(&w.w), acct.value as i64, T0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
         let outs = judged.map(|o| o.outs).unwrap_or(o.outs);
@@ -2993,10 +3001,10 @@ fn a_token_leg_counts_as_coins_at_a_discount_and_is_named_by_no_statement_of_the
     let row_script = w.script("KpfTCRow");
     for (at, prev, leg) in [(1i64, [0u8; 32], long), (3, said.rows[0].g, tok)] {
         let q = w.pointed(&live, at);
-        let (b, right) = c_row(&w.lib, &q, &said, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &said, at, &prev, if at == 1 { None } else { Some(&long) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(right);
         signed(&format!("a row of an account that holds tokens, at the point {at}, answered right"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &said, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(false)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &said, at, &prev, if at == 1 { None } else { Some(&long) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(false)).unwrap();
         assert!(!accepted(&b, &w.keys), "the row at the point {at} answered wrong");
     }
     let good = &said.rows;
@@ -3005,7 +3013,7 @@ fn a_token_leg_counts_as_coins_at_a_discount_and_is_named_by_no_statement_of_the
     let mut whole = good.clone();
     whole[1].tk = 1_000 * KAS1 + 1;
     let mut worth_too = good.clone();
-    worth_too[1].wa += 1_000 * KAS1;
+    worth_too[1].w += 1_000 * KAS1;
     let mut futures_adds = good.clone();
     futures_adds[0].tk = KAS1;
     futures_adds[1].tk += KAS1;
@@ -3019,22 +3027,22 @@ fn a_token_leg_counts_as_coins_at_a_discount_and_is_named_by_no_statement_of_the
         let st = Stated { arg: bent.arg(), ..live.s };
         let lv = acct_stated(&w, &acct, &st, &bent.said());
         let q = w.pointed(&lv, at);
-        let (b, right) = c_row(&w.lib, &q, &bent, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &bent, at, &prev, if at == 1 { None } else { Some(&long) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(!right, "{what}");
         signed(&format!("{what}: the row answered wrong"), &b, &w.keys);
-        let (b, _) = c_row(&w.lib, &q, &bent, at, &prev, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &bent, at, &prev, if at == 1 { None } else { Some(&long) }, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
         assert!(!accepted(&b, &w.keys), "{what}, answered right");
     }
     // A token leg is named by no leaving, step, split or mark: its row is wrong there, whatever it sums.
     for kind in [KIND_C_LEAVE, KIND_C_STEP, KIND_C_SPLIT, KIND_C_MARK] {
-        let named = CSaid { amount: 0, skip: 2, lc: kpf_protocol::covered::chain_of_one(&tok), rows: good.clone() };
-        assert_eq!(c_row_judged_of(kind, &good[0].g, &tok, &good[0], &good[1], 2, &named), Some(false));
+        let named = CSaid { amount: 0, skip: 2, lc: kpf_protocol::covered::chain_of_one(&tok), head: acct.s.c_head(), rows: good.clone() };
+        assert_eq!(c_row_judged_of(kind, &good[0].g, Some(&long), &tok, &good[0], &good[1], 2, &named), Some(false));
     }
-    let named = CSaid { amount: 0, skip: 2, lc: kpf_protocol::covered::chain_of_one(&tok), rows: good.clone() };
+    let named = CSaid { amount: 0, skip: 2, lc: kpf_protocol::covered::chain_of_one(&tok), head: acct.s.c_head(), rows: good.clone() };
     let st = Stated { kind: KIND_C_LEAVE, arg: named.arg(), ..live.s };
     let lv = acct_stated(&w, &acct, &st, &named.said());
     let q = w.pointed(&lv, 3);
-    let (b, right) = c_row(&w.lib, &q, &named, 3, &good[0].g, &tok, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &q, &named, 3, &good[0].g, Some(&long), &tok, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(!right);
     signed("a leaving that names a token leg: its row answered wrong", &b, &w.keys);
     // (And a discount beyond the whole is no token leg's.)
@@ -3120,7 +3128,7 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     assert_eq!(ticket, Ticket { chain: chain_of_one(&tok), key: xk(&w.w) });
     assert_eq!((after.legs.clone(), after.a_margin, after.a_min_counter), (vec![long], NOTE_MIN + need, 1));
     assert_eq!(after.b_min_counter, live.s.t0 + 2 * (t.late_daa + 2 * rich.s.dispute_daa));
-    assert_eq!((said.rows[1].eb, said.rows[1].tk, said.rows[1].h, said.rows[1].wa), (1_000 * KAS1, 0, said.rows[0].h, 10_000 * KAS1), "the leg's worth whole, counted for nothing, out of the chain");
+    assert_eq!((said.rows[1].gl, said.rows[1].tk, said.rows[1].h, said.rows[1].w), (1_000 * KAS1, 0, said.rows[0].h, 10_000 * KAS1), "the leg's worth whole, counted for nothing, out of the chain");
     assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (rich.value, &hash_spk(&w.lib, &after.hash())));
     assert_eq!(out_of(&sg, &hash_spk(&w.lib, &ticket.hash())).1, NOTE_MIN as u64);
     end_answered(&w, "tokens that leave", &rich, &live, &said, true);
@@ -3146,7 +3154,7 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     let lie = |what: &str, x: &OLive<Account>, kind: i64, prices: &[i64; 2], amount: i64, skip: i64, claimer: [u8; 32], want: bool| {
         // (The token leg is the second of every account here: the trace names it, whatever the statement says.)
         let named = 2i64;
-        let s = CSaid { amount, skip, lc: chain_of_one(&x.s.legs[named as usize - 1]), rows: x.s.c_trace_tok(kind, prices, named).unwrap() };
+        let s = CSaid { amount, skip, lc: chain_of_one(&x.s.legs[named as usize - 1]), head: x.s.c_head(), rows: x.s.c_trace_tok(kind, prices, named).unwrap() };
         let judged = x.s.c_end(kind, &s, &claimer, x.value as i64, T0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
         let outs = judged.map(|o| o.outs).unwrap_or(o.outs);
@@ -3165,20 +3173,20 @@ fn tokens_leave_by_their_users_statement_or_are_sold_in_a_step_and_either_writes
     // which is shown the leg named and asks a token leg (review 62, F109).
     assert!(rich.s.c_trace_tok(KIND_C_TOK_OUT, &a, 1).is_none() && rich.s.c_state(KIND_C_TOK_OUT, 0, 1, &a, T0, rich.value as i64, xk(&w.w)).is_err());
     for kind in [KIND_C_TOK_OUT, KIND_C_TOK_SOLD] {
-        let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace(&a, 0).unwrap() };
-        assert_eq!(c_row_judged_of(kind, &[0; 32], &long, &kpf_protocol::thin::Row::ZERO, &s.rows[0], 1, &s), Some(false));
+        let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), head: rich.s.c_head(), rows: rich.s.c_trace(&a, 0).unwrap() };
+        assert_eq!(c_row_judged_of(kind, &[0; 32], None, &long, &kpf_protocol::crow::CRow::ZERO, &s.rows[0], 1, &s), Some(false));
         let every = CSaid { skip: ALL, ..s.clone() };
-        assert_eq!(c_row_judged_of(kind, &s.rows[0].g, &tok, &s.rows[0], &s.rows[1], 2, &every), Some(false));
+        assert_eq!(c_row_judged_of(kind, &s.rows[0].g, Some(&long), &tok, &s.rows[0], &s.rows[1], 2, &every), Some(false));
     }
-    let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), rows: rich.s.c_trace(&a, 0).unwrap() };
+    let s = CSaid { amount: 0, skip: 1, lc: chain_of_one(&long), head: rich.s.c_head(), rows: rich.s.c_trace(&a, 0).unwrap() };
     assert_eq!(rich.s.c_end(KIND_C_TOK_OUT, &s, &xk(&w.w), rich.value as i64, T0), Some(None), "the leg named is no token leg");
     let lv = acct_stated(&w, &rich, &Stated { arg: s.arg(), ..live.s }, &s.said());
     end_answered(&w, "tokens leave, a futures leg named", &rich, &lv, &s, false);
-    let (b, right) = c_row(&w.lib, &w.pointed(&lv, 1), &s, 1, &[0u8; 32], &long, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &w.pointed(&lv, 1), &s, 1, &[0u8; 32], None, &long, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(!right);
     signed("tokens leave, a futures leg named: its row answered wrong", &b, &w.keys);
     let q = w.pointed(&live, 3);
-    let (b, right) = c_row(&w.lib, &q, &said, 3, &said.rows[0].g, &tok, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &q, &said, 3, &said.rows[0].g, Some(&long), &tok, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(right);
     signed("tokens leave: the token leg's row answered right", &b, &w.keys);
 
@@ -3222,7 +3230,7 @@ fn an_account_that_owes_is_sold_from_or_paid_for_and_does_nothing_else() {
     assert_eq!((out_of(&sg, &hash_spk(&w.lib, &ticket.hash())).1, out_of(&sg, &hash_spk(&w.lib, &owed.hash())).1), (NOTE_MIN as u64, (NOTE_MIN + owes) as u64));
     end_answered(&w, "a sale", &ower, &live, &said, true);
     let sale_lie = |what: &str, x: &OLive<Account>, amount: i64, claimer: [u8; 32], want: bool| {
-        let s = CSaid { amount, skip: 1, lc: chain_of_one(&tok), rows: x.s.c_trace_tok(KIND_C_TOK_SOLD, &a, 1).unwrap() };
+        let s = CSaid { amount, skip: 1, lc: chain_of_one(&tok), head: x.s.c_head(), rows: x.s.c_trace_tok(KIND_C_TOK_SOLD, &a, 1).unwrap() };
         let judged = x.s.c_end(KIND_C_TOK_SOLD, &s, &claimer, x.value as i64, T0).unwrap();
         assert_eq!(judged.is_some(), want, "{what}: the model");
         let outs = judged.map(|o| o.outs).unwrap_or(o.outs);
@@ -3400,7 +3408,7 @@ fn what_a_leg_that_gained_asks_is_set_against_what_its_account_owes() {
     // (An account that owes little is no step's: it stands.)
     let little = OLive { s: Account { b_margin: 2 * KAS1, ..whole.s.clone() }, ..whole.clone() };
     let rows = little.s.c_trace(&a, 1).unwrap();
-    let s = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), rows };
+    let s = CSaid { amount: 0, skip: 1, lc: kpf_protocol::covered::chain_of_one(&long), head: little.s.c_head(), rows };
     assert_eq!(little.s.c_end(KIND_C_STEP, &CSaid { amount: fee, ..s }, &xk(&w.f), little.value as i64, T0), Some(None));
     let some = OLive { s: Account { b_margin: 100 * KAS1 + 5 * KAS1, ..whole.s.clone() }, ..whole.clone() };
     let (_, _, o) = some.s.c_state(KIND_C_STEP, 0, 1, &a, T0, some.value as i64, xk(&w.f)).unwrap();
@@ -3947,4 +3955,120 @@ fn s1_what_a_shard_that_held_its_upper_requirement_holds_after_legs_leave() {
     assert_eq!((table[0].0, table[1].0, table[2].0), (225, 275, 313));
     assert_eq!((table[0].3, table[1].3, table[2].3), (450, 550, 626));
     assert_eq!((table[0].4, table[1].4, table[2].4), (775, 825, 863));
+}
+
+/// Docs 17.4, 17.8h (stage 1): what a covered account is asked is what its legs can lose by a move of the rate, the
+/// legs of one market that stand next to one another counted together. At the engine: a hedge is asked what each
+/// of its legs lost alone and nothing more; the two with another market's leg between them are asked as two; two
+/// prices in a group, a leg before that is not the leg before, and a head that is not the account's are answered
+/// wrong or not at all; a leg that lost leaves where what stays is at the level of an entry; and a step is due by
+/// one price a group.
+#[test]
+fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together() {
+    use kpf_protocol::covered::{c_row_judged_of, CSaid, KIND_C_LEAVE, KIND_C_STEP, KIND_C_TAKE};
+    use kpf_protocol::crow::{crow_after, CHead, Part};
+    use kpf_protocol::state::SHORT;
+    let w = world();
+    let shard = bare(&w);
+    let (long, short, other) = (fleg(&w, 0, 10, LONG, P10), fleg(&w, 0, 10, SHORT, P10), fleg(&w, 1, 5, LONG, P10));
+    let fw = [fund(xk(&w.w), 33)];
+    let state = |acct: &OLive<Account>, kind: i64, amount: i64, skip: i64, a: &[i64]| c_state(&w.lib, acct, &w.script("KpfTChange"), kind, amount, skip, a, T0, xk(&w.w), w.payer(&w.w, &fw));
+
+    // A hedge at 11: the short lost 10, the long gained 10; each is worth 110. It is asked the 10 and a note's
+    // least (where the rate on what the two are worth asked 12.1 more).
+    let pair = cov(&w, &shard, &[long, short], 100 * KAS1);
+    let a = [P10 * 11 / 10; 2];
+    let keep = 10 * KAS1 + NOTE_MIN;
+    let max = 100 * KAS1 - keep;
+    assert!(state(&pair, KIND_C_TAKE, max + 1, 0, &a).is_err(), "a sompi more");
+    let (live, s, o, _) = c_applied(&w, "a take from a hedge", &pair, KIND_C_TAKE, max, 0, &a, &w.w);
+    assert_eq!((o.after.clone().unwrap().a_margin, s.head, s.said().len()), (keep, pair.s.c_head(), 80 + 2 * 232));
+    assert_eq!((s.rows[0].closed(), s.rows[1].closed(), s.rows[1].ls, s.rows[1].w), (Some((605 * KAS1 / 100, 605 * KAS1 / 100)), Some((0, 0)), 10 * KAS1, 220 * KAS1));
+    end_answered(&w, "a take from a hedge", &pair, &live, &s, true);
+    // The two rows are right, each shown its leg (the second, the leg before as well).
+    let row_script = w.script("KpfTCRow");
+    for (at, prev, before, leg) in [(1i64, [0u8; 32], None, long), (3, s.rows[0].g, Some(&long), short)] {
+        let (b, right) = c_row(&w.lib, &w.pointed(&live, at), &s, at, &prev, before, &leg, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        assert!(right);
+        signed(&format!("a hedge's row {at} answered right"), &b, &w.keys);
+    }
+    // The second row shown another leg before, or none: answered by neither verdict (the leg before is asked).
+    assert!(c_row(&w.lib, &w.pointed(&live, 3), &s, 3, &s.rows[0].g, Some(&other), &short, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).is_err());
+    for (lb, v) in [(Some(&other), true), (Some(&other), false), (None, true), (None, false)] {
+        let (b, _) = c_row(&w.lib, &w.pointed(&live, 3), &s, 3, &s.rows[0].g, lb, &short, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(v)).unwrap();
+        assert!(!accepted(&b, &w.keys), "a row answered {v} with a leg before that does not open the row before's chain");
+    }
+
+    // Two prices in one group: the model writes no such trace. Stated all the same (the second row as if its leg
+    // began a group of its own, a sompi higher), its second row is wrong.
+    assert!(pair.s.c_trace(&[a[0], a[0] + 1], 0).is_none() && state(&pair, KIND_C_TAKE, KAS1, 0, &[a[0], a[0] + 1]).is_err());
+    let second = crow_after(KIND_C_TAKE, &s.head, &s.rows[0], None, &short, a[0] + 1, a[0] + 1, Part::Stays).unwrap().unwrap();
+    let two = CSaid { rows: vec![s.rows[0], second], ..s.clone() };
+    assert_eq!(c_row_judged_of(KIND_C_TAKE, &two.rows[0].g, Some(&long), &short, &two.rows[0], &two.rows[1], 2, &two), Some(false));
+    let lv = acct_stated(&w, &pair, &Stated { arg: two.arg(), ..live.s }, &two.said());
+    let (b, right) = c_row(&w.lib, &w.pointed(&lv, 3), &two, 3, &two.rows[0].g, Some(&long), &short, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    assert!(!right);
+    signed("two prices in one group: the second row answered wrong", &b, &w.keys);
+    let (b, _) = c_row(&w.lib, &w.pointed(&lv, 3), &two, 3, &two.rows[0].g, Some(&long), &short, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
+    assert!(!accepted(&b, &w.keys), "two prices in one group, answered right");
+
+    // A head that is not the account's: the rows are right as it has them, and the end is wrong. (T a block more;
+    // and a rate a point less, with the rows it makes.)
+    let late = CSaid { head: CHead { t: s.head.t + 1, ..s.head }, ..s.clone() };
+    end_answered(&w, "a head of another T", &pair, &acct_stated(&w, &pair, &Stated { arg: late.arg(), ..live.s }, &late.said()), &late, false);
+    let less = CHead { rate: s.head.rate - 1, ..s.head };
+    let rows = kpf_protocol::crow::ctrace(KIND_C_TAKE, &less, &pair.s.legs, &a, &a, |_| Part::Stays).unwrap();
+    let low = CSaid { head: less, rows, ..s.clone() };
+    assert_eq!(c_row_judged_of(KIND_C_TAKE, &[0; 32], None, &long, &kpf_protocol::crow::CRow::ZERO, &low.rows[0], 1, &low), Some(true), "a row is right by the head its statement says");
+    end_answered(&w, "a head of a rate a point less", &pair, &acct_stated(&w, &pair, &Stated { arg: low.arg(), ..live.s }, &low.said()), &low, false);
+
+    // The same two legs with another market's leg between them are not counted together: asked 6.05 each, 2.75
+    // for the leg between, and what the short lost.
+    let apart = cov(&w, &shard, &[long, other, short], 100 * KAS1);
+    let a3 = [P10 * 11 / 10, P10, P10 * 11 / 10];
+    let keep3 = 2 * 605 * KAS1 / 100 + 275 * KAS1 / 100 + 10 * KAS1 + NOTE_MIN;
+    assert!(state(&apart, KIND_C_TAKE, 100 * KAS1 - keep3 + 1, 0, &a3).is_err());
+    let (_, _, o, _) = c_applied(&w, "a take from two legs of one market that are apart", &apart, KIND_C_TAKE, 100 * KAS1 - keep3, 0, &a3, &w.w);
+    assert_eq!(o.after.unwrap().a_margin, keep3);
+
+    // A leg that lost leaves by its user's statement where the coins pay it and what stays is at the level of an
+    // entry (N65). A short of market 0 that lost 10 at 11 and a long of market 1 that lost 5 at 9: without the
+    // short the account is asked 2.475 of the long's 45, and has lost 5 more.
+    let legs = [short, other];
+    let prices = [P10 * 11 / 10, P10 * 9 / 10];
+    let need = 15 * KAS1 + 2_475 * KAS1 / 1_000 + NOTE_MIN;
+    assert!(need - NOTE_MIN - 10 * KAS1 > 0, "the coins pay the leg in both cases");
+    assert!(state(&cov(&w, &shard, &legs, need - 1), KIND_C_LEAVE, 0, 1, &prices).is_err(), "what stays would be under");
+    let (lv, s8, o, _) = c_applied(&w, "a leg that lost leaves, what stays at the level of an entry", &cov(&w, &shard, &legs, need), KIND_C_LEAVE, 0, 1, &prices, &w.w);
+    assert_eq!((o.after.clone().unwrap().legs, o.after.unwrap().a_margin, o.note.unwrap().asked), (vec![other], need - 10 * KAS1, -10 * KAS1));
+    end_answered(&w, "a leg that lost leaves", &cov(&w, &shard, &legs, need), &lv, &s8, true);
+
+    // A step is due by one price a group. The hedge with a KAS above a note's least loses nothing at any price:
+    // it is not due (by the lower rate on what its legs are worth it was, with 220 KAS of them). A long alone that
+    // lost 5 at 9.5, with 9: due by the price a lower rate below, which its row says.
+    assert!(c_state(&w.lib, &cov(&w, &shard, &[long, short], NOTE_MIN + KAS1), &w.script("KpfTChange"), KIND_C_STEP, 0, 1, &a, T0, xk(&w.f), w.payer(&w.f, &fw)).is_err(), "a hedge is not due");
+    let alone = cov(&w, &shard, &[long], NOTE_MIN + 9 * KAS1);
+    let (lv, s9, o, _) = c_applied(&w, "a step due by one price", &alone, KIND_C_STEP, 0, 1, &[P10 * 95 / 100], &w.f);
+    let dq = P10 * 95 / 100 * 450 / 10_000;
+    assert_eq!((s9.rows[0].a, s9.rows[0].q, s9.rows[0].m, s9.rows[0].gain), (P10 * 95 / 100, P10 * 95 / 100 - dq, -10 * dq, -5 * KAS1));
+    assert_eq!(o.note.unwrap().asked, -5 * KAS1);
+    end_answered(&w, "a step due by one price", &alone, &lv, &s9, true);
+    // Stated at a price further than the lower rate, or at the row's own (where the account is not under): wrong.
+    for (what, q) in [("a step's price beyond the lower rate", P10 * 95 / 100 - dq - 1), ("a step's price that does not show it due", P10 * 95 / 100)] {
+        let bent = match crow_after(KIND_C_STEP, &s9.head, &kpf_protocol::crow::CRow::ZERO, None, &alone.s.legs[0], P10 * 95 / 100, q, Part::Leaves).unwrap() {
+            Some(row) => CSaid { rows: vec![row], ..s9.clone() },
+            // (No right row at that price: the row of the rule's with the price put in.)
+            None => CSaid { rows: vec![kpf_protocol::crow::CRow { q, ..s9.rows[0] }], ..s9.clone() },
+        };
+        let lv = acct_stated(&w, &alone, &Stated { arg: bent.arg(), ..lv.s }, &bent.said());
+        assert!(alone.s.c_wrong_point(KIND_C_STEP, &bent, &lv.s.claimer, &lv.s.outs, alone.value as i64, T0, &[P10 * 95 / 100]).is_some(), "{what}");
+        let judged = c_row_judged_of(KIND_C_STEP, &[0; 32], None, &alone.s.legs[0], &kpf_protocol::crow::CRow::ZERO, &bent.rows[0], 1, &bent).unwrap();
+        if judged {
+            end_answered(&w, what, &alone, &lv, &bent, false);
+        } else {
+            let (b, right) = c_row(&w.lib, &w.pointed(&lv, 1), &bent, 1, &[0; 32], None, &alone.s.legs[0], &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+            assert!(!right, "{what}");
+            signed(&format!("{what}: its row answered wrong"), &b, &w.keys);
+        }
+    }
 }

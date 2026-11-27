@@ -607,7 +607,7 @@ fn t3_b1_b3_a_join_a_hand_over_a_mark_and_a_split_carry_the_legs_time() {
     assert!(c_state(&w.lib, &OLive { s: Account { b_min_counter: T0 + 1, ..m_acct.s.clone() }, ..m_acct.clone() }, &w.script("KpfTChange"), KIND_C_MARK, 0, 1, &up12, T0, xk(&w.w), w.payer(&w.w, &fw)).is_err(), "a mark before the account's time");
     let row_script = w.script("KpfTCRow");
     let q = w.pointed(&live, 1);
-    let (b, right) = c_row(&w.lib, &q, &said, 1, &[0; 32], &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &q, &said, 1, &[0; 32], None, &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(right);
     signed("the row of a mark answered right", &b, &w.keys);
     // (The same mark, its chain of the leg at its new entry with another time: the row is wrong.)
@@ -617,9 +617,9 @@ fn t3_b1_b3_a_join_a_hand_over_a_mark_and_a_split_carry_the_legs_time() {
         let lie = CSaid { rows, ..said.clone() };
         let st = Stated { arg: lie.arg(), ..live.s };
         let q = w.pointed(&acct_stated(&w, &m_acct, &st, &lie.said()), 1);
-        let (b, right) = c_row(&w.lib, &q, &lie, 1, &[0; 32], &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+        let (b, right) = c_row(&w.lib, &q, &lie, 1, &[0; 32], None, &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
         assert!(!right && accepted(&b, &w.keys), "a mark that rewrites the leg's time to {other}: its row is answered wrong");
-        let (b, _) = c_row(&w.lib, &q, &lie, 1, &[0; 32], &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
+        let (b, _) = c_row(&w.lib, &q, &lie, 1, &[0; 32], None, &l_m, &row_script, xk(&w.f), w.payer(&w.w, &fw), Some(true)).unwrap();
         assert!(!accepted(&b, &w.keys), "a mark that rewrites the leg's time to {other}: its row is answered right");
     }
 
@@ -631,13 +631,13 @@ fn t3_b1_b3_a_join_a_hand_over_a_mark_and_a_split_carry_the_legs_time() {
     let (stays, new) = (o.after.clone().unwrap(), o.split.clone().unwrap());
     assert_eq!((stays.legs.clone(), new.legs.clone(), leg_time(&new.legs[0])), (vec![l_m], vec![l_s], entered_at + 3));
     let q = w.pointed(&live, 3);
-    let (b, right) = c_row(&w.lib, &q, &said, 3, &said.rows[0].g, &l_s, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &q, &said, 3, &said.rows[0].g, Some(&l_m), &l_s, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(right);
     signed("the row of the leg that leaves answered right", &b, &w.keys);
     let lie = CSaid { lc: chain_of_one(&leg_entered(&l_s, 0)), ..said.clone() };
     let st = Stated { arg: lie.arg(), ..live.s };
     let q = w.pointed(&acct_stated(&w, &s_acct, &st, &lie.said()), 3);
-    let (b, right) = c_row(&w.lib, &q, &lie, 3, &said.rows[0].g, &l_s, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
+    let (b, right) = c_row(&w.lib, &q, &lie, 3, &said.rows[0].g, Some(&l_m), &l_s, &row_script, xk(&w.f), w.payer(&w.w, &fw), None).unwrap();
     assert!(!right && accepted(&b, &w.keys), "a split that names the leg by a chain of another time: its row is answered wrong");
 }
 
@@ -1119,7 +1119,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1837)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(books, vec![("KpfTShardOpen", 752), ("KpfTCallPay", 2567), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2317), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
@@ -1160,7 +1160,9 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // not the stage's.)
     // (An entry is 49 bytes more: `KpfTEnterS` makes no row for a market of which a number is nothing written below
     // zero. Review T9, Q1; docs 17.8e.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_599, 7_123, 7_175, 7_771));
+    // (Docs 17.8h: an entry stated was 5,599: its statement says a head and a place, 40 bytes, and its row is 232
+    // bytes where it was 120; `KpfTEnterS` is 2 bytes more.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_754, 7_123, 7_175, 7_771));
 }
 
 // ================================================================================================================
