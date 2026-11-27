@@ -11037,7 +11037,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Review T6, second round, K1: `KpfTCallPay` is 2,523: the payment that makes a claim whole pays its key
     // the part and what the claim's note held, in one output.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTChange", 1761), ("KpfTPoint", 2588), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2093)]);
 }
 
 // ================================================================================================================
@@ -11430,8 +11430,10 @@ fn t1b_r54_the_bond_of_a_call_and_who_has_what_where_it_ends() {
     assert!(right && rs.tx.outputs[0].script_public_key == hash_spk(&w.lib, &st.again().hash()), "the call stands again");
     let (to_caller, to_answerer, to_disputer) = (paid(&rs, &xk(&w.w)), paid(&rs, &xk(&w.a)) - 1_000 * KAS1, paid(&rs, &xk(&w.w)));
     // (The disputer of `OW::pointed` is the key `w`, the caller's own here: what it has back is the quarter.)
-    assert_eq!((to_caller, to_disputer), (st.bond / 4, st.bond / 4), "a quarter of the disputer's bond to the caller");
-    assert!(to_answerer > st.bond / 4 - 3_000_000 && to_answerer <= st.bond / 4, "a quarter to whoever answered, less its fees ({to_answerer})");
+    // (Docs 17.8h, X1: a quarter of the least bond, 0.05 KAS, is not paid apart: the caller has half in one output,
+    // and whoever answered is not paid.)
+    assert_eq!((st.bond, to_caller, to_disputer), (NOTE_MIN, st.bond / 2, st.bond / 2), "half of the disputer's bond to the caller");
+    assert!(to_answerer > -3_000_000 && to_answerer <= 0, "whoever answered pays its fees and is paid nothing ({to_answerer})");
     // A call that is not the rule's (at 9 the shard, short from 10, has gained), answered wrong.
     let (wst, wd) = call_by_hand54(&shard, [P10 * 9 / 10, 0, 0, 0], [P10 * 9 / 10, 0, 0, 0], fee, 0, T0, xk(&w.b)).unwrap();
     let fbb = [fund(xk(&w.b), 55, 1_000)];
@@ -12413,7 +12415,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1761), ("KpfTPoint", 2588), ("KpfTShardPrice", 2317), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1854), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1761), ("KpfTPoint", 2589), ("KpfTShardPrice", 2318), ("KpfTLeft", 1674), ("KpfTLeftAll", 4369), ("KpfTLeftVoid", 2093)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -13813,7 +13815,8 @@ fn t1b_r57_a_bond_above_an_accounts_coins_is_posted_and_comes_back_at_the_end_an
         leavings.push((coins, got.map(|(o, after, note, _)| (o.paid, after.is_some(), note.map(|n| n.value)))));
     }
     assert!(leavings.iter().all(|l| l.1.as_ref().is_some_and(|o| o.0 == l.0 && !o.1)), "a leaving of a small account is stated with the floor's bond and applied, and its user has its coins: {leavings:?}");
-    // A right statement disputed and answered right: the quarters of a bond of 0.2 KAS are outputs.
+    // A right statement disputed and answered right: of a bond of 0.2 KAS the claimer has half in one output (a
+    // quarter of it is not paid apart: docs 17.8h, X1).
     {
         let mut acct = cov47(&w, &[leg], 3 * KAS1 / 10, 0);
         acct.s.bond_bps = 100;
@@ -13822,7 +13825,7 @@ fn t1b_r57_a_bond_above_an_accounts_coins_is_posted_and_comes_back_at_the_end_an
         let q = w.pointed(&nth(&signed("a leaving of the rule's", &b, &w.keys), 0, st, 6_510), 0);
         let (eb, right) = c_end(&w.lib, &q, &acct.s, &said, &w.script("KpfTCEnd"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
         let es = signed("disputed, and answered right by a third key", &eb, &w.keys);
-        assert!(right && paid(&es, &xk(&w.a)) == NOTE_MIN / 4 && paid(&es, &xk(&w.f)) > 1_000 * KAS1, "of the disputer's bond of 0.2 KAS a quarter is the claimer's and a quarter whoever answered's");
+        assert!(right && paid(&es, &xk(&w.a)) == NOTE_MIN / 2 && paid(&es, &xk(&w.f)) <= 1_000 * KAS1, "of the disputer's bond of 0.2 KAS half is the claimer's, and whoever answered is paid nothing");
     }
     // Under a call.
     let call = call54(&w, [P10, P10, P10, P10], T0);
@@ -14593,11 +14596,11 @@ fn t1b_r59_what_a_split_writes_and_the_life_of_the_two_accounts() {
 #[test]
 fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
-    let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
+    let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2589), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4240), ("KpfTStepPrice", 1837), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2614)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2615)]);
 }
 
 // ================================================================================================================
@@ -14992,7 +14995,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCMark", 2546), ("KpfTMarkNote", 1188), ("KpfTCRow", 4240), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1837), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2547), ("KpfTMarkNote", 1188), ("KpfTCRow", 4241), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1838), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15353,7 +15356,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3757), ("KpfTCRow", 4240), ("KpfTCEnd", 4471), ("KpfTCSplit", 2614), ("KpfTCMark", 2546), ("KpfTCEnter", 1994), ("KpfTStepPrice", 1837), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2588)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3758), ("KpfTCRow", 4241), ("KpfTCEnd", 4472), ("KpfTCSplit", 2615), ("KpfTCMark", 2547), ("KpfTCEnter", 1995), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15487,7 +15490,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4471), ("KpfTCTok", 3757), ("KpfTChange", 1761), ("KpfTCRow", 4240), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4472), ("KpfTCTok", 3758), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

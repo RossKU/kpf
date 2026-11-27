@@ -192,7 +192,7 @@ contract KpfTPoint(int init_version) {
         int kept = bond - part;
         int m = tx.outputs.length - 1 - 4 * j;
         require(m >= tx.inputs.length);
-        if (bond / 4 >= 5000000) {
+        if (bond / 4 >= 10000000) {
             require(m - 1 >= tx.inputs.length);
             part = bond / 4;
             kept = bond - part - part;

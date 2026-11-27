@@ -2117,8 +2117,10 @@ pub fn point_lapse(lib: &[u8; 32], obj: &OLive<Pointed>, script: &LibScript, p: 
 }
 
 /// The least quarter of a bond that a right answer pays to who answered (`ends` of the answering scripts): two
-/// outputs of less fit in no transaction, and the claimer then has half, in one output (review 50, F77).
-pub const ANSWER_PAY_MIN: i64 = 5_000_000;
+/// outputs of less fit in no transaction, and the claimer then has half, in one output (review 50, F77). 0.1 KAS:
+/// beside the output of an object that holds a note's least (0.2 KAS: 200,000 of a block's 500,000 in storage
+/// mass) two outputs of 0.05 KAS fit no block (found after review T13: docs 17.8h, X1).
+pub const ANSWER_PAY_MIN: i64 = 10_000_000;
 
 /// How the answer of a point ends (`ends` of the answering scripts): right, the statement stands again, and of the
 /// disputer's bond a quarter is the claimer's and a quarter `rkey`'s, who answered (half stays in the copy); wrong, the account again, the disputer's bond back and half of the claimer's to

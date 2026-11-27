@@ -232,10 +232,10 @@ fn t13_w1_closed_a_due_account_with_a_token_leg_and_a_partly_hedged_group_is_ste
         // The account that goes on: the short gained beside no leg that lost, and is named; it leaves alone (an
         // account that holds tokens is not taken whole), what it gained beyond the band set against what is owed.
         let next = OLive { s: after.clone(), value: after.a_margin as u64, ..acct.clone() };
-        // (On the model: the account now holds a note's least, its statement's bond is the least bond, and the
-        // answer of a disputed end would pay a quarter of it in an output a block does not take beside the
-        // account's own: docs 17.8h, after review T13.)
-        let (_, s2, o2) = next.s.c_state(KIND_C_STEP, 0, 1, &[price, P10], T0, next.value as i64, xk(&w.f)).expect("the short is named, the long gone");
+        // (The account now holds a note's least and its statement's bond is the least bond: the answer of its
+        // disputed end fits a block since a quarter of a bond is paid apart only from 0.1 KAS. Docs 17.8h, X1.)
+        let (s2, o2, e2) = ruled(&w, &next, KIND_C_STEP, 0, 1, &[price, P10], &w.f).expect("the short is named, the long gone");
+        assert_eq!(e2, (true, false), "X1 is open: the end of a step on an account that holds a note's least is not answered");
         let after2 = o2.after.clone().unwrap();
         assert_eq!((after2.legs.clone(), s2.amount, after2.a_margin, o2.note.clone().map(|n| n.asked)), (vec![tok], 0, NOTE_MIN, Some(0)), "the second step at {price}");
         assert!(after2.b_margin < after.b_margin && after2.b_margin > 0, "what the short gained is set against what is owed: {} then {}", after.b_margin, after2.b_margin);

@@ -100,8 +100,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
             require(tx.outputs[c].value >= v - bond);
             require(m >= tx.inputs.length);
             // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
-            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77.)
-            if (bond / 4 >= 5000000) {
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77; 0.1 KAS: docs 17.8h, X1.)
+            if (bond / 4 >= 10000000) {
                 require(m - 1 >= tx.inputs.length);
                 half = bond / 4;
                 kept = bond - half - half;

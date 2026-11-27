@@ -4362,15 +4362,19 @@ named leaves alone, the coins paying what they hold above a note's least and the
 short (it gained, beside no leg that lost) is named, what it gained set against what is owed; then the tokens
 of an account that owes are sold.
 
-**Found while closing them (X1; not of this stage; open).** An account that holds a note's least and no more
+**Found while closing them (X1; not of this stage; closed, below).** An account that holds a note's least and no more
 (what a step that made it owe leaves) can have a statement stated and applied, but **the answer of a disputed
 point of it is a transaction no block takes**: the statement's bond is then the least bond (0.2 KAS), the script
 pays a quarter of a bond lost in an output of its own where a quarter is 0.05 KAS or more, and beside the
 account's own output of 0.2 KAS (which weighs 200,000 of a block's 500,000 by itself) an output of 0.05 KAS
 is too small by a thousandth (0.05094867 at the least here). So on such an account whoever disputes a step
 wins by nobody being able to answer, and the stater loses its bond. The threshold of review 50 (F77) was set
-for accounts whose own output is larger. To do: the quarter paid apart only from a bond that leaves room (a
-threshold above the least bond's quarter), or the least bond larger; with the fee's base (W3).
+for accounts whose own output is larger. **Closed** (`s437_x1_quarter.py`): a quarter of a bond lost is paid in an
+output of its own only where it is 0.1 KAS or more (the fifteen answering scripts, a byte more each;
+`ANSWER_PAY_MIN`); below that the claimer has half in one output and whoever answered is not paid, as F77 has it
+for the smaller bonds. Two outputs of 0.1 KAS fit beside an output of 0.2. Shown: the end of a step on W1's
+account once it holds a note's least is answered right at the engine, and not wrong. (So the answer of a point
+of a statement whose bond is under 0.4 KAS pays its sender nothing: the least bond is 0.2.)
 
 **A step by what is asked** (review T13, W3; `s432_step_net.py`; the model first:
 `research_account_rows.rs`, `a_step_by_what_is_asked_costs_a_user_no_more_than_its_risk_whoever_chooses_the_leg`).
