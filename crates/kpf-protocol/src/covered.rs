@@ -290,7 +290,13 @@ pub fn c_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before
 /// second price, within the lower rate of its first.
 #[allow(clippy::too_many_arguments)]
 pub fn c_row_judged_of(kind: i64, prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64, s: &CSaid) -> Option<bool> {
-    c_row_judged_with(kind, &s.head, s.amount, s.skip, &s.lc, prev, &two_before(&s.rows, i), leg_before, l, before, row, i)
+    c_row_judged_at(kind, 0, prev, leg_before, l, before, row, i, s)
+}
+
+/// As `c_row_judged_of`, of a statement stated at the time `t0` (an option leg's row reads it: docs 17.8i).
+#[allow(clippy::too_many_arguments)]
+pub fn c_row_judged_at(kind: i64, t0: i64, prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64, s: &CSaid) -> Option<bool> {
+    c_row_judged_with(kind, t0, &s.head, s.amount, s.skip, &s.lc, prev, &two_before(&s.rows, i), leg_before, l, before, row, i)
 }
 
 /// The chain two rows before row `i` (from 1), as the rows say it: what the script opens the row before's chain
@@ -300,7 +306,7 @@ fn two_before(rows: &[CRow], i: i64) -> [u8; 32] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn c_row_judged_with(kind: i64, head: &CHead, amount: i64, skip: i64, lc: &[u8; 32], prev: &[u8; 32], g2: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64) -> Option<bool> {
+fn c_row_judged_with(kind: i64, t0: i64, head: &CHead, amount: i64, skip: i64, lc: &[u8; 32], prev: &[u8; 32], g2: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64) -> Option<bool> {
     if row.g == [0; 32] {
         return Some(false);
     }
@@ -330,7 +336,7 @@ fn c_row_judged_with(kind: i64, head: &CHead, amount: i64, skip: i64, lc: &[u8; 
         return Some(false);
     }
     let part = if !leaves { Part::Stays } else if kind == KIND_C_MARK { Part::Marked(amount) } else { Part::Leaves };
-    Some(crow_after(kind, head, before, leg_before.filter(|_| i > 1), l, row.a, row.q, part)? == Some(*row))
+    Some(crow_after(kind, head, t0, usize::try_from(i - 1).ok()?, before, leg_before.filter(|_| i > 1), l, row.a, row.q, part)? == Some(*row))
 }
 
 /// What a statement on a covered account makes of it.
@@ -366,10 +372,19 @@ impl Account {
     /// `part` says of it. `None` where a sum does not fit or no right trace is (two legs of one market next to
     /// one another are stated at one price).
     pub fn c_trace_of(&self, kind: i64, a: &[i64], q: &[i64], part: impl Fn(usize, &XLeg) -> Part) -> Option<Vec<CRow>> {
+        // (An option leg's row is of the statement's time: its trace is written with one, `c_trace_at`.)
+        if self.legs.iter().any(|l| crate::crow::option_of(l).is_some()) {
+            return None;
+        }
+        self.c_trace_at(kind, 0, &self.c_head(), a, q, part)
+    }
+
+    /// The same, stated at the time `t0` with the head `head` (an option leg's row reads the time, T and its line).
+    pub fn c_trace_at(&self, kind: i64, t0: i64, head: &CHead, a: &[i64], q: &[i64], part: impl Fn(usize, &XLeg) -> Part) -> Option<Vec<CRow>> {
         if a.len() != self.legs.len() || q.len() != self.legs.len() {
             return None;
         }
-        crate::crow::ctrace(kind, &self.c_head(), &self.legs, a, q, |i| part(i, &self.legs[i]))
+        crate::crow::ctrace(kind, head, t0, &self.legs, a, q, |i| part(i, &self.legs[i]))
     }
 
     /// The trace of a statement on this covered account at the prices `a`, one a leg; `skip`: the leg that leaves
@@ -1317,7 +1332,7 @@ pub fn c_enter_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, 
     if row.g != [0; 32] && blake2b(&[&prev[..], &leg_bytes(l)].concat()) == row.g && *prev == before.g && opened && last && !(*l == s.leg && l.entry == row.a) {
         return Some(false);
     }
-    c_row_judged_with(KIND_C_ENTER, &s.head, 0, 0, &[0; 32], prev, &g2, leg_before, l, before, row, i)
+    c_row_judged_with(KIND_C_ENTER, 0, &s.head, 0, 0, &[0; 32], prev, &g2, leg_before, l, before, row, i)
 }
 
 impl Account {

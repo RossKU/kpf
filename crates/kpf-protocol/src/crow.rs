@@ -101,6 +101,24 @@ pub fn ends(a: i64, rate: i64) -> Option<(i64, i64)> {
     Some((sub(a, d)?.max(0), add(a, d)?))
 }
 
+/// What a covered account's option leg says (docs 17.2, 17.8i): where a futures leg says its way, 3 a call the
+/// user holds, 4 a call it wrote, 5 a put it holds, 6 a put it wrote; and in its 32 bytes, after the time it
+/// entered, its day, its strike and its premium a unit. Its entry is the market's price where it entered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opt {
+    pub call: bool,
+    pub held: bool,
+    pub day: i64,
+    pub strike: i64,
+    pub premium: i64,
+}
+
+/// The option a leg is (`None`: a futures or a token leg).
+pub fn option_of(l: &XLeg) -> Option<Opt> {
+    let n = |k: usize| int8(&l.committee[8 * k..8 * k + 8]);
+    (3..=6).contains(&l.dir).then(|| Opt { call: l.dir <= 4, held: l.dir % 2 == 1, day: n(1), strike: n(2), premium: n(3) })
+}
+
 /// What a leg does in a statement: it stays, it leaves, or it is the leg a mark names (it stays, entered from now
 /// at the price said).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,10 +171,14 @@ impl CRow {
 /// The row after `before` with the leg `l`, in a statement of `kind` whose head is `head`, at the price `a` and a
 /// step's price `q`. `leg_before` is the leg of the row before (none for the first row): a leg of another market
 /// closes the group; a leg of the same market says the same two prices.
+/// `t0` is the statement's time and `i` the leg's place from 0 (an option leg reads them: its day, and the head's
+/// bit of its line).
 /// `None`: a sum does not fit (the script takes neither verdict). `Some(None)`: no right row follows (a price out
-/// of its range, two prices in one group, a mark's entry out of range, a token's discount out of range).
-pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XLeg>, l: &XLeg, a: i64, q: i64, part: Part) -> Option<Option<CRow>> {
-    if a <= 0 || a > l.price_max || (l.dir != LONG && l.dir != SHORT && l.dir != DIR_SPOT) {
+/// of its range, two prices in one group, a mark's entry out of range, a token's discount out of range, an option
+/// that is ended, or named by a leaving or a mark).
+#[allow(clippy::too_many_arguments)]
+pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg_before: Option<&XLeg>, l: &XLeg, a: i64, q: i64, part: Part) -> Option<Option<CRow>> {
+    if a <= 0 || a > l.price_max || (l.dir != LONG && l.dir != SHORT && l.dir != DIR_SPOT && option_of(l).is_none()) {
         return Some(None);
     }
     // (A head whose rates are no rates: no right row. The end holds the head to the terms.)
@@ -202,6 +224,80 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
             }
             Part::Leaves => r.gl = add(r.gl, w)?,
             Part::Marked(_) => return Some(None),
+        }
+        return Some(Some(r));
+    }
+    if let Some(o) = option_of(l) {
+        // An option leg (docs 17.8i; review T14's list). Wrong before anything: a strike out of its market's
+        // range, a premium below nothing, a day at or before the statement's time (an ended leg leaves by the
+        // day's transaction), and where a leaving or a mark names it (nobody exercises before the day).
+        if o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.day <= t0 || (kind == crate::covered::KIND_C_LEAVE && part == Part::Leaves) || matches!(part, Part::Marked(_)) {
+            return Some(None);
+        }
+        let wk = worth(l.size, l.scale, o.strike)?;
+        // What it is exercised at a price, and what it is worth exercised there to the user.
+        let ex = |p: i64| -> Option<i64> {
+            let wp = worth(l.size, l.scale, p)?;
+            if o.call { sub(wp, wk) } else { sub(wk, wp) }
+        };
+        let v = |p: i64| -> Option<i64> {
+            let e = ex(p)?.max(0);
+            if o.held { Some(e) } else { sub(0, e) }
+        };
+        let between = |lo: i64, up: i64| o.held && lo < o.strike && o.strike < up;
+        let near = sub(o.day, t0)? <= head.t;
+        let va = v(a)?;
+        let d = sub(va, v(l.entry)?)?;
+        let (lo, up) = ends(a, head.rate)?;
+        // The two sums: exact; a held option whose strike is between the ends, along its line (in a step the
+        // line of nothing, whatever the head says); within T of its day, each no more than nothing.
+        let (mut dl, mut du) = if between(lo, up) {
+            if kind != KIND_C_STEP && (head.lines >> i) & 1 == 1 { (sub(ex(lo)?, va)?, sub(ex(up)?, va)?) } else { (sub(0, va)?, sub(0, va)?) }
+        } else {
+            (sub(v(lo)?, va)?, sub(v(up)?, va)?)
+        };
+        let mut mq = sub(v(q)?, va)?;
+        if near {
+            (dl, du, mq) = (dl.min(0), du.min(0), mq.min(0));
+        }
+        // Its entry's part: what it is worth exercised changes by where its entry is a tolerance off for the user.
+        let (el, eu) = ends(l.entry, head.tolerance)?;
+        let ve = v(l.entry)?;
+        let e = 0.max(sub(v(el)?, ve)?).max(sub(v(eu)?, ve)?);
+        // The band's ends: what it gains to them; the line of nothing where its strike is between them.
+        let (lob, upb) = ends(a, head.tolerance)?;
+        let (bl, bu) = if between(lob, upb) { (sub(0, va)?, sub(0, va)?) } else { (sub(v(lob)?, va)?, sub(v(upb)?, va)?) };
+        let premium = worth(l.size, l.scale, o.premium)?;
+        r.m = add(r.m, mq)?;
+        r.ba = add(r.ba, e)?;
+        r.ddb = add(r.ddb, bl)?;
+        r.dub = add(r.dub, bu)?;
+        r.dda = add(r.dda, dl)?;
+        r.dua = add(r.dua, du)?;
+        r.pa = add(r.pa, premium)?;
+        match part {
+            Part::Stays => {
+                if kind != KIND_C_MARK {
+                    r.gain = add(r.gain, d)?;
+                }
+                r.ls = add(r.ls, (-d).max(0))?;
+                r.dds = add(r.dds, dl)?;
+                r.dus = add(r.dus, du)?;
+                r.ps = add(r.ps, premium)?;
+                if !o.held {
+                    r.ns = add(r.ns, 1)?;
+                }
+                r.h = with(l);
+            }
+            _ => {
+                r.gain = add(r.gain, d)?;
+                r.gl = add(r.gl, d)?;
+                r.rl = add(r.rl, lost(dl, du))?;
+                // (Its band where it leaves alone: its entry's part and what it loses by a move of the tolerance.)
+                r.bl = add(r.bl, add(e, 0.max(sub(va, v(lob)?)?).max(sub(va, v(upb)?)?))?)?;
+                // (What its leaving pays of its premium: a holder's, whole; a writer's, less what it lost.)
+                r.po = add(r.po, if o.held { premium } else { sub(premium, (-d).max(0))?.max(0) })?;
+            }
         }
         return Some(Some(r));
     }
@@ -256,13 +352,13 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
     Some(Some(r))
 }
 
-/// The trace of the legs at the prices `a` and a step's prices `q` (a leg's each), each leg doing what `part`
-/// says of it; `None` where no right trace is.
-pub fn ctrace(kind: i64, head: &CHead, legs: &[XLeg], a: &[i64], q: &[i64], part: impl Fn(usize) -> Part) -> Option<Vec<CRow>> {
+/// The trace of the legs at the prices `a` and a step's prices `q` (a leg's each), stated at the time `t0`, each
+/// leg doing what `part` says of it; `None` where no right trace is.
+pub fn ctrace(kind: i64, head: &CHead, t0: i64, legs: &[XLeg], a: &[i64], q: &[i64], part: impl Fn(usize) -> Part) -> Option<Vec<CRow>> {
     let mut rows: Vec<CRow> = vec![];
     for (i, l) in legs.iter().enumerate() {
         let before = rows.last().copied().unwrap_or(CRow::ZERO);
-        rows.push(crow_after(kind, head, &before, i.checked_sub(1).map(|k| &legs[k]), l, *a.get(i)?, *q.get(i)?, part(i))??);
+        rows.push(crow_after(kind, head, t0, i, &before, i.checked_sub(1).map(|k| &legs[k]), l, *a.get(i)?, *q.get(i)?, part(i))??);
     }
     Some(rows)
 }

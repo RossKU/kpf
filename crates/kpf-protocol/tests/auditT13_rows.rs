@@ -409,7 +409,7 @@ fn t13_held_a_row_follows_from_the_row_before_as_it_is_said_and_a_group_closes_b
                 t.rows[i - 2] = b;
                 let l = &legs[i - 1];
                 // (The row the model computes from the row before as bent; where it computes none, the row as it was.)
-                if let Some(Some(r)) = crow_after(kind, &s.head, &b, Some(&legs[i - 2]), l, s.rows[i - 1].a, s.rows[i - 1].q, part_of(kind, s.skip, s.amount, i - 1, l)) {
+                if let Some(Some(r)) = crow_after(kind, &s.head, 0, 0, &b, Some(&legs[i - 2]), l, s.rows[i - 1].a, s.rows[i - 1].q, part_of(kind, s.skip, s.amount, i - 1, l)) {
                     t.rows[i - 1] = r;
                 }
                 let (model, engine) = row_both(&w, &acct, kind, &t, i);
@@ -473,8 +473,8 @@ fn t13_a_steps_price_and_a_head_at_their_edges() {
     let (mut n, mut w5) = (0, None);
     for (what, x, h, a, q, rule) in cases {
         let l = &x.s.legs[0];
-        let honest = crow_after(KIND_C_STEP, &own, &CRow::ZERO, None, l, a, a, Part::Leaves).unwrap().unwrap();
-        let row = match crow_after(KIND_C_STEP, &h, &CRow::ZERO, None, l, a, q, Part::Leaves) {
+        let honest = crow_after(KIND_C_STEP, &own, 0, 0, &CRow::ZERO, None, l, a, a, Part::Leaves).unwrap().unwrap();
+        let row = match crow_after(KIND_C_STEP, &h, 0, 0, &CRow::ZERO, None, l, a, q, Part::Leaves) {
             Some(Some(r)) => r,
             _ => CRow { q, ..honest },
         };
@@ -566,7 +566,7 @@ fn t13_held_the_leg_before_is_asked_where_the_row_stands_on_the_row_before() {
     // A row more, of a leg nobody holds.
     let ghost = fleg(&w, 2, 7, SHORT, P10);
     let mut more = s.clone();
-    more.rows.push(crow_after(KIND_C_TAKE, &s.head, &s.rows[2], Some(&legs[2]), &ghost, P10, P10, Part::Stays).unwrap().unwrap());
+    more.rows.push(crow_after(KIND_C_TAKE, &s.head, 0, 0, &s.rows[2], Some(&legs[2]), &ghost, P10, P10, Part::Stays).unwrap().unwrap());
     let lv = w.stated(&acct, &Stated { arg: more.arg(), ..st }, &more.said());
     assert_eq!(row_taken(&w, &w.pointed(&lv, 7), &more, 7, &s.rows[2].g, Some(&legs[2]), &ghost), (true, false));
     assert_eq!(end_taken(&w, &acct, &lv, &more), (false, true), "the end of a trace of a leg more");
@@ -772,7 +772,7 @@ fn t13_held_the_ends_at_their_edges_a_sompi_either_side() {
     // held by nothing (stage 1 reads none): the end is right whatever they say.
     let acct = cov(&w, &h, 100 * KAS1);
     let (st, s, _) = acct.s.c_state(KIND_C_TAKE, KAS1, 0, &a, T0, acct.value as i64, xk(&w.w)).unwrap();
-    let with = |head: CHead| CSaid { head, rows: kpf_protocol::crow::ctrace(KIND_C_TAKE, &head, &h, &a, &a, |_| Part::Stays).unwrap(), ..s.clone() };
+    let with = |head: CHead| CSaid { head, rows: kpf_protocol::crow::ctrace(KIND_C_TAKE, &head, 0, &h, &a, &a, |_| Part::Stays).unwrap(), ..s.clone() };
     for d in [1i64, -1] {
         for (what, head) in [("rate", CHead { rate: s.head.rate + d, ..s.head }), ("tolerance", CHead { tolerance: s.head.tolerance + d, ..s.head }), ("T", CHead { t: s.head.t + d, ..s.head })] {
             let t = with(head);
@@ -862,9 +862,9 @@ fn t13_held_the_rows_of_an_entry_a_sompi_off_and_its_last_row() {
     assert_eq!(both(&other, 3), (Some(false), (false, true)), "the leg said is another");
     // Its group a sompi above the entry: row 2 is right as a row, the last is not at its entry.
     let at = |a2: i64, a3: i64| {
-        let r2 = crow_after(KIND_C_ENTER, &s.head, &s.rows[0], Some(&all[0]), &all[1], a2, a2, Part::Stays).unwrap().unwrap();
+        let r2 = crow_after(KIND_C_ENTER, &s.head, 0, 0, &s.rows[0], Some(&all[0]), &all[1], a2, a2, Part::Stays).unwrap().unwrap();
         // (As if the last leg began a group, where the two prices differ: the row the arithmetic gives.)
-        let r3 = crow_after(KIND_C_ENTER, &s.head, &r2, if a2 == a3 { Some(&all[1]) } else { None }, &all[2], a3, a3, Part::Stays).unwrap().unwrap();
+        let r3 = crow_after(KIND_C_ENTER, &s.head, 0, 0, &r2, if a2 == a3 { Some(&all[1]) } else { None }, &all[2], a3, a3, Part::Stays).unwrap().unwrap();
         CEnterSaid { rows: vec![s.rows[0], r2, r3], ..s.clone() }
     };
     let above = at(p11 + 1, p11 + 1);

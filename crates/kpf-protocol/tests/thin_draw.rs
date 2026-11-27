@@ -4002,7 +4002,7 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
     // Two prices in one group: the model writes no such trace. Stated all the same (the second row as if its leg
     // began a group of its own, a sompi higher), its second row is wrong.
     assert!(pair.s.c_trace(&[a[0], a[0] + 1], 0).is_none() && state(&pair, KIND_C_TAKE, KAS1, 0, &[a[0], a[0] + 1]).is_err());
-    let second = crow_after(KIND_C_TAKE, &s.head, &s.rows[0], None, &short, a[0] + 1, a[0] + 1, Part::Stays).unwrap().unwrap();
+    let second = crow_after(KIND_C_TAKE, &s.head, 0, 0, &s.rows[0], None, &short, a[0] + 1, a[0] + 1, Part::Stays).unwrap().unwrap();
     let two = CSaid { rows: vec![s.rows[0], second], ..s.clone() };
     assert_eq!(c_row_judged_of(KIND_C_TAKE, &two.rows[0].g, Some(&long), &short, &two.rows[0], &two.rows[1], 2, &two), Some(false));
     let lv = acct_stated(&w, &pair, &Stated { arg: two.arg(), ..live.s }, &two.said());
@@ -4017,7 +4017,7 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
     let late = CSaid { head: CHead { t: s.head.t + 1, ..s.head }, ..s.clone() };
     end_answered(&w, "a head of another T", &pair, &acct_stated(&w, &pair, &Stated { arg: late.arg(), ..live.s }, &late.said()), &late, false);
     let less = CHead { rate: s.head.rate - 1, ..s.head };
-    let rows = kpf_protocol::crow::ctrace(KIND_C_TAKE, &less, &pair.s.legs, &a, &a, |_| Part::Stays).unwrap();
+    let rows = kpf_protocol::crow::ctrace(KIND_C_TAKE, &less, 0, &pair.s.legs, &a, &a, |_| Part::Stays).unwrap();
     let low = CSaid { head: less, rows, ..s.clone() };
     assert_eq!(c_row_judged_of(KIND_C_TAKE, &[0; 32], None, &long, &kpf_protocol::crow::CRow::ZERO, &low.rows[0], 1, &low), Some(true), "a row is right by the head its statement says");
     end_answered(&w, "a head of a rate a point less", &pair, &acct_stated(&w, &pair, &Stated { arg: low.arg(), ..live.s }, &low.said()), &low, false);
@@ -4069,7 +4069,7 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
     end_answered(&w, "a step due by one price", &alone, &lv, &s9, true);
     // Stated at a price further than the lower rate, or at the row's own (where the account is not under): wrong.
     for (what, q) in [("a step's price beyond the lower rate", P10 * 95 / 100 - dq - 1), ("a step's price that does not show it due", P10 * 95 / 100)] {
-        let bent = match crow_after(KIND_C_STEP, &s9.head, &kpf_protocol::crow::CRow::ZERO, None, &alone.s.legs[0], P10 * 95 / 100, q, Part::Leaves).unwrap() {
+        let bent = match crow_after(KIND_C_STEP, &s9.head, 0, 0, &kpf_protocol::crow::CRow::ZERO, None, &alone.s.legs[0], P10 * 95 / 100, q, Part::Leaves).unwrap() {
             Some(row) => CSaid { rows: vec![row], ..s9.clone() },
             // (No right row at that price: the row of the rule's with the price put in.)
             None => CSaid { rows: vec![kpf_protocol::crow::CRow { q, ..s9.rows[0] }], ..s9.clone() },
