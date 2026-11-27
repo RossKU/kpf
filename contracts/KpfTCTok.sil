@@ -139,16 +139,16 @@ contract KpfTCTok(int init_version) {
         byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
-        int n = rows.length / 232;
-        require(rows.length == 232 * n);
+        int n = rows.length / 256;
+        require(rows.length == 256 * n);
         require(at == 0);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         int ok = 1;
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        byte[] row = z32 + z32 + z32 + z32 + z32 + z32 + z32 + byte[](0 as byte[8]);
+        byte[] row = z32 + z32 + z32 + z32 + z32 + z32 + z32 + z32;
         if (n >= 1) {
-            row = rows.slice(232 * (n - 1), 232 * n);
+            row = rows.slice(256 * (n - 1), 256 * n);
         } else {
             ok = 0;
         }
@@ -157,7 +157,7 @@ contract KpfTCTok(int init_version) {
         // (Of these kinds the fifth sum is the worth of the token leg named, whole.)
         int tw = int(byte[8](row.slice(40, 48)));
         int tk = int(byte[8](row.slice(48, 56)));
-        if (byte[32](row.slice(168, 200)) != root) { ok = 0; }
+        if (byte[32](row.slice(192, 224)) != root) { ok = 0; }
         if (w < 0) { ok = 0; }
         if (ls < 0) { ok = 0; }
         if (tw < 0) { ok = 0; }
@@ -221,7 +221,7 @@ contract KpfTCTok(int init_version) {
             }
         }
         if (ok == 1) {
-            byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(200, 232))) + mv.slice(0, 67) + byte[](cafter as byte[8]) + mv.slice(75, 76) + byte[]((owes - toshard) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](wtime as byte[8]) + mv.slice(138, 171))) + byte[]((held + cafter - coins) as byte[8]);
+            byte[] due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(224, 256))) + mv.slice(0, 67) + byte[](cafter as byte[8]) + mv.slice(75, 76) + byte[]((owes - toshard) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](wtime as byte[8]) + mv.slice(138, 171))) + byte[]((held + cafter - coins) as byte[8]);
             due = due + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + i9(14) + byte[](0x20) + said.slice(16, 48) + tkey)) + byte[](NOTE_MIN as byte[8]);
             if (toshard > 0) {
                 due = due + byte[](0x02) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(15) + i9(toshard))) + byte[]((NOTE_MIN + toshard) as byte[8]);

@@ -1161,8 +1161,8 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // (An entry is 49 bytes more: `KpfTEnterS` makes no row for a market of which a number is nothing written below
     // zero. Review T9, Q1; docs 17.8e.)
     // (Docs 17.8h: an entry stated was 5,599: its statement says a head and a place, 40 bytes, and its row is 232
-    // bytes where it was 120; `KpfTEnterS` is 2 bytes more.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_754, 7_123, 7_175, 7_771));
+    // bytes where it was 120; `KpfTEnterS` is 2 bytes more. Docs 17.8i: 5,754 with a row of 232 bytes; of 256, 24 more.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_778, 7_123, 7_175, 7_771));
 }
 
 // ================================================================================================================

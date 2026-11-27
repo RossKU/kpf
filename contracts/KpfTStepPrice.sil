@@ -164,8 +164,8 @@ contract KpfTStepPrice(byte[37] CITE_SPK, int init_version) {
         int rl = 112;
         int ga = 48;
         if (kind >= 7) {
-            rl = 232;
-            ga = 168;
+            rl = 256;
+            ga = 192;
         }
         int n = rows.length / rl;
         require(rows.length == rl * n);

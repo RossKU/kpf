@@ -189,13 +189,13 @@ contract KpfTChange(int init_version) {
             } else {
                 // (A covered account's own kinds say two numbers and a chain before their rows.)
                 int at0 = 116;
-                // (A row is 112 bytes; of a covered account 232, after a head of 80: docs 17.8h.)
+                // (A row is 112 bytes; of a covered account 256, after a head of 80: docs 17.8h, 17.8i.)
                 int rl = 112;
                 if (kind >= 6) {
                     require(kind >= 7);
                     require(mv.length == 171);
                     at0 = 80;
-                    rl = 232;
+                    rl = 256;
                 }
                 require(said.length >= at0);
                 require((said.length - at0) % rl == 0);

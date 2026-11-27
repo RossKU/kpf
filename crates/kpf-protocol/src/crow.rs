@@ -1,5 +1,5 @@
-//! The row of a covered account's trace as `docs/ARCHITECTURE-CLEARING.md` 17.8h has it (after review T12): 232
-//! bytes, twenty-one numbers and two chains, and the head of a statement that the rows compute with. The model of
+//! The row of a covered account's trace as `docs/ARCHITECTURE-CLEARING.md` 17.8h and 17.8i have it: 256
+//! bytes, twenty-four numbers and two chains, and the head of a statement that the rows compute with. The model of
 //! the row's arithmetic, with the scripts' integers. Not yet what the scripts read: the row that is built is
 //! `thin::Row` (120 bytes) and `covered::c_row_after`; this takes its place with stage 1 of 17.8h.
 //!
@@ -18,7 +18,7 @@ use crate::state::{int8, sm8, BPS, LONG, SHORT};
 use crate::thin::leg_bytes;
 
 /// The length of a row.
-pub const CROW_LEN: usize = 232;
+pub const CROW_LEN: usize = 256;
 /// The length of what a statement's head says for its rows: the rate, the tolerance, T and the lines.
 pub const CHEAD_LEN: usize = 32;
 
@@ -79,6 +79,12 @@ pub struct CRow {
     pub pa: i64,
     pub ps: i64,
     pub po: i64,
+    /// The open group's two sums at the tolerance: what its legs gain from `a` to the price less, and plus, the
+    /// tolerance on it (docs 17.8i).
+    pub ddb: i64,
+    pub dub: i64,
+    /// How many of the legs that stay are not held options (a futures leg is one; a token leg none).
+    pub ns: i64,
     pub g: [u8; 32],
     pub h: [u8; 32],
 }
@@ -106,13 +112,13 @@ pub enum Part {
 
 impl CRow {
     /// What stands before the first row.
-    pub const ZERO: CRow = CRow { a: 0, gain: 0, w: 0, ws: 0, ls: 0, gl: 0, tk: 0, q: 0, m: 0, ba: 0, bl: 0, dda: 0, dua: 0, ra: 0, dds: 0, dus: 0, rs: 0, rl: 0, pa: 0, ps: 0, po: 0, g: [0; 32], h: [0; 32] };
+    pub const ZERO: CRow = CRow { a: 0, gain: 0, w: 0, ws: 0, ls: 0, gl: 0, tk: 0, q: 0, m: 0, ba: 0, bl: 0, dda: 0, dua: 0, ra: 0, dds: 0, dus: 0, rs: 0, rl: 0, pa: 0, ps: 0, po: 0, ddb: 0, dub: 0, ns: 0, g: [0; 32], h: [0; 32] };
 
-    fn numbers(&self) -> [i64; 21] {
-        [self.a, self.gain, self.w, self.ws, self.ls, self.gl, self.tk, self.q, self.m, self.ba, self.bl, self.dda, self.dua, self.ra, self.dds, self.dus, self.rs, self.rl, self.pa, self.ps, self.po]
+    fn numbers(&self) -> [i64; 24] {
+        [self.a, self.gain, self.w, self.ws, self.ls, self.gl, self.tk, self.q, self.m, self.ba, self.bl, self.dda, self.dua, self.ra, self.dds, self.dus, self.rs, self.rl, self.pa, self.ps, self.po, self.ddb, self.dub, self.ns]
     }
 
-    /// The 232 bytes: the numbers in their order (today's seven where they are today), then the two chains.
+    /// The 256 bytes: the numbers in their order (today's seven where they are today), then the two chains.
     pub fn bytes(&self) -> Vec<u8> {
         let mut b: Vec<u8> = self.numbers().iter().flat_map(|x| sm8(*x)).collect();
         b.extend_from_slice(&self.g);
@@ -126,13 +132,19 @@ impl CRow {
         }
         let n = |i: usize| int8(&r[8 * i..8 * i + 8]);
         Some(CRow {
-            a: n(0), gain: n(1), w: n(2), ws: n(3), ls: n(4), gl: n(5), tk: n(6), q: n(7), m: n(8), ba: n(9), bl: n(10), dda: n(11), dua: n(12), ra: n(13), dds: n(14), dus: n(15), rs: n(16), rl: n(17), pa: n(18), ps: n(19), po: n(20),
-            g: r[168..200].try_into().expect("32 bytes"),
-            h: r[200..232].try_into().expect("32 bytes"),
+            a: n(0), gain: n(1), w: n(2), ws: n(3), ls: n(4), gl: n(5), tk: n(6), q: n(7), m: n(8), ba: n(9), bl: n(10), dda: n(11), dua: n(12), ra: n(13), dds: n(14), dus: n(15), rs: n(16), rl: n(17), pa: n(18), ps: n(19), po: n(20), ddb: n(21), dub: n(22), ns: n(23),
+            g: r[192..224].try_into().expect("32 bytes"),
+            h: r[224..256].try_into().expect("32 bytes"),
         })
     }
 
     /// R with the last group closed: of all the legs, and of those that stay (an end reads these).
+    /// The band of every leg leaving: each leg's entry's part and what the closed groups lose by a move of the
+    /// tolerance (`ba`), and of the open group what the larger of its two sums at the tolerance lost.
+    pub fn band(&self) -> Option<i64> {
+        add(self.ba, lost(self.ddb, self.dub))
+    }
+
     pub fn closed(&self) -> Option<(i64, i64)> {
         Some((add(self.ra, lost(self.dda, self.dua))?, add(self.rs, lost(self.dds, self.dus))?))
     }
@@ -167,7 +179,8 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
         Some(b) if b.market != l.market => {
             r.ra = add(r.ra, lost(r.dda, r.dua))?;
             r.rs = add(r.rs, lost(r.dds, r.dus))?;
-            (r.dda, r.dua, r.dds, r.dus) = (0, 0, 0, 0);
+            r.ba = add(r.ba, lost(r.ddb, r.dub))?;
+            (r.dda, r.dua, r.dds, r.dus, r.ddb, r.dub) = (0, 0, 0, 0, 0, 0);
         }
         Some(_) if before.a != a || before.q != q => return Some(None),
         _ => {}
@@ -198,9 +211,14 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
     let dl = s(sub(worth(l.size, l.scale, lo)?, w)?)?;
     let du = s(sub(worth(l.size, l.scale, up)?, w)?)?;
     let mq = s(sub(worth(l.size, l.scale, q)?, w)?)?;
+    // (Its band where it leaves alone: twice the tolerance of its worth. Its entry's part: the tolerance of its
+    // worth. And what it gains to the two ends of a move of the tolerance.)
     let b = rate_up(w, 2 * head.tolerance)?;
+    let (lob, upb) = ends(a, head.tolerance)?;
     r.w = add(r.w, w)?;
-    r.ba = add(r.ba, b)?;
+    r.ba = add(r.ba, rate_up(w, head.tolerance)?)?;
+    r.ddb = add(r.ddb, s(sub(worth(l.size, l.scale, lob)?, w)?)?)?;
+    r.dub = add(r.dub, s(sub(worth(l.size, l.scale, upb)?, w)?)?)?;
     r.dda = add(r.dda, dl)?;
     r.dua = add(r.dua, du)?;
     match part {
@@ -214,6 +232,7 @@ pub fn crow_after(kind: i64, head: &CHead, before: &CRow, leg_before: Option<&XL
             r.ls = add(r.ls, (-d).max(0))?;
             r.dds = add(r.dds, dl)?;
             r.dus = add(r.dus, du)?;
+            r.ns = add(r.ns, 1)?;
             r.h = with(l);
         }
         Part::Leaves => {

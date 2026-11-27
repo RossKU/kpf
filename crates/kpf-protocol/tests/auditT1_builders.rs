@@ -14600,7 +14600,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2615)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3017), ("KpfTChange", 1761), ("KpfTCRow", 4873), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2613)]);
 }
 
 // ================================================================================================================
@@ -14800,10 +14800,8 @@ fn t1b_r60_what_a_user_has_by_marks_against_the_leaving_alone() {
             let a2 = if leg.dir == LONG { a1 - back } else { a1 + back };
             let more = g1 + leaving(&marked, a2, marked.b_min_counter) - leaving(&x, a2, T0);
             // (The band of every leg leaving is of what is asked: R by twice the tolerance over the rate. Review T13, W3.)
-            let band = {
-                let (ra, up, g) = (x.c_trace(&[a2], 0).unwrap()[0].closed().unwrap().0, w.terms().mmr_bps + w.terms().g_bps, w.terms().g_bps);
-                rate_up(worth(&leg, a2), g) + (ra / up) * g + ((ra % up) * g + up - 1) / up + 1
-            };
+            // (The row's: each leg's entry's part and what the legs lose by a move of the tolerance. Docs 17.8i.)
+            let band = x.c_trace(&[a2], 0).unwrap()[0].band().unwrap() + 1;
             let truly = if leg.dir == LONG { worth(&leg, a2) - worth(&leg, leg.entry) } else { worth(&leg, leg.entry) - worth(&leg, a2) };
             assert!(more >= 0 && more <= band && g1 + leaving(&marked, a2, marked.b_min_counter) <= truly.max(g1), "case {case}: {more} more than the leaving alone, the band {band}");
             if case == 0 {
@@ -14997,7 +14995,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCMark", 2547), ("KpfTMarkNote", 1188), ("KpfTCRow", 4241), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1838), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2497), ("KpfTMarkNote", 1188), ("KpfTCRow", 4873), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTStepPrice", 1838), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15358,7 +15356,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3758), ("KpfTCRow", 4241), ("KpfTCEnd", 4530), ("KpfTCSplit", 2615), ("KpfTCMark", 2547), ("KpfTCEnter", 1995), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3756), ("KpfTCRow", 4873), ("KpfTCEnd", 4488), ("KpfTCSplit", 2613), ("KpfTCMark", 2497), ("KpfTCEnter", 1993), ("KpfTStepPrice", 1838), ("KpfTChange", 1761), ("KpfTCStep", 5319), ("KpfTEnterS", 3017), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15492,7 +15490,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 76);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4530), ("KpfTCTok", 3758), ("KpfTChange", 1761), ("KpfTCRow", 4241), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 4488), ("KpfTCTok", 3756), ("KpfTChange", 1761), ("KpfTCRow", 4873), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

@@ -618,7 +618,7 @@ impl Account {
             // Its band: the entries' part, the tolerance of what the legs are worth, and the leaving's part, R
             // by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
             let up = add(self.t.mmr_bps, g)?;
-            let band_all = add(rate_up(w, g)?, over(ra, g, up, true)?)?;
+            let band_all = row.band()?;
             let fee_all = over(ra, self.t.liq_fee_bps, up, false)?;
             // (What the legs that stay lost, together.)
             let nls = sub(0, sub(gain, gl)?)?.max(0);
@@ -672,7 +672,6 @@ impl Account {
         if all && tk != 0 {
             return Some(None);
         }
-        let g2 = add(g, g)?;
         let (mut pay, mut asked);
         let mut setoff = 0;
         let v;
@@ -686,7 +685,7 @@ impl Account {
             } else {
                 // (The band of every leg leaving, by a step or by its user's statement: the tolerance of what the
                 // legs are worth, and R by the tolerance over the rate. Reviews T13, W3, and T14, O1.)
-                asked = sub(gain, add(rate_up(w, g)?, over(ra, g, add(self.t.mmr_bps, g)?, true)?)?)?.max(0);
+                asked = sub(gain, row.band()?)?.max(0);
                 // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
                 asked = sub(asked, asked.min(owes))?;
             }
@@ -706,7 +705,8 @@ impl Account {
                 pay = sub(0, gl)?;
                 asked = gl;
             } else {
-                asked = sub(gl, rate_up(wl, g2)?)?.max(0);
+                // (The band of a leg that leaves alone: the row's.)
+                asked = sub(gl, row.bl)?.max(0);
                 // (And the account owes that much less.)
                 setoff = asked.min(owes);
                 asked = sub(asked, setoff)?;
@@ -812,14 +812,13 @@ impl Account {
         let mut ok = n >= 1 && row.g == self.legs_root() && w >= 0 && ws >= 0 && ws <= w && ls >= 0 && row.tk >= 0 && self.b_margin == 0 && self.c_head_held(s);
         let (ra, _) = row.closed()?;
         let coins = self.a_margin;
-        let g = self.t.g_bps;
         let quiet = self.b_min_counter;
         let when = add(t0, ck(add(self.t.late_daa, ck(self.dispute_daa.checked_mul(2))?)?.checked_mul(2))?)?;
         ok = ok && *claimer == self.a_key && t0 >= quiet && s.amount > 0 && s.skip >= 1 && s.skip <= n && gl > 0;
         if !ok {
             return Some(None);
         }
-        let thin = kept < rate_up(sub(w, ws)?, add(g, g)?)?;
+        let thin = kept < row.bl;
         if add(sub(coins, NOTE_MIN)?, row.tk)? < add(ra, ls)? || thin {
             return Some(None);
         }

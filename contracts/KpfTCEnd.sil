@@ -163,17 +163,17 @@ contract KpfTCEnd(int init_version) {
         byte[32] c1 = blake2b(pre + i9(again) + i9(held));
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(at == point || verdict == 0);
-        int n = rows.length / 232;
-        require(rows.length == 232 * n);
+        int n = rows.length / 256;
+        require(rows.length == 256 * n);
         require(at == 0);
         require(who.slice(8, 16) == who.slice(0, 8));
         require(who.slice(16, 24) == who.slice(0, 8));
         require(kind >= 7);
         require(kind <= 9);
         byte[] z32 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
-        byte[] row = z32 + z32 + z32 + z32 + z32 + z32 + z32 + byte[](0 as byte[8]);
+        byte[] row = z32 + z32 + z32 + z32 + z32 + z32 + z32 + z32;
         if (n >= 1) {
-            row = rows.slice(232 * (n - 1), 232 * n);
+            row = rows.slice(256 * (n - 1), 256 * n);
         }
         int gain = int(byte[8](row.slice(8, 16)));
         int w = int(byte[8](row.slice(16, 24)));
@@ -185,7 +185,7 @@ contract KpfTCEnd(int init_version) {
             // (An account of no leg takes a take, stated with no row.)
             if (kind != 7) { ok = 0; }
         }
-        if (byte[32](row.slice(168, 200)) != root) { ok = 0; }
+        if (byte[32](row.slice(192, 224)) != root) { ok = 0; }
         if (w < 0) { ok = 0; }
         if (ws < 0) { ok = 0; }
         if (ws > w) { ok = 0; }
@@ -223,6 +223,15 @@ contract KpfTCEnd(int init_version) {
             if (int(byte[8](row.slice(112, 120))) < 0) { rst = rst - int(byte[8](row.slice(112, 120))); }
         } else {
             if (int(byte[8](row.slice(120, 128))) < 0) { rst = rst - int(byte[8](row.slice(120, 128))); }
+        }
+        // The band of every leg leaving (docs 17.8i): each leg's entry's part and what the groups that are closed
+        // lose by a move of the tolerance, the row's ninth number; and of the open group what the larger of its two
+        // sums at the tolerance lost.
+        int band = int(byte[8](row.slice(72, 80)));
+        if (0 - int(byte[8](row.slice(168, 176))) > 0 - int(byte[8](row.slice(176, 184)))) {
+            if (int(byte[8](row.slice(168, 176))) < 0) { band = band - int(byte[8](row.slice(168, 176))); }
+        } else {
+            if (int(byte[8](row.slice(176, 184))) < 0) { band = band - int(byte[8](row.slice(176, 184))); }
         }
         // Where a position has its asks: the legs counted, and the time before which the user states nothing
         // again. A statement of the user's writes its own time and twice the longest a statement lives (the
@@ -286,8 +295,7 @@ contract KpfTCEnd(int init_version) {
                     // net: R by the tolerance over the rate. Review T13, W3; review T14, O1.)
                     int sx = gain + int(byte[8](row.slice(64, 72)));
                     if (sx >= 0) {
-                        sx = sx - ((w / BPS) * g + ((w % BPS) * g + BPS - 1) / BPS);
-                        if (up > 0) { sx = sx - ((rall / up) * g + ((rall % up) * g + up - 1) / up); }
+                        sx = sx - band;
                         if (sx < 0) { sx = 0; }
                     }
                     if (m + tk - owes + sx >= 0) { ok = 0; }
@@ -349,7 +357,6 @@ contract KpfTCEnd(int init_version) {
                 if (tk != 0) { ok = 0; }
             }
             if (ok == 1) {
-                int g2 = g + g;
                 int pay = 0;
                 int asked = 0;
                 if (all == 1) {
@@ -360,8 +367,7 @@ contract KpfTCEnd(int init_version) {
                         if (pay > room) { pay = room; }
                         asked = 0 - pay;
                     } else {
-                        asked = gain - ((w / BPS) * g + ((w % BPS) * g + BPS - 1) / BPS);
-                        if (up > 0) { asked = asked - ((rall / up) * g + ((rall % up) * g + up - 1) / up); }
+                        asked = gain - band;
                         if (asked < 0) { asked = 0; }
                         // (What the account owes its shard is set against what its legs ask of it: review 64, F112.)
                         if (asked > owes) { asked = asked - owes; } else { asked = 0; }
@@ -377,7 +383,8 @@ contract KpfTCEnd(int init_version) {
                         pay = 0 - gl;
                         asked = gl;
                     } else {
-                        asked = gl - ((wl / BPS) * g2 + ((wl % BPS) * g2 + BPS - 1) / BPS);
+                        // (The band of a leg that leaves alone: the row's.)
+                        asked = gl - int(byte[8](row.slice(80, 88)));
                         if (asked < 0) { asked = 0; }
                         // (What the account owes its shard is set against what the leg asks of it: the account
                         // owes that much less. Review 64, F112.)
@@ -401,7 +408,7 @@ contract KpfTCEnd(int init_version) {
                         if (when < grace) { when = grace; }
                     }
                     if (fee > room1 - pay) { fee = room1 - pay; }
-                    due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(200, 232))) + mv.slice(0, 67) + byte[]((coins - pay - fee) as byte[8]) + mv.slice(75, 76) + byte[]((owes + more) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - fee) as byte[8]);
+                    due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + byte[](0x20) + row.slice(224, 256))) + mv.slice(0, 67) + byte[]((coins - pay - fee) as byte[8]) + mv.slice(75, 76) + byte[]((owes + more) as byte[8]) + mv.slice(84, 121) + byte[]((count - 1) as byte[8]) + mv.slice(129, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - pay - fee) as byte[8]);
                     if (fee > 0) {
                         due = due + byte[](0x01) + byte[](claimer) + byte[](fee as byte[8]);
                     }

@@ -3982,7 +3982,7 @@ fn legs_of_one_market_next_to_one_another_are_asked_what_they_can_lose_together(
     let max = 100 * KAS1 - keep;
     assert!(state(&pair, KIND_C_TAKE, max + 1, 0, &a).is_err(), "a sompi more");
     let (live, s, o, _) = c_applied(&w, "a take from a hedge", &pair, KIND_C_TAKE, max, 0, &a, &w.w);
-    assert_eq!((o.after.clone().unwrap().a_margin, s.head, s.said().len()), (keep, pair.s.c_head(), 80 + 2 * 232));
+    assert_eq!((o.after.clone().unwrap().a_margin, s.head, s.said().len()), (keep, pair.s.c_head(), 80 + 2 * 256));
     assert_eq!((s.rows[0].closed(), s.rows[1].closed(), s.rows[1].ls, s.rows[1].w), (Some((605 * KAS1 / 100, 605 * KAS1 / 100)), Some((0, 0)), 10 * KAS1, 220 * KAS1));
     end_answered(&w, "a take from a hedge", &pair, &live, &s, true);
     // The two rows are right, each shown its leg (the second, the leg before as well).

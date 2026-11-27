@@ -37,9 +37,9 @@ fn token(market: u8) -> XLeg {
 }
 
 #[test]
-fn a_row_is_232_bytes_with_todays_seven_numbers_where_they_are() {
+fn a_row_is_256_bytes_with_todays_seven_numbers_where_they_are() {
     let mut r = CRow::ZERO;
-    let n = [&mut r.a, &mut r.gain, &mut r.w, &mut r.ws, &mut r.ls, &mut r.gl, &mut r.tk, &mut r.q, &mut r.m, &mut r.ba, &mut r.bl, &mut r.dda, &mut r.dua, &mut r.ra, &mut r.dds, &mut r.dus, &mut r.rs, &mut r.rl, &mut r.pa, &mut r.ps, &mut r.po];
+    let n = [&mut r.a, &mut r.gain, &mut r.w, &mut r.ws, &mut r.ls, &mut r.gl, &mut r.tk, &mut r.q, &mut r.m, &mut r.ba, &mut r.bl, &mut r.dda, &mut r.dua, &mut r.ra, &mut r.dds, &mut r.dus, &mut r.rs, &mut r.rl, &mut r.pa, &mut r.ps, &mut r.po, &mut r.ddb, &mut r.dub, &mut r.ns];
     for (i, x) in n.into_iter().enumerate() {
         *x = 1_000 + i as i64 * if i % 2 == 0 { 1 } else { -1 };
     }
@@ -50,7 +50,7 @@ fn a_row_is_232_bytes_with_todays_seven_numbers_where_they_are() {
     assert!(CRow::read(&b[1..]).is_none());
     let today = Row { a: r.a, gain: r.gain, wa: r.w, wb: r.ws, ea: r.ls, eb: r.gl, tk: r.tk, g: r.g, h: r.h }.c_bytes();
     assert_eq!(&b[..56], &today[..56], "the price and the six sums of today's row");
-    assert_eq!((&b[168..200], &b[200..232]), (&today[56..88], &today[88..120]), "the two chains");
+    assert_eq!((&b[192..224], &b[224..256]), (&today[56..88], &today[88..120]), "the two chains");
     assert_eq!(CHead::read(&HEAD.bytes()), Some(HEAD));
     assert_eq!((HEAD.bytes().len(), HEAD.lower()), (CHEAD_LEN, 450));
     assert_eq!(CHead { rate: 60, tolerance: 50, ..HEAD }.lower(), 0);
@@ -103,7 +103,7 @@ fn the_row_holds_what_todays_row_holds_and_asks_what_its_groups_can_lose() {
             marks += (which == 3) as i64;
             // What is asked: over the groups as they stand, of all and of those that stay.
             let last = rows.last().unwrap();
-            let asked = |stays_only: bool| -> i64 {
+            let asked_at = |stays_only: bool, rate: i64| -> i64 {
                 let (mut r, mut dd, mut du) = (0, 0, 0);
                 for (i, l) in legs.iter().enumerate() {
                     if i > 0 && legs[i - 1].market != l.market {
@@ -113,7 +113,7 @@ fn the_row_holds_what_todays_row_holds_and_asks_what_its_groups_can_lose() {
                     if l.dir == DIR_SPOT || (stays_only && part(i) != Part::Stays) {
                         continue;
                     }
-                    let (lo, up) = ends(a[i], HEAD.rate).unwrap();
+                    let (lo, up) = ends(a[i], rate).unwrap();
                     let w = |p: i64| (l.size as i128 * p as i128 / l.scale as i128) as i64;
                     let s = if l.dir == LONG { 1 } else { -1 };
                     dd += s * (w(lo) - w(a[i]));
@@ -121,6 +121,7 @@ fn the_row_holds_what_todays_row_holds_and_asks_what_its_groups_can_lose() {
                 }
                 r + lost(dd, du)
             };
+            let asked = |stays_only: bool| asked_at(stays_only, HEAD.rate);
             assert_eq!(last.closed(), Some((asked(false), asked(true))), "kind {kind}: {legs:?}");
             let today = (last.w / 10_000) * HEAD.rate + ((last.w % 10_000) * HEAD.rate + 9_999) / 10_000;
             // (The rounding: a step of the price on each leg's units, and a sompi. Review T12, E10.)
@@ -133,7 +134,17 @@ fn the_row_holds_what_todays_row_holds_and_asks_what_its_groups_can_lose() {
                 (w / 10_000) * 100 + ((w % 10_000) * 100 + 9_999) / 10_000
             };
             let fut = |i: &usize| legs[*i].dir != DIR_SPOT;
-            assert_eq!(last.ba, (0..legs.len()).filter(fut).map(band).sum::<i64>());
+            // (The band of every leg leaving, docs 17.8i: each leg's entry's part, the tolerance of its worth, and
+            // what the groups lose by a move of the tolerance. A hedge: half the gross band; one leg: the band of
+            // its worth, twice the tolerance, to a step of the price on its units.)
+            let entry_part = |i: usize| -> i64 {
+                let w = (legs[i].size as i128 * a[i] as i128 / legs[i].scale as i128) as i64;
+                (w / 10_000) * 50 + ((w % 10_000) * 50 + 9_999) / 10_000
+            };
+            assert_eq!(last.band(), Some((0..legs.len()).filter(fut).map(entry_part).sum::<i64>() + asked_at(false, HEAD.tolerance)), "kind {kind}: {legs:?}");
+            let gross: i64 = (0..legs.len()).filter(fut).map(band).sum();
+            assert!(last.band().unwrap() <= gross + slack && last.band().unwrap() >= gross / 2 - 1, "the band of every leg is between half the gross band and the whole");
+            assert_eq!(last.ns, (0..legs.len()).filter(fut).filter(|i| part(*i) == Part::Stays).count() as i64, "the legs that stay that are not held options");
             assert_eq!(last.bl, (0..legs.len()).filter(fut).filter(|i| part(*i) != Part::Stays).map(band).sum::<i64>());
             assert_eq!(last.m, 0, "no step: nothing moves to a second price");
         }

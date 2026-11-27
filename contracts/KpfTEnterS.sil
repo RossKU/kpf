@@ -157,8 +157,8 @@ contract KpfTEnterS(int init_version) {
         require(count >= 0);
         require(count < LEGS_MAX);
         // What is said: the coins added, the row, the leg, and a trace of at least the leg's row.
-        require(said.length >= 399);
-        require((said.length - 167) % 232 == 0);
+        require(said.length >= 423);
+        require((said.length - 167) % 256 == 0);
         int add = iAt(said, 0);
         int r = iAt(said, 8);
         require(add >= 0);

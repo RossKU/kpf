@@ -6,7 +6,7 @@ pragma silverscript ^0.1.0;
 // liquidation (9). What is stated: the amount (a take's; a step's fee) and the leg that leaves (0 none, -1 every
 // leg), 8 bytes each; the chain of the leg that leaves alone (blake2b(32 zero bytes + the leg): what its note names
 // it by); then the head (the rate, the tolerance, T and the lines, 8 bytes each: docs 17.8h) and a trace, a row of
-// 232 bytes a leg (the price, six sums, a step's price, thirteen sums more, two chains; the model is crow.rs):
+// 256 bytes a leg (the price, six sums, a step's price, sixteen numbers more, two chains; the model is crow.rs):
 //   a_i    the price stated for leg i
 //   G_i    what the legs 1..i gained or lost at the prices stated            (the user's standing is of this net)
 //   W_i    what they are worth
@@ -155,8 +155,8 @@ contract KpfTCRow(int init_version) {
         require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         // The point answered is the one disputed; or any other, where the answer is that it is wrong.
         require(at == point || verdict == 0);
-        int n = rows.length / 232;
-        require(rows.length == 232 * n);
+        int n = rows.length / 256;
+        require(rows.length == 256 * n);
         require(kind >= 7);
         // (12, a split: its rows are a leaving's of one leg.)
         // (13, a mark: the leg named stays, at the entry the statement says.)
@@ -171,26 +171,26 @@ contract KpfTCRow(int init_version) {
             require(at % 2 == 1);
             byte[] z8 = byte[](0 as byte[8]);
             byte[] z32 = z8 + z8 + z8 + z8;
-            byte[] row = rows.slice(232 * (i - 1), 232 * i);
-            byte[] before = z32 + z32 + z32 + z32 + z32 + z8 + z32 + z32;
+            byte[] row = rows.slice(256 * (i - 1), 256 * i);
+            byte[] before = z32 + z32 + z32 + z32 + z32 + z32 + z32 + z32;
             // (The chain two rows before: what the row before's chain is opened from.)
             byte[] g2 = z32;
             if (i > 1) {
-                before = rows.slice(232 * (i - 2), 232 * (i - 1));
+                before = rows.slice(256 * (i - 2), 256 * (i - 1));
             }
             if (i > 2) {
-                g2 = rows.slice(232 * (i - 3) + 168, 232 * (i - 3) + 200);
+                g2 = rows.slice(256 * (i - 3) + 192, 256 * (i - 3) + 224);
             }
             // The row's chain is opened: a chain before it and a leg that hash to it. Where that chain is not the
             // row before's, the row is wrong. (A chain of 32 zero bytes is the seed of every chain and of no leg:
             // a row that carries it is wrong, with no leg shown.)
             byte[] lg = byte[](leg);
-            if (row.slice(168, 200) == z32) {
+            if (row.slice(192, 224) == z32) {
                 ok = 0;
             } else {
-                require(blake2b(byte[](prev) + lg) == byte[32](row.slice(168, 200)));
+                require(blake2b(byte[](prev) + lg) == byte[32](row.slice(192, 224)));
             }
-            if (byte[](prev) != before.slice(168, 200)) { ok = 0; }
+            if (byte[](prev) != before.slice(192, 224)) { ok = 0; }
             // The leg before, shown: the row before's chain opened from the chain two rows before (asked, not
             // judged: a false leg shown would make a right row wrong). A leg of its market goes on with its group
             // and says its two prices; a leg of another closes the group (docs 17.4, 17.8h).
@@ -198,7 +198,7 @@ contract KpfTCRow(int init_version) {
             if (i > 1) {
                 if (ok == 1) {
                     require(legb.length == 111);
-                    require(blake2b(g2 + legb) == byte[32](before.slice(168, 200)));
+                    require(blake2b(g2 + legb) == byte[32](before.slice(192, 224)));
                     if (legb.slice(0, 33) == lg.slice(0, 33)) { same = 1; }
                 }
             }
@@ -291,8 +291,29 @@ contract KpfTCRow(int init_version) {
                     du = 0 - du;
                     mq = 0 - mq;
                 }
-                // (Its band: twice the tolerance of its worth.)
+                // (Its band where it leaves alone: twice the tolerance of its worth. Its entry's part: the tolerance
+                // of its worth. What it gains to the two ends of a move of the tolerance. Docs 17.8i.)
                 int bd = (worth / BPS) * (tol + tol) + ((worth % BPS) * (tol + tol) + BPS - 1) / BPS;
+                int be = (worth / BPS) * tol + ((worth % BPS) * tol + BPS - 1) / BPS;
+                int dt = (a / BPS) * tol + ((a % BPS) * tol + BPS - 1) / BPS;
+                int dlb = a - dt;
+                if (dlb < 0) { dlb = 0; }
+                if (dir == 7) {
+                    dlb = a;
+                    dt = 0;
+                }
+                dlb = quoteAt(size, scale, dlb) - worth;
+                int dub = quoteAt(size, scale, a + dt) - worth;
+                if (dir != DIR_LONG) {
+                    dlb = 0 - dlb;
+                    dub = 0 - dub;
+                }
+                // (The band of all the legs, the open group's two sums at the tolerance, and how many of the legs
+                // that stay are not held options.)
+                int ba = int(byte[8](before.slice(72, 80)));
+                int tdd = int(byte[8](before.slice(168, 176)));
+                int tdu = int(byte[8](before.slice(176, 184)));
+                int ns = int(byte[8](before.slice(184, 192)));
                 // The two sums of the group that is open and R of the groups closed: of all the legs, and of those
                 // that stay. A leg of another market than the leg before's closes the group.
                 int dda = int(byte[8](before.slice(88, 96)));
@@ -307,6 +328,10 @@ contract KpfTCRow(int init_version) {
                         if (dda < 0) { rall = rall - dda; }
                         if (dus < dds) { dds = dus; }
                         if (dds < 0) { rst = rst - dds; }
+                        if (tdu < tdd) { tdd = tdu; }
+                        if (tdd < 0) { ba = ba - tdd; }
+                        tdd = 0;
+                        tdu = 0;
                         dda = 0;
                         dua = 0;
                         dds = 0;
@@ -325,7 +350,7 @@ contract KpfTCRow(int init_version) {
                 int dbl = 0;
                 int drl = 0;
                 int stays = 0;
-                byte[32] h = byte[32](before.slice(200, 232));
+                byte[32] h = byte[32](before.slice(224, 256));
                 if (dir == 7) {
                     // A token leg that stays: nothing for the legs' worth, for what they gained or for what is
                     // asked; what it counts, as coins, is its worth at the price stated less its discount (in basis
@@ -337,7 +362,8 @@ contract KpfTCRow(int init_version) {
                     du = 0;
                     mq = 0;
                     bd = 0;
-                    h = blake2b(before.slice(200, 232) + lg);
+                    be = 0;
+                    h = blake2b(before.slice(224, 256) + lg);
                     if (disc < 0 || disc > 10000) {
                         ok = 0;
                     } else {
@@ -347,7 +373,7 @@ contract KpfTCRow(int init_version) {
                         // (The token leg named, kinds 14 and 15: it leaves the chain; its worth whole is the fifth
                         // sum; and it counts in the sixth only where it is sold, 15: a step is due by the account
                         // as it stands before the sale.)
-                        h = byte[32](before.slice(200, 232));
+                        h = byte[32](before.slice(224, 256));
                         gl = worth;
                         tkd = 0;
                     }
@@ -374,14 +400,14 @@ contract KpfTCRow(int init_version) {
                                 gl = 0 - gl;
                                 dg = 0 - dg;
                             }
-                            h = blake2b(before.slice(200, 232) + lg.slice(0, 103) + byte[](ne as byte[8]));
+                            h = blake2b(before.slice(224, 256) + lg.slice(0, 103) + byte[](ne as byte[8]));
                         }
                     }
                 } else {
                     ws = worth;
                     stays = 1;
                     if (d < 0) { ls = 0 - d; }
-                    h = blake2b(before.slice(200, 232) + lg);
+                    h = blake2b(before.slice(224, 256) + lg);
                     if (kind == 13) { dg = 0; }
                 }
                 dda = dda + dl;
@@ -389,14 +415,19 @@ contract KpfTCRow(int init_version) {
                 if (stays == 1) {
                     dds = dds + dl;
                     dus = dus + du;
+                    ns = ns + 1;
                 }
+                ba = ba + be;
+                tdd = tdd + dlb;
+                tdu = tdu + dub;
                 // The row is the row before with the leg's numbers: today's six sums; then what the legs gain to
                 // the step's price, the bands, the two sums and R twice, what the legs that leave can lose alone;
                 // and the options' numbers as they were (docs 17.8h: nothing, before the option leg).
                 if (row.slice(8, 56) != byte[]((int(byte[8](before.slice(8, 16))) + dg) as byte[8]) + byte[]((int(byte[8](before.slice(16, 24))) + dw) as byte[8]) + byte[]((int(byte[8](before.slice(24, 32))) + ws) as byte[8]) + byte[]((int(byte[8](before.slice(32, 40))) + ls) as byte[8]) + byte[]((int(byte[8](before.slice(40, 48))) + gl) as byte[8]) + byte[]((int(byte[8](before.slice(48, 56))) + tkd) as byte[8])) { ok = 0; }
-                if (row.slice(64, 144) != byte[]((int(byte[8](before.slice(64, 72))) + mq) as byte[8]) + byte[]((int(byte[8](before.slice(72, 80))) + bd) as byte[8]) + byte[]((int(byte[8](before.slice(80, 88))) + dbl) as byte[8]) + byte[](dda as byte[8]) + byte[](dua as byte[8]) + byte[](rall as byte[8]) + byte[](dds as byte[8]) + byte[](dus as byte[8]) + byte[](rst as byte[8]) + byte[]((int(byte[8](before.slice(136, 144))) + drl) as byte[8])) { ok = 0; }
+                if (row.slice(64, 144) != byte[]((int(byte[8](before.slice(64, 72))) + mq) as byte[8]) + byte[](ba as byte[8]) + byte[]((int(byte[8](before.slice(80, 88))) + dbl) as byte[8]) + byte[](dda as byte[8]) + byte[](dua as byte[8]) + byte[](rall as byte[8]) + byte[](dds as byte[8]) + byte[](dus as byte[8]) + byte[](rst as byte[8]) + byte[]((int(byte[8](before.slice(136, 144))) + drl) as byte[8])) { ok = 0; }
                 if (row.slice(144, 168) != before.slice(144, 168)) { ok = 0; }
-                if (h != byte[32](row.slice(200, 232))) { ok = 0; }
+                if (row.slice(168, 192) != byte[](tdd as byte[8]) + byte[](tdu as byte[8]) + byte[](ns as byte[8])) { ok = 0; }
+                if (h != byte[32](row.slice(224, 256))) { ok = 0; }
             }
         }
         require(ok == verdict);
