@@ -320,13 +320,19 @@ contract KpfTCRow(int init_version) {
                     int day = int(byte[8](lg.slice(42, 50)));
                     // Wrong, before anything: a strike out of its market's range, a premium below nothing, an
                     // ended leg (it leaves by the day's transaction), a leaving or a mark that names it (nobody
-                    // exercises before the day), and the leg an entry says (an option enters by the seventh step).
+                    // exercises before the day), and the leg an entry says where its time is not the statement's or
+                    // its day is within T of it.
                     if (strike <= 0 || strike > int(byte[8](lg.slice(76, 84))) || pu < 0 || pu > int(byte[8](lg.slice(76, 84))) || day <= t0) { ok = 0; }
                     if (leaves == 1) {
                         if (kind == 8 || kind == 13) { ok = 0; }
                     }
                     if (kind == 10) {
-                        if (i == n) { ok = 0; }
+                        if (i == n) {
+                            // (The leg that enters: of the statement's time, its day more than T after it. Docs
+                            // 17.8j, 8.)
+                            if (lg.slice(34, 42) != byte[](t0 as byte[8])) { ok = 0; }
+                            if (day - t0 <= int(byte[8](said.slice(hd + 16, hd + 24)))) { ok = 0; }
+                        }
                     }
                     if (ok == 1) {
                         int cs = 1;

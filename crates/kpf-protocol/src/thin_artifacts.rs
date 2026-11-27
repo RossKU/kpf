@@ -13,7 +13,7 @@ use serde::Deserialize;
 use silverscript_abi::SilAbiArtifact;
 
 const MANIFEST_JSON: &str = include_str!("../../../contracts/artifacts/manifest.json");
-const TEXTS: [(&str, &str); 82] = [
+const TEXTS: [(&str, &str); 83] = [
     ("KpfSlot", include_str!("../../../contracts/artifacts/KpfSlot.json")),
     ("KpfTAdd", include_str!("../../../contracts/artifacts/KpfTAdd.json")),
     ("KpfTBoth", include_str!("../../../contracts/artifacts/KpfTBoth.json")),
@@ -46,6 +46,7 @@ const TEXTS: [(&str, &str); 82] = [
     ("KpfTRowIn", include_str!("../../../contracts/artifacts/KpfTRowIn.json")),
     ("KpfTRowOut", include_str!("../../../contracts/artifacts/KpfTRowOut.json")),
     ("KpfTShardRowD", include_str!("../../../contracts/artifacts/KpfTShardRowD.json")),
+    ("KpfTEnterSD", include_str!("../../../contracts/artifacts/KpfTEnterSD.json")),
     ("KpfTCite", include_str!("../../../contracts/artifacts/KpfTCite.json")),
     ("KpfTChange", include_str!("../../../contracts/artifacts/KpfTChange.json")),
     ("KpfTChangeSettle", include_str!("../../../contracts/artifacts/KpfTChangeSettle.json")),
@@ -107,7 +108,7 @@ pub const NOTE: &str = "KpfNote";
 /// The scripts that take no oracle fees of their own use: they collect them.
 pub const COLLECTORS: [&str; 2] = ["KpfTSweep", "KpfTPay"];
 /// The scripts of a library, in the order its genesis writes them.
-pub const SCRIPTS: [&str; 79] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTDay", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTRowIn", "KpfTRowOut", "KpfTShardRowD", "KpfTSweep", "KpfTPay"];
+pub const SCRIPTS: [&str; 80] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTDay", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTRowIn", "KpfTRowOut", "KpfTShardRowD", "KpfTEnterSD", "KpfTSweep", "KpfTPay"];
 
 /// (name, the artifact's text) of the pinned artifacts.
 pub fn artifact_texts() -> &'static [(&'static str, &'static str)] {

@@ -1624,7 +1624,9 @@ fn t15_held_rows_of_an_entry_beside_options_the_engine_takes_the_models_verdict(
             0 => XLeg { entry: p + 1, ..base },
             1 | 2 => {
                 last_option += 1;
-                XLeg { dir: r.pick(&[CALL_HELD, CALL_WRITTEN, PUT_HELD, PUT_WRITTEN]), committee: leg_more(T0, FAR, p / 100 * r.range(95, 106), KAS1 / 5), ..base }
+                // (17.8j, 8: an option is the leg an entry says where its time is the statement's and its day is more than
+                // T after it. The one of another time is wrong whatever its row sums.)
+                XLeg { dir: r.pick(&[CALL_HELD, CALL_WRITTEN, PUT_HELD, PUT_WRITTEN]), committee: leg_more(if what == 2 { T0 - 1 } else { T0 }, FAR, p / 100 * r.range(95, 106), KAS1 / 5), ..base }
             }
             3 => XLeg { dir: DIR_SPOT, committee: [0x99; 32], entry: 2_000, ..base },
             _ => base,
@@ -1663,11 +1665,11 @@ fn t15_held_rows_of_an_entry_beside_options_the_engine_takes_the_models_verdict(
             }
             let is_last = i == legs.len();
             // (The leg an entry says: a futures leg at its entry, or the row is wrong.)
-            let rule_last = is_last && (what <= 3) && model != Some(false);
+            let rule_last = is_last && (what == 0 || what == 2 || what == 3) && model != Some(false);
             if engine != verdicts(model) || rule_last {
                 parts.push(format!("entry {n}, row {i} of {} ({what}): leg {:?} at {}: the model says {model:?}, the engine takes {engine:?}", legs.len(), legs[i - 1], a[i - 1]));
             }
-            if is_last && what <= 3 {
+            if is_last && (what == 0 || what == 2 || what == 3) {
                 last_off += 1;
             }
             if n % 30 == 0 && model == Some(true) {

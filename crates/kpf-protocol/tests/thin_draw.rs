@@ -4425,3 +4425,124 @@ fn a_dated_row_of_a_trace_is_answered_at_the_engine() {
     }
     println!("a dated row answered: {} to {} bytes", sizes.iter().min().unwrap(), sizes.iter().max().unwrap());
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, B1: an option enters (`KpfTEnterSD`; the leg an entry says in `KpfTCRow`).
+
+/// The owner lists two series of market 0 (calls at 11 and calls at 9, one day). A user's account takes a call it
+/// HOLDS at 11 (out of the money at its entry, 10): the statement is made with the shard, whose tree's row has the
+/// leg from there (the clearing side wrote ten units; nothing entered); the entry's end and its row are answered
+/// right, and wrong by nobody; applied, the account has the leg with its day, strike and premium. Then a call the
+/// user WRITES at 9 (in the money by 1 a unit): the row and the shard's one number take what it is worth exercised
+/// at its entry. Refused: another shard after (the row without the leg, its units the other way, the root or the
+/// sum as before); a series that is not listed; another scale; a day within T of the statement's time, by the
+/// row; a shard that does not hold what the row is asked with the leg.
+#[test]
+fn an_option_enters_a_covered_account_and_its_row_in_the_shards_tree() {
+    use kpf_protocol::books::{Books, Key, Row, OF_CALLS};
+    let w = world();
+    let h = w.head(0);
+    let scale = h.scale;
+    let base = seeded(&w);
+    let committee = w.markets[0].committee_id;
+    let day = T0 + 1_000_000;
+    let (k11, k9) = (Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 11 }, Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 9 });
+    let (s1, b1) = base.s.row_in(&Books::opened(), k11, scale, h.price_max, 0, 1, Some(2)).unwrap();
+    let (s2, b2) = s1.row_in(&b1, k9, scale, h.price_max, 0, 3, None).unwrap();
+    let shard = OLive { s: s2, ..base.clone() };
+    let enter = w.script("KpfTEnterSD");
+    let f = [fund(xk(&w.w), 33)];
+    let life = shard.s.t.late_daa + 2 * shard.s.dispute_daa;
+
+    // A call held: ten units at 11 for 0.5 a unit, into an account of 20 KAS.
+    let acct = cov(&w, &shard, &[], 20 * KAS1);
+    let held = oleg(&w, 0, 3, 10, P10 / 10 * 11, P10, day, KAS1 / 2);
+    let (b, st, said, marked, after, next, b3) = c_enter_state_d(&w.lib, &acct, &shard, &b2, &enter, SEED, committee, held, 0, &[], T0, w.payer(&w.w, &f)).unwrap();
+    let sg = signed("an option's entry stated with the shard", &b, &w.keys);
+    let entered = kpf_protocol::covered::leg_entered(&held, T0);
+    assert_eq!(kpf_protocol::crow::option_of(&entered).map(|o| (o.call, o.held, o.day, o.strike, o.premium)), Some((true, true, day, P10 / 10 * 11, KAS1 / 2)), "the leg keeps its day, strike and premium, and says the time it entered");
+    assert_eq!((marked.0.legs.clone(), said.leg), (vec![entered], entered));
+    let row = b3.row(&k11).unwrap();
+    assert_eq!((row.net, row.gross, row.entered), (-10 * scale, 10 * scale, 0), "the clearing side wrote ten units, out of the money at the entry");
+    assert_eq!(next, Shard { root: b3.root(), dgross: 10 * scale, expiry: T0 + life, ..shard.s }, "the shard: the root, the sum of the gross, its time; the four rows as they were");
+    assert_eq!((sg.tx.outputs[2].value, &sg.tx.outputs[2].script_public_key), (shard.value, &hash_spk(&w.lib, &next.hash())));
+    // (Another shard after: refused.)
+    let other = |row: Row| {
+        let mut b = b2.clone();
+        let at = b.place_of(&k11).unwrap();
+        b.leaves[at] = Some(row);
+        b.root()
+    };
+    let r0 = b2.row(&k11).unwrap();
+    for (what, wrong) in [
+        ("the root as before", Shard { root: shard.s.root, ..next }),
+        ("the sum of the gross as before", Shard { dgross: 0, ..next }),
+        ("the units the other way", Shard { root: other(Row { net: 10 * scale, gross: 10 * scale, ..r0 }), ..next }),
+        ("a unit less in the row", Shard { root: other(Row { net: -10 * scale + 1, gross: 10 * scale, ..r0 }), ..next }),
+        ("something entered", Shard { root: other(Row { net: -10 * scale, gross: 10 * scale, entered: 1, ..r0 }), ..next }),
+        ("the shard's number of what was entered moved", Shard { basis: 1, ..next }),
+        ("the shard's time as before", Shard { expiry: shard.s.expiry, ..next }),
+    ] {
+        let mut t = b.clone();
+        t.tx.outputs[2].script_public_key = hash_spk(&w.lib, &wrong.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    // Its points: the end and the row of the leg that enters, right; the other verdict refused.
+    let live = nth(&sg, 0, st, 6_510);
+    let ff = [fund(xk(&w.f), 36)];
+    let q = w.pointed(&live, 0);
+    let (bb, right) = c_enter_end(&w.lib, &q, &marked, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("the end of an option's entry answered right", &bb, &w.keys);
+    let (bb, _) = c_enter_end(&w.lib, &q, &marked, &said, &w.script("KpfTCEnter"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
+    assert!(!accepted(&bb, &w.keys));
+    let q = w.pointed(&live, 1);
+    let (bb, right) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], None, &said.leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), None).unwrap();
+    assert!(right);
+    signed("the row of the option that enters answered right", &bb, &w.keys);
+    let (bb, _) = c_enter_row(&w.lib, &q, &said, 1, &[0; 32], None, &said.leg, &w.script("KpfTCRow"), xk(&w.f), w.payer(&w.f, &ff), Some(false)).unwrap();
+    assert!(!accepted(&bb, &w.keys));
+    // Applied: the account with the leg.
+    let bb = stated_settle(&w.lib, &live, &w.script("KpfTChangeSettle"), w.payer(&w.w, &f)).unwrap();
+    let ap = signed("the option's entry applied", &bb, &w.keys);
+    assert_eq!((after.legs.clone(), after.a_margin, after.a_min_counter), (vec![entered], 20 * KAS1, 1));
+    assert_eq!(&ap.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &after.hash()));
+
+    // A call written at 9, in the money by 1 a unit at its entry: the owner's premium (2 a unit) is added with it.
+    let shard2 = OLive { s: Shard { expiry: 0, ..next }, ..shard.clone() };
+    let acct2 = cov(&w, &shard2, &[], 40 * KAS1);
+    let written = oleg(&w, 0, 4, 10, P10 / 10 * 9, P10, day, 2 * KAS1);
+    let (b, _, said2, _, _, next2, b4) = c_enter_state_d(&w.lib, &acct2, &shard2, &b3, &enter, SEED, committee, written, 20 * KAS1, &[], T0, w.payer(&w.w, &f)).unwrap();
+    signed("a written call's entry stated", &b, &w.keys);
+    let row = b4.row(&k9).unwrap();
+    assert_eq!((row.net, row.gross, row.entered, next2.basis, next2.dgross, said2.add), (10 * scale, 10 * scale, 10 * KAS1, 10 * KAS1, 20 * scale, 20 * KAS1), "the clearing side holds ten units worth 1 each exercised at the entry");
+
+    // Refused by the rule: a series that is not listed; another scale; a day within T of the statement's time (the
+    // account's row); a called shard.
+    let none = oleg(&w, 0, 3, 10, P10 / 10 * 12, P10, day, KAS1 / 2);
+    assert!(c_enter_state_d(&w.lib, &acct, &shard, &b2, &enter, SEED, committee, none, 0, &[], T0, w.payer(&w.w, &f)).is_err(), "a series that is not listed");
+    assert!(c_enter_state_d(&w.lib, &acct, &shard, &b2, &enter, SEED, committee, XLeg { scale: scale / 10, ..held }, 0, &[], T0, w.payer(&w.w, &f)).is_err(), "another scale than the row's");
+    let called = OLive { s: Shard { called: 6_000, ..shard.s }, ..shard.clone() };
+    assert!(c_enter_state_d(&w.lib, &acct, &called, &b2, &enter, SEED, committee, held, 0, &[], T0, w.payer(&w.w, &f)).is_err(), "a called shard");
+    let near = Key { day: T0 + 10, ..k11 };
+    let (s5, b5) = shard.s.row_in(&b2, near, scale, h.price_max, 0, 7, Some(8)).unwrap();
+    let soon = oleg(&w, 0, 3, 10, P10 / 10 * 11, P10, T0 + 10, KAS1 / 2);
+    assert!(c_enter_state_d(&w.lib, &acct, &OLive { s: s5, ..shard.clone() }, &b5, &enter, SEED, committee, soon, 0, &[], T0, w.payer(&w.w, &f)).is_err(), "an option within T of its day");
+    // The row's gate: a shard that holds 1 KAS takes no ten calls held at 9.9 (the row is asked what it loses by a
+    // move of the rate up); with what the row is asked, it does.
+    let k99 = Key { strike: P10 / 100 * 99, ..k11 };
+    let (s6, b6) = shard.s.row_in(&b2, k99, scale, h.price_max, 0, 9, None).unwrap();
+    let itm = oleg(&w, 0, 3, 100, P10 / 100 * 99, P10, day, KAS1 / 2);
+    let acct3 = cov(&w, &shard, &[], 200 * KAS1);
+    let poor = OLive { s: Shard { held: KAS1, ..s6 }, value: (KAS1 + SHARD_CARRIER) as u64, ..shard.clone() };
+    assert!(c_enter_state_d(&w.lib, &acct3, &poor, &b6, &enter, SEED, committee, itm, 0, &[], T0, w.payer(&w.w, &f)).is_err(), "the row's gate");
+    let rich = OLive { s: Shard { held: 100 * KAS1, ..s6 }, value: (100 * KAS1 + SHARD_CARRIER) as u64, ..shard.clone() };
+    let (b, _, _, _, _, _, _) = c_enter_state_d(&w.lib, &acct3, &rich, &b6, &enter, SEED, committee, itm, 0, &[], T0, w.payer(&w.w, &f)).unwrap();
+    signed("an entry into a row whose gate the shard holds", &b, &w.keys);
+    // (And at the engine the same statement on the poor shard is refused, with the shard after the model would
+    // write were there no gate.)
+    let (st_p, said_p, _, _) = acct3.s.c_enter(itm, 0, 0, &[], T0, acct3.value as i64).unwrap();
+    let after_p = Shard { held: KAS1, ..s6.entered_d(&b6, &kpf_protocol::covered::leg_entered(&itm, T0), T0).map(|x| x.0).unwrap_or(s6) };
+    let forced = c_enter_state_d_as(&w.lib, &acct3, &poor, &b6, &enter, SEED, committee, &st_p, &said_p, &after_p, w.payer(&w.w, &f));
+    assert!(forced.is_err() || !accepted(&forced.unwrap(), &w.keys), "the gate, at the engine");
+}

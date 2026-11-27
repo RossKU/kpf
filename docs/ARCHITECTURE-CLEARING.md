@@ -5175,6 +5175,41 @@ review at the engine after the third).
 **Not in B**: a call's step over option legs and the call's list with units in dated rows (C; review T17, V4);
 everything of the day (D).
 
+**B1 as it is built: an option enters** (the engine; `s505` to `s508`; `KpfTEnterSD` is written from `KpfTEnterS` by
+`s506_b1_enter_sd.py`, run after `s478`; `KpfTCRow`'s part is in `s505`, run after `s499`; the library has 80
+scripts). 798 tests: 796 passed in the one run of all, and the two that failed hold the rule as it is and pass in
+their files (below).
+- **The model**: `Shard::book_of_option` (the row's key, the clearing side's units, what the leg is worth
+  exercised at its entry), `dated_gate`, `entered_d`; `c_marked` takes an option leg; `leg_entered` keeps an
+  option's day, strike and premium; `c_enter` states no entry of an option within T of its day (the script that
+  states takes any day after the time: the row is what is answered wrong).
+- **`KpfTCRow`** (7,778 bytes; 7,520): the last row of an entry is an option leg's that stays where the leg's
+  time is the statement's and its day is more than T after it; else wrong, as it was for every option.
+- **`KpfTEnterSD.state`** (4,271 bytes; the twin 3,039): as the list says. **Found while building: a call of a
+  function takes a place of a script's stack for good**, and `KpfTEnterS` stands at the 244 an entry has: the
+  twin's block reads its numbers and writes its pushes in place, names a number once and writes over it, and
+  computes the gate in a loop of two (with the leg, without it) where a function called twice did not fit. The
+  row among the four that the statement says is read by nothing.
+- **At the engine** (`thin_draw.rs`, `an_option_enters_a_covered_account_and_its_row_in_the_shards_tree`): two
+  series listed; a call held at 11 enters an account of 20 KAS: the row has ten units written by the clearing
+  side and nothing entered, the shard its root, the sum of the gross and its time, the four rows as they were;
+  seven other shards after are refused (the root or the sum as before, the units the other way, a unit less,
+  something entered, the shard's number moved, its time as before); the entry's end and the row of the leg are
+  answered right and wrong by nobody; applied, the account has the leg with its day, its strike and its
+  premium. A call written at 9 with the price at 10: the row and the shard's one number take the 10 KAS it is
+  worth exercised at its entry. Refused: a series that is not listed, another scale than the row's, a called
+  shard, an option within T of its day; **the row's gate**: a shard that holds 1 KAS takes no hundred calls
+  held at 9.9, by the model and at the engine, and one that holds 100 does.
+- **Measured**: an option's entry stated 7,400 bytes (a futures leg's 5,833: the leaf and its path, and the
+  script 1,232 more); its end answered 3,864; its row answered 9,447; applied 2,513.
+- **Two earlier tests say the rule as it is.** Review T15's rows of an entry held every option that an entry
+  says wrong: an option of the statement's time is right there now, on 900 entries at random beside option legs,
+  and one of another time is wrong whatever its row sums. A list of the scripts that read a shard's time has
+  `KpfTEnterSD`.
+- **Not in B1**: the premium of a written option is added with the entry and does not return where the entry
+  ends unapplied (B2); no note takes an option leg out of its row (B3): until then an option that entered leaves
+  the books by nothing.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

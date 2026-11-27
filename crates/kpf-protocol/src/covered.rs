@@ -190,7 +190,11 @@ pub fn leg_time(l: &XLeg) -> i64 {
 
 /// The leg as it stands in a covered account it entered at `t0`.
 pub fn leg_entered(l: &XLeg, t0: i64) -> XLeg {
-    XLeg { committee: leg_more(t0, 0, 0, 0), ..*l }
+    // (An option leg keeps its day, its strike and its premium a unit: docs 17.2.)
+    match crate::crow::option_of(l) {
+        Some(o) => XLeg { committee: leg_more(t0, o.day, o.strike, o.premium), ..*l },
+        None => XLeg { committee: leg_more(t0, 0, 0, 0), ..*l },
+    }
 }
 
 /// (The row before docs 17.8h, kept as what the row of `crow.rs` is held against in `tests/crow_model.rs`: its seven
@@ -1460,7 +1464,8 @@ pub fn c_enter_row_judged(prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, 
 #[allow(clippy::too_many_arguments)]
 pub fn c_enter_row_judged_at(t0: i64, prev: &[u8; 32], leg_before: Option<&XLeg>, l: &XLeg, before: &CRow, row: &CRow, i: i64, s: &CEnterSaid) -> Option<bool> {
     // (A token leg enters by no entry: the last row of one is wrong whatever it sums.)
-    if i == s.rows.len() as i64 && (l.dir == DIR_SPOT || crate::crow::option_of(l).is_some()) {
+    // (An option enters where its time is the statement's and its day is more than T after it: docs 17.8j, 8.)
+    if i == s.rows.len() as i64 && (l.dir == DIR_SPOT || crate::crow::option_of(l).is_some_and(|o| leg_time(l) != t0 || o.day.checked_sub(t0).is_none_or(|x| x <= s.head.t))) {
         return if row.g != [0; 32] && blake2b(&[&prev[..], &leg_bytes(l)].concat()) != row.g { None } else { Some(false) };
     }
     // (The script finds the row of another leg than the one said wrong before it computes: so does this.)
@@ -1484,7 +1489,8 @@ impl Account {
             && t0 >= self.b_min_counter
             && (0..C_LEGS_MAX as i64).contains(&self.a_min_counter)
             && more >= 0
-            && (leg.dir == LONG || leg.dir == SHORT)
+            // (A futures leg, or an option leg of a day after the statement's time: docs 17.8j, 8.)
+            && (leg.dir == LONG || leg.dir == SHORT || crate::crow::option_of(leg).is_some_and(|o| o.strike > 0 && o.strike <= leg.price_max && o.premium >= 0 && o.premium <= leg.price_max && o.day > t0))
             && leg.scale > 0
             && leg.scale <= 1_000_000_000
             && leg.size > 0
@@ -1541,6 +1547,9 @@ impl Account {
         // (The leg as it stands in the account: it says the time it entered where it had its committee. 17.2.)
         let leg = leg_entered(&leg, t0);
         let no = |why: &str| Error::Invalid(format!("no entry into this covered account: {why}"));
+        if crate::crow::option_of(&leg).is_some_and(|o| o.day.checked_sub(t0).is_none_or(|x| x <= self.c_head().t)) {
+            return Err(no("an option enters more than T before its day (T: twice a lateness and a dispute period): its row would be answered wrong"));
+        }
         if a.len() != self.legs.len() || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
             return Err(no("it is stated with one price a leg the account has, within its market's limit"));
         }

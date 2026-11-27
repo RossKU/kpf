@@ -80,10 +80,10 @@
     },
     "KpfTCRow": {
       "artifact": "KpfTCRow.json",
-      "artifact_sha256": "31297be8b7217cecad64e5c19dcfebf5ca42e0bd0695538a9115de874850c136",
-      "script_len": 7520,
+      "artifact_sha256": "1451db49e19ff08a8fb9d518688ee0db59b97d4b35c3d6660df7ee32603ab0da",
+      "script_len": 7778,
       "source": "contracts/KpfTCRow.sil",
-      "source_sha256": "8d9808cd38d0d600cde480a8224a4e180f4200151e9961e54cbb27508f393538"
+      "source_sha256": "ebd44d31e85b60457e2e08c9052fa286807e70a5fdde56e3355f23bdfc6d17b5"
     },
     "KpfTCSplit": {
       "artifact": "KpfTCSplit.json",
@@ -224,6 +224,13 @@
       "script_len": 3039,
       "source": "contracts/KpfTEnterS.sil",
       "source_sha256": "37212ad8f5167b75638f3c5ae8240b526e902d2ad7c4bcec49075a5850303d84"
+    },
+    "KpfTEnterSD": {
+      "artifact": "KpfTEnterSD.json",
+      "artifact_sha256": "254f9ee7f8d7240472faeb09e368b14ed29320899e8f0715390207545102118f",
+      "script_len": 4271,
+      "source": "contracts/KpfTEnterSD.sil",
+      "source_sha256": "5fee80488bf74a60eb7fdbeae42719e2434b4bbde3ad8dc1ea044ffd3bc3ac87"
     },
     "KpfTExit": {
       "artifact": "KpfTExit.json",

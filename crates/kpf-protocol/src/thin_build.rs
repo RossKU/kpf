@@ -2710,6 +2710,58 @@ pub fn c_enter_state_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<
     d.finish()
 }
 
+/// `KpfTEnterSD.state` (docs 17.8j, 8): the entry of an option leg into a covered account is stated, with the shard,
+/// whose tree of dated rows is `books`: the leg's row is listed there. The shard's `committee` is given (an option
+/// leg says its day, strike and premium where a leg said its committee). What `c_enter_state` gives, and the books
+/// after.
+#[allow(clippy::too_many_arguments)]
+pub fn c_enter_state_d(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, script: &LibScript, seed: [u8; 32], committee: [u8; 32], leg: crate::cross::XLeg, more: i64, a: &[i64], t0: i64, p: Payer) -> Result<(OBuilt, Stated, crate::covered::CEnterSaid, crate::covered::Marked, Account, crate::reserve::Shard, crate::books::Books)> {
+    let s = &shard.s;
+    if s.sid != crate::reserve::shard_sid(&seed, &committee, &s.terms(), &s.moving()[93..120]) {
+        return invalid("the committee given is not the shard's (the shard's id is the hash of its opening, its committee, and the terms and periods of its accounts)");
+    }
+    let entered = crate::covered::leg_entered(&leg, t0);
+    let (next, after_books) = s.entered_d(books, &entered, t0)?;
+    let (st, said, marked, after) = account.s.c_enter(leg, more, 0, a, t0, account.value as i64)?;
+    let b = c_enter_state_d_as(lib, account, shard, books, script, seed, committee, &st, &said, &next, p)?;
+    Ok((b, st, said, marked, after, next, after_books))
+}
+
+/// As `c_enter_state_d`, the statement, what it says and the shard after as they are given.
+#[allow(clippy::too_many_arguments)]
+pub fn c_enter_state_d_as(lib: &[u8; 32], account: &OLive<Account>, shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, script: &LibScript, seed: [u8; 32], committee: [u8; 32], st: &Stated, said: &crate::covered::CEnterSaid, next: &crate::reserve::Shard, p: Payer) -> Result<OBuilt> {
+    let (a, s) = (&account.s, &shard.s);
+    if a.shard != Some(s.sid) || a.b_key != s.owner || said.add < 0 {
+        return invalid("the shard is not the account's (its id; its owner the account's second key), or coins are taken where they are added");
+    }
+    let (head, _, _) = crate::reserve::Shard::book_of_option(&said.leg)?;
+    let shown = books.shown(&head.key).ok_or_else(|| Error::Invalid("the leg's series is not listed in the shard's books".into()))?;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let f = if p.funds.first().is_some_and(|c| c.daa as i64 >= st.t0) {
+        3
+    } else if shard.daa as i64 >= st.t0 {
+        2
+    } else if account.daa as i64 >= st.t0 {
+        0
+    } else {
+        return invalid("an entry's time is not ahead of the chain: fund with a coin that landed at or after it");
+    };
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(a.terms()), bv(a.legs_root().to_vec()), bv(a.moving()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()),
+        bv(seed.to_vec()), bv(committee.to_vec()), iv(st.t0), bv(said.said()), bv(st.outs.bytes()), iv(f), Arg::Sig(a.a_key), Arg::Sig(a.b_key),
+        bv(leaf138(&shown.row)), iv(shown.place as i64), bv(beside192(&shown.beside)),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, account, &a.hash(), "account", script, "KpfTEnterSD", "state", args, 0)?;
+    d.contract(shard, OWhich::T(SLOT), pinned::kit().object(lib, &s.hash()), "go", vec![iv(1), iv(1)], "shard", 0);
+    d.lock(st.t0 as u64);
+    d.out(account.value + (said.add + st.bond) as u64, hash_spk(lib, &st.hash()), Some((0, id)), "stated entry", None);
+    keep(&mut d, script, lid)?;
+    d.out(shard.value, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    d.fund(p.funds, &p.change_to);
+    d.finish()
+}
+
 fn c_enter_open(obj: &OLive<Pointed>, s: &crate::covered::CEnterSaid, marked: Option<&crate::covered::Marked>) -> Result<()> {
     let c = &obj.s.st;
     if c.arg != s.arg() || c.kind != crate::covered::KIND_C_ENTER || marked.is_some_and(|m| m.hash() != c.position) {

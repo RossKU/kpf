@@ -589,6 +589,67 @@ impl Shard {
         Ok(s)
     }
 
+    /// What an option leg is to the books (docs 17.8j, 5): the dated row of its market, its day, calls or puts, and
+    /// its strike; the clearing side's units in it (the size where the user wrote it, the size below nothing
+    /// where the user holds it); and what it is worth exercised at its entry, signed the same way: what the
+    /// row's number and the shard's one number of what the legs were entered at take. No premium is in the books.
+    pub fn book_of_option(l: &XLeg) -> Result<(RowHead, i64, i64)> {
+        let Some(o) = crate::crow::option_of(l) else { return Err(Error::Invalid("the leg is no option leg".into())) };
+        if l.size <= 0 || l.scale <= 0 || l.entry <= 0 || o.strike <= 0 || o.day <= 0 {
+            return Err(Error::Invalid("an option leg has a size, a scale, an entry, a strike and a day".into()));
+        }
+        let ex = if o.call { l.entry.checked_sub(o.strike) } else { o.strike.checked_sub(l.entry) }.map(|v| v.max(0));
+        let we = ex.and_then(|x| worth(l.size, l.scale, x)).ok_or_else(|| Error::Invalid("the leg's worth is beyond what is counted".into()))?;
+        let key = Key { market: l.market, day: o.day, of: if o.call { crate::books::OF_CALLS } else { crate::books::OF_PUTS }, strike: o.strike };
+        let head = RowHead { key, scale: l.scale, price_max: l.price_max };
+        Ok(if o.held { (head, -l.size, -we) } else { (head, l.size, we) })
+    }
+
+    /// What a dated row is asked alone, at the price `p` and the upper rate, with the rate on its gross (the row's
+    /// gate: docs 17.8j, 7).
+    fn dated_gate(&self, row: &crate::books::Row, p: i64) -> Option<i64> {
+        let (_, wg, asked) = self.dated_adds(row, p, false)?;
+        asked.checked_add(rate_up(wg, gross_rate(&self.t) + self.t.g_bps)?)
+    }
+
+    /// `KpfTEnterSD`: the shard with an option leg in its books (docs 17.8j, 5 and 7), `books` being its tree. The
+    /// leg's row is listed (no entry puts a row in) and has the leg's scale and limit; the row and what the legs
+    /// were entered at take the leg, within bounds; the row's gate: what the shard holds, less what it owes, is
+    /// at least what the row is asked with the leg, at the leg's entry; or the row is asked no more with the leg
+    /// than without it. The shard's time as a futures entry writes it. Not while the shard is called.
+    pub fn entered_d(&self, books: &crate::books::Books, l: &XLeg, t0: i64) -> Result<(Shard, crate::books::Books)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the shard does not take the option leg: {why}")));
+        if self.called != 0 {
+            return no("it is called");
+        }
+        if books.root() != self.root {
+            return no("the books shown are not the shard's");
+        }
+        let (head, units, basis) = Shard::book_of_option(l)?;
+        let Some(row) = books.row(&head.key) else { return no("its series is not listed in the shard's books") };
+        if (row.scale, row.price_max) != (head.scale, head.price_max) {
+            return no("the leg's scale and limit are not its row's");
+        }
+        let max = crate::cross::MARGIN_MAX;
+        let net = row.net.checked_add(units).filter(|n| (-max..=max).contains(n));
+        let gross = row.gross.checked_add(l.size).filter(|g| *g <= max);
+        let entered = row.entered.checked_add(basis).filter(|x| *x != i64::MIN);
+        let (Some(net), Some(gross), Some(entered), Some(b)) = (net, gross, entered, self.basis.checked_add(basis).filter(|b| *b != i64::MIN)) else { return no("its books are beyond what is counted") };
+        let with = crate::books::Row { net, gross, entered, ..row };
+        let (Some(need), Some(before)) = (self.dated_gate(&with, l.entry), self.dated_gate(&row, l.entry)) else { return no("its row's requirement is beyond what is counted") };
+        if self.held.checked_sub(self.owed).is_none_or(|free| free < need) && need > before {
+            return no("the row's gate: what the shard holds, less what it owes, is below what the leg's row is asked with the leg, and the leg raises it");
+        }
+        let until = self.dispute_daa.checked_mul(2).and_then(|w| w.checked_add(self.t.late_daa)).and_then(|x| x.checked_add(t0));
+        let Some(until) = until else { return no("its time is beyond what is counted") };
+        if self.expiry.checked_add(self.t.late_daa).is_none_or(|least| until < least) {
+            return no("an entry's time is a lateness after the last: the shard's time is too near, or ahead");
+        }
+        let next = books.moved(&head.key, units, l.size, basis)?;
+        let Some(dgross) = self.dgross.checked_add(l.size) else { return no("its books are beyond what is counted") };
+        Ok((Shard { root: next.root(), dgross, basis: b, expiry: until, ..*self }, next))
+    }
+
     /// The shard's committee is the leg's, for a leg that enters: the shard's id is the hash of `seed`, of that
     /// committee, and of the terms and periods of the accounts under it (`KpfTEnterS`; review 51, F80).
     pub fn of_committee(&self, seed: &[u8; 32], l: &XLeg) -> bool {
