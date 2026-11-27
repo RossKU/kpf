@@ -4009,6 +4009,21 @@ and who can drain an account by ending its legs one at a time; the fallback's ti
 committee's silence at a day (17.5 has N72: the written side); M1's two forms; and what of B can be tested
 before option rows exist.
 
+**Review T11** (`docs/audit/REVIEW-T11-day.md`; on paper, nothing run). **Change first: 17.8g is not built as
+it is written above.** It is rewritten before any script (not yet done):
+
+| Finding | What it is | Direction |
+|---|---|---|
+| D1 (high) | **two notes of one day differ with no fault of the committee, and whoever sends picks.** The committee's attest takes its price from whoever builds the transaction (each member's signed price within the spread of it): at a spread of 0.25 % any price from 99.75 to 100.25 is a true note of one time. A user that holds a call in one account and wrote it in another of one shard ends each by the note it likes: twice the spread of the notional a day, from the shard. 17.5 took no band at the day because the price was "written once" | one price a shard, a market and a day, **in the shard's books** (a leaf put in once by a transaction that spends the shard beside a day's note; the spread held once), and a note of the shard's day that the ends of legs read |
+| D2 (high) | the fallback is not exclusive of a note: no script shows that no note is; after the fallback's time a leg is ended either way, by whoever gains | the same leaf says a price or "none", and the first written holds |
+| D3 (high; A cannot be built as written) | `KpfTDay.write` beside a citation cannot write an object: a citation's transaction has as many outputs under the library's id as inputs, and only `KpfTNote.note` writes one more | the day's note is written as a price's note is, beside the committee's attest (a twin of `KpfTNote.note`): no citation, nothing of a block's depth |
+| D4 (medium) | the fallback pays the owner twice for a committee's silence (it does not pay holders in the money, and has the written options' premiums back); and a day's price is attested within one or two epochs or never (an epoch can be passed over) | at the fallback a written option's premium stays its user's; the fallback's time at least two epochs; a keeper's duty |
+| D5 (medium) | `KpfTSweep` takes a day's note down to a copy's floor | a least of its own; a reader asks the value it had, never a least |
+| D6 (medium) | a leg that lost, ended first, leaves the account owing, and an owing account does nothing (16.19): its user cannot state the leaving of its ended gain | gains are set against what is owed; an owing account may leave an ended leg that gained |
+| D7 (medium) | "gained and others stay: by the user's statement" leaves dead legs and rows: an option written that ended worth nothing (the commonest end) needs a statement, and a dozen accounts of dust hold every row of a tree | **every ended leg leaves by the one transaction, and what it gained less its premium is credited to the account** (16.18's number below nothing: counted, no coin, taken by a take under the same test); the row is free at once |
+| D8 (medium) | M1 | the test counts every band the step takes (the options' as well); the model first |
+| D9 to D11 | the keeper's fee's order and time; what a library's move strands; what 17.8g drops of 17.5 (the entry's part of the band at the day; a call's trace where no price was written; a leg whose day came before a call) | said in the rewriting |
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
