@@ -4255,6 +4255,32 @@ before any script:
 | E10 to E12, E14 | an account is asked less than today by at most a sompi a leg; the opening of the leg before is asked, not judged (a false leg shown would make a right row wrong); `KpfTChange`, `KpfTEnterS` and `KpfTStepPrice` hold the shape of what is said; a mark reads the sums of all | while building |
 | E13 (stage 2) | a step with every held option on its line of nothing is safe for the shard and takes a hedge apart (a put held against a long, named alone, "lacks less" so and 5,120 more by the lines that ask least) | a held option is named alone only where every leg that stays is a held option; the model first |
 
+**The model of stage 1** (E4; `tests/research_account_rows.rs`, four tests, no script): futures legs of three
+markets, the row's sums as the review's list has them, the ends' tests, a step with its fee, a gain paid out to
+the user's key.
+
+- **What is asked.** On 200,000 accounts of one to six legs, R is never below what the legs lose where each
+  market moves by the rate (the legs of a market counted together wherever they stand); exactly that on the
+  121,633 whose markets stand together, more on 47,797 of the others. Against today's rate on the legs' worth:
+  an account whose legs are each of another market is asked that, less a sompi a leg at the most; no account is
+  asked more than that and a step of the price on each leg's units (**the ends are the rate on the price, rounded
+  up to a step of the price**: at a price of 100 a rate of 5.5 % is asked as 6 %; a market's price has five
+  digits or more, or its users are asked more). What stays when a leg leaves is asked what it would be asked
+  alone, and more on 7,813 leavings from between two groups of one market (E6).
+- **A hedge** (a long and a short of one market, next to one another): asked nothing where today's rate asks
+  1,100,000 of 20,000,000; after a move of 4 % a take asks what the short lost alone; it is due at no price;
+  with no coins neither leg leaves by its user's statement (E7). The same two with another market's leg between
+  them are asked as two.
+- **E1 and E3, in their numbers**: by "lacks less" alone the long that gained 3,000 is named, 2,000 leave for
+  the user's key and the short's loss of 8,000 meets coins of 5,000; as built the statement is wrong, the short
+  named takes every leg, and the shard is paid. The short that lost 14,000 beside a long that gained 20,000,
+  coins 1,000: as built every leg leaves and the shard pays what they gained together less the band; nothing is
+  owed.
+- **In time.** 30,000 accounts entered at the level of a take and something more, the prices moving the lower
+  rate at the most between visits, whoever watches naming a leg at random: 35,689 steps (31,910 of a leg
+  alone), 9,799 accounts ended, **the shard unpaid nothing**. By "lacks less" alone (any leg named, what the
+  coins do not pay owed): unpaid on 162 accounts. An account at the level of a take is due at no price.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

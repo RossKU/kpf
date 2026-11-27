@@ -151,6 +151,10 @@ path = "tests/pinned.rs"
 required-features = ["legacy"]
 
 [[test]]
+name = "research_account_rows"
+path = "tests/research_account_rows.rs"
+
+[[test]]
 name = "research_option_spot"
 path = "tests/research_option_spot.rs"
 
