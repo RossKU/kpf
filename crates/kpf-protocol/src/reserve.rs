@@ -1334,6 +1334,15 @@ impl Shard {
         (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads: self.rows.map(|r| if r.gross != 0 || r.net != 0 { r.head() } else { RowHead::default() }), prices: p.into() })
     }
 
+    /// As `called_at`, of a shard whose tree is `books` (docs 17.8j, C4; review T17, V4): the call names the market
+    /// of every row that has a unit, a futures row's and a dated row's by its market's head among the four: the
+    /// list a call's trace says (`traced_with`).
+    pub fn called_at_with(&self, books: &crate::books::Books, p: impl Into<Places<i64>>, t0: i64, pay: i64) -> (Shard, Called) {
+        let dated: Vec<[u8; 32]> = books.in_order().iter().skip(1).filter(|r| r.gross != 0).map(|r| r.key.market).collect();
+        let heads = self.rows.map(|r| if r.gross != 0 || r.net != 0 || (!r.no_market() && dated.contains(&r.key.market)) { r.head() } else { RowHead::default() });
+        (Shard { held: self.held - pay, called: t0, ..*self }, Called { sid: self.sid, time: t0, heads, prices: p.into() })
+    }
+
     /// The outputs of a call that is the rule's: the shard called, the call, and the fee to the caller.
     pub fn call_outs(&self, d: &Draw, claimer: &[u8; 32], t0: i64, held: i64) -> Option<Outs> {
         let (ok, pay) = self.call_end_judged(d, t0, held)?;

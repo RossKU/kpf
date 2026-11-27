@@ -12422,7 +12422,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2367), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2244)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 6369), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2367), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2244)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12823,7 +12823,10 @@ fn t1b_fixed_f93_whoever_steps_adds_nothing_and_has_the_fee_where_the_account_ha
     // (Review T3: `KpfTCStep` is 716 bytes more (4,829 from 4,113), so a step is 6,890 or 6,942 bytes where it was
     // 6,174 or 6,226, and costs its maker 143,200 sompi more at the least rate: whoever steps an account that
     // has no fee for it is 1,578,000 sompi the poorer, where it was 1,434,800. The bound was 1,500,000.)
-    assert!(left[0].3 > 8_000_000 && left[2].3 < 0 && left[2].3 > -1_700_000 && left[4].3 > -1_700_000);
+    // (17.8j, C1: `KpfTCStep` is 1,050 bytes more (6,369 from 5,319: an option leg's branch), and a step costs its
+    // maker 210,000 sompi more at the least rate. The bound was 1,700,000. For the last phase: the branch in a
+    // twin of its own, so that a futures account's step does not carry it.)
+    assert!(left[0].3 > 8_000_000 && left[2].3 < 0 && left[2].3 > -2_000_000 && left[4].3 > -2_000_000);
     // (Review T5, docs 17.8b: `KpfTCStep` is 227 bytes more (5,056 from 4,829) and the call's object, of one
     // price here, 56 bytes where it was 368 with a push of two bytes more: a step is 82 bytes more than it was
     // (7,024 from 6,942) where 17.8b estimated it lighter, and costs its maker 16,400 sompi more at the least
@@ -12833,7 +12836,7 @@ fn t1b_fixed_f93_whoever_steps_adds_nothing_and_has_the_fee_where_the_account_ha
     // (Review T9, docs 17.8d: `KpfTCStep` is 120 bytes less (5,319 from 5,439: the list's entry is held to the leg's
     // market as bytes, a hash less a leg), so a step costs its maker 24,000 sompi less at the least rate: 1,647,000
     // the poorer where it was 1,671,000.)
-    assert_eq!((left[0].3, left[2].3), (8_342_600, -1_647_000), "what a step leaves whoever made it, with the script as it is");
+    assert_eq!((left[0].3, left[2].3), (8_132_600, -1_857_000), "what a step leaves whoever made it, with the script as it is");
 }
 
 /// Round 54, F94 (Low), fixed in round 55: one note of the rest, counted when it is written. A called shard of
@@ -13066,7 +13069,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 964)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 6369), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 964)]);
 }
 
 // ================================================================================================================
@@ -14607,7 +14610,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3039), ("KpfTChange", 1886), ("KpfTCRow", 7778), ("KpfTStepPrice", 1838), ("KpfTCStep", 5319), ("KpfTPoint", 2589), ("KpfTCSplit", 2716)]);
+    assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3039), ("KpfTChange", 1886), ("KpfTCRow", 7778), ("KpfTStepPrice", 1838), ("KpfTCStep", 6369), ("KpfTPoint", 2589), ("KpfTCSplit", 2716)]);
 }
 
 // ================================================================================================================
@@ -15002,7 +15005,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R60 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCMark", 2573), ("KpfTMarkNote", 1188), ("KpfTCRow", 7778), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTStepPrice", 1838), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCMark", 2573), ("KpfTMarkNote", 1188), ("KpfTCRow", 7778), ("KpfTChange", 1886), ("KpfTCStep", 6369), ("KpfTStepPrice", 1838), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15363,7 +15366,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R62 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCTok", 3847), ("KpfTCRow", 7778), ("KpfTCEnd", 5871), ("KpfTCSplit", 2716), ("KpfTCMark", 2573), ("KpfTCEnter", 2069), ("KpfTStepPrice", 1838), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTPoint", 2589)]);
+    assert_eq!(sizes, vec![("KpfTCTok", 3847), ("KpfTCRow", 7778), ("KpfTCEnd", 5871), ("KpfTCSplit", 2716), ("KpfTCMark", 2573), ("KpfTCEnter", 2069), ("KpfTStepPrice", 1838), ("KpfTChange", 1886), ("KpfTCStep", 6369), ("KpfTEnterS", 3039), ("KpfTPoint", 2589)]);
 }
 
 // ================================================================================================================
@@ -15497,7 +15500,7 @@ fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 5871), ("KpfTCTok", 3847), ("KpfTChange", 1886), ("KpfTCRow", 7778), ("KpfTAddC", 630), ("KpfTPass", 614)]);
+    assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 6369), ("KpfTCEnd", 5871), ("KpfTCTok", 3847), ("KpfTChange", 1886), ("KpfTCRow", 7778), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }
 
 // ================================================================================================================

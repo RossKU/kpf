@@ -5372,6 +5372,28 @@ names and four prices), `KpfTShardPrice`'s (points 1 to 4), `KpfTLeft`'s (a tag 
 - **At the engine, at the end**: a shard with a futures leg and options of two users is called; every account
   is stepped; every note applied; the claims paid and the call ended; and with one thing changed, refused.
 
+**C1 as it is built: a call's step over option legs** (the engine; `s524_c1_call_step.py`, its script's part run
+after `s520`; 821 tests: 819 passed in the one run of all, and the two that failed measure a step and pass in
+their files with the measures of now). With C4, the model's call made with the shard's tree
+(`Shard::called_at_with`: the market of every row that has a unit).
+- **`KpfTCStep`** (6,369 bytes; 5,319): a leg's way is 1 to 6. An option leg of a day after the call's time: what
+  it is worth exercised at the call's price for its market less the same at its entry, by its units, for its
+  user where it holds the option, against it where it wrote it; no premium moves; where it is young (it entered
+  less than T before the call's time) it is counted with the young, **its band's base the underlying's worth,
+  as a futures leg's** (the worth exercised of an option in the money by the tolerance alone would give the
+  young no band: 17.9's F116 by an option). An option leg of a day at or before the call's time: no step (it
+  has ended: D). The note names every leg.
+- **At the engine** (`thin_draw.rs`, `a_calls_step_takes_an_option_leg_at_what_it_is_worth_exercised`; entries at
+  10, the call at 12): a long of ten and a call held at 11: 30 KAS asked; the call written: 10; a put held at 9
+  beside the long: 20; a put written at 13 alone: 20; a call held at 11 alone: 10; a young call held beside an
+  old long: 20 asked and 8.8 of the young (its 10 less 1.2, the tolerance twice of the underlying's 120). A KAS
+  more gained, and a leg left out of the note, refused. An option of the call's time or the block before:
+  no step; of the block after: stepped.
+- **Measured**: a call's step of a futures leg and an option leg is 8,287 bytes. **A futures account's step
+  is 1,050 bytes more than it was** (8,173; 7,123), and costs whoever makes it 210,000 sompi more at the least
+  rate (1,857,000 the poorer where the account has no fee for it). For the last phase: the option leg's branch
+  in a twin of its own.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

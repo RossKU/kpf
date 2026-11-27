@@ -134,7 +134,9 @@ contract KpfTCStep(int init_version) {
                 int sc = int(byte[8](lg.slice(67, 75)));
                 int size = int(byte[8](lg.slice(85, 93)));
                 int e = int(byte[8](lg.slice(103, 111)));
-                require(dir == DIR_LONG || dir == DIR_SHORT);
+                // (A futures leg, or an option leg: a call or a put, held or written. Docs 17.8j, 11.)
+                require(dir >= 1);
+                require(dir <= 6);
                 require(sc > 0);
                 require(size > 0);
                 require(e > 0);
@@ -143,6 +145,24 @@ contract KpfTCStep(int init_version) {
                 int we = (size / sc) * e + (size % sc) * (e / sc) + ((size % sc) * (e % sc)) / sc;
                 int dl = wp - we;
                 if (dir != DIR_LONG) { dl = we - wp; }
+                if (dir >= 3) {
+                    // An option leg, of a day after the call's time (one whose day has come has ended, and its
+                    // account is stepped once it has left: docs 17.8j, 11). What it is worth exercised at the
+                    // call's price less the same at its entry, by its units: for its user where it holds the
+                    // option, against it where it wrote it. No premium moves. (Where it is young, the band's base
+                    // is the underlying's worth, as a futures leg's: `wp`, `we` above.)
+                    require(int(byte[8](lg.slice(42, 50))) > ctime);
+                    int xp = p - int(byte[8](lg.slice(50, 58)));
+                    int xe = e - int(byte[8](lg.slice(50, 58)));
+                    if (dir >= 5) {
+                        xp = int(byte[8](lg.slice(50, 58))) - p;
+                        xe = int(byte[8](lg.slice(50, 58))) - e;
+                    }
+                    if (xp < 0) { xp = 0; }
+                    if (xe < 0) { xe = 0; }
+                    dl = (size / sc) * xp + (size % sc) * (xp / sc) + ((size % sc) * (xp % sc)) / sc - ((size / sc) * xe + (size % sc) * (xe / sc) + ((size % sc) * (xe % sc)) / sc);
+                    if (dir == 4 || dir == 6) { dl = 0 - dl; }
+                }
                 // (A leg that entered less than T before the call's time, T twice a lateness and a dispute
                 // period, is young: the young legs of an account are counted together. Docs 17.9.)
                 if (int(byte[8](lg.slice(34, 42))) > ctime - ywin) {

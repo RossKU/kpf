@@ -1273,7 +1273,10 @@ impl Account {
                 at.push(0);
                 continue;
             }
-            if (l.dir != LONG && l.dir != SHORT) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 {
+            // (A futures leg, or an option leg of a day after the call's time: one whose day has come has ended, and
+            // its account is stepped once it has left. Docs 17.8j, 11.)
+            let o = crate::crow::option_of(l);
+            if (l.dir != LONG && l.dir != SHORT && o.is_none()) || l.scale <= 0 || l.size <= 0 || l.entry <= 0 || o.is_some_and(|o| o.day <= call.time) {
                 return None;
             }
             // (The price the call's list has for the leg's market: the market plain, its price's limit, no day.
@@ -1286,7 +1289,16 @@ impl Account {
                 return None;
             }
             let (wp, we) = (worth(l.size, l.scale, p)?, worth(l.size, l.scale, l.entry)?);
-            let d = if l.dir == LONG { sub(wp, we)? } else { sub(we, wp)? };
+            let d = match o {
+                None => if l.dir == LONG { sub(wp, we)? } else { sub(we, wp)? },
+                // (What it is worth exercised at the call's price less the same at its entry: for its user where
+                // it holds the option, against it where it wrote it. No premium moves.)
+                Some(o) => {
+                    let ex = |x: i64| if o.call { sub(x, o.strike) } else { sub(o.strike, x) }.map(|v| v.max(0));
+                    let g = sub(worth(l.size, l.scale, ex(p)?)?, worth(l.size, l.scale, ex(l.entry)?)?)?;
+                    if o.held { g } else { sub(0, g)? }
+                }
+            };
             if leg_time(l) > sub(call.time, ywin)? {
                 young = add(young, d)?;
                 ymax = add(ymax, wp.max(we))?;

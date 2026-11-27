@@ -94,10 +94,10 @@
     },
     "KpfTCStep": {
       "artifact": "KpfTCStep.json",
-      "artifact_sha256": "dfc6047c5334b6de985fe2c14d4c8e92719136b4af0c4cae2e93dcc847c35225",
-      "script_len": 5319,
+      "artifact_sha256": "4bf0e862bf659b0d05925bd9c56b2de91e1737d1850fc8a2437f35759fc67939",
+      "script_len": 6369,
       "source": "contracts/KpfTCStep.sil",
-      "source_sha256": "eab6e205f1d0bb0ca064ed145f120d2ff80afaafa305948c3727322ce1e2bab4"
+      "source_sha256": "ccb86683c0baaff9956d61548b3976d79eefc47603140c0ac83323c602adac76"
     },
     "KpfTCTok": {
       "artifact": "KpfTCTok.json",

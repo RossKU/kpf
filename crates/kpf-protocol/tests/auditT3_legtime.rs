@@ -1119,7 +1119,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2244), ("KpfTStepPrice", 1838)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 6369), ("KpfTEnterS", 3039), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2244), ("KpfTStepPrice", 1838)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1858), ("KpfTShardPrice", 2367), ("KpfTCallEnd", 1963)]);
     let base = seeded(&w);
@@ -1162,7 +1162,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // zero. Review T9, Q1; docs 17.8e.)
     // (Docs 17.8h: an entry stated was 5,599: its statement says a head and a place, 40 bytes, and its row is 232
     // bytes where it was 120; `KpfTEnterS` is 2 bytes more. Docs 17.8i: 5,754 with a row of 232 bytes; of 256, 24 more.)
-    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_833, 7_123, 7_175, 7_771)); // (17.8j, A1: the root, 33 bytes, and 22 of script.)
+    assert_eq!((entry.mass.size, steps[0].1, steps[1].1, steps[2].1), (5_833, 8_173, 8_225, 8_821)); // (17.8j, A1: the root, 33 bytes, and 22 of script. C1: a step 1,050 more, an option leg's branch.)
 }
 
 // ================================================================================================================

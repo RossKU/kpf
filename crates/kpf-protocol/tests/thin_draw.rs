@@ -4777,3 +4777,59 @@ fn a_note_of_several_legs_takes_the_option_legs_out_of_their_rows() {
     let called = OLive { s: Shard { called: 6_000, ..sb }, ..with.clone() };
     assert!(left_apply_d(&w.lib, &called, &bb, &left_note(&called, &n2, 3), &all_d, w.payer(&w.f, &ff)).is_err());
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, C1: a call's step takes an option leg (`KpfTCStep`).
+
+/// A shard is called at 12, the entries at 10. An account of a long of ten and a call held at 11 (ten units): the
+/// long gained 20 KAS and the call is worth 10 exercised where it was worth nothing: the step asks 30. A call
+/// written at 11 beside the long: 10. A put held at 9: nothing of it. No premium moves. A held call that entered
+/// less than T before the call's time is young: what it gained is a claim of the second class, less the band of
+/// the underlying's worth. An option whose day is at or before the call's time is stepped by nothing here (it has
+/// ended: step D). Another outcome is refused.
+#[test]
+fn a_calls_step_takes_an_option_leg_at_what_it_is_worth_exercised() {
+    use kpf_protocol::reserve::{Called, CALL_HOLD};
+    let w = world();
+    let base = seeded(&w);
+    let h = w.head(0);
+    let day = 1_000_000;
+    let ctime = 6_400;
+    let p12 = P10 / 10 * 12;
+    let call = OLive { s: Called { sid: base.s.sid, time: ctime, heads: [h, RowHead::default(), RowHead::default(), RowHead::default()].into(), prices: [p12, 0, 0, 0].into() }, value: CALL_HOLD as u64, id: base.id, op: op(91), daa: 6_500 };
+    let f = [fund(xk(&w.f), 36)];
+    let step_s = w.script("KpfTCStep");
+    // (Every leg says the time it entered: 6,000, more than T before the call's time.)
+    let long = kpf_protocol::covered::leg_entered(&fleg(&w, 0, 10, LONG, P10), 6_000);
+    let opt = |way: i64, strike: i64, time: i64, d: i64| XLeg { committee: kpf_protocol::covered::leg_more(time, d, strike, KAS1 / 2), ..oleg(&w, 0, way, 10, strike, P10, d, KAS1 / 2) };
+    let mut said = vec![];
+    for (what, legs, gain, young) in [
+        ("a long and a call held at 11", vec![long, opt(3, P10 / 10 * 11, 6_000, day)], 30 * KAS1, 0),
+        ("a long and a call written at 11", vec![long, opt(4, P10 / 10 * 11, 6_000, day)], 10 * KAS1, 0),
+        ("a long and a put held at 9", vec![long, opt(5, P10 / 10 * 9, 6_000, day)], 20 * KAS1, 0),
+        ("a put written at 13 alone", vec![opt(6, P10 / 10 * 13, 6_000, day)], 20 * KAS1, 0),
+        ("a call held at 11 alone", vec![opt(3, P10 / 10 * 11, 6_000, day)], 10 * KAS1, 0),
+        // (Young: entered at 6,300, the call's time 6,400 and T 300. Its 10 KAS less the band, twice the
+        // tolerance of the underlying's larger worth, 120 KAS: 1.2.)
+        ("a long and a young call held at 11", vec![long, opt(3, P10 / 10 * 11, 6_300, day)], 20 * KAS1, 10 * KAS1 - 12 * KAS1 / 10),
+    ] {
+        let acct = cov(&w, &base, &legs, 60 * KAS1);
+        let (b, step) = call_step(&w.lib, &acct, &acct.s, None, &call, &step_s, w.payer(&w.f, &f)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        let sg = signed(&format!("a call's step: {what}"), &b, &w.keys);
+        assert_eq!((step.gain, step.young, step.note.legs.clone()), (gain, young, legs.clone()), "{what}");
+        // (Another outcome: refused.)
+        for (wrong, other) in [("a KAS more gained", kpf_protocol::covered::CallStep { note: kpf_protocol::reserve::Left { asked: step.note.asked + KAS1, ..step.note.clone() }, ..step.clone() }), ("a leg left out of the note", kpf_protocol::covered::CallStep { note: kpf_protocol::reserve::Left { legs: legs[..legs.len() - 1].to_vec(), ..step.note.clone() }, ..step.clone() })] {
+            let t = call_step_as(&w.lib, &acct, &acct.s, None, &call, &other, &step_s, w.payer(&w.f, &f));
+            assert!(t.is_err() || !accepted(&t.unwrap(), &w.keys), "{what}: {wrong}");
+        }
+        said.push(format!("{what}: {} asked, {} of the young; {} bytes", step.note.asked, step.young, sg.mass.size));
+    }
+    // An option whose day is at or before the call's time: no step of its account here.
+    for d in [ctime, ctime - 1] {
+        let acct = cov(&w, &base, &[long, opt(3, P10 / 10 * 11, 6_000, d)], 60 * KAS1);
+        assert!(call_step(&w.lib, &acct, &acct.s, None, &call, &step_s, w.payer(&w.f, &f)).is_err(), "an option of the day {d} under a call of {ctime}");
+    }
+    let acct = cov(&w, &base, &[long, opt(3, P10 / 10 * 11, 6_000, ctime + 1)], 60 * KAS1);
+    assert!(call_step(&w.lib, &acct, &acct.s, None, &call, &step_s, w.payer(&w.f, &f)).is_ok_and(|(b, _)| accepted(&b, &w.keys)), "an option of the day after the call's time");
+    println!("C1: {said:#?}");
+}
