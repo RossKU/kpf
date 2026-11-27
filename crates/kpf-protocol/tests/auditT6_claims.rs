@@ -124,7 +124,9 @@ fn world() -> World {
         keys.add_keypair(*k);
     }
     let rid = Hash::from_bytes([0x52; 32]);
-    let markets = (0..4u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    // (In the order of their keys: the rows a test puts at the places 0, 1, 2 are the first rows of a trace. Docs 17.8d.)
+    let mut markets: Vec<CMarket> = (0..4u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    markets.sort_by_key(|m| kpf_protocol::books::Key::futures(m.id()).numbers());
     let funds = vec![fund(xk(&f), 200)];
     let (g, lib) = lib_genesis(1, 10 * KAS1 as u64, Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = g.sign(&keys).expect("genesis");

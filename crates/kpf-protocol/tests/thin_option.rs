@@ -199,7 +199,9 @@ fn world() -> World {
     }
     let rid = Hash::from_bytes([0x52; 32]);
     let rp = CommitteeParams::testnet();
-    let markets = (0..8u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    // (In the order of their keys: the rows a test puts at the places 0, 1, 2 are the first rows of a trace. Docs 17.8d.)
+    let mut markets: Vec<CMarket> = (0..8u8).map(|i| CMarket::testnet(rid.as_bytes(), [0xc0 + i; 32])).collect();
+    markets.sort_by_key(|m| kpf_protocol::books::Key::futures(m.id()).numbers());
     let mut table = EMPTY_TABLE;
     for (i, wt) in [30i64, 22, 15].iter().enumerate() {
         table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
