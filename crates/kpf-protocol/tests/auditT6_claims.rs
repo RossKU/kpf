@@ -1586,7 +1586,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 2966), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3015), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");

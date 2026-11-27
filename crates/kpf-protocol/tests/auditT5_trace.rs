@@ -841,7 +841,8 @@ fn t5_b1_the_trace_of_a_draw_and_of_a_call_on_random_shards_the_model_and_the_en
         }
     }
     println!("T5 B1: {honest} statements of the rule's (a draw and a call on each of 14 random shards): {points} points answered right and not wrong, and a price 3 % away wrong on each; {lies} lies each answered wrong at the point the model names, and under a dispute of another point (by point, 5 for a price: {by_point:?}); {still_right} changes that left the trace the rule's; {orphans} entries of no row, which nobody answers. Lists not in the order of their bytes: {not_byte_order}; first numbers below nothing: {below_nothing}; shards with an empty row before a row that has a market: {empty_between}");
-    assert!(lies >= 600 && orphans >= 10 && by_point.len() == 6 && not_byte_order >= 1 && below_nothing >= 5 && empty_between >= 3, "{lies} {orphans} {by_point:?} {not_byte_order} {below_nothing} {empty_between}");
+    // (No lie is named at an entry of no row any more: review T9, Q2, closed in 17.8e.)
+    assert!(lies >= 600 && orphans == 0 && by_point.len() == 6 && not_byte_order >= 1 && below_nothing >= 5 && empty_between >= 3, "{lies} {orphans} {by_point:?} {not_byte_order} {below_nothing} {empty_between}");
 }
 
 // ================================================================================================================
@@ -951,7 +952,9 @@ fn t5_b3_an_entry_no_row_is_of_is_answered_by_nobody_and_its_dispute_lapses_at_t
         let cite = (at == 5).then(|| w.cited(0, p13));
         assert_eq!(taken_raw(&w, &w.pointed(&live, at), s, &raw, at, cite.as_ref()), (true, false), "the point {at}");
     }
-    assert_eq!(s.trace_wrong_point(&lie, true, &caller, &st.outs, shard.value as i64, T0, &prices), Some(6), "the model names the entry of no row");
+    // (Review T9, Q2, closed in 17.8e: the model is given no price of a market no row is of, and names no point for
+    // such an entry. That nobody answers this one is held below, at the engine.)
+    assert_eq!(s.trace_wrong_point(&lie, true, &caller, &st.outs, shard.value as i64, T0, &prices), None, "the model names no point for an entry no row is of");
     // The point 6, at the engine. The builder writes the answer of the point 5 (with its citation) and of a point
     // beyond the list (with none), for the same statement disputed at those points; the point answered (argument
     // 17 of `KpfTShardPrice.answer`) and the object are then made the point 6's.

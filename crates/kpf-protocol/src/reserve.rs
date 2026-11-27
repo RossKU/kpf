@@ -599,6 +599,10 @@ impl Shard {
         if row.head() != head && (*row != ShardRow::EMPTY || self.rows.iter().any(|x| x.key == head.key)) {
             return no("the row is another market's, or the leg's market has a row of its own");
         }
+        // (A row is made only for a market that is one: no number of its id nothing written below zero. Review T9, Q1.)
+        if row.head() != head && !head.key.well_made() {
+            return no("a market of which a number of the id is nothing written below zero has no row: it is one market with another id, by their numbers");
+        }
         let mut s = *self;
         let max = crate::cross::MARGIN_MAX;
         let net = s.rows[r].net.checked_add(units).filter(|n| (-max..=max).contains(n));
@@ -1086,7 +1090,9 @@ impl Shard {
             return Some(r as i64);
         }
         let c: Places<i64> = c.into();
-        let cited = |x: &Priced| self.rows.iter().position(|r| r.key.market == x.market).map_or(0, |i| c[i]);
+        // (An entry no row is of is priced as any other, at a price this is not given: only its order and its day
+        // are judged here. Review T9, Q2.)
+        let cited = |x: &Priced| self.rows.iter().position(|r| r.key.market == x.market && !r.no_market()).map_or(x.price, |i| c[i]);
         (1..=t.list.len()).find(|e| !self.trace_price_right(t, *e, cited(&t.list[*e - 1]))).map(|e| 4 + e as i64)
     }
 

@@ -3700,6 +3700,137 @@ functions, the worlds' markets in order: nothing changes in what is built; (2) t
 rows, `KpfTRowIn` and `KpfTRowOut`, the model, the builders, the tool, in one commit, reviewed at the engine;
 (3) `KpfTLeftAll`'s worst case measured, and its twin of three legs if it must be (P6).
 
+**Stage 2 as it was built, and reviewed at the engine (review T10): kept, and not the form of the futures rows (17.8e).** A shard's state holds the root of its books' tree
+where it held the hash of four rows. A leaf is the hash, under a tag (20), of a row's 138 bytes: its key, its
+scale and limit, the net, the gross, what was entered, and the hash of the key of the row after it; a node is
+the hash of its two halves under another tag (21); the head's leaf stands at the last place (63) and a row at
+one of 0 to 62; the books of no row have a root that is a constant (`books::OPENED_ROOT`).
+
+- **One script, `KpfTRows`, of two entries** (where the plan had two scripts), signed by the shard's owner:
+  `put` (the futures row of a market, of no unit, at an empty place: shown the leaf before the new key and the
+  key that leaf names, plain; not into a called shard; not of a market of nothing, nor of one of whose id a
+  number is nothing written below zero: review T9's Q1 is closed here) and `out` (a row of no unit and nothing
+  entered; a futures row only where the row after is another market's). No entry makes a row, and no leaving
+  takes one out: a row of no unit stands.
+- `KpfTEnterS` and `KpfTLeft` are shown the one row (138 bytes) and the six hashes beside its place's way
+  (192), the place being the row the statement or the note names; `KpfTLeftAll` 330 bytes a leg, each against
+  the books as the leg before left them. One function, `both`, gives the root with the row as it stands and
+  the root with the row rewritten; the shard is opened by the first and written with the second.
+- `KpfTLeftVoid` is shown the row of the named leg's key (the leg is gone where it is of another scale or limit
+  or has fewer units), or the leaf before that key and the key it names: no row of the key.
+- `KpfTShardRow` is shown the leaf at the place the trace's row says and the leaf at the place of the row
+  before it (the head's, before the first): the one before names this one's key, and the trace's last names
+  none, so that a trace right at every row is the rows that stand, each once, in the keys' order. A row of no
+  unit adds nothing and reads no price (P1); a point beyond the trace is of nothing. Rows are the points 1 to
+  63, prices the points from 64.
+- `KpfTChange` holds a trace's two counts (63 at the most, written as numbers are) and its length to them, so
+  that the answers read the counts and no end judges them: a trace whose counts are not its own is no statement
+  (it was a statement answered wrong at its end).
+- `KpfTShardPrice`, `KpfTCallPay` and `KpfTLeft.rest` are shown the root (32 bytes) and read no row;
+  `KpfTCallPay` asks that the sum of the gross is nothing, not that four rows are empty.
+- The model: `Shard.rows` are the sixty-three places; `standing`, `books`, `root`, `shown`, `row_in`,
+  `row_out`; a trace has as many rows as stand. A shard is kept with its rows and their places. The tool:
+  `shard-row-in`, `shard-row-out` (prices are still said for the first four places: a shard whose rows stand
+  beyond them is not drawn from or called by the tool).
+
+**What it weighs: more than was estimated.** The way to the root is twelve hashes written out in each script
+that rewrites a row (six levels, the root before and the root after), about 650 bytes, where review T8 reckoned
+some 150. Measured: `KpfTEnterS` 3,573 bytes (2,966), `KpfTLeft` 3,732 (2,914), `KpfTLeftVoid` 3,618 (2,093),
+`KpfTLeftAll` 10,042 (5,059), `KpfTChange` 1,851 (1,760), `KpfTCallPay` 2,401 (2,567); a note of one leg
+applied is a transaction of about 5,735 bytes (4,862: 18 % more), an entry stated about 6,160 (5,550: 11 %
+more; not yet measured as one number). A row shown with its path is 330 bytes where four rows were 420. A
+tree is the lighter form from about nine rows on (four rows shown whole were 420 bytes and no hash); the rows
+of options are dozens. **`KpfTLeftAll` at 10 kB is P6's case**: a note of two legs pays it. Its twin of three
+legs, or another form of a note of several legs, is the next piece (not built). And a script's stack has 244
+places, every name of a function set into an entry being one: `KpfTEnterS` has none to spare (the path's
+function has four names for it).
+
+**Review T10** (`docs/audit/REVIEW-T10-tree.md`; its tests `auditT10_tree.rs`, twenty, kept with the tree; of
+the tree's own mechanics, the earlier reviews' tests not brought along: 17.8e). No finding above medium; the
+tree holds at the engine. The path: on sixteen random books of 0 to 63 rows a row opened the root at its place
+and 1,926 other forms were refused (a place of 64 and more, a leaf a byte longer or shorter, a node shown as a
+leaf, the empty leaf where a row stands). A row put in: 110 forms refused, a check at a time (the path of the
+empty place taken from the books before the leaf before was rewritten is refused at every place). A row taken
+out: 43 forms refused. The order: 570 random steps of rows put in and taken out, honest and not, up to a full
+tree, the engine taking what the rule takes and the list from the head whole after each; sixty-three rows
+stand, and one more is refused at every place. A trace's rows: 200 stated traces (145 of them lies) and 2,416
+answers as the model says; 56 forms of counts and lengths are no statement. A shard with a statement on it is
+another object: no row is put in or taken out between a statement and its answer.
+
+| Finding | What it is | For the options' tree |
+|---|---|---|
+| U1 (low to medium) | a note of a leg whose key is a standing row's by its numbers and not by its bytes is spent by `KpfTLeftVoid` with no leaf: the row of the same numbers is neither below nor above the key (before the tree the lookup was by bytes, and the note was spent) | the second arm takes a leaf whose key is neither below nor above the leg's and is not its bytes |
+| U4 (low today) | `KpfTRows.put` holds "a market's futures row is its first" by the key the leaf before names alone: after a row of the market made by hand with a day below nothing it takes the futures row | a dated key's day, kind and strike are held above nothing and written as numbers are, in the script |
+| U5 (low to medium; the model) | `trace_wrong_point` names a rightly priced entry wrong where its market's row stands at no unit and no price is given for that place | the model judges an entry it has no price for by its order alone (done for the four rows: below) |
+| U3, U6 (low; the model) | `with_row_for` puts a row in with none of the checks; `Books::moved` writes nothing entered where the scripts keep it; a row with something entered and no unit is taken out by nothing; `standing` sorts twin keys by no order | with the day, which writes "entered" |
+| U7 (low to medium; the tool) | a shard kept in the form of before the tree is not read back | a shard is kept in one form a stage; an older one is read by its own reader |
+| U8 (by design) | `KpfTCallPay` reads the sum of the gross alone: every script that writes a row keeps the sum | said |
+
+Measured: `KpfTRows` 6,086 bytes (review T8 reckoned 2.2 to 2.7 kB), a row put in 7,897 and taken out 7,992;
+`KpfTShardRow` 3,985; an entry stated 6,068 (5,550); a note of one leg applied 5,591 (4,862), of two legs
+12,357, of six 14,154; a trace's row answered 6,311 (three rows) to 8,767 (sixty-three); a price answered
+8,663. Kept, beside the repository's tree (`run/parked/tree-all-rows/`: the patch against commit `c0ef7bd`,
+`KpfTRows.sil`, the review's tests; the patches of the scripts `s351`, `s352`, `s353`, `s355`, `s365`).
+
+### 17.8e The common paths made lighter (decided 28 November 2026; on paper)
+
+An operation's transaction carries the whole script of the operation: about half of every transaction is
+script, and the scripts grew with every hole that was closed. What only a called shard needs, and what only
+books of many rows need, stands in the scripts every entry and every leaving pays for. The yardstick is the
+common path: an entry stated and a note of one leg applied. In bytes of script, each number the measured
+difference of the piece when it was built (none measured with the piece taken out):
+
+| | `KpfTEnterS` | `KpfTLeft` | costs |
+|---|---|---|---|
+| with the tree for every row (17.8d, stage 2) | 3,573 | 3,732 | |
+| a market's futures row one of four written whole; the tree for dated rows only | less 607 | less 818 | four futures markets a shard (a row more written whole is 105 bytes in every transaction that shows the rows: eight would be 420 more) |
+| what a called shard alone needs (the class of a claim) in scripts of its own | | less about 410 | a script more in the library; none in what holds |
+| the row's gate judged where an entry is disputed, not where it is stated | less about 400 | | see below: not decided |
+| | about 2,470 to 2,970 | about 2,500 | |
+
+**1. The tree is for the dated rows.** Stage 2 put every row in the tree, and only futures rows exist: every
+entry and leaving paid twelve hashes for books of a few rows. A tree is the lighter form from about nine rows
+on; a shard's futures markets are few, and the rows of options are many. So: the futures rows stay as stage 1
+has them (four, written whole, 420 bytes, made by an entry and emptied by the last leaving), and the books'
+hash holds beside their hash the root of a tree of the dated rows, which only a leg with a day reads. **Stage
+2 as it was built is not committed as the form of the futures rows.** What review T10 holds of the tree's own
+mechanics (the path, a row put in and taken out, the order kept, the leaf before as the proof that no row is
+of a key, a trace's rows as a list from the head, the counts held where a trace is stated) is the dated tree's,
+as built; it is kept (`run/parked/tree-all-rows/`, with the model, the scripts, `KpfTRows` and the review's
+tests) and comes back with the option rows, where the paper has to say anew: where a dated row's
+scale and limit come from (its market's futures row is not in the tree: shown among the four, which must then
+not be emptied while a dated row of the market stands), and how a trace goes over four rows and then a list.
+Lost with it for now, and closed otherwise: review T9's Q1 (two ids that are one market by their numbers) is
+closed in `KpfTEnterS`, which makes a row: a market of which a number is nothing written below zero makes none
+(built, with the model's `entered`: 49 bytes of `KpfTEnterS`, now 3,015, an entry stated 5,599; and review
+T9's Q2: the model judges an entry no row is of by its order alone). The default workspace: 723 tests, none
+failed.
+
+**2. A called shard's scripts.** A note applied to a shard that is not called pays or leaves a note of the
+rest; applied to a called shard it is counted in one of two classes, with the young legs' window, a step's
+note of another tag, and what was paid already. The second is rare and is 410 bytes of `KpfTLeft`, 783 of
+`KpfTLeftAll` and 229 of `KpfTMarkNote`, in every application. So: `KpfTLeft`, `KpfTLeftAll` and `KpfTMarkNote`
+take a shard that is not called (and a note of an account's own: no step's note exists without a call), and
+their twins `KpfTLeftC`, `KpfTLeftAllC`, `KpfTMarkNoteC` take a called one; each holds its shard to its state
+(called, or not), so that no note is applied by the wrong one. Nothing of what is held changes.
+
+**3. The row's gate, where an entry is disputed: not decided.** The gate (17.8c) is about 500 bytes of every
+entry. Judged at the entry's end instead, the entry would say the four numbers it read (what the shard holds
+and owes, the row's net and gross before it), `KpfTEnterS` would hold them to the shard, and the end's answer
+would compute the requirement. But the gate is there so that an owner's leg that its shard cannot carry is
+never in the books (review T3, L4: a call is due at once, and is stated at once); judged only where somebody
+disputes, the leg is in the books for a dispute period, and a call stated in that time reads it. That is a
+game in time between a call and the dispute of an entry, and three reviews went into closing it. It is taken
+up only with a model of that game, and after the two above.
+
+**What is not a matter of bytes.** Below about 2,500 bytes of script and as much of arguments and objects, an
+operation of this form is not made lighter by taking things out: a script would have to be named and not
+shown, which the chain does not give. And before bytes: an entry and the applying of a note spend the shard,
+one output. The users of a shard act one after another, and two that act at once are one of them refused and
+stated again. For a clearing party of many users that is the limit that is felt first; it is not designed
+here, and is the next question of the form (rows, or accounts' notes, that are objects of their own, so that
+what two users do does not meet in one output).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

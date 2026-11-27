@@ -208,6 +208,11 @@ contract KpfTEnterS(int init_version) {
             for (q, 0, 4, 4) {
                 require(rw.slice(105 * q, 105 * q + 60) != name);
             }
+            // (And the market is one: the four numbers of its id, written as numbers are, are its bytes: none of
+            // them is nothing written below zero. Two such ids are one market by their numbers, and a list of
+            // prices is in the order of the numbers: with a row each, no draw and no call over them has a right
+            // list. Review T9, Q1.)
+            require(byte[](int(byte[8](lg.slice(1, 9))) as byte[8]) + byte[](int(byte[8](lg.slice(9, 17))) as byte[8]) + byte[](int(byte[8](lg.slice(17, 25))) as byte[8]) + byte[](int(byte[8](lg.slice(25, 33))) as byte[8]) == lg.slice(1, 33));
         }
         // Side B's units in the leg (the size below zero where A is long), and its worth at its entry signed the
         // same way: what the row and what the legs were entered at take.

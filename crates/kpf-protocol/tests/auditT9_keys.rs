@@ -606,7 +606,7 @@ fn t9_k1_what_was_entered_is_written_by_nothing_and_a_row_made_with_it_is_stuck_
 /// which neither is below the other, so whichever stands second is answered wrong with nothing cited, and is
 /// answered right by nobody. Every statement over such books has a wrong point.
 #[test]
-fn t9_k1b_two_markets_that_are_one_by_their_numbers_enter_two_rows_and_no_trace_over_them_is_right() {
+fn t9_k1b_the_second_of_two_markets_that_are_one_by_their_numbers_makes_no_row_and_books_of_both_have_no_right_trace() {
     let w = world();
     let base = seeded(&w);
     let mut ma = [0x21u8; 32];
@@ -624,7 +624,9 @@ fn t9_k1b_two_markets_that_are_one_by_their_numbers_enter_two_rows_and_no_trace_
     let s2 = after(&one.s, &lb, 1, with_leg(RowHead::of(&lb), &E, &lb));
     let engine = enters(&w, &one, lb, 1, &s2);
     println!("T9 K1b: the second of two ids that are one by their numbers enters a row of its own: the engine {engine:?}, the model {:?}", model.as_ref().map(|_| "takes it"));
-    assert_eq!((engine, model.ok()), (Some(true), Some(s2)), "Q1 is closed: the engine or the model refuses the second id");
+    // (Q1 closed, 17.8e: `KpfTEnterS` makes no row for an id of which a number is nothing written below zero, and
+    // the model's `entered` refuses it. What follows is of books made by hand with a row of each: why.)
+    assert_eq!((engine, model.is_err()), (Some(false), true), "Q1 is open again: the second of two ids that are one by their numbers enters a row of its own");
     // A draw over the two rows.
     let two = live(&base, Shard { expiry: 0, ..s2 });
     let s = &two.s;
@@ -827,7 +829,7 @@ fn t9_k3_a_price_is_answered_for_the_committee_the_shards_id_is_opened_by() {
 ///    a watcher who disputes by the model where the entry is priced right is answered right and loses its bond.
 /// (An entry of a market the committee signs no price of is answered by nobody, as before: `t5_b3...`.)
 #[test]
-fn t9_k3_an_entry_no_row_is_of_is_priced_as_any_other_and_the_model_still_names_it_wrong() {
+fn t9_k3_an_entry_no_row_is_of_is_priced_as_any_other_and_the_model_judges_only_its_order() {
     let w = world();
     let shard = two_rows(&w);
     let s = shard.s;
@@ -854,7 +856,8 @@ fn t9_k3_an_entry_no_row_is_of_is_priced_as_any_other_and_the_model_still_names_
         assert_eq!(price_taken(&w, &lv, &s, &more, 8, None), (true, false), "{what}: the point beyond the list");
         let named = s.trace_wrong_point(&more, false, &xk(&w.c), &st.outs, shard.value as i64, T0, &prices);
         println!("T9 K3: an entry more of a market the committee signs, of no row, {what}: the engine answers it {want:?} (right, wrong); the model's first wrong point: {named:?}");
-        assert_eq!(named, Some(5 + e2 as i64), "Q2 is closed: the model no longer names the entry of no row");
+        // (Q2 closed, 17.8e: the model is given no price of a market no row is of, and names no point for it.)
+        assert_eq!(named, None, "Q2 is open again: the model names the point of an entry no row is of");
     }
 }
 
