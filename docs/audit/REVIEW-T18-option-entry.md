@@ -1,5 +1,10 @@
 # Review T18: an option enters and leaves a shard's books (17.8j, B1 to B3), at the engine
 
+**Status after the second round (see "Second round" at the end): U1, U2 and U5 are closed; U3 is closed for the
+day's bound and open for the rest (steps C and D); U4 stands. Two new findings, W1 (Medium) and W2 (Medium). The
+file has 19 tests now, all passing against the working tree with the fixes. What follows down to "Second round" is
+the first round as it was written, against the four commits.**
+
 Reviewer's file: `crates/kpf-protocol/tests/auditT18_option_entry.rs`, 15 tests, all passing (5 of findings as
 they stand, 10 of what was attacked and held). Read against commits `eec08b6`, `04aec33`, `8331217`, `6aa44d0`. A
 test named `t18_uN_...` shows the finding UN as it stands (it passes while the finding is open and says so in its
@@ -221,3 +226,133 @@ model's (`c_state`, `traced_with`, `call_step`, `left_d`, `left_class`) with the
 note scripts of a called shard at the engine; `KpfTCStep` and `KpfTCallPay` were read. U4 is the model's
 (`entered_d`), the gate's sompi at the engine. U5 is the model's, the script's refusal at the engine. No other test
 file was run, nothing outside the two files of this review was changed, and no git write was made.
+
+## Second round
+
+Against the working tree with the fixes of `run/gen/s520_t18_fixes.py` (`KpfTLeftVoid`, `KpfTEnterOff`,
+`KpfTEnterSD`; the model's `gone_at` and `c_marked`; the builder `enter_off`), not committed. The four tests of the
+findings that were closed keep their names and now hold the closed rule (their assertions say "(closed)"); the
+tests of what was held are brought to the rule as it is; four tests are new. **19 tests, 19 passed, in one run.**
+
+### What is closed
+
+**U1, closed.** Every note round one voided is voided by nobody now, and is applied by its script: the note of a
+held call asking 3 KAS, the note that an option did not enter, the note of a long and a call named by either leg.
+The attack of the fix (`t18_held_what_is_void_of_a_note_with_option_legs_and_what_is_not`, 37 notes, each named
+by each of its legs: 65 namings, the engine's verdict the model's `gone_at` on each):
+- 52 namings do not spend the note, each also with two other shards written. An option leg is named by nothing,
+  whatever it says: each way; another scale or limit; a strike that is not listed; a market that has no row; more
+  units than its row has; no size, no scale, no entry; alone and beside a long. A long whose row of ten units is
+  short only if the option legs of its market are counted (4 + 6 + 5 more) is not gone. Every leg of the books in
+  two orders, named by each: refused.
+- 13 namings still spend it, as they should: a short of a market that has no row, alone, after a call, and before a
+  call and a long; two longs of ten on a row of ten, beside a call (named by either long, not by the call); a leg
+  of a way of 0, 7, 9 or -1 beside a call; a long of another scale or limit than its market's row. Spent, the
+  shard takes what the note held and no more.
+- One thing to know, not a finding: a leg of a way that is neither a futures leg's nor an option's (0, 7, 9) is
+  counted with the futures legs of its market, so a long that is in the books is "gone" beside such a leg. A note
+  with such a leg is void by that leg already.
+
+**U2, closed within the family of accounts and shards.** Two entries undone in one transaction (two copies; 20 and
+30 KAS) return 50 KAS of 50, each premium at the place of its own account's input (the last output, and the ninth
+from the end); either order. Refused, 20 arrangements (`engine_refuses`: the transaction is signed, so the refusal
+is a script's): either premium's output the builder's; one output of both premiums at either place; each at the
+other's place; a premium a place before or after its own; a sompi less. And the collisions round one only read
+(`t18_held_an_undone_entry_beside_another_script_that_pays_the_owner_each_has_its_output`): an undone entry with
+the settlement of a draw of 20 KAS of another shard of the same owner (`KpfTChangeSettle`), and with a note
+applied that pays the owner's key 20 KAS (`KpfTLeftD`), either first: 4 transactions pay both in full, each script
+holding its own output; 16 with one output for the two refused. `KpfTEnterOff` alone
+(`t18_held_what_an_undone_entry_pays_and_to_whom`): the premium is the last output; at any other place (each
+output swapped with it, an output after it), a sompi less, to the user, a sompi kept in the account, an argument
+more: 74 refused; an entry that returns nothing is indifferent to an output more. **Across families it is not
+closed: W1.**
+
+**U3, closed for the day's bound; the rest open, as said.** `KpfTEnterSD` and `c_marked` take an option whose day
+is more than T after the statement's time (T twice a lateness and a dispute period, 300 here). Model and engine
+agree on 28 entries (the four ways; days `T0 - 1`, `T0`, `T0 + 1`, `T0 + T - 1`, `T0 + T` refused; `T0 + T + 1`
+and `T0 + T + 2` taken, with the shard after exactly the rule's: nothing else of an entry changed). The row's own
+rule in `KpfTCRow` stands behind it (run on a statement made by hand: within T wrong, not right). Open, and held
+as open by `t18_u3_...`: from its day on an account with an option leg states nothing and no draw or call of its
+shard is traced; under a call it is stepped by nothing and its note is applied by nothing (and, U1 closed, spent
+by nothing). The owner's way to a shard no call reaches is now one entry and a wait of T blocks and one, where it
+was one block. Steps C and D.
+
+**U5, closed.** `c_marked` gives no marked account of a written option that adds another amount than its premium
+(0, a sompi either side), and one for the premium exactly; a held option and a futures leg add what they like.
+
+**U4 stands** (the paper's L4; not changed): eight rows asked 799 KAS of a shard of 100.
+
+### New findings
+
+#### W1 (Medium): the place a key is paid at is counted in fours by one family of scripts and in twos by the other; the two meet
+
+U2 was closed by paying the premium at `tx.outputs.length - 1 - 4 * j`, "the place every script pays a key at, by
+its own input: no output serves two". That holds among the scripts of accounts and shards. The scripts of
+positions (the first family, in the same library: `KpfTSettle`, `KpfTLate`, `KpfTDispute`, `KpfTProve`, `KpfTLiq`,
+`KpfTLiqSettle`, `KpfTLiqDispute`, `KpfTLiqProve`, `KpfTCure`, `KpfTExit`, `KpfTExitEnd`, `KpfTExitRefute`,
+`KpfTLeave`, `KpfTNovate`, `KpfTReplace`) pay at `tx.outputs.length - 1 - 2 * j`. An account at input `j` and a
+position's object at input `2 * j` have one place.
+
+Run at the engine: the script that undoes at input 0, the marked account at 1, a position's claim at 2, the
+script that settles at 3; ten outputs; the sixth is both `10 - 1 - 4 * 1` and `10 - 1 - 2 * 2`. The position is
+between a user (side A) and the shard's owner (side B). One output pays the owner the 3,001.2 KAS the claim gives
+side B; `KpfTEnterOff` takes it for the premium of 20 KAS as well. The owner has 3,001.2 of 3,021.2 KAS and whoever
+built the transaction is 20.0008 KAS better off than by the two transactions apart.
+
+It is not of B and not of `KpfTEnterOff` alone: by the same arithmetic any payment to a key by a script of
+accounts and shards (a note's user paid by `KpfTLeft` and its kin, a draw's owner, a claim's key) meets a
+position's payment to the same key (read, not run, for the other pairs). What it needs is one key paid by both
+families in one transaction: a clearing party that is also a party of a position, or a user of both.
+
+Recommendation: one count for the library. Either the position family at four a place as well (its scripts use
+two places an input at the most), or, if positions are legacy and leave the working library, out of its list.
+Until then a builder cannot hold it: the scripts are what is held to.
+
+Test: `t18_w1_a_positions_payment_and_an_undone_entrys_premium_meet_at_one_place`.
+
+#### W2 (Medium; the other half of U1's recommendation, not built): a note of an option leg that is in no row is spent by nothing, and ends every draw
+
+Said with the fix: no `KpfTLeftVoidD`, "no script writes such a note". No script writes one of its own rule; a
+wrong statement that nobody disputed writes any note (review 53, F86), and any user with an account under the
+shard states one. Of a futures leg such a note is cleared by `KpfTLeftVoid` at nobody's cost; of an option leg,
+since U1's closing, by nothing.
+
+Run at the engine: a note to the shard of a held call of a series that is not listed. `left_d` applies it to
+nothing (no leaf has its key), `KpfTLeftVoid` refuses it, and shown under the shard it ends the owner's stated
+draw of 20 KAS by `KpfTDrawNote`: the shard again, and the note goes on as it is, to end the next draw. Before
+U1's closing this note was void; closing U1 without the twin trades a theft for a way to stop an owner's draws for
+good at the price of one statement that goes undisputed.
+
+Recommendation: `KpfTLeftVoidD` as in round one (the named option leg shown the leaf of its key with fewer units
+than the note's legs of that key, or shown by the leaf that names the key after it that no leaf has its key). Or,
+cheaper and enough for this: `KpfTDrawNote` ends no draw by a note of an option leg that is shown to be in no
+leaf.
+
+Test: `t18_w2_a_note_of_an_option_leg_that_is_in_no_row_is_spent_by_nothing_and_ends_every_draw`.
+
+### The tests, second round
+
+| Test | What it holds now |
+|---|---|
+| `t18_u1_...` | (closed) the three notes of round one are spent by `KpfTLeftVoid` by nobody, whatever shard is written; each is applied by its script and pays |
+| `t18_u2_...` | (closed) two entries undone in one transaction pay 50 of 50 KAS; 20 arrangements with one output for two, or a premium off its place, refused |
+| `t18_u3_...` | closed for the day's bound (`c_marked`, five days); open for the rest (the account and the shard from the day on, under a call), said so in each assertion |
+| `t18_u4_...` | open, unchanged |
+| `t18_u5_...` | (closed) |
+| `t18_w1_...`, `t18_w2_...` | open: the two new findings |
+| `t18_held_what_is_void_of_a_note_with_option_legs_and_what_is_not` | new: 65 namings, 13 void, 52 not |
+| `t18_held_an_undone_entry_beside_another_script_that_pays_the_owner_each_has_its_output` | new: 4 transactions of two scripts, 16 refusals |
+| `t18_held_what_an_undone_entry_pays_and_to_whom` | the premium at the last output; 74 changes refused |
+| `t18_held_an_options_entry_with_one_thing_changed_is_refused` | the day's bound for each way (28 entries, model and engine); 149 in all |
+| `t18_held_the_accounts_side_of_an_options_entry` | an option within T is stated by nothing (engine and model); the row's rule run on a statement made by hand |
+| `t18_held_the_models_words_and_the_sizes_printed` | an entry stated 7,495 bytes (20 more: the day's bound); undone with its premium 2,329 (11 fewer: no `po`); the notes as they were; the void of an option note refused |
+| the other six `t18_held_...` | unchanged, passing: 600 random entries, the gate a sompi either side, the largest sizes, 400 random notes, 34 changes of a note, the whole life |
+
+### What was run and what was read, second round
+
+Run: `cargo test -p kpf-protocol --test auditT18_option_entry`, 19 passed, 0 failed; everything above is at the
+engine through `verify::verify` except U3's open part, U4 and U5 (the model), as in round one. W1 was run for one
+pair (`KpfTSettle` with `KpfTEnterOff`); the other pairs of the two families were read off the scripts' place
+arithmetic. W2's note is made by hand (the wrong statement that would write it was not stated). Not run in either
+round: `KpfTCStep`, `KpfTCallPay`, a call's lapse at a row of an ended day. No other test file was run, nothing
+outside the two files of this review was changed, and no git write was made.

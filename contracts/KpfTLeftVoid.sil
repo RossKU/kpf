@@ -128,8 +128,11 @@ contract KpfTLeftVoid(int init_version) {
                 byte[] lg = legs.slice(i * 111, i * 111 + 111);
                 lh = blake2b(byte[](lh) + lg);
                 if (lg.slice(0, 33) == lk.slice(0, 33) && lg.slice(66, 84) == lk.slice(66, 84)) {
+                    // (The units of futures legs: an option leg of the market is of a dated row, not of the
+                    // market's futures row. Review T18, U1.)
                     int sz = int(byte[8](lg.slice(85, 93)));
-                    if (sz > 0) { units = units + sz; }
+                    int dz = int(byte[8](lg.slice(94, 102)));
+                    if (sz > 0 && (dz < 3 || dz > 6)) { units = units + sz; }
                 }
             }
         }
@@ -138,6 +141,10 @@ contract KpfTLeftVoid(int init_version) {
         // has fewer units than the note's legs of it.
         int gone = 0;
         int dir = int(byte[8](lk.slice(94, 102)));
+        // (An option leg, its way 3 to 6, is a leg of the shard's tree of dated rows: this script judges none. A
+        // note of one is applied by KpfTLeftD or KpfTLeftAllD. Review T18, U1: it was "no leg of these books", and
+        // every note with an option leg was spent by anyone, its legs staying in the books.)
+        require(dir < 3 || dir > 6);
         if (dir != DIR_LONG && dir != DIR_SHORT) { gone = 1; }
         if (int(byte[8](lk.slice(67, 75))) <= 0) { gone = 1; }
         if (int(byte[8](lk.slice(85, 93))) <= 0) { gone = 1; }

@@ -232,7 +232,9 @@ contract KpfTEnterSD(int init_version) {
         require(dir <= 6);
         int day = int(byte[8](lg.slice(42, 50)));
         int strike = int(byte[8](lg.slice(50, 58)));
-        require(day > t0);
+        // (Its day is more than T after the statement's time: T, twice a lateness and a dispute period. The row
+        // holds the same; held here, no option of a nearer day is in the shard's books at all. Review T18, U3.)
+        require(day - t0 > 2 * (int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111)))));
         require(strike > 0);
         require(strike <= pm);
         require(int(byte[8](lg.slice(58, 66))) >= 0);

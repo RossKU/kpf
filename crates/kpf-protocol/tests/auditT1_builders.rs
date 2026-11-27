@@ -11044,7 +11044,7 @@ fn t1b_r53_the_sizes_of_the_seven_scripts_that_changed() {
     // (Review T6, second round, K1: `KpfTCallPay` is 2,523: the payment that makes a claim whole pays its key
     // the part and what the claim's note held, in one output.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2110)]);
+    assert_eq!(sizes, vec![("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTOpenC", 684), ("KpfTAddC", 630), ("KpfTAcctEnd", 505), ("KpfTDrawNote", 1742), ("KpfTLeftVoid", 2244)]);
 }
 
 // ================================================================================================================
@@ -12422,7 +12422,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2367), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1963), ("KpfTCStep", 5319), ("KpfTCallPay", 2461), ("KpfTCallEnter", 1051), ("KpfTChange", 1886), ("KpfTPoint", 2589), ("KpfTShardPrice", 2367), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2244)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -13066,7 +13066,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 974)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 964)]);
 }
 
 // ================================================================================================================
@@ -13865,7 +13865,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 82);
     // (Round 58: the three that changed again.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1886, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3039, 2282), ("KpfTEnterOff", 974, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1886, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3039, 2282), ("KpfTEnterOff", 964, 719)]);
 }
 
 // ================================================================================================================

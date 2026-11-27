@@ -1510,8 +1510,9 @@ impl Account {
             && t0 >= self.b_min_counter
             && (0..C_LEGS_MAX as i64).contains(&self.a_min_counter)
             && more >= 0
-            // (A futures leg, or an option leg of a day after the statement's time: docs 17.8j, 8.)
-            && (leg.dir == LONG || leg.dir == SHORT || crate::crow::option_of(leg).is_some_and(|o| o.strike > 0 && o.strike <= leg.price_max && o.premium >= 0 && o.premium <= leg.price_max && o.day > t0))
+            // (A futures leg, or an option leg of a day more than T after the statement's time, a written one
+            // adding its premium exactly: docs 17.8j, 8 and B2; review T18, U3 and U5. `KpfTEnterSD` holds both.)
+            && (leg.dir == LONG || leg.dir == SHORT || crate::crow::option_of(leg).is_some_and(|o| o.strike > 0 && o.strike <= leg.price_max && o.premium >= 0 && o.premium <= leg.price_max && o.day.checked_sub(t0).is_some_and(|x| x > self.c_head().t) && (o.held || Marked::premium_added(leg) == Some(more))))
             && leg.scale > 0
             && leg.scale <= 1_000_000_000
             && leg.size > 0

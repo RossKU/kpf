@@ -5282,6 +5282,33 @@ of all, and the 45 that failed were one thing, the library of one test file, bel
   legs, step C. A note of an option leg that is in no row is spent by nothing (`KpfTLeftVoid` reads futures
   rows): no script writes such a note; said.
 
+**Review T18** (the engine; `docs/audit/REVIEW-T18-option-entry.md`, `tests/auditT18_option_entry.rs`, nineteen
+tests after its second round). The three scripts B built are the model on everything tried: 600 entries at random
+(296 taken, 304 refused by the gate; 592 other shards after refused), the gate to the sompi for nine legs and
+five shards, 400 notes of one to six legs (774 other shards after refused), a series' whole life with two users
+(listed, one holds and one writes, two notes, taken out: the shard exactly as opened). **What it found is around
+them**, twice in a script B did not touch.
+
+| Finding | What | Closed by (`s520_t18_fixes.py`), or where it stands |
+|---|---|---|
+| U1 (high) | `KpfTLeftVoid` took an option leg for "no leg of these books": every note with an option leg was spent by anyone, the user paid nothing and the leg left in its row for good; and a futures leg beside one was "short" by the option's units | **`KpfTLeftVoid` judges no option leg**, and counts the units of futures legs alone against a futures row; the model's `gone_at` the same. Second round: 65 namings of the legs of 37 notes are the model's verdict at the engine; a note with an option leg is voided by nothing but a futures leg of it that really is in no row |
+| U2 (high) | The output that returns a premium was at a place its builder said: two entries undone in one transaction (a library of two copies) returned 20 KAS of 40, the rest the builder's | **The place is computed from the script's own input** (`outputs.length - 1 - 4 * j`), as every script of accounts and shards pays a key; no argument. Second round: two entries return 50 of 50; beside a draw's settlement and beside a note that pays the same key, each has its own output |
+| U3 (high as the library stood) | An option entered with a day a block after the statement's time; from its day on its account states nothing and its shard is traced by no draw and no call; under a call its account is stepped by nothing and its note applied by nothing | **`KpfTEnterSD` holds the day to more than T after the time** (the row held it; the script that states did not): the days from the time to T after it are refused, at the engine. **The rest stands until steps C and D**: an option that entered has no way out at its day and under a call. Nothing of this is deployed, and no option is entered on a chain before D |
+| U4 (low) | The gate is of a row against all the shard holds: a shard of 100 KAS takes eight rows asked 799 together | the paper's L4 (17.8c), with the rates |
+| U5 (low) | The model's marked account took a written option adding another amount than its premium | the model holds it |
+| W1 (medium; second round; older than B) | **The two families of scripts count the places of what they pay differently**: accounts and shards four an input, positions two. An account at input 1 and a position's claim at input 2 name one output: one payment of 3,001.2 KAS to an owner served a settled claim and an undone entry's premium of 20 | **Open, and the owner of the design's to decide**: the positions' scripts out of the library (they are the form before accounts; the library is then some thirty scripts smaller), or their places moved to four an input. Not specific to `KpfTEnterOff`: any script of the one family that pays a key, beside one of the other |
+| W2 (medium; second round) | With U1 closed, a note of an option leg that is in no row is spent by nothing, and ends every draw of its shard (`KpfTDrawNote`). No script writes such a note; a wrong statement nobody disputed writes any | `KpfTLeftVoidD` (the leaf before the key shown: no leaf of the key), with the notes' twins of step C |
+
+The whole workspace after the fixes: 820 tests, none failed (one run of all). Measured after them: an option's entry stated 7,495
+bytes, undone with its premium returned 2,329; `KpfTLeftVoid` 2,244 bytes (2,110), `KpfTEnterSD` 4,366,
+`KpfTEnterOff` 964.
+
+**What the two reviews of this step say of how it is built** (T17's V1 and T18's U1 are one mistake twice): a
+thing was given a meaning (a point from 101; a leg's way from 3) that scripts already standing read as "nothing"
+or "no leg", and took. **Before C and D: every script that reads a leg's way, a point's number, a row's kind or
+a statement's length is listed and read first**, and what each does with the new thing is said in the list the
+step is built from.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

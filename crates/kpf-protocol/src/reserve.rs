@@ -861,9 +861,14 @@ impl Shard {
     /// and is spent, the shard as it is (review 51, F81). `None`: every leg is in the books.
     pub fn gone_at(&self, n: &Left) -> Option<usize> {
         n.legs.iter().position(|l| {
+            // (An option leg is a leg of the dated rows: `KpfTLeftVoid` judges none, and counts the units of
+            // futures legs alone against a futures row. Review T18, U1.)
+            if crate::crow::option_of(l).is_some() {
+                return false;
+            }
             let Ok((head, _, _)) = Shard::book_of(l) else { return true };
             let Some(row) = self.rows.iter().find(|row| row.head() == head) else { return true };
-            let units: i64 = n.legs.iter().filter(|x| (x.market, x.scale, x.price_max) == (l.market, l.scale, l.price_max) && x.size > 0).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
+            let units: i64 = n.legs.iter().filter(|x| (x.market, x.scale, x.price_max) == (l.market, l.scale, l.price_max) && x.size > 0 && crate::crow::option_of(x).is_none()).map(|x| x.size).fold(0i64, |a, b| a.saturating_add(b));
             row.gross < units
         })
     }
