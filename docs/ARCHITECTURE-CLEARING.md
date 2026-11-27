@@ -3221,11 +3221,24 @@ change when a claim is paid and grows by every coin that reaches the shard.
    together only because what the coins do not pay is owed by the account and what a later leg gained is set
    against it (16.18: without that, less in 74,463 of the right steps); and then never less by more than the
    bands (together, the futures legs' bands are taken from what all gained; apart, a leg's band is at most
-   what that leg gained: 53,391 steps). Still to show before it is carried into `covered.rs` and `reserve.rs`:
-   a held leg of a spread ending at its day (with the day: 17.5's test of a leg that gained, where its gain
-   is to be read as coins of the account or as no coin, is to be said first); the sums a row needs; and N81's
-   test as the bound that is stated (17.8f has its numbers for futures rows: the rate on the gross that
-   closes it).
+   what that leg gained: 53,391 steps). **And a held leg of a group ending at its day**
+   (`a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_without_it`). 17.5's test is read
+   as a futures leg's that gained and leaves (16): what the ended option gained, less its premium, is asked
+   of the shard and paid to its user, out of the account; so it leaves only where the account stands on its
+   coins without it, and else its gain stays in the account, at its day's price, counted and no coin. A call
+   held at 100 for 5 whose day comes at 120, beside a call written at 110 that stands on: its 150 stay (the
+   account would be asked 186 and has 70), the account has 120 and after a move of the lower rate 66, its
+   premium and more; paid out at the day, the written call would stand on 70 having lost 100. At random
+   (40,000 accounts, the price then moving a lower rate a visit, the user taking all a take gives): by the rule
+   the gain stayed on 3,662 paths and left at once on 4,706; paid out at the day whatever stays, the shard is
+   unpaid on 410 paths, twenty times as much. **Found (M1): with the rule the shard is still unpaid on 30
+   paths, never by more than the band.** An account may have its premiums in what its futures legs gained, and
+   a step pays what they gained less their band: the test of a step counts no band. For the account's side
+   (17.8, 6): a step is due where the coins, what the legs gained less the band of the futures legs, and the
+   sum to the price named are below the premiums; or a step takes no band (its price is its stater's, within
+   the tolerance, and the band is there for that). Not decided. Still to say before it is carried into
+   `covered.rs` and `reserve.rs`: the sums a row needs (with the account's side); N81's bound is 17.8f's, left
+   for the last phase.
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
    nothing; under a call a leg younger than T asks nothing (17.9, F116); the two bounds of a stated price
    rounded inward.

@@ -1595,3 +1595,107 @@ fn a_step_of_some_legs_is_right_only_where_the_account_lacks_less() {
     assert!(apart_less > less_n);
     assert!(due_n > 5_000 && right > 5_000 && wrong > 5_000 && premium_only > 100);
 }
+
+/// 17.5, read as it is built for a futures leg that gained and leaves (16): what an ended option gained, less its
+/// premium, is asked of the shard and paid to its user, out of the account. So it leaves at its day only where the
+/// account stands without it, on its coins: the coins at what the legs that stay are asked at the entry's rate,
+/// their premiums, and what each of them lost counted alone. Else it stays: its gain at its day's price counts for
+/// the account's standing, moves no more, and is no coin; it leaves when the test passes, or with every leg.
+///
+/// The case 17.8 names: a call held at 100 for a premium of 5 whose day comes, and a call written at 110 for 2 that
+/// stands on. And at random: a held option that ends in the money beside legs that go on, the price then moving a
+/// lower rate a visit; with the rule and without it (the gain paid out at the day whatever stays).
+#[test]
+fn a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_without_it() {
+    // What the legs that stay ask of the coins for a leg that gained to leave (and for a take).
+    let stands = |coins: i64, stay: &[Leg], p: i64| coins >= asked_group(stay, p, UP) + stay.iter().map(|x| x.premium_all() + (-x.gained(p)).max(0)).sum::<i64>();
+    // Ten units, prices in hundredths. The spread at its entry: asked its two premiums (the 50 are the user's
+    // coins, the 20 the owner paid in), and nothing by the rate.
+    let held = Leg { kind: CallHeld, units: 10, strike: 10_000, entry: 10_000, premium: 500, near: false };
+    let written = Leg { kind: CallWritten, units: 10, strike: 11_000, entry: 10_000, premium: 200, near: false };
+    let coins = asked_group(&[held, written], 10_000, UP) + 7_000;
+    assert_eq!(coins, 7_000);
+    // The held call's day, at 120: it gained 200 a... 20,000, less its premium 15,000; the written call lost 10,000
+    // and goes on. Without the held call the account is asked 6,600 by the rate, the 2,000 and the 10,000: 18,600.
+    let pd = 12_000;
+    let net = held.gained(pd) - held.premium_all();
+    assert_eq!((net, written.gained(pd), asked_group(&[written], pd, UP)), (15_000, -10_000, 6_600));
+    assert!(!stands(coins, &[written], pd));
+    // So it stays: 15,000 that count and are no coin. The account has 7,000 + 15,000 - 10,000 and is due at no
+    // price; a move of the lower rate up (5,400 more lost) leaves it its premium and more.
+    let has = |kept: i64, p: i64| coins + kept + written.gained(p);
+    let (_, u) = ends(pd, LO);
+    assert_eq!((has(net, pd), has(net, u)), (12_000, 6_600));
+    assert!(has(net, u) >= written.premium_all());
+    // Paid out at the day whatever stays (no rule): the written call stands on 7,000 having lost 10,000: the
+    // account lacks at once, and a step of it leaves the shard unpaid 3,000 and the premium.
+    assert_eq!(has(0, pd), -3_000);
+    // (With 11,600 more of its own in the account it stands without the held call, which then leaves.)
+    assert!(!stands(coins + 11_599, &[written], pd) && stands(coins + 11_600, &[written], pd));
+
+    // At random.
+    let mut rng = Rng(0x17_0087);
+    let (mut kept_n, mut left_n, mut unpaid_rule, mut unpaid_none, mut paths_none, mut later, mut by_band) = (0, 0, 0i64, 0i64, 0, 0, 0);
+    for _ in 0..40_000 {
+        let a = 1_000 + rng.below(1_000_000);
+        // A held option in the money at its day, and one to three legs that go on.
+        let kind = if rng.below(2) == 0 { CallHeld } else { PutHeld };
+        let strike = if kind == CallHeld { a - 1 - rng.below(a / 10) } else { a + 1 + rng.below(a / 10) };
+        let ended = Leg { kind, units: 1 + rng.below(50), strike, entry: a - a / 20 + rng.below(a / 10 + 1), premium: rng.below(a / 20 + 1), near: false };
+        let stay: Vec<Leg> = (0..1 + rng.below(3)).map(|_| Leg { near: false, ..rng.leg(a) }).collect();
+        let net = ended.gained(a) - ended.premium_all();
+        if net <= 0 {
+            continue;
+        }
+        // The account before the day: not due, by a random margin (its premiums lie in its coins).
+        let all: Vec<Leg> = stay.iter().copied().chain([ended]).collect();
+        let whole = Acct { coins: 0, legs: all.clone() };
+        let floor = worst(&all, a, LO) + whole.premiums() - whole.gained(a);
+        let coins = (floor + rng.below(floor.abs() / 2 + 2)).max(0);
+        for rule in [true, false] {
+            // (The premium of the ended leg is paid out of what it gained: the coins are as they were.)
+            let (mut coins, mut kept, mut legs, mut p) = (coins, net, stay.clone(), a);
+            let mut unpaid = 0i64;
+            for tick in 0..6 {
+                // The ended leg leaves where the rule lets it (without the rule: at once).
+                if kept > 0 && (!rule || stands(coins, &legs, p)) {
+                    if rule {
+                        left_n += (tick == 0) as i64;
+                        later += (tick > 0) as i64;
+                    }
+                    kept = 0;
+                } else if kept > 0 && tick == 0 {
+                    kept_n += 1;
+                }
+                // Whoever watches: a step of every leg where the account is due by a price (what is kept counts).
+                let acct = Acct { coins: coins + kept, legs: legs.clone() };
+                if prices_to_try(&legs, p).iter().any(|q| due_at(&acct, p, *q)) {
+                    let (_, _, owes) = stepped(&acct, (1 << legs.len()) - 1, p);
+                    // (Found: with the rule, what a step leaves unpaid is never more than the band of the
+                    // futures legs that leave in it: the account had its premiums in what its legs gained, and
+                    // a step pays what they gained less their band.)
+                    let band: i64 = legs.iter().filter(|x| !x.option()).map(|x| rate_up(x.units * p, 2 * G)).sum();
+                    assert!(!rule || owes <= band, "unpaid {owes} beyond the band {band}");
+                    by_band += (rule && owes > 0) as i64;
+                    unpaid += owes;
+                    legs.clear();
+                    break;
+                }
+                // The user takes all a take gives it (never what is kept: it is no coin).
+                let alone: i64 = legs.iter().map(|x| (-x.gained(p)).max(0)).sum();
+                coins -= (coins - asked_group(&legs, p, UP) - legs.iter().map(|x| x.premium_all()).sum::<i64>() - alone).max(0);
+                // The price moves, by the lower rate at the most.
+                let (l, u) = ends(p, LO);
+                p = l + rng.below(u - l + 1);
+            }
+            if rule {
+                unpaid_rule += unpaid;
+            } else {
+                unpaid_none += unpaid;
+                paths_none += (unpaid > 0) as i64;
+            }
+        }
+    }
+    println!("a held leg at its day: by the rule its gain stayed in the account on {kept_n} paths and left at its day on {left_n} (on {later} it left at a later visit); the shard unpaid {unpaid_rule} in all with the rule, on {by_band} paths and never by more than the band of the futures legs a step takes; paid out at the day whatever stays, the shard is unpaid on {paths_none} paths, {unpaid_none} in all");
+    assert!(kept_n > 3_000 && left_n > 1_000 && paths_none > 300 && unpaid_none > 10 * unpaid_rule);
+}
