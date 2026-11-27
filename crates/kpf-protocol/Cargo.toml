@@ -191,6 +191,10 @@ name = "thin_change"
 path = "tests/thin_change.rs"
 
 [[test]]
+name = "thin_day"
+path = "tests/thin_day.rs"
+
+[[test]]
 name = "thin_draw"
 path = "tests/thin_draw.rs"
 

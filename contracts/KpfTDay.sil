@@ -1,0 +1,109 @@
+pragma silverscript ^0.1.0;
+
+// KpfTDay: the committee's price of a day written as a note that stays (docs/ARCHITECTURE-CLEARING.md, 17.8g, A), as a
+// script under the library's id. It is KpfTNote's twin: spent beside an epoch table of the committee spent by its
+// attest for a market and a time, it writes one object under the library's id whose state says the committee, the
+// market, the time (the day), the price the committee signed and its spread:
+//   blake2b(push8(22) + push(committee) + push(market) + push8(day) + push8(price) + push8(spread))
+// The object is in the fee pool's form (KpfFeePool's script with that state: a script of the library cannot hold the
+// library's id, as KpfSlot does). It has no owner: nobody takes it back, and it leaves its place only named by a
+// script of the library, which holds it to its state and writes it again.
+// DESIGN: a price note's signatures are public: whoever has them writes a day's note from them while a table of the
+// day's window lives. Two notes of one day may differ within the committee's spread (the attest takes its price from
+// whoever builds it): a day's note is the committee's word, not the one price of a day. A shard writes one into its
+// books, once (17.8g, B).
+//   write(u, n, rid, mkt, t0)    anyone. u: the epoch table's input; n: the note's output.
+contract KpfTDay(byte[32] EPOCH_TABLE_TPL, int EPOCH_TABLE_PRE, int EPOCH_TABLE_SUF, byte[4] ATTEST_TAG, byte[2] DAY_PRE, byte[103] DAY_SUF, int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    // The least a day's note holds (a note's least: below what a copy of a script keeps, so that no sweep moves it).
+    int constant DAY_MIN = 20000000;
+    int constant DAY_TAG = 22;
+
+    // The epoch table (KpfEpochTable) and the signature script of its attest, as KpfCrossC reads them.
+    int constant EPOCH_TABLE_STATE_LEN = 648;
+    int constant ATTEST_T0_AT = 33;
+    int constant ATTEST_P_AT = 42;
+    int constant ATTEST_BITS_AT = 51;
+    int constant ATTEST_PRICES_AT = 60;
+    int constant ATTEST_SIGS_AT = 182;
+    int constant ATTEST_TAG_AT = 1145;
+    int constant ATTEST_HEAD = 1153;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // Input u is an epoch table of the committee `rid` spent by its `attest` for the market `mkt` and the time t0 (the
+    // epoch table's script is the pinned template, its signature script shows the entry's arguments, and its own
+    // script checks the members' signatures and that it goes on). Held here: that it is so. The price and the spread
+    // are read by the entry.
+    function attested(int u, int t0, byte[32] mkt, byte[32] rid) {
+        require(u >= 0);
+        require(u < tx.inputs.length);
+        require(u != this.activeInputIndex);
+        byte[] z8 = byte[](0 as byte[8]);
+        require(rid != byte[32](z8 + z8 + z8 + z8));
+        require(OpInputCovenantId(u) == rid);
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN + EPOCH_TABLE_SUF;
+        require(OpTxInputScriptSigLen(u) == ATTEST_HEAD + sz);
+        byte[] trs = OpTxInputScriptSigSubstr(u, ATTEST_HEAD, ATTEST_HEAD + sz);
+        require(tx.inputs[u].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+        require(blake3(byte[](EPOCH_TABLE_PRE as byte[8]) + trs.slice(0, EPOCH_TABLE_PRE) + byte[](EPOCH_TABLE_SUF as byte[8])
+            + trs.slice(EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN, sz)) == EPOCH_TABLE_TPL);
+        require(OpTxInputScriptSigSubstr(u, 0, ATTEST_T0_AT) == p33(mkt));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_T0_AT, ATTEST_P_AT) == i9(t0));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_P_AT, ATTEST_P_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_BITS_AT, ATTEST_BITS_AT + 1) == byte[](0x08));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_PRICES_AT, ATTEST_PRICES_AT + 2) == byte[](0x4c78));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_SIGS_AT, ATTEST_SIGS_AT + 3) == byte[](0x4dc003));
+        require(OpTxInputScriptSigSubstr(u, ATTEST_TAG_AT, ATTEST_HEAD - 3) == byte[](0x04) + byte[](ATTEST_TAG));
+    }
+
+    entry write(int u, int n, byte[32] rid, byte[32] mkt, int t0) {
+        int self = this.activeInputIndex;
+        require(version == 1);
+        attested(u, t0, mkt, rid);
+        // A day's price is above nothing: a leg is not ended at a price of nothing.
+        int price = int(byte[8](OpTxInputScriptSigSubstr(u, ATTEST_P_AT + 1, ATTEST_BITS_AT)));
+        require(price > 0);
+        // The committee's spread: the last value of the epoch table's state.
+        int sz = EPOCH_TABLE_PRE + EPOCH_TABLE_STATE_LEN;
+        int spread = int(byte[8](OpTxInputScriptSigSubstr(u, ATTEST_HEAD + sz - 8, ATTEST_HEAD + sz)));
+        require(spread >= 0);
+        // The note: one output of the library's id beside what goes on, with that state and nothing else in it.
+        byte[32] h = blake2b(i9(DAY_TAG) + p33(rid) + p33(mkt) + i9(t0) + i9(price) + i9(spread));
+        byte[32] lib = OpInputCovenantId(self);
+        require(n >= 0);
+        require(n != self);
+        require(OpOutputCovenantId(n) == lib);
+        require(tx.outputs[n].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(byte[](DAY_PRE) + byte[](h) + byte[](DAY_SUF))));
+        require(tx.outputs[n].value >= DAY_MIN);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        // Nothing else of the library is in the transaction: this copy and the note are all it writes under the id.
+        require(OpCovInputCount(lib) == 1);
+        require(OpCovOutputCount(lib) == 2);
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

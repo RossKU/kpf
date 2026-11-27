@@ -183,6 +183,13 @@
       "source": "contracts/KpfTCure.sil",
       "source_sha256": "e90ede3a51b2d26b207dbe3b8c492b0def4acdc46b3937de5c5687f1f03d3886"
     },
+    "KpfTDay": {
+      "artifact": "KpfTDay.json",
+      "artifact_sha256": "29d7b89493e095a9e365dc9a8312d33b7d6e090b4ff9315e207fd111881c895e",
+      "script_len": 761,
+      "source": "contracts/KpfTDay.sil",
+      "source_sha256": "f1fdca017653d81e347d7a892f6f8968dfb0c898447b7f979ef497eb019cf98f"
+    },
     "KpfTDispute": {
       "artifact": "KpfTDispute.json",
       "artifact_sha256": "c7f994ec18c623733df02028d5dff5640703d5df7097257772d56a9820ca3905",

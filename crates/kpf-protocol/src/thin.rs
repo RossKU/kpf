@@ -1992,6 +1992,28 @@ impl Note {
     }
 }
 
+/// The least a day's note holds (`KpfTDay.DAY_MIN`): a note's least, below what a copy of a script keeps.
+pub const DAY_MIN: i64 = 20_000_000;
+
+/// The committee's price of a day, as a note that stays states it (docs 17.8g, A; written by `KpfTDay` beside the
+/// committee's attest): the committee, the market, the day (a time, as a statement's is), the price and the
+/// committee's spread. An object in the fee pool's form, with no owner. Two of one day may differ within the spread:
+/// it is the committee's word, and a shard takes one into its books, once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Day {
+    pub committee: [u8; 32],
+    pub market: [u8; 32],
+    pub day: i64,
+    pub price: i64,
+    pub spread_bps: i64,
+}
+
+impl Day {
+    pub fn hash(&self) -> [u8; 32] {
+        blake2b(&[i9(22), p33(&self.committee), p33(&self.market), i9(self.day), i9(self.price), i9(self.spread_bps)].concat())
+    }
+}
+
 /// The state of the fee pool whose oracle fees are the committee `committee`'s, in a library whose copies (and the fee pool) go on
 /// holding `floor`: what its genesis gave each.
 pub fn fee_pool_hash(committee: &[u8; 32], floor: i64) -> [u8; 32] {

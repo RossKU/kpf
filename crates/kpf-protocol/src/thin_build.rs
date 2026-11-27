@@ -1554,6 +1554,43 @@ pub fn note_reclaim(note: &OLive<Note>, p: Payer) -> Result<OBuilt> {
     d.finish()
 }
 
+// ---------------------------------------------------------------- the committee's note of a day (docs 17.8g, A)
+
+/// The script of a day's note: the fee pool's with the day's state (the same in every library).
+pub fn day_script(n: &crate::thin::Day) -> Vec<u8> {
+    pinned::kit().fee_pool(&n.hash())
+}
+
+/// The address of a day's note (the output is under a library's id).
+pub fn day_spk(n: &crate::thin::Day) -> ScriptPublicKey {
+    pay_to_script_hash_script(&day_script(n))
+}
+
+/// `KpfTDay`: the committee's price of a market at a day written as a note that stays, under the library's id. As
+/// `note_write`: input 0 is the payer's first coin, input 1 the script, input 2 the committee's epoch table spent by
+/// its attest; output 0 is the note, outputs 1 and 2 the script and the epoch table as they go on. Nobody takes the
+/// note back.
+pub fn day_write(lib: &[u8; 32], script: &LibScript, t: Attested, p: Payer) -> Result<(OBuilt, crate::thin::Day)> {
+    let (epoch_table, att) = t;
+    let [coin, more @ ..] = p.funds else {
+        return invalid("a day's note's transaction begins with a coin of its payer");
+    };
+    let Some(committee) = epoch_table.id.map(|h| h.as_bytes()) else {
+        return invalid("the epoch table carries no covenant id");
+    };
+    let day = crate::thin::Day { committee, market: att.market, day: att.t0, price: att.p, spread_bps: epoch_table.s.spread_bps };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    d.key(coin, "funding");
+    let (_, lid) = copy_in(&mut d, lib, script, "KpfTDay", "write", vec![iv(2), iv(0), bv(committee.to_vec()), bv(att.market.to_vec()), iv(att.t0)])?;
+    d.lock(att.t0 as u64);
+    let rid = crate::committee_build::attest_input(&mut d, epoch_table, att, att.t0 as u64)?;
+    d.out(crate::thin::DAY_MIN as u64, day_spk(&day), Some((1, lid)), "day's note", None);
+    keep(&mut d, script, lid)?;
+    d.obj(crate::oracle_build::OObj::C(crate::committee_build::CObj::EpochTable(epoch_table.s)), epoch_table.value, Some((2, rid)), "epoch table");
+    d.fund(more, &p.change_to);
+    Ok((d.finish()?, day))
+}
+
 /// The most steps `KpfTCite` follows in a lane's activity and in the lanes' tree.
 pub const CITE_ACTIVITY_MAX: usize = 14;
 pub const CITE_LANES_MAX: usize = 12;

@@ -2786,7 +2786,8 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     // (Round 59: 64, with the split of 16.2; round 60: 66, with the two of a mark.)
     // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a draw's or a call's trace.)
     // (72 with `KpfTRest`: an operation a script, docs 17.8e.)
-    assert_eq!(names.len(), 75, "{names:?}");
+    // (76 with `KpfTDay`: docs 17.8g, A.)
+    assert_eq!(names.len(), 76, "{names:?}");
     assert!(names.iter().any(|n| n == "KpfTShardRow"), "{names:?}");
     assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
     for cmd in ["acct-leg", "acct-out"] {

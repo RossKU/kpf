@@ -480,9 +480,11 @@ fn generate_committee(r: &Path) -> Vec<(String, String)> {
 const NOTE_SUF_LEN: usize = 55;
 /// What stands between the state's hash and the writer's key there.
 const NOTE_MID_LEN: usize = 1;
+/// What stands after the state's hash in a day's note's script, which is the fee pool's (`byte[N] DAY_SUF` of KpfTDay).
+const DAY_SUF_LEN: usize = 103;
 
 fn generate_thin(r: &Path) -> Vec<(String, String)> {
-    let names = ["KpfSlot", "KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay", "KpfNote", "KpfFeePool"];
+    let names = ["KpfSlot", "KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTDay", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay", "KpfNote", "KpfFeePool"];
     let srcs: Vec<String> = names.iter().map(|n| read_norm(&r.join(format!("contracts/{n}.sil")))).collect();
     let code = |a: &SilAbiArtifact| a.contracts.values().next().expect("one contract").compiled.bytecode.clone();
     let (lib, state) = ([0x4c_u8; 32], [0x5a_u8; 32]);
@@ -521,6 +523,12 @@ fn generate_thin(r: &Path) -> Vec<(String, String)> {
     let note_writer = [epoch_table[0].clone(), epoch_table[1].clone(), epoch_table[2].clone(), epoch_table[3].clone(), note_parts[0].clone(), note_parts[1].clone(), note_parts[2].clone(), ArtifactValue::Int(1)];
     let cite = [note_parts[0].clone(), note_parts[1].clone(), note_parts[2].clone(), ArtifactValue::Int(1)];
     let note_ctor = [ArtifactValue::Bytes(state.to_vec()), ArtifactValue::Bytes(owner.to_vec())];
+    // A day's note is an object in the fee pool's form (the fee pool's script with a day's state): its writer holds
+    // an output to that script by what stands before and after the state's hash.
+    assert_eq!(names.last(), Some(&"KpfFeePool"));
+    let pool_code = code(&compile("KpfFeePool", srcs.last().expect("the fee pool"), &[ArtifactValue::Bytes(state.to_vec())]));
+    assert_eq!(pool_code.len() - state_at - 32, DAY_SUF_LEN, "the fee pool's script: KpfTDay is written for this length");
+    let day_writer = [epoch_table[0].clone(), epoch_table[1].clone(), epoch_table[2].clone(), epoch_table[3].clone(), ArtifactValue::Bytes(pool_code[..state_at].to_vec()), ArtifactValue::Bytes(pool_code[state_at + 32..].to_vec()), ArtifactValue::Int(1)];
     // What reads a citation holds the citing input to KpfTCite's script (compiled before it in the list).
     let mut cite_spk: Vec<ArtifactValue> = vec![];
     for i in 1..names.len() {
@@ -528,7 +536,7 @@ fn generate_thin(r: &Path) -> Vec<(String, String)> {
         let merge = [ArtifactValue::Int(kpf_protocol::thin::MERGE_TIP), ArtifactValue::Int(1)];
         let novate = [ArtifactValue::Int(kpf_protocol::thin::NOVATE_TIP), ArtifactValue::Int(1)];
         let purse = [ArtifactValue::Bytes(state.to_vec())];
-        let ctor: &[ArtifactValue] = if names[i] == "KpfFeePool" { &purse } else if names[i] == "KpfNote" { &note_ctor } else if names[i] == "KpfTNote" { &note_writer } else if names[i] == "KpfTCite" { &cite } else if names[i] == "KpfTTake" || names[i] == "KpfTStepPrice" || names[i] == "KpfTShardPrice" { &cite_spk } else if names[i].ends_with("Prove") || names[i].ends_with("Refute") || names[i] == "KpfTPay" { &epoch_table } else if names[i] == "KpfTMerge" || names[i] == "KpfTJoin" || names[i] == "KpfTFold" { &merge } else if names[i] == "KpfTLeave" { &novate } else if names[i] == "KpfTNovate" { &novate } else { &[ArtifactValue::Int(1)] };
+        let ctor: &[ArtifactValue] = if names[i] == "KpfFeePool" { &purse } else if names[i] == "KpfNote" { &note_ctor } else if names[i] == "KpfTNote" { &note_writer } else if names[i] == "KpfTDay" { &day_writer } else if names[i] == "KpfTCite" { &cite } else if names[i] == "KpfTTake" || names[i] == "KpfTStepPrice" || names[i] == "KpfTShardPrice" { &cite_spk } else if names[i].ends_with("Prove") || names[i].ends_with("Refute") || names[i] == "KpfTPay" { &epoch_table } else if names[i] == "KpfTMerge" || names[i] == "KpfTJoin" || names[i] == "KpfTFold" { &merge } else if names[i] == "KpfTLeave" { &novate } else if names[i] == "KpfTNovate" { &novate } else { &[ArtifactValue::Int(1)] };
         arts.push(compile(names[i], &srcs[i], ctor));
         if names[i] == "KpfTCite" {
             let spk = kpf_protocol::tx::p2sh_spk(&code(arts.last().expect("KpfTCite")));

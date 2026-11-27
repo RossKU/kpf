@@ -3902,6 +3902,7 @@ here when it is found, with its number, and is not built:
 | the rows a shard writes whole (four) | more futures markets a shard | 105 bytes a row in every entry and every note applied |
 | **S1's rate** (17.8f): the upper rate on the gross at 3.13 % | a leaving never leaves a shard below its lower level | it is a rate, with the rates; until then S1 is open as review T7 found it |
 | the band where legs leave apart (17.8, 1: a leg's band is at most what that leg gained) | one rule for a band, apart or together | a number, with the rates |
+| what a copy holds at a library's genesis (7 KAS a copy with 76 scripts; 8 from the 77th: the genesis is one transaction, and an output under an id weighs 4 x 10^12 over its value against a block's 500,000) | a library made for less (78 outputs of 7 KAS today: 546) | a genesis in several transactions, or fewer scripts: with the scripts' final count |
 
 ### 17.8f S1 in numbers: the rate on the gross (a model; no rate changed)
 
@@ -4022,10 +4023,36 @@ gained nothing and gives up no band, and would be due for bands it never pays.) 
 thirty-four paths that left the shard unpaid leave it paid; an account that took all a take gives is due at no
 price after a move of the lower rate.
 
-**What is built when.** A now: `KpfDay`, `KpfTDay.write`, `KpfTDay.copy`, and a reader in the tests. B with
-the dated rows; C with the account's side. What 17.5 said otherwise is replaced by this: the price "written
-once" is the shard's leaf; a leg that gained leaves by the one transaction, credited; an ended leg is passed
-by no row (it has left); a citation answers no day.
+**What is built when.** A now: the note and `KpfTDay.write`. B with the dated rows; C with the account's side.
+What 17.5 said otherwise is replaced by this: the price "written once" is the shard's leaf; a leg that gained
+leaves by the one transaction, credited; an ended leg is passed by no row (it has left); a citation answers no
+day.
+
+**A as it is built** (the engine; `tests/thin_day.rs`, four tests; not yet read by a reviewer, and the tool has
+no command for it yet: both with the first script that reads a day's note).
+
+- **The note is no contract of its own**: it is the fee pool's script (`KpfFeePool`, 137 bytes) with the day's
+  state where the fee pool's is. `KpfTDay` holds its output to that script by what stands before and after the
+  state (as `KpfTNote` holds a price note's).
+- **`KpfTDay.write(u, n, rid, mkt, t0)`** is `KpfTNote.note` line for line, but for: the tag (22), no owner, the
+  least (`DAY_MIN`, 0.2 KAS, where a price note holds 1), and **a price above nothing** (the committee's attest
+  takes a price of nothing, and the price note's script writes it; shown). 761 bytes; its transaction 5,771
+  (a price note's 5,769). The library has 76 scripts.
+- **Shown at the engine:** a note of another price, market, day, committee or spread than the attest's, a
+  second note, a note under no id, a price note in its place, a note before its day: refused. The signed prices
+  of a price note write a day's note (the table as it went on). **Two true notes of one day** (the members
+  signed one price; a second note is written a spread above it): review T11's D1, as the engine has it. A time
+  no table covers has no attest.
+- **A sweep and a day's note** (D5): `KpfTSweep` takes what a note holds above a copy's floor (it passes for a
+  copy), and the note stays, of its state, at the floor; a note at its least is below the floor and nothing of
+  it moves; a day's note named where the sweep reads the fee pool is refused. So a reader asks the value the
+  note had, never a least.
+- **`copy` is not built here.** It was for the notes many transactions read at once, and those are the
+  shard's notes of B (every ended leg of a shard reads one); a committee's note is read once a shard, and
+  anyone writes a second from the same signed prices. It comes with B, for both notes, as a script of its own
+  (an operation a script), and takes the state opened (the committee or the shard, the market, the day, the
+  price, the fifth number) and not its hash: a fee pool is of the same script, and a copy by the hash alone
+  would write a second fee pool.
 
 #### The first writing (replaced)
 
