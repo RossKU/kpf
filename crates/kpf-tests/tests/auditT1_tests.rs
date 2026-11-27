@@ -630,7 +630,7 @@ const RELEASE: [&str; 6] = [
     "require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));",
 ];
 // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a draw's or a call's trace.)
-const SCRIPTS: [&str; 78] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTDay", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTRowIn", "KpfTRowOut", "KpfTSweep", "KpfTPay"];
+const SCRIPTS: [&str; 79] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTDay", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTLeftC", "KpfTRest", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTMarkNote", "KpfTMarkNoteC", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftVoid", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTRowIn", "KpfTRowOut", "KpfTShardRowD", "KpfTSweep", "KpfTPay"];
 /// Round 30. The two services of the library are spent not to move an object named by `who` but to write or cite a
 /// price note: their first argument is not the 24 bytes of the places, and their "going on" is their own (a note
 /// writer writes two outputs under the id, a citation ties the counts). The who-based lints (A3's entry shape, R19's
@@ -831,7 +831,8 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     // (17.8e, 2: 86 and 73 with the three twins of a called shard, each an `apply` and its `release`.)
     // (17.8g, A: 87 and 74 with `KpfTDay.write` and its `release`.)
     // (17.8j, A2: 89 and 76 with `KpfTRowIn.put`, `KpfTRowOut.out` and their `release`.)
-    assert_eq!((entries, releases), (89, 76));
+    // (17.8j, A3: 90 and 77 with `KpfTShardRowD.answer` and its `release`.)
+    assert_eq!((entries, releases), (90, 77));
     // Review T5. The new script is an answer of a point as `KpfTShardEnd` is: what the loop above holds of its one
     // entry (it goes on by `ends`, the copy kept with the fee and half a bond, the counts tied; `version == 1`;
     // named by `who`; `release` the six lines; ORACLE_FEE read twice). And, of the parts the loop reads only for
@@ -868,13 +869,13 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     }
     let judged = answer.split("require(at <= 4);").nth(1).unwrap().split("require(ok == verdict);").next().unwrap();
     let requires: Vec<&str> = judged.lines().map(str::trim).filter(|l| l.starts_with("require(")).collect();
-    assert_eq!(requires, vec!["require(sd.length >= 184);", "require((sd.length - 184) % 56 == 0);", "require(ne <= 4);"], "KpfTShardRow.answer: between the point's range and the verdict nothing is required but the length of what is said");
+    assert_eq!(requires, vec!["require(sd.length >= 184);", "require(ne >= 0);", "require((sd.length - 184) % 56 == 0);", "require(ne <= 4);"], "KpfTShardRow.answer: between the point's range and the verdict nothing is required but the length of what is said");
     // (The same of the two ends, which read no row now, and of the price's answer up to its citation.)
     for name in ["KpfTShardEnd", "KpfTCallEnd"] {
         let a = part(&code_of(name), "entry answer(");
         let judged = a.split("require(at == 0);").nth(1).unwrap().split("require(ok == verdict);").next().unwrap();
         let requires: Vec<&str> = judged.lines().map(str::trim).filter(|l| l.starts_with("require(")).collect();
-        assert_eq!(requires, vec!["require(sd.length >= 184);", "require((sd.length - 184) % 56 == 0);", "require(ne <= 4);"], "{name}.answer");
+        assert_eq!(requires, vec!["require(sd.length >= 184);", "require(ne >= 0);", "require((sd.length - 184) % 56 == 0);", "require(ne <= 4);"], "{name}.answer");
         assert!(!a.contains("byte[408]") && !a.contains("rw.slice") && a.contains("byte[32] books"), "{name}.answer reads no row");
     }
 }

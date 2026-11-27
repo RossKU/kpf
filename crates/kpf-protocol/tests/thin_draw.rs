@@ -95,7 +95,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() }.seeded(&SEED, &self.markets[0].committee_id);
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened(), dgross: 0 }.seeded(&SEED, &self.markets[0].committee_id);
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -4305,4 +4305,123 @@ fn a_dated_row_is_listed_and_taken_out_at_the_engine() {
     let (b, s8, b8) = row_out(&w.lib, &l7, &b7, &rout, &Key::day_of(market, 1_800_000), RowOutBy::Owner, w.payer(&w.c, &ff)).unwrap();
     signed("the last leaf: the head leaves with it", &b, &w.keys);
     assert_eq!((s8.rows, s8.root, b8.root()), (s0.s.rows, s0.s.root, b0.root()), "the shard as it was");
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, A3: a draw's and a call's trace over the dated rows (`KpfTShardRowD`; the statement with dated rows in
+// `KpfTChange`, `KpfTShardRow`, `KpfTShardEnd`).
+
+/// A shard of a futures row and three dated rows of its market, two with units (written by hand: no leg enters a
+/// dated row yet). A draw and a call say the trace with its dated rows, the head's leaf first: stated (its length
+/// held), every point answered right and no other verdict taken: the four rows by `KpfTShardRow`, the dated rows
+/// and the point beyond the last by `KpfTShardRowD`. A number of a dated row moved, a row left out and a trace
+/// that says no dated row are answered wrong at their own point. The end counts what the dated rows are asked.
+#[test]
+fn a_dated_row_of_a_trace_is_answered_at_the_engine() {
+    use kpf_protocol::books::{Books, Key, Row, OF_CALLS, OF_PUTS};
+    use kpf_protocol::reserve::{trace_dated_point, Traced};
+    let w = world();
+    let h = w.head(0);
+    let (scale, limit, market) = (h.scale, h.price_max, h.key.market);
+    let base = bare(&w);
+    let (mut s, mut b) = (base.s, Books::opened());
+    let keys = [Key { market, day: 900_000, of: OF_CALLS, strike: P10 / 100 * 103 }, Key { market, day: 900_000, of: OF_PUTS, strike: P10 / 100 * 102 }, Key { market, day: 1_800_000, of: OF_CALLS, strike: P10 }];
+    for k in keys {
+        let free: Vec<usize> = (0..64).filter(|i| b.leaves[*i].is_none()).collect();
+        let stands = b.row(&Key::day_of(k.market, k.day)).is_some();
+        (s, b) = s.row_in(&b, k, scale, limit, 0, free[0], (!stands).then_some(free[1])).unwrap();
+    }
+    // (The clearing side wrote 30 calls at 10.3 and holds 20 puts at 10.2, both within a move of the rate of the
+    // price, 10; the third row has no unit. Ten futures short.)
+    for (k, net, gross) in [(keys[0], -30 * scale, 30 * scale), (keys[1], 20 * scale, 20 * scale)] {
+        let at = b.place_of(&k).unwrap();
+        b.leaves[at] = Some(Row { net, gross, ..b.leaves[at].unwrap() });
+        s = Shard { root: b.root(), dgross: s.dgross + gross, ..s };
+    }
+    s.rows[0] = ShardRow { net: -10 * scale, gross: 40 * scale, ..s.rows[0] };
+    s.basis = -100 * KAS1;
+    let shard = OLive { s, ..base };
+    let s = &shard.s;
+    let f = [fund(xk(&w.w), 32)];
+    let (row_s, row_d) = (w.script("KpfTShardRow"), w.script("KpfTShardRowD"));
+    let mut sizes = vec![];
+    for call in [false, true] {
+        // (The shard is not due for a call: a call is stated all the same, and its rows are answered as they are.)
+        let (dst, dd) = s.draw(KAS1, PRICES, T0, shard.value as i64).unwrap();
+        let (st0, d) = if call { (Stated { kind: kpf_protocol::reserve::KIND_CALL, bond: s.call_bond(), claimer: xk(&w.w), ..dst }, Draw { amount: 0, ..dd }) } else { (dst, dd) };
+        let t = s.traced_with(&b, &d, call, T0).unwrap();
+        let nd = t.dated.len();
+        // (The head's leaf, three rows and two days' leaves.)
+        assert_eq!((nd, t.list.len(), t.said().len()), (6, 1, 184 + 56 + 9 + 80 * 6));
+        assert!(t.dated.last().unwrap().ro > 0 && t.dated.last().unwrap().nk == Key::HEAD.hash());
+        let st = Stated { arg: t.arg(), ..st0 };
+        let live = w.stated(&shard, &st, &t.said());
+        // Every point is answered right, and wrong by nobody.
+        for at in 1..=4i64 {
+            let q = w.pointed(&live, at);
+            let (bb, right) = shard_row_t(&w.lib, &q, s, &t, at, &row_s, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+            assert!(right && accepted(&bb, &w.keys), "the futures row {at} of a trace with dated rows");
+        }
+        for k in 1..=nd as i64 + 1 {
+            let q = w.pointed(&live, trace_dated_point(k as usize));
+            let (bb, right) = shard_row_d(&w.lib, &q, s, &b, &t, k, &row_d, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+            assert!(right);
+            let sg = signed(&format!("the dated row {k} of a {} answered right", if call { "call" } else { "draw" }), &bb, &w.keys);
+            sizes.push(sg.mass.size);
+            assert_eq!(&sg.tx.outputs[0].script_public_key, &hash_spk(&w.lib, &st.again().hash()), "the statement stands again");
+            let forced = shard_row_d(&w.lib, &q, s, &b, &t, k, &row_d, xk(&w.w), w.payer(&w.w, &f), Some(false));
+            assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "the dated row {k} answered wrong");
+        }
+        // What is said otherwise is wrong at its own point: the shard again.
+        let wrong = |what: &str, lie: &Traced, k: i64| {
+            let lst = Stated { arg: lie.arg(), ..st };
+            let q = w.pointed(&w.stated(&shard, &lst, &lie.said()), trace_dated_point(k as usize));
+            let (bb, right) = shard_row_d(&w.lib, &q, s, &b, lie, k, &row_d, xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+            assert!(!right, "{what}");
+            let sg = signed(&format!("{what}: answered wrong"), &bb, &w.keys);
+            assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (shard.value, &hash_spk(&w.lib, &s.hash())), "{what}: the shard again");
+            let forced = shard_row_d(&w.lib, &q, s, &b, lie, k, &row_d, xk(&w.w), w.payer(&w.w, &f), Some(true));
+            assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys), "{what}: answered right");
+        };
+        let moved = |k: usize, f: usize, by: i64| {
+            let mut lie = t.clone();
+            let x = &mut lie.dated[k - 1];
+            *[&mut x.place, &mut x.at, &mut x.wn, &mut x.wg, &mut x.sn, &mut x.ro][f] += by;
+            lie
+        };
+        // (In the keys' order: the head, the calls at 10.3, the puts at 10.2, their day's leaf, the call of the later
+        // day, its day's leaf.)
+        wrong("what the dated rows are asked a sompi less at the written calls", &moved(2, 5, -1), 2);
+        wrong("the clearing side's worth a sompi more at the held puts", &moved(3, 4, 1), 3);
+        wrong("the gross's worth more at a row of no unit", &moved(5, 3, 7), 5);
+        wrong("the head's leaf at another place", &moved(1, 0, 1), 1);
+        wrong("the head's row with something asked", &moved(1, 5, 1), 1);
+        wrong("a day's leaf that adds to the net's worth", &moved(4, 2, 1), 4);
+        let mut cut = t.clone();
+        cut.dated.pop();
+        wrong("the last leaf left out", &cut, nd as i64);
+        let mut gap = t.clone();
+        gap.dated.remove(2);
+        wrong("a row left out in the middle", &gap, 3);
+        let mut blind = t.clone();
+        blind.dated.clear();
+        wrong("no dated row said by a shard that has them", &blind, 1);
+        // The end counts what the dated rows are asked: a draw that would be right by the four rows alone is wrong.
+        if !call {
+            let most = |t: &Traced| (1..=200i64).rev().map(|x| x * KAS1 / 2).find(|a| s.draw_trace_end_judged(&Traced { amount: *a, ..t.clone() }, &s.owner, T0) == Some(true)).unwrap_or(0);
+            let (with, without) = (most(&t), most(&blind));
+            assert!(with > 0 && without > with, "the dated rows ask {} of the shard", without - with);
+            let (st2, d2) = s.draw(without, PRICES, T0, shard.value as i64).unwrap();
+            let t2 = s.traced_with(&b, &d2, false, T0).unwrap();
+            let live2 = w.stated(&shard, &Stated { arg: t2.arg(), ..st2 }, &t2.said());
+            let q = w.pointed(&live2, 0);
+            let (bb, right) = shard_end_t(&w.lib, &q, s, &t2, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), None).unwrap();
+            assert!(!right, "a draw of what the four rows alone allow");
+            signed("a draw that leaves less than the dated rows ask: its end answered wrong", &bb, &w.keys);
+            let forced = shard_end_t(&w.lib, &q, s, &t2, &w.script("KpfTShardEnd"), xk(&w.w), w.payer(&w.w, &f), Some(true));
+            assert!(forced.is_err() || !accepted(&forced.unwrap().0, &w.keys));
+            println!("the dated rows ask {} sompi more of the shard: a draw of {with} at the most, {without} by the four rows alone", without - with);
+        }
+    }
+    println!("a dated row answered: {} to {} bytes", sizes.iter().min().unwrap(), sizes.iter().max().unwrap());
 }

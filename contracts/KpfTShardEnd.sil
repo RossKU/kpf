@@ -135,15 +135,29 @@ contract KpfTShardEnd(int init_version) {
         if (amount <= 0) { ok = 0; }
         // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
         require(sd.length >= 184);
-        require((sd.length - 184) % 56 == 0);
         int ne = (sd.length - 184) / 56;
+        int odd = (sd.length - 184) % 2;
+        if (odd == 1) {
+            // (With dated rows after the four: the list's count as it is written. Docs 17.8j, 6.)
+            ne = int(byte[8](sd.slice(8, 16)));
+            require(ne >= 0);
+        } else {
+            require((sd.length - 184) % 56 == 0);
+        }
         require(ne <= 4);
         // The counts as they are written: the list's, and four rows. No row is read: the sums are the last row's.
         if (int(byte[8](sd.slice(8, 16))) != ne) { ok = 0; }
         if (int(byte[8](sd.slice(16 + 56 * ne, 24 + 56 * ne))) != 4) { ok = 0; }
-        int wn = int(byte[8](sd.slice(sd.length - 24, sd.length - 16)));
-        int wg = int(byte[8](sd.slice(sd.length - 16, sd.length - 8)));
-        int sn = int(byte[8](sd.slice(sd.length - 8, sd.length)));
+        // (The last row's sums: of the last dated row where the trace has any, with what the dated rows are asked.)
+        int tail = sd.length;
+        int ro = 0;
+        if (odd == 1) {
+            tail = sd.length - 40;
+            ro = int(byte[8](sd.slice(sd.length - 40, sd.length - 32)));
+        }
+        int wn = int(byte[8](sd.slice(tail - 24, tail - 16)));
+        int wg = int(byte[8](sd.slice(tail - 16, tail - 8)));
+        int sn = int(byte[8](sd.slice(tail - 8, tail)));
         // The requirement at its upper level: the maintenance rate of the net's worth and the rate on the gross of
         // the gross's (half the maintenance rate less three times the tolerance: what a book that is set off keeps
         // for the time between one side's leaving and a call), each counted the tolerance more.
@@ -152,7 +166,7 @@ contract KpfTShardEnd(int init_version) {
         int rg = (int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) - 3 * g) / 2;
         if (rg < 0) { rg = 0; }
         rg = rg + g;
-        int need = (wn / BPS) * rn + ((wn % BPS) * rn + BPS - 1) / BPS + (wg / BPS) * rg + ((wg % BPS) * rg + BPS - 1) / BPS;
+        int need = (wn / BPS) * rn + ((wn % BPS) * rn + BPS - 1) / BPS + (wg / BPS) * rg + ((wg % BPS) * rg + BPS - 1) / BPS + ro;
         // A draw is of coins the shard holds, leaves its equity (what it holds, and what its net units are worth,
         // less what its legs were entered at) at that level, and is not made while the shard is called.
         int has = int(byte[8](mv.slice(67, 75))) - amount;

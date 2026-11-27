@@ -1,0 +1,357 @@
+pragma silverscript ^0.1.0;
+
+// A draw (kind 5 of KpfTChange) is stated on a shard by its owner: 40 bytes, an amount and a price a row. It is
+// within the rule when the claimer is the shard's owner, the amount is above zero, each row that has a market has a
+// price above zero and within the market's limit, the shard is not called, the amount is of coins it holds, and
+// its equity then (what it holds, and what its net units are worth at those prices, less what its legs were
+// entered at) is at least its requirement at its upper level: the maintenance rate of the worth of every row's net
+// units and the rate on the gross (half the maintenance rate less three times the tolerance) of the worth of every
+// row's gross units, each counted the tolerance more. A dispute names one point:
+//   point 0        the end: the rule above, and the outputs (the shard holding the amount less, the amount to its
+//                  owner): KpfTShardEnd computes it over the four rows
+//   point r, 1..4  the price of row r is within the tolerance of the committee's (KpfTShardPrice, one citation; a
+//                  row with no market, and a point beyond the fourth, are answered right)
+// And whatever was disputed or not: a note to the shard that landed before the statement and is not applied ends it
+// (KpfTDrawNote): what the shard holds and what its rows say is not what it will, once the note is applied.
+//
+// KpfTShardRowD: the answer of a dated row of a draw's or of a call's trace (a point 100 and k): docs 17.8j, 6. After
+// its four rows a trace says a row of 80 bytes a leaf of the shard's tree of dated rows, in the tree's order, the
+// head's leaf first: the leaf's place, the place of its market's price in the list, the three sums, what the dated
+// rows are asked, and the hash of the key the leaf names. The answer is shown one leaf by its path: the head's for
+// the first row (the fourth row's sums, nothing asked); for a later one the leaf whose key the row before carries.
+// A leaf of no unit (a day's leaf among them) carries the sums. A dated row with units, of a day to come, adds
+// what its net is worth exercised, its gross at the price, and what it alone can lose by a move of the rate (a
+// call's price moved the tolerance in the shard's favour, at the lower rate). One beyond the last row is right
+// where the last hash is the key of nothing; with no dated row said, where the head's leaf names none. A draw is
+// wrong over a row of an ended day that has a unit; a call's row of one is another script's.
+//   answer(who, ageb, slotLen, terms, rows, gbook, moving, t0, said, outs, bond, claimer, window, late, held, dkey,
+//          point, at, rkey, verdict, kind, leaf, pl, beside)                                           anyone.
+contract KpfTShardRowD(int init_version) {
+    int version = init_version;
+
+    int constant BPS = 10000;
+    int constant MMR_AT = 10;
+    int constant G_AT = 19;
+    int constant LIQFEE_AT = 28;
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    // (The tree of dated rows, docs 17.6: a leaf is the hash of a row under one tag, a node of its halves under another.)
+    int constant LEAF_TAG = 20;
+    int constant NODE_TAG = 21;
+    int constant STATE_AT = 2;
+    int constant CHANGE_TAG = 10;
+    int constant POINT_TAG = 11;
+    int constant NOTE_TAG = 12;
+    // The least a note holds.
+    int constant NOTE_MIN = 20000000;
+    // The lateness of a statement that stands again after a point of it was answered right: it was held to its time
+    // when it was disputed, and is not held to it again.
+    int constant LATE_AGAIN = 499999999999;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    // The answer of a point. The point is right (1), by anyone's answer: the statement stands again (its dispute
+    // period begins again; another point of it may be disputed until the last time to dispute; it is not held to
+    // its time again), and the disputer's bond is lost: a quarter to the claimer (the last output), a quarter to
+    // whoever answered (the one before), half to this script's copy (a claimer that answers its own other key's
+    // dispute loses half a bond a round: docs 14.1).
+    // The point is wrong (0): the position again, the disputer's bond back (the output before the last) and half of
+    // the claimer's to whoever answered (the last). The other half of the bond lost stays in this script's copy.
+    function ends(int j, byte[] rs, int slotLen, int verdict, byte[32] c0, byte[32] position, int bond, byte[32] claimer, byte[32] dkey, byte[32] rkey) {
+        require(verdict == 0 || verdict == 1);
+        require(bond > 0);
+        int v = tx.inputs[j].value;
+        require(v >= bond + bond);
+        int half = bond / 2;
+        int kept = bond - half;
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        int m = tx.outputs.length - 1 - 4 * j;
+        if (verdict == 1) {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](c0) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond);
+            require(m >= tx.inputs.length);
+            // (Two outputs of less than this fit in no transaction: where a quarter is no payable amount the
+            // claimer has half, in one output, and nobody is paid for the answer. Review 50, F77; 0.1 KAS: docs 17.8h, X1.)
+            if (bond / 4 >= 10000000) {
+                require(m - 1 >= tx.inputs.length);
+                half = bond / 4;
+                kept = bond - half - half;
+                require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+                require(tx.outputs[m - 1].value >= half);
+            }
+            rkey = claimer;
+        } else {
+            require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](position) + rs.slice(STATE_AT + 32, slotLen))));
+            require(tx.outputs[c].value >= v - bond - bond);
+            require(m - 1 >= tx.inputs.length);
+            require(tx.outputs[m - 1].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(dkey))));
+            require(tx.outputs[m - 1].value >= bond);
+        }
+        if (half > 0) {
+            require(tx.outputs[m].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(rkey))));
+            require(tx.outputs[m].value >= half);
+        }
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE + kept);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    // The root of the books with the leaf `a` at a place: 32 bytes (as `both`, of one leaf).
+    function up(byte[] a, int place, byte[] beside) : byte[] {
+        require(place >= 0);
+        require(place <= 63);
+        require(beside.length == 192);
+        byte[] un0 = byte[](0x08) + byte[](NODE_TAG as byte[8]);
+        byte[] ux0 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        if (a.length != 0) {
+            require(a.length == 138);
+            ux0 = byte[](blake2b(byte[](0x08) + byte[](LEAF_TAG as byte[8]) + a));
+        }
+        int up0 = place;
+        for (ud0, 0, 6, 6) {
+            ux0 = byte[](blake2b(un0 + (ux0 + beside.slice(32 * ud0, 32 * ud0 + 32) + ux0).slice(32 * (up0 % 2), 32 * (up0 % 2) + 64)));
+            up0 = up0 / 2;
+        }
+        return ux0;
+    }
+
+    entry answer(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[420] rows, byte[69] gbook, byte[171] moving, int t0, byte[] said, byte[32] outs, int bond, byte[32] claimer, int window, int late, int held, byte[32] dkey, int point, int at, byte[32] rkey, int verdict, int kind, byte[138] leaf, int pl, byte[192] beside) {
+        require(version == 1);
+        require(kind == 5 || kind == 11);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[] tb = byte[](terms);
+        byte[] rw = byte[](rows);
+        byte[] gb = byte[](gbook);
+        byte[] sd = byte[](said);
+        byte[32] position = blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36))))))) + mv);
+        byte[] pre = i9(CHANGE_TAG) + p33(position) + i9(kind) + i9(t0) + p33(blake2b(sd)) + p33(outs) + i9(bond) + p33(claimer) + i9(window);
+        byte[32] c0 = blake2b(pre + i9(late) + i9(held));
+        // (A statement that stands again keeps its lateness, beside the mark that it does: the last time to dispute
+        // it is counted from its time by it.)
+        int again = late;
+        if (late < LATE_AGAIN) { again = LATE_AGAIN + late; }
+        byte[32] c1 = blake2b(pre + i9(again) + i9(held));
+        require(blake2b(i9(POINT_TAG) + p33(c0) + p33(dkey) + i9(point)) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        require(at + 100 == point || verdict == 0);
+        require(at >= 1);
+        // (What is said is a trace: docs 17.8b, 17.8j. Its length was held where it was stated.)
+        require(sd.length >= 184);
+        int ne = (sd.length - 184) / 56;
+        int nd = 0;
+        int base = sd.length;
+        if ((sd.length - 184) % 2 == 1) {
+            ne = int(byte[8](sd.slice(8, 16)));
+            require(ne >= 0);
+            require(ne <= 4);
+            base = 184 + 56 * ne + 9;
+            nd = (sd.length - base) / 80;
+        } else {
+            require((sd.length - 184) % 56 == 0);
+            require(ne <= 4);
+        }
+        require(at <= nd + 1);
+        byte[] z8 = byte[](0 as byte[8]);
+        byte[] z9 = byte[](0x08) + z8;
+        byte[] hk = byte[](0x20) + z8 + z8 + z8 + z8 + z9 + z9 + z9;
+        byte[] hkh = byte[](blake2b(hk));
+        byte[] lf = byte[](leaf);
+        byte[] root = gb.slice(37, 69);
+        int ok = 1;
+        if (nd == 0) {
+            // No dated row is said: right where the head's leaf, shown, names none.
+            require(lf.slice(0, 60) == hk);
+            require(up(lf, pl, byte[](beside)) == root);
+            if (lf.slice(106, 138) != hkh) { ok = 0; }
+        } else {
+            if (at == 1) {
+                // The first row is of the head's leaf: at its place, the fourth row's sums, nothing asked, and the
+                // key the head names.
+                require(lf.slice(0, 60) == hk);
+                require(up(lf, pl, byte[](beside)) == root);
+                byte[] c1r = sd.slice(base, base + 80);
+                int f4 = 144 + 56 * ne;
+                if (int(byte[8](c1r.slice(0, 8))) != pl) { ok = 0; }
+                if (int(byte[8](c1r.slice(16, 24))) != int(byte[8](sd.slice(f4 + 16, f4 + 24)))) { ok = 0; }
+                if (int(byte[8](c1r.slice(24, 32))) != int(byte[8](sd.slice(f4 + 24, f4 + 32)))) { ok = 0; }
+                if (int(byte[8](c1r.slice(32, 40))) != int(byte[8](sd.slice(f4 + 32, f4 + 40)))) { ok = 0; }
+                if (int(byte[8](c1r.slice(40, 48))) != 0) { ok = 0; }
+                if (c1r.slice(48, 80) != lf.slice(106, 138)) { ok = 0; }
+            } else {
+                byte[] prv = sd.slice(base + 80 * (at - 2), base + 80 * (at - 1));
+                byte[] pnk = prv.slice(48, 80);
+                if (at == nd + 1) {
+                    // One beyond the last: no key is left.
+                    if (pnk != hkh) { ok = 0; }
+                } else {
+                    if (pnk == hkh) {
+                        // (A row said after the last leaf.)
+                        ok = 0;
+                    } else {
+                        // The leaf whose key the row before carries, at its place in the shard's tree.
+                        require(byte[](blake2b(lf.slice(0, 60))) == pnk);
+                        require(up(lf, pl, byte[](beside)) == root);
+                        byte[] cur = sd.slice(base + 80 * (at - 1), base + 80 * at);
+                        if (int(byte[8](cur.slice(0, 8))) != pl) { ok = 0; }
+                        if (cur.slice(48, 80) != lf.slice(106, 138)) { ok = 0; }
+                        int pwn = int(byte[8](prv.slice(16, 24)));
+                        int pwg = int(byte[8](prv.slice(24, 32)));
+                        int psn = int(byte[8](prv.slice(32, 40)));
+                        int pro = int(byte[8](prv.slice(40, 48)));
+                        int cwn = int(byte[8](cur.slice(16, 24)));
+                        int cwg = int(byte[8](cur.slice(24, 32)));
+                        int csn = int(byte[8](cur.slice(32, 40)));
+                        int cro = int(byte[8](cur.slice(40, 48)));
+                        int gross = int(byte[8](lf.slice(88, 96)));
+                        if (gross == 0) {
+                            // A leaf of no unit (a day's leaf among them) adds nothing and reads no price.
+                            if (cwn != pwn) { ok = 0; }
+                            if (cwg != pwg) { ok = 0; }
+                            if (csn != psn) { ok = 0; }
+                            if (cro != pro) { ok = 0; }
+                        } else {
+                            int c = int(byte[8](cur.slice(8, 16)));
+                            if (c < 0) { ok = 0; }
+                            if (c >= ne) { ok = 0; }
+                            if (ok == 1) {
+                                // The price the list has there: of the row's market, of its limit, of no day.
+                                byte[] en = sd.slice(16 + 56 * c, 72 + 56 * c);
+                                int sc = int(byte[8](lf.slice(61, 69)));
+                                int pm = int(byte[8](lf.slice(70, 78)));
+                                int p = int(byte[8](en.slice(48, 56)));
+                                int of = int(byte[8](lf.slice(43, 51)));
+                                if (en.slice(0, 32) != lf.slice(1, 33)) { ok = 0; }
+                                if (int(byte[8](en.slice(32, 40))) != pm) { ok = 0; }
+                                if (en.slice(40, 48) != z8) { ok = 0; }
+                                if (p <= 0) { ok = 0; }
+                                if (p > pm) { ok = 0; }
+                                if (sc <= 0) { ok = 0; }
+                                if (of != 1 && of != 2) { ok = 0; }
+                                if (ok == 1) {
+                                    if (int(byte[8](lf.slice(34, 42))) <= t0) {
+                                        // A draw is wrong while a row of an ended day has a unit. A call's row
+                                        // of one is counted by its day's leaf: another script's.
+                                        require(kind == 5);
+                                        ok = 0;
+                                    } else {
+                                        int net = int(byte[8](lf.slice(79, 87)));
+                                        int strike = int(byte[8](lf.slice(52, 60)));
+                                        int units = net;
+                                        if (net < 0) { units = 0 - net; }
+                                        int g = int(byte[8](tb.slice(G_AT, G_AT + 8)));
+                                        int rate = int(byte[8](tb.slice(MMR_AT, MMR_AT + 8))) + g;
+                                        // (A call counts the row at the price moved the tolerance in the
+                                        // shard's favour, up where it holds calls or wrote puts, and at the
+                                        // lower rate.)
+                                        int q = p;
+                                        if (kind == 11) {
+                                            rate = rate - g - g;
+                                            if (rate < 0) { rate = 0; }
+                                            q = (p * (BPS - g)) / BPS;
+                                            int fav = 0;
+                                            if (net > 0 && of == 1) { fav = 1; }
+                                            if (net <= 0 && of == 2) { fav = 1; }
+                                            if (fav == 1) {
+                                                q = (p * (BPS + g) + BPS - 1) / BPS;
+                                                if (q > pm) { q = pm; }
+                                            }
+                                        }
+                                        // The two ends of a move of the rate, the upper within the limit.
+                                        int dq = (q / BPS) * rate + ((q % BPS) * rate + BPS - 1) / BPS;
+                                        int lo = q - dq;
+                                        if (lo < 0) { lo = 0; }
+                                        int hi = q + dq;
+                                        if (hi > pm) { hi = pm; }
+                                        // What a unit is worth exercised, now and at each end.
+                                        int xq = q - strike;
+                                        int xl = lo - strike;
+                                        int xu = hi - strike;
+                                        if (of == 2) {
+                                            xq = strike - q;
+                                            xl = strike - lo;
+                                            xu = strike - hi;
+                                        }
+                                        if (xq < 0) { xq = 0; }
+                                        if (xl < 0) { xl = 0; }
+                                        if (xu < 0) { xu = 0; }
+                                        int wq = (units / sc) * xq + (units % sc) * (xq / sc) + ((units % sc) * (xq % sc)) / sc;
+                                        int wl = (units / sc) * xl + (units % sc) * (xl / sc) + ((units % sc) * (xl % sc)) / sc;
+                                        int wu = (units / sc) * xu + (units % sc) * (xu / sc) + ((units % sc) * (xu % sc)) / sc;
+                                        int most = wl;
+                                        if (wu > most) { most = wu; }
+                                        int least = wl;
+                                        if (wu < least) { least = wu; }
+                                        // What the row is asked alone: where the clearing side wrote, what it is
+                                        // worth at the worse end less the same now; where it holds, what it is
+                                        // worth now less the same at the worse end, and all of it where the
+                                        // strike is between the ends.
+                                        int asked = 0;
+                                        int s = wq;
+                                        if (net < 0) {
+                                            asked = most - wq;
+                                            s = 0 - wq;
+                                        }
+                                        if (net > 0) {
+                                            asked = wq - least;
+                                            if (lo < strike && strike < hi) { asked = wq; }
+                                        }
+                                        if (asked < 0) { asked = 0; }
+                                        int v = (gross / sc) * q + (gross % sc) * (q / sc) + ((gross % sc) * (q % sc)) / sc;
+                                        if (cwn != pwn) { ok = 0; }
+                                        if (cwg != pwg + v) { ok = 0; }
+                                        if (csn != psn + s) { ok = 0; }
+                                        if (cro != pro + asked) { ok = 0; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        require(ok == verdict);
+        ends(j, rs, slotLen, verdict, c1, position, bond, claimer, dkey, rkey);
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

@@ -208,7 +208,8 @@ fn shard_of(r: &mut Rd) -> Result<Shard> {
     let claims = if r.at < r.b.len() { crate::reserve::Claims { paid1: r.int()?, owed2: r.int()?, paid2: r.int()? } } else { crate::reserve::Claims::default() };
     // (The root of its dated rows, where it is kept: a shard kept without one has none.)
     let root = if r.at < r.b.len() { r.p33()? } else { Shard::root_opened() };
-    Ok(Shard { t, rows: rows.into(), owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1], claims, root })
+    let dgross = if r.at < r.b.len() { r.int()? } else { 0 };
+    Ok(Shard { t, rows: rows.into(), owner, held: v[0], expiry: v[2], dispute_daa: v[4], bond_bps: v[5], sid: sid.expect("171 bytes"), basis: v[6], called: v[7], owed: v[1], claims, root, dgross })
 }
 
 fn host_bytes(h: &Host) -> Vec<u8> {
@@ -299,7 +300,7 @@ impl AObj {
             // (The claims' numbers where there are any: a shard that has none is kept as before they were.)
             AObj::Shard(s) => {
                 let plain = s.root == Shard::root_opened();
-                [vec![21], s.terms(), s.rows_bytes(), s.moving(), if s.claims == crate::reserve::Claims::default() && plain { vec![] } else { s.claims.bytes() }, if plain { vec![] } else { [vec![0x20], s.root.to_vec()].concat() }].concat()
+                [vec![21], s.terms(), s.rows_bytes(), s.moving(), if s.claims == crate::reserve::Claims::default() && plain { vec![] } else { s.claims.bytes() }, if plain { vec![] } else { [vec![0x20], s.root.to_vec(), vec![0x08], crate::state::sm8(s.dgross).to_vec()].concat() }].concat()
             }
             AObj::Left(n) => [vec![22], n.sid.to_vec(), vec![n.legs.len() as u8], n.legs.iter().flat_map(leg_bytes).collect(), n.key.to_vec(), i9(n.asked)].concat(),
             AObj::Rest(n) => [vec![25], n.sid.to_vec(), n.key.to_vec(), i9(n.amount)].concat(),

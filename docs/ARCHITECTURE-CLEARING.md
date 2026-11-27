@@ -5049,6 +5049,60 @@ tree's own functions being the parked `KpfTRows`'s that review T10 read; the lib
   (D). A row is listed for a day that has passed if its leaf is not written (review T16, Z13: an entry's own
   rule refuses the leg).
 
+**A3 as it is built** (the engine; the whole workspace 783 tests, none failed; `s490` to `s496`; the scripts' part
+is `s493_a3_scripts.py`, run after `s485`; the library has 79 scripts).
+- **What is said.** A draw and a call of a shard whose tree has the head's leaf alone say what they said, to the
+  byte. Where it has other leaves, after the four rows come **one byte (0x44), a count, and a row of 80 bytes a
+  leaf, in the tree's order, the head's leaf first**: the leaf's place, the place of its market's price, today's
+  three sums, what the dated rows are asked, the hash of the key the leaf names. Such a statement is of an odd
+  length beyond the 184 bytes, one without of an even one, so the two forms are never one another's; with dated
+  rows the list's count is read as it is written, and `KpfTChange` holds the length to the two counts
+  (sixty-four rows at the most). The head's leaf is a row so that every dated point is answered with one leaf
+  shown (decided while building: with the head carried by the fourth row, the first dated point needed two).
+- **The points**: 100 and k, the dated row k. The first is right where the head's leaf, shown at its place, has
+  the fourth row's sums, nothing asked, and the key the head names. A later one is shown the leaf whose key the
+  row before carries. One beyond the last is right where the last hash is the key of nothing; **a trace that
+  says no dated row is right at the point 101 where the head's leaf, shown, names none.** A hash that is no
+  leaf's key has no answer at the row after it: the row that wrote it is the wrong one.
+- **What a dated row adds** (`Shard::dated_adds`; `KpfTShardRowD`, 5,745 bytes): with no unit, nothing (a day's
+  leaf among them; the place of its price is read by nothing). With a unit, of a day to come: what its net is
+  worth exercised to the clearing side's worth, its gross at the price to the gross's, and what it is asked
+  alone, as the second writing's 6 says; a call's price moved the tolerance in the shard's favour (up where the
+  clearing side holds calls or wrote puts), at the lower rate. A draw is wrong over a row of an ended day that
+  has a unit; **a call's row of one has no answer here** (`KpfTShardRowE`, D).
+- **The ends** (`KpfTShardEnd`, `KpfTCallEnd`) read the last row's sums, a dated row's where the trace has any,
+  and add what the dated rows are asked. `KpfTShardRow` and `KpfTShardPrice` read the list's count the same way.
+- **A market's futures row of no unit adds nothing and reads no price** (review T16, ZZ6): in `KpfTShardRow`, in
+  the model's judgement of a row, and in the trace the model makes (such a market is in no list). Two earlier
+  tests held the opposite and say the rule as it is: the text of what `KpfTShardRow.answer` requires, and the
+  reviewer's own writing of a row's answer in the draws at random (a row of no unit and of no scale was wrong at
+  its point; it is right, and the draw is no longer wrong for it).
+- **A shard says the sum of the gross of its dated rows** (`dgross`): the books' hash is of the sum over every
+  row. Nothing writes it yet (B).
+
+| Script | Before | Now |
+|---|---|---|
+| `KpfTChange` | 1,761 | 1,886 |
+| `KpfTShardRow` | 2,114 | 2,169 |
+| `KpfTShardPrice` | 2,326 | 2,360 |
+| `KpfTShardEnd`, `KpfTCallEnd` | 1,748, 1,854 | 1,858, 1,963 |
+
+**Shown.** In the model (`thin_rows.rs`): a dated row alone is asked exactly what it can lose at the worst price
+of the move on 200,000 rows (72,269 of them nothing); on 600 traces of shards with dated rows, a draw's and a
+call's, every point is right (5,332), what is said reads back, the sums of the last row are the sums over every
+row, and each number of a dated row moved, a row left out, a row said twice and a trace that says none are
+wrong at their own point (5,685). **At the engine** (`thin_draw.rs`,
+`a_dated_row_of_a_trace_is_answered_at_the_engine`): a shard of a futures row, calls written at 10.3, puts held
+at 10.2 and a row of no unit; a draw and a call stated with their dated rows; the four rows by `KpfTShardRow`
+and the seven dated points by `KpfTShardRowD` each answered right and wrong by nobody; nine statements with one
+thing changed each answered wrong at its point, the shard again, and right by nobody; and **the end counts what
+the dated rows are asked**: the most a draw takes is 66.5 KAS where the four rows alone allow 85.5, and a draw of
+the 85.5 is answered wrong at its end. **Measured: a dated row answered is 8,635 bytes.**
+
+**Not done in A:** a price's point (`KpfTShardPrice`) of a statement with dated rows, and a call's end with them
+(`KpfTCallEnd`), are changed and not tested at the engine by me: for the review. Nothing reads `KpfTCStep`'s
+list differently (the call's object is the list, as it was).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

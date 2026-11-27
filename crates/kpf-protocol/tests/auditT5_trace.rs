@@ -99,7 +99,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened(), dgross: 0 };
         // (Review T9, docs 17.8d: a price's answer opens the shard's id by the seed of its opening and its
         // committee. The shard made by hand has the id that opening gives it.)
         let s = s.seeded(&SEED, &self.markets[0].committee_id);
@@ -660,7 +660,7 @@ fn random_books(w: &World, r: &mut Rng, call: bool) -> (OLive<Shard>, [i64; 4], 
         prices[row] = P10 / 2 + r.below(3 * P10);
         of[row] = Some(m);
     }
-    let mut s = Shard { t: w.terms(), rows: rows.into(), owner: xk(&w.c), held: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
+    let mut s = Shard { t: w.terms(), rows: rows.into(), owner: xk(&w.c), held: 0, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened(), dgross: 0 };
     // (Review T9, docs 17.8d: the id its opening gives it, so that its prices are answered. It was: "the point 5
     // of the rule's trace" not taken, the shard's id being of chosen bytes: no disagreement of model and engine.)
     s = s.seeded(&SEED, &w.markets[0].committee_id);
@@ -1254,7 +1254,7 @@ fn t5_the_sizes_of_the_scripts_and_of_the_transactions_of_a_trace() {
     // 4,829; KpfTChange 1,728; KpfTShardRow is new. Second round: the day held as eight bytes (R1) is three bytes
     // in each of KpfTShardPrice (2,700 from 2,697) and KpfTShardRow (2,098 from 2,095); the others as they were.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTShardEnd", 1748), ("KpfTCallEnd", 1854), ("KpfTShardPrice", 2326), ("KpfTCStep", 5319), ("KpfTChange", 1761), ("KpfTShardRow", 2114)]);
+    assert_eq!(sizes, vec![("KpfTShardEnd", 1858), ("KpfTCallEnd", 1963), ("KpfTShardPrice", 2360), ("KpfTCStep", 5319), ("KpfTChange", 1886), ("KpfTShardRow", 2169)]);
     let scale = w.markets[0].p.scale;
     let two = w.shard();
     let four = OLive { s: Shard { rows: [two.s.rows[0], two.s.rows[1], ShardRow::of(w.head(2), 5 * scale, 5 * scale), ShardRow::of(w.head(3), -5 * scale, 5 * scale)].into(), ..two.s }, ..two.clone() };

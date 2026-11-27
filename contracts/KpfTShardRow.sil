@@ -137,8 +137,15 @@ contract KpfTShardRow(int init_version) {
         require(at <= 4);
         // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
         require(sd.length >= 184);
-        require((sd.length - 184) % 56 == 0);
         int ne = (sd.length - 184) / 56;
+        int odd = (sd.length - 184) % 2;
+        if (odd == 1) {
+            // (With dated rows after the four: the list's count as it is written. Docs 17.8j, 6.)
+            ne = int(byte[8](sd.slice(8, 16)));
+            require(ne >= 0);
+        } else {
+            require((sd.length - 184) % 56 == 0);
+        }
         require(ne <= 4);
         int ra = 24 + 56 * ne + 40 * (at - 1);
         byte[] cur = sd.slice(ra, ra + 40);
@@ -159,8 +166,9 @@ contract KpfTShardRow(int init_version) {
         if (int(byte[8](cur.slice(0, 8))) != at - 1) { ok = 0; }
         byte[] none = byte[](0x20) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
         byte[] row = rw.slice(105 * (at - 1), 105 * at);
-        if (row.slice(0, 33) == none) {
-            // A row with no market adds nothing; the place of its price is read by nothing.
+        if (row.slice(0, 33) == none || row.slice(78, 96) == byte[](0x08) + byte[](0 as byte[8]) + byte[](0x08) + byte[](0 as byte[8])) {
+            // A row with no market, and a market's head of no unit (docs 17.8j, 6), add nothing; the place of its
+            // price is read by nothing.
             if (cwn != pwn) { ok = 0; }
             if (cwg != pwg) { ok = 0; }
             if (csn != psn) { ok = 0; }

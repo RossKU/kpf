@@ -3619,6 +3619,43 @@ pub fn shard_row_t(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve:
     Ok((d.finish()?, right))
 }
 
+/// `KpfTShardRowD.answer` (docs 17.8j, 6): the dated row `k` (from 1; the point 100 and k) of a draw's or a call's
+/// trace is answered, shown one leaf of the shard's tree `books` by its path: the head's leaf for the first row,
+/// and where no dated row is said; else the leaf whose key the row before carries.
+#[allow(clippy::too_many_arguments)]
+pub fn shard_row_d(lib: &[u8; 32], obj: &OLive<Pointed>, shard: &crate::reserve::Shard, books: &crate::books::Books, t: &crate::reserve::Traced, k: i64, script: &LibScript, rkey: [u8; 32], p: Payer, force: Option<bool>) -> Result<(OBuilt, bool)> {
+    use crate::books::Key;
+    draw_open(obj, shard, t)?;
+    let q = &obj.s;
+    let c = &q.st;
+    if k < 1 || k as usize > t.dated.len() + 1 {
+        return invalid("a dated row of a trace is a point 101 to one beyond its last");
+    }
+    if books.root() != shard.root {
+        return invalid("the books shown are not the shard's");
+    }
+    let judged = shard.trace_dated_judged(books, t, k as usize, c.kind == crate::reserve::KIND_CALL, c.t0);
+    if force.is_none() && judged.is_none() {
+        return invalid("the row's worth or a sum is beyond what a script computes, the row before carries a hash that is no leaf's key, or the row is a call's of an ended day: nobody answers this point here, and the dispute lapses");
+    }
+    let right = force.unwrap_or(judged == Some(true));
+    if force.is_none() && crate::reserve::trace_dated_point(k as usize) != q.point && right {
+        return invalid("a point other than the one disputed is answered only where it is wrong");
+    }
+    // (The leaf shown: the one the row before names; the head's for the first row, and where none is read.)
+    let carried = if k >= 2 { t.dated.get(k as usize - 2).map(|r| r.nk) } else { None };
+    let key = carried.and_then(|h| books.leaves.iter().flatten().find(|r| r.key != Key::HEAD && r.key.hash() == h).map(|r| r.key)).unwrap_or(Key::HEAD);
+    let shown = books.shown(&key).ok_or_else(|| Error::Invalid("the leaf is not in the books".into()))?;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = shard_args(shard, vec![0; 24]);
+    args.extend(point_args_said(q, t.said(), k, rkey, right));
+    args.push(iv(c.kind));
+    args.extend([bv(leaf138(&shown.row)), iv(shown.place as i64), bv(beside192(&shown.beside))]);
+    let (id, lid) = enter_hash(&mut d, lib, obj, &q.hash(), "disputed point", script, "KpfTShardRowD", "answer", args, 0)?;
+    point_ends(&mut d, lib, obj, script, id, lid, right, rkey, None, p)?;
+    Ok((d.finish()?, right))
+}
+
 /// `KpfTShardPrice.answer`: the point `at` (5 and above: the price `at - 4` of the list) of a draw or of a call is
 /// answered with the committee's price for that market at the statement's time, in a citation. A point beyond the
 /// list is answered right with none; an entry out of its order, or of a day, wrong with none. A market in the list

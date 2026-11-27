@@ -100,7 +100,7 @@ impl World {
     fn shard(&self) -> OLive<Shard> {
         let scale = self.markets[0].p.scale;
         let rows = [ShardRow::of(self.head(0), -60 * scale, 140 * scale), ShardRow::of(self.head(1), 10 * scale, 30 * scale), ShardRow::EMPTY, ShardRow::EMPTY];
-        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened() };
+        let s = Shard { t: self.terms(), rows: rows.into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: -500 * KAS1, called: 0, owed: 0, claims: Default::default(), root: Shard::root_opened(), dgross: 0 };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     fn cited(&self, i: usize, price: i64) -> Cited {
@@ -1121,7 +1121,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3039), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110), ("KpfTStepPrice", 1838)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1748), ("KpfTShardPrice", 2326), ("KpfTCallEnd", 1854)]);
+    assert_eq!(books, vec![("KpfTShardOpen", 789), ("KpfTCallPay", 2461), ("KpfTShardEnd", 1858), ("KpfTShardPrice", 2360), ("KpfTCallEnd", 1963)]);
     let base = seeded(&w);
     let (f, ff) = ([fund(xk(&w.w), 33)], [fund(xk(&w.f), 36)]);
     let leg = fleg(&w, 0, 10, LONG, P10);
@@ -1829,5 +1829,5 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
     opens.sort();
     // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
     // (17.8e: `KpfTRest`, which was `KpfTLeft.rest`, is a script of its own.)
-    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftVoid", "KpfTRest", "KpfTRowIn", "KpfTRowOut", "KpfTShardPrice", "KpfTShardRow"]);
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftVoid", "KpfTRest", "KpfTRowIn", "KpfTRowOut", "KpfTShardPrice", "KpfTShardRow", "KpfTShardRowD"]);
 }

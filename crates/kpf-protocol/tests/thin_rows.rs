@@ -161,3 +161,157 @@ fn rows_listed_and_taken_out_at_random_keep_the_list_the_leaves_and_the_counts()
     println!("rows at random: {ins} listed, {outs} taken out, {refused} refused; {} leaves stand", b.in_order().len() - 1);
     assert!(ins > 500 && outs > 500 && refused > 500);
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, A3, the model: a draw's and a call's trace over the dated rows.
+
+use kpf_protocol::reserve::{Draw, Traced};
+
+const P10: i64 = 1_000_000_000;
+
+/// A shard of two markets with futures units and dated rows, some with units (written by hand: no leg enters a
+/// dated row yet), and its books.
+fn booked(g: &mut Rng) -> (Shard, Books) {
+    let (mut s, mut b) = opened();
+    for m in 0..2u8 {
+        for _ in 0..1 + g.below(4) {
+            let key = Key { market: market(m), day: 1_000_000 * (1 + g.below(2) as i64), of: if g.below(2) == 0 { OF_CALLS } else { OF_PUTS }, strike: P10 / 10 * (8 + g.below(5) as i64) };
+            if b.row(&key).is_some() {
+                continue;
+            }
+            let free: Vec<usize> = (0..64).filter(|i| b.leaves[*i].is_none()).collect();
+            let stands = b.row(&Key::day_of(key.market, key.day)).is_some();
+            (s, b) = s.row_in(&b, key, SCALE, LIMIT, m as usize, free[0], (!stands).then_some(free[1])).unwrap();
+            if g.below(4) != 0 {
+                let units = SCALE * (1 + g.below(20) as i64);
+                let net = [units, -units, units / 2, 0][g.below(4) as usize];
+                let at = b.place_of(&key).unwrap();
+                b.leaves[at] = Some(Row { net, gross: units, entered: net / 7, ..b.leaves[at].unwrap() });
+                s = Shard { root: b.root(), dgross: s.dgross + units, ..s };
+            }
+        }
+        if g.below(3) != 0 {
+            let units = SCALE * (1 + g.below(30) as i64);
+            s.rows[m as usize] = ShardRow { net: [units, -units][g.below(2) as usize], gross: units, ..s.rows[m as usize] };
+        }
+    }
+    (s, b)
+}
+
+/// What a dated row is asked alone is never less than what it loses, alone, at any price the move of the rate
+/// reaches: the ends, the strike and a sompi either side of each.
+#[test]
+fn a_dated_row_is_asked_no_less_than_it_can_lose_alone() {
+    let mut g = Rng(0x17_8A3);
+    let (s, _) = opened();
+    let (mut n, mut exact, mut none) = (0, 0, 0);
+    for _ in 0..200_000 {
+        let p = P10 / 2 + g.below(P10 as u64) as i64;
+        let strike = p - p / 10 + g.below((p / 5) as u64) as i64;
+        let units = 1 + g.below(50 * SCALE as u64) as i64;
+        let row = Row { key: Key { market: market(0), day: 9, of: if g.below(2) == 0 { OF_CALLS } else { OF_PUTS }, strike }, scale: SCALE, price_max: LIMIT, net: [units, -units][g.below(2) as usize], gross: units, entered: 0, next: [0; 32] };
+        let (now, _, asked) = s.dated_adds(&row, p, false).unwrap();
+        let (l, u) = kpf_protocol::crow::ends(p, s.t.mmr_bps + s.t.g_bps).unwrap();
+        let mut worst = 0;
+        for x in [l, l + 1, u - 1, u, strike - 1, strike, strike + 1, p] {
+            if x >= l && x <= u {
+                worst = worst.max(now - s.dated_adds(&row, x, false).unwrap().0);
+            }
+        }
+        assert!(asked >= worst, "{row:?} at {p}: asked {asked}, it loses {worst}");
+        n += 1;
+        exact += (asked == worst) as i64;
+        none += (asked == 0) as i64;
+    }
+    println!("{n} dated rows alone: {exact} asked exactly what they can lose ({none} of them nothing)");
+    assert!(exact > n / 2 && none > 1_000 && none < n / 2);
+}
+
+#[test]
+fn a_trace_over_dated_rows_is_judged_a_row_at_a_time_and_leaves_none_out() {
+    let mut g = Rng(0x17_8A4);
+    let t0 = 5_000;
+    let (mut right, mut wrong, mut traces) = (0, 0, 0);
+    for round in 0..300 {
+        let (s, b) = booked(&mut g);
+        let prices = [P10 - P10 / 20 + g.below((P10 / 10) as u64) as i64, P10 + g.below((P10 / 10) as u64) as i64, 0, 0];
+        let d = Draw { amount: 1, prices: prices.into() };
+        for call in [false, true] {
+            let t = s.traced_with(&b, &d, call, t0).expect("a trace");
+            let nd = t.dated.len();
+            // (The head's leaf is the first row where the tree has any other.)
+            assert_eq!(nd, if b.in_order().len() > 1 { b.in_order().len() } else { 0 });
+            // (What is said reads back; with no leaf it is the statement of today to the byte.)
+            assert_eq!(Traced::read(&t.said()).as_ref(), Some(&t), "round {round}");
+            assert_eq!(t.said().len(), 184 + 56 * t.list.len() + if nd == 0 { 0 } else { 9 + 80 * nd });
+            for k in 1..=nd + 1 {
+                assert_eq!(s.trace_dated_judged(&b, &t, k, call, t0), Some(true), "round {round}: row {k} of {nd}");
+                right += 1;
+            }
+            for at in 1..=4 {
+                assert_eq!(s.trace_row_judged(&t, at, call), Some(true), "round {round}: the futures row {at}");
+            }
+            // The sums of the last row are the sums over every row of the shard.
+            let last = t.dated.last().map_or((t.rows[3].wg, t.rows[3].sn), |r| (r.wg, r.sn));
+            let mut sn = t.rows[3].sn;
+            let mut wg = t.rows[3].wg;
+            for leaf in b.in_order().iter().skip(1).filter(|r| r.gross != 0) {
+                let p = prices[if leaf.key.market == market(0) { 0 } else { 1 }];
+                let (x, y, _) = s.dated_adds(leaf, p, call).unwrap();
+                sn += x;
+                wg += y;
+            }
+            assert_eq!(last, (wg, sn));
+            if nd == 0 {
+                continue;
+            }
+            traces += 1;
+            // Each number of a dated row moved: wrong at its row.
+            let k = 1 + g.below(nd as u64) as usize;
+            for which in 0..7 {
+                let mut lie = t.clone();
+                let r = &mut lie.dated[k - 1];
+                match which {
+                    0 => r.place = (r.place + 1) % 64,
+                    1 => r.wn += 1,
+                    2 => r.wg += 1,
+                    3 => r.sn -= 1,
+                    4 => r.ro += 1,
+                    5 => r.nk[0] ^= 1,
+                    _ => r.at += 1,
+                }
+                let got = s.trace_dated_judged(&b, &lie, k, call, t0);
+                let with_unit = b.leaves[t.dated[k - 1].place as usize].unwrap().gross != 0;
+                if which == 6 && !with_unit {
+                    // (The place of a price is read by nothing where the leaf has no unit.)
+                    assert_eq!(got, Some(true));
+                } else {
+                    assert_eq!(got, Some(false), "round {round}: number {which} of row {k}");
+                    wrong += 1;
+                }
+            }
+            // A row left out: the row after it is of another key than the one carried, and is wrong; the last row
+            // left out: the point beyond the last is wrong. A row said twice: wrong at the second.
+            let mut cut = t.clone();
+            cut.dated.remove(k - 1);
+            assert_eq!(s.trace_dated_judged(&b, &cut, k, call, t0), Some(false), "round {round}: row {k} left out");
+            let mut twice = t.clone();
+            twice.dated.insert(k - 1, t.dated[k - 1]);
+            assert_eq!(s.trace_dated_judged(&b, &twice, k + 1, call, t0), Some(false), "round {round}: row {k} twice");
+            // A trace that says no dated row at all: wrong at the first point.
+            let mut blind = t.clone();
+            blind.dated.clear();
+            assert_eq!(s.trace_dated_judged(&b, &blind, 1, call, t0), Some(false));
+            wrong += 3;
+        }
+        // An ended day with a unit: a draw is wrong at its row; the row of a call is of another script.
+        if let Some((k, leaf)) = b.in_order().iter().skip(1).enumerate().find(|(_, r)| r.gross != 0) {
+            let t = s.traced_with(&b, &d, false, t0).unwrap();
+            assert!(s.traced_with(&b, &d, false, leaf.key.day).is_none());
+            assert_eq!(s.trace_dated_judged(&b, &t, k + 2, false, leaf.key.day), Some(false));
+            assert_eq!(s.trace_dated_judged(&b, &t, k + 2, true, leaf.key.day), None);
+        }
+    }
+    println!("traces over dated rows: {traces} with rows; {right} points right, {wrong} lies wrong");
+    assert!(traces > 300 && wrong > 2_000);
+}

@@ -95,7 +95,7 @@ impl World {
     }
     /// A shard of the clearing party's (`c`), 100 KAS, no row (as `thin_draw.rs`'s `bare`).
     fn bare(&self) -> OLive<Shard> {
-        let s = Shard { t: self.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Claims::default(), root: Shard::root_opened() };
+        let s = Shard { t: self.terms(), rows: [ShardRow::EMPTY; 4].into(), owner: xk(&self.c), held: 100 * KAS1, expiry: 0, dispute_daa: 50, bond_bps: 1_000, sid: [0x5d; 32], basis: 0, called: 0, owed: 0, claims: Claims::default(), root: Shard::root_opened(), dgross: 0 };
         OLive { s, value: (s.held + SHARD_CARRIER) as u64, id: Some(Hash::from_bytes([0x73; 32])), op: op(12), daa: 6_100 }
     }
     /// The statement `st` stated on the shard (its bytes `said`), landed at 6,510.
@@ -1587,7 +1587,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110), ("KpfTMarkNote", 1188), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3039), ("KpfTShardPrice", 2326), ("KpfTShardRow", 2114)]);
+    assert_eq!(sizes, vec![("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTLeftVoid", 2110), ("KpfTMarkNote", 1188), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3039), ("KpfTShardPrice", 2360), ("KpfTShardRow", 2169)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");

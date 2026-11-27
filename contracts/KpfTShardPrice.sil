@@ -138,8 +138,15 @@ contract KpfTShardPrice(byte[37] CITE_SPK, int init_version) {
         require(at >= 5);
         // (What is said is a trace: docs 17.8b. Its length was held where it was stated.)
         require(sd.length >= 184);
-        require((sd.length - 184) % 56 == 0);
         int ne = (sd.length - 184) / 56;
+        int odd = (sd.length - 184) % 2;
+        if (odd == 1) {
+            // (With dated rows after the four: the list's count as it is written. Docs 17.8j, 6.)
+            ne = int(byte[8](sd.slice(8, 16)));
+            require(ne >= 0);
+        } else {
+            require((sd.length - 184) % 56 == 0);
+        }
         require(ne <= 4);
         int ok = 1;
         int u = int(byte[8](who.slice(8, 16)));

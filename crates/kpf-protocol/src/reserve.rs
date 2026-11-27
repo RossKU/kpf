@@ -263,6 +263,8 @@ pub struct Shard {
     pub claims: Claims,
     /// The root of the tree of its dated rows (docs 17.8j, 1): of the head leaf alone while it has none.
     pub root: [u8; 32],
+    /// The sum of the gross units of its dated rows: with the four rows', the sum in the books' hash.
+    pub dgross: i64,
 }
 
 /// The claims' numbers of a called shard (docs 17.8c), beside what it owes by claims of the first class (`owed`,
@@ -290,7 +292,7 @@ impl Shard {
 
     /// A shard as `KpfTShardOpen` writes it: no row taken.
     pub fn opened(t: XTerms, owner: [u8; 32], held: i64, expiry: i64, dispute_daa: i64, bond_bps: i64, sid: [u8; 32]) -> Shard {
-        Shard { t, rows: Places::default(), owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default(), root: Shard::root_opened() }
+        Shard { t, rows: Places::default(), owner, held, expiry, dispute_daa, bond_bps, sid, basis: 0, called: 0, owed: 0, claims: Claims::default(), root: Shard::root_opened(), dgross: 0 }
     }
 
     pub fn terms(&self) -> Vec<u8> {
@@ -310,7 +312,7 @@ impl Shard {
 
     /// The sum of the rows' gross units (a call ends where it is nothing).
     pub fn gross_sum(&self) -> i64 {
-        self.rows.iter().fold(0i64, |a, x| a.saturating_add(x.gross))
+        self.rows.iter().fold(self.dgross, |a, x| a.saturating_add(x.gross))
     }
 
     /// The hash of the claims' numbers (docs 17.8c).
@@ -1465,6 +1467,41 @@ pub struct Traced {
     pub list: Vec<Priced>,
     pub n: i64,
     pub rows: Vec<TraceRow>,
+    /// A row a leaf of the tree of dated rows, in the tree's order, the head's leaf first (docs 17.8j, 6): none for
+    /// a shard whose tree has the head's leaf alone.
+    pub dated: Vec<DatedTrace>,
+}
+
+/// The byte that begins the dated rows of a trace, after the four rows: with it a statement that has them is of an
+/// odd length beyond a trace's 184 bytes, and one that has none is of an even one.
+pub const DATED_TAG: u8 = 0x44;
+/// The most dated rows a trace says: the head's leaf and the sixty-three a tree has beside it.
+pub const DATED_MAX: usize = 64;
+
+/// A row of a trace that is of a leaf of the tree (a dated row, or a day's leaf), 80 bytes: the leaf's place, the
+/// place of its market's price in the list, the three sums of a trace's row up to and with it, what the dated rows
+/// are asked up to and with it, and the hash of the key the leaf names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DatedTrace {
+    pub place: i64,
+    pub at: i64,
+    pub wn: i64,
+    pub wg: i64,
+    pub sn: i64,
+    pub ro: i64,
+    pub nk: [u8; 32],
+}
+
+impl DatedTrace {
+    pub fn bytes(&self) -> Vec<u8> {
+        [[self.place, self.at, self.wn, self.wg, self.sn, self.ro].into_iter().flat_map(sm8).collect::<Vec<u8>>(), self.nk.to_vec()].concat()
+    }
+}
+
+/// The point of a draw's or a call's dispute that is the dated row `k` of its trace (from 1; one beyond the last is
+/// the point that no leaf is left out at the end).
+pub fn trace_dated_point(k: usize) -> i64 {
+    100 + k as i64
 }
 
 impl Traced {
@@ -1476,7 +1513,8 @@ impl Traced {
     /// 184 bytes and 56 a price.
     pub fn said(&self) -> Vec<u8> {
         let rows: Vec<u8> = self.rows.iter().flat_map(|r| [r.place, r.at, r.wn, r.wg, r.sn].into_iter().flat_map(sm8).collect::<Vec<u8>>()).collect();
-        [sm8(self.amount).to_vec(), sm8(self.e).to_vec(), self.list_bytes(), sm8(self.n).to_vec(), rows].concat()
+        let dated: Vec<u8> = if self.dated.is_empty() { vec![] } else { [vec![DATED_TAG], sm8(self.dated.len() as i64).to_vec(), self.dated.iter().flat_map(|r| r.bytes()).collect()].concat() };
+        [sm8(self.amount).to_vec(), sm8(self.e).to_vec(), self.list_bytes(), sm8(self.n).to_vec(), rows, dated].concat()
     }
 
     pub fn arg(&self) -> [u8; 32] {
@@ -1485,17 +1523,34 @@ impl Traced {
 
     /// What is said read back, where its length is a trace's (the counts are read as they are written).
     pub fn read(said: &[u8]) -> Option<Traced> {
-        if said.len() < 184 || (said.len() - 184) % 56 != 0 || (said.len() - 184) / 56 > SHARD_ROWS {
+        if said.len() < 184 {
             return None;
         }
-        let e = (said.len() - 184) / 56;
         let n = |at: usize| num8(&said[at..at + 8]);
+        // (With dated rows, of an odd length: the count of the list is read as it is written, and after the four
+        // rows come a byte, a count and 80 bytes a row. Docs 17.8j, 6.)
+        let has = (said.len() - 184) % 2 == 1;
+        let e = if has { usize::try_from(n(8)).ok().filter(|e| *e <= SHARD_ROWS)? } else { (said.len() - 184) / 56 };
+        let base = 184 + 56 * e;
+        let mut dated = vec![];
+        if has {
+            if said.len() < base + 9 + 80 || said[base] != DATED_TAG || (said.len() - base - 9) % 80 != 0 {
+                return None;
+            }
+            let nd = (said.len() - base - 9) / 80;
+            if nd > DATED_MAX || n(base + 1) != nd as i64 {
+                return None;
+            }
+            dated = (0..nd).map(|i| base + 9 + 80 * i).map(|a| DatedTrace { place: n(a), at: n(a + 8), wn: n(a + 16), wg: n(a + 24), sn: n(a + 32), ro: n(a + 40), nk: said[a + 48..a + 80].try_into().expect("32 bytes") }).collect();
+        } else if (said.len() - 184) % 56 != 0 || e > SHARD_ROWS {
+            return None;
+        }
         let list = (0..e).map(|i| 16 + 56 * i).map(|a| Priced { market: said[a..a + 32].try_into().expect("32 bytes"), limit: n(a + 32), day: n(a + 40), price: n(a + 48) }).collect();
         let at = 16 + 56 * e;
         let rows = (0..SHARD_ROWS).map(|i| at + 8 + 40 * i).map(|a| TraceRow { place: n(a), at: n(a + 8), wn: n(a + 16), wg: n(a + 24), sn: n(a + 32) }).collect();
         // (Only what is written back the same: a number of nothing has two forms in eight bytes, and a script
         // that compares bytes takes one. Review T5, R1.)
-        Some(Traced { amount: n(0), e: n(8), list, n: n(at), rows }).filter(|t| t.said() == said)
+        Some(Traced { amount: n(0), e: n(8), list, n: n(at), rows, dated }).filter(|t| t.said() == said)
     }
 }
 
@@ -1518,7 +1573,8 @@ impl Shard {
     /// limits (a market has one entry of the list): nobody states such a trace.
     pub fn traced(&self, d: &Draw, call: bool) -> Option<Traced> {
         let mut list: Vec<Priced> = vec![];
-        for (r, p) in self.rows.iter().zip(&d.prices).filter(|(r, _)| !r.no_market()) {
+        // (A market's head of no unit is in no list and reads no price: docs 17.8j, 6.)
+        for (r, p) in self.rows.iter().zip(&d.prices).filter(|(r, _)| !r.no_market() && (r.gross != 0 || r.net != 0)) {
             match list.iter().find(|x| x.market == r.key.market) {
                 Some(x) if (x.limit, x.price) == (r.price_max, *p) => {}
                 Some(_) => return None,
@@ -1530,7 +1586,7 @@ impl Shard {
         let mut rows = vec![];
         for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate().take(SHARD_ROWS) {
             let mut at = 0;
-            if row.key.market != [0; 32] {
+            if row.key.market != [0; 32] && (row.gross != 0 || row.net != 0) {
                 at = list.iter().position(|x| x.market == row.key.market && x.limit == row.price_max)? as i64;
                 if *p > 0 && *p <= row.price_max && row.scale > 0 {
                     let q = self.counted_at(row, *p, call)?;
@@ -1542,7 +1598,152 @@ impl Shard {
             }
             rows.push(TraceRow { place: i as i64, at, wn, wg, sn });
         }
-        Some(Traced { amount: d.amount, e: list.len() as i64, list, n: SHARD_ROWS as i64, rows })
+        Some(Traced { amount: d.amount, e: list.len() as i64, list, n: SHARD_ROWS as i64, rows, dated: vec![] })
+    }
+
+    /// What a dated row of a day to come adds to a trace at its market's price `p` (docs 17.8j, 6): to the clearing
+    /// side's worth, what its net is worth exercised; to the gross's worth, its gross at the price; and what it is
+    /// asked alone by a move of the rate. Where the clearing side wrote: what its net is worth exercised at the
+    /// worse end, less the same now. Where it holds: what it is worth now less the same at the worse end, and all
+    /// it is worth now where the strike is between the ends. A call counts it at the price moved the tolerance in
+    /// the shard's favour and at the lower rate. `None` beyond 64 bits.
+    pub fn dated_adds(&self, row: &crate::books::Row, p: i64, call: bool) -> Option<(i64, i64, i64)> {
+        let calls = row.key.of == crate::books::OF_CALLS;
+        let (g, holds) = (self.t.g_bps, row.net > 0);
+        let q = if !call {
+            p
+        } else if holds == calls {
+            (p.checked_mul(BPS + g)?.checked_add(BPS - 1)? / BPS).min(row.price_max)
+        } else {
+            p.checked_mul(BPS - g)? / BPS
+        };
+        let rate = if call { (self.t.mmr_bps - g).max(0) } else { self.t.mmr_bps + g };
+        let (l, u) = crate::crow::ends(q, rate)?;
+        let u = u.min(row.price_max);
+        let k = row.key.strike;
+        let ex = |x: i64| if calls { x.checked_sub(k).map(|v| v.max(0)) } else { k.checked_sub(x).map(|v| v.max(0)) };
+        let units = row.net.checked_abs()?;
+        let w = |x: i64| worth(units, row.scale, ex(x)?);
+        let (now, low, high) = (w(q)?, w(l)?, w(u)?);
+        let asked = if row.net < 0 {
+            low.max(high).checked_sub(now)?.max(0)
+        } else if row.net > 0 && l < k && k < u {
+            now
+        } else if row.net > 0 {
+            now.checked_sub(low.min(high))?.max(0)
+        } else {
+            0
+        };
+        Some((if row.net < 0 { now.checked_neg()? } else { now }, worth(row.gross, row.scale, q)?, asked))
+    }
+
+    /// The trace of a draw or a call over the shard's four rows and the leaves of `books` (its tree: their root
+    /// is its root), at the time `t0`: `traced`, and a row a leaf. A leaf of no unit (a day's leaf among them)
+    /// carries the sums. `None` as `traced`, and where a dated row with a unit has no price or is of an ended day
+    /// (a draw is wrong over one, and a call's row of one is answered by another script: 17.8j, 6 and D).
+    pub fn traced_with(&self, books: &crate::books::Books, d: &Draw, call: bool, t0: i64) -> Option<Traced> {
+        let leaves: Vec<crate::books::Row> = books.in_order().into_iter().skip(1).collect();
+        // (The list has the market of every row that has a unit: a futures row's, and a dated row's by its market's
+        // head among the four.)
+        let mut list: Vec<Priced> = vec![];
+        let price_of = |m: &[u8; 32]| self.rows.iter().zip(&d.prices).find(|(r, _)| r.key.market == *m && !r.no_market()).map(|(r, p)| (r.price_max, *p));
+        for m in self.rows.iter().filter(|r| !r.no_market() && (r.gross != 0 || r.net != 0)).map(|r| r.key.market).chain(leaves.iter().filter(|r| r.gross != 0).map(|r| r.key.market)) {
+            if !list.iter().any(|x| x.market == m) {
+                let (limit, price) = price_of(&m)?;
+                list.push(Priced { market: m, limit, day: 0, price });
+            }
+        }
+        list.sort_by_key(|p| p.numbers());
+        let (mut wn, mut wg, mut sn) = (0i64, 0i64, 0i64);
+        let mut rows = vec![];
+        for (i, (row, p)) in self.rows.iter().zip(&d.prices).enumerate().take(SHARD_ROWS) {
+            let mut at = 0;
+            if row.key.market != [0; 32] && (row.gross != 0 || row.net != 0) {
+                at = list.iter().position(|x| x.market == row.key.market && x.limit == row.price_max)? as i64;
+                if *p > 0 && *p <= row.price_max && row.scale > 0 {
+                    let q = self.counted_at(row, *p, call)?;
+                    let w = worth(row.net.checked_abs()?, row.scale, q)?;
+                    wn = wn.checked_add(w)?;
+                    sn = if row.net < 0 { sn.checked_sub(w)? } else { sn.checked_add(w)? };
+                    wg = wg.checked_add(worth(row.gross.checked_abs()?, row.scale, q)?)?;
+                }
+            }
+            rows.push(TraceRow { place: i as i64, at, wn, wg, sn });
+        }
+        let mut ro = 0i64;
+        let mut dated = vec![];
+        // (The head's leaf is the first row where the tree has any other: it adds nothing and names the first.)
+        if !leaves.is_empty() {
+            let head = books.row(&Key::HEAD)?;
+            dated.push(DatedTrace { place: books.place_of(&Key::HEAD)? as i64, at: 0, wn, wg, sn, ro, nk: head.next });
+        }
+        for leaf in &leaves {
+            let mut at = 0;
+            if leaf.gross != 0 {
+                at = list.iter().position(|x| x.market == leaf.key.market && x.limit == leaf.price_max)? as i64;
+                let p = list[at as usize].price;
+                if !leaf.key.is_dated() || leaf.key.day <= t0 || p <= 0 || p > leaf.price_max || leaf.scale <= 0 {
+                    return None;
+                }
+                let (s, g, r) = self.dated_adds(leaf, p, call)?;
+                sn = sn.checked_add(s)?;
+                wg = wg.checked_add(g)?;
+                ro = ro.checked_add(r)?;
+            }
+            dated.push(DatedTrace { place: books.place_of(&leaf.key)? as i64, at, wn, wg, sn, ro, nk: leaf.next });
+        }
+        Some(Traced { amount: d.amount, e: list.len() as i64, list, n: SHARD_ROWS as i64, rows, dated })
+    }
+
+    /// `KpfTShardRowD`: whether the dated row `k` (from 1) of a trace is right for these books, at the time `t0`.
+    /// The first is of the head's leaf (the fourth row's sums, and the key the head names); a later one of the leaf
+    /// whose key the row before carries. One beyond the last is right where no key is left; with no dated row
+    /// said, where the head's leaf names none. `None` where the script
+    /// computes no verdict: a sum beyond 64 bits; a hash carried that is no leaf's key; a call's row of an ended
+    /// day with a unit (another script's: D).
+    pub fn trace_dated_judged(&self, books: &crate::books::Books, t: &Traced, k: usize, call: bool, t0: i64) -> Option<bool> {
+        if k == 0 || k > t.dated.len() + 1 || t.rows.len() != SHARD_ROWS {
+            return Some(false);
+        }
+        let head = books.row(&Key::HEAD)?;
+        let last4 = t.rows[SHARD_ROWS - 1];
+        if t.dated.is_empty() {
+            // (No dated row is said: right where the head's leaf, shown, names none.)
+            return Some(head.next == Key::HEAD.hash());
+        }
+        if k == 1 {
+            // (The first is the head's leaf: at its place, the fourth row's sums, nothing asked, the key it names.)
+            let cur = t.dated[0];
+            return Some(books.place_of(&Key::HEAD) == usize::try_from(cur.place).ok() && (cur.wn, cur.wg, cur.sn, cur.ro) == (last4.wn, last4.wg, last4.sn, 0) && cur.nk == head.next);
+        }
+        let prev = t.dated[k - 2];
+        if k == t.dated.len() + 1 {
+            return Some(prev.nk == Key::HEAD.hash());
+        }
+        if prev.nk == Key::HEAD.hash() {
+            return Some(false);
+        }
+        let cur = t.dated[k - 1];
+        let leaf = books.leaves.iter().flatten().find(|r| r.key != Key::HEAD && r.key.hash() == prev.nk).copied()?;
+        let mut ok = books.place_of(&leaf.key) == usize::try_from(cur.place).ok() && cur.nk == leaf.next;
+        if leaf.gross == 0 {
+            return Some(ok && (cur.wn, cur.wg, cur.sn, cur.ro) == (prev.wn, prev.wg, prev.sn, prev.ro));
+        }
+        if cur.at < 0 || cur.at >= t.list.len() as i64 {
+            return Some(false);
+        }
+        let en = t.list[cur.at as usize];
+        let p = en.price;
+        if en.market != leaf.key.market || en.limit != leaf.price_max || en.day != 0 || p <= 0 || p > leaf.price_max || leaf.scale <= 0 || !leaf.key.is_dated() {
+            return Some(false);
+        }
+        if leaf.key.day <= t0 {
+            // (A draw is wrong while a row of an ended day has a unit. A call's: by its day's leaf, another script.)
+            return if call { None } else { Some(false) };
+        }
+        let (s, g, r) = self.dated_adds(&leaf, p, call)?;
+        ok = ok && cur.wn == prev.wn && cur.wg == prev.wg.checked_add(g)? && cur.sn == prev.sn.checked_add(s)? && cur.ro == prev.ro.checked_add(r)?;
+        Some(ok)
     }
 
     /// `KpfTShardRow`: whether the row `at` (1 to 4) of a trace is right for these books. `None` where the script
@@ -1551,7 +1752,8 @@ impl Shard {
         let (Some(row), Some(cur)) = (self.rows.get(at.wrapping_sub(1)), t.rows.get(at.wrapping_sub(1))) else { return Some(false) };
         let prev = if at >= 2 { t.rows[at - 2] } else { TraceRow { place: 0, at: 0, wn: 0, wg: 0, sn: 0 } };
         let ok = cur.place == at as i64 - 1;
-        if row.key.market == [0; 32] {
+        // (A row with no market, and a market's head of no unit, add nothing and read no price: 17.8j, 6.)
+        if row.key.market == [0; 32] || (row.gross == 0 && row.net == 0) {
             return Some(ok && (cur.wn, cur.wg, cur.sn) == (prev.wn, prev.wg, prev.sn));
         }
         if cur.at < 0 || cur.at >= t.list.len() as i64 {
@@ -1584,7 +1786,15 @@ impl Shard {
     /// The last row's sums, and whether the counts written are the trace's.
     fn trace_sums(t: &Traced) -> (bool, i64, i64, i64) {
         let made = t.e == t.list.len() as i64 && t.n == SHARD_ROWS as i64 && t.rows.len() == SHARD_ROWS;
-        t.rows.last().map_or((false, 0, 0, 0), |r| (made, r.wn, r.wg, r.sn))
+        match t.dated.last() {
+            Some(r) => (made, r.wn, r.wg, r.sn),
+            None => t.rows.last().map_or((false, 0, 0, 0), |r| (made, r.wn, r.wg, r.sn)),
+        }
+    }
+
+    /// What the dated rows of a trace are asked, by its last row (nothing where it has none).
+    fn trace_asked(t: &Traced) -> i64 {
+        t.dated.last().map_or(0, |r| r.ro)
     }
 
     /// `KpfTShardEnd`, of a trace: whether the end of a draw is within the rule, by the last row's sums and no row
@@ -1592,7 +1802,7 @@ impl Shard {
     pub fn draw_trace_end_judged(&self, t: &Traced, claimer: &[u8; 32], t0: i64) -> Option<bool> {
         let (made, wn, wg, sn) = Shard::trace_sums(t);
         let ok = made && *claimer == self.owner && t.amount > 0;
-        let need = need_of(wn, wg, &self.t, true)?;
+        let need = need_of(wn, wg, &self.t, true)?.checked_add(Shard::trace_asked(t))?;
         let has = self.held.checked_sub(t.amount)?;
         let equity = has.checked_add(sn)?.checked_sub(self.basis)?;
         if has == i64::MIN || equity == i64::MIN || has.checked_add(sn)? == i64::MIN {
@@ -1607,7 +1817,7 @@ impl Shard {
     pub fn call_trace_end_judged(&self, t: &Traced, t0: i64, held: i64) -> Option<(bool, i64)> {
         let (made, wn, wg, sn) = Shard::trace_sums(t);
         let ok = made && t.amount == 0 && t0 > 0;
-        let need = need_of(wn, wg, &self.t, false)?;
+        let need = need_of(wn, wg, &self.t, false)?.checked_add(Shard::trace_asked(t))?;
         let with = self.held.checked_add(sn)?;
         let equity = with.checked_sub(self.basis)?;
         if with == i64::MIN || equity == i64::MIN {

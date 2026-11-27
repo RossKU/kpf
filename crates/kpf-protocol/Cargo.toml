@@ -91,6 +91,10 @@ name = "auditT15_options"
 path = "tests/auditT15_options.rs"
 
 [[test]]
+name = "auditT17_dated_rows"
+path = "tests/auditT17_dated_rows.rs"
+
+[[test]]
 name = "auditT2_vault"
 path = "tests/auditT2_vault.rs"
 

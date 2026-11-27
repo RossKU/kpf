@@ -183,8 +183,23 @@ contract KpfTChange(int init_version) {
                 // An amount and a price a row; a call says nothing where a draw says its amount.
                 // (A draw and a call say a trace: 184 bytes and 56 a price of its list, four at the most. 17.8b.)
                 require(said.length >= 184);
-                require(said.length <= 408);
-                require((said.length - 184) % 56 == 0);
+                if ((said.length - 184) % 2 == 1) {
+                    // (With dated rows after the four, the head's leaf first: one byte, a count, 80 bytes a row,
+                    // sixty-four at the most; the list's count as it is written. Docs 17.8j, 6.)
+                    int dne = int(byte[8](said.slice(8, 16)));
+                    require(dne >= 0);
+                    require(dne <= 4);
+                    int dba = 184 + 56 * dne;
+                    require(said.length >= dba + 89);
+                    require(said.slice(dba, dba + 1) == byte[](0x44));
+                    require((said.length - dba - 9) % 80 == 0);
+                    int dnd = (said.length - dba - 9) / 80;
+                    require(dnd <= 64);
+                    require(int(byte[8](said.slice(dba + 1, dba + 9))) == dnd);
+                } else {
+                    require(said.length <= 408);
+                    require((said.length - 184) % 56 == 0);
+                }
                 require(shard == 1);
             } else {
                 // (A covered account's own kinds say two numbers and a chain before their rows.)
