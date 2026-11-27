@@ -1380,6 +1380,81 @@ pub struct TraceRow {
     pub sn: i64,
 }
 
+/// By what a dated row is taken out of a shard's books (docs 17.8j, 4): its owner's signature; its day's leaf, written;
+/// or the shard being called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowOutBy {
+    Owner,
+    DayWritten,
+    Called,
+}
+
+impl Shard {
+    /// `KpfTRowIn.put` (docs 17.8j, 2 and 4): the owner lists a dated row. `books` are the shard's (their root is
+    /// its root). The row `r` of the four is the market's futures row, whose scale and limit the row takes; or an
+    /// empty place where no row is the market's, which becomes its head with no unit. Its ninth field counts the
+    /// market's leaves in the tree: one more, and two where the day's leaf is put in with the row. Not while the
+    /// shard is called.
+    pub fn row_in(&self, books: &crate::books::Books, key: Key, scale: i64, limit: i64, r: usize, place: usize, place_day: Option<usize>) -> Result<(Shard, crate::books::Books)> {
+        let no = |why: &str| Err(Error::Invalid(format!("no row is put into the shard's books: {why}")));
+        if self.called != 0 {
+            return no("it is called");
+        }
+        if books.root() != self.root {
+            return no("the books shown are not the shard's");
+        }
+        let head = RowHead { key: Key::futures(key.market), scale, price_max: limit };
+        let Some(row) = self.rows.get(r).filter(|_| r < SHARD_ROWS).copied() else { return no("it has four rows") };
+        if row.head() != head {
+            let free = row == ShardRow::EMPTY && !self.rows.iter().any(|x| x.key == head.key);
+            if !free || !head.key.well_made() || scale <= 0 || scale > crate::state::SCALE_MAX || limit <= 0 || limit > crate::cross::MARGIN_MAX {
+                return no("the row named is not its market's, nor an empty place for a market that has none and is one, of a scale and a limit within bounds");
+            }
+        }
+        let next = books.listed(key, scale, limit, place, place_day)?;
+        let mut s = *self;
+        let more = if place_day.is_some() { 2 } else { 1 };
+        s.rows[r] = ShardRow { entered: row.entered + more, ..ShardRow::of(head, row.net, row.gross) };
+        s.root = next.root();
+        Ok((s, next))
+    }
+
+    /// `KpfTRowOut.out` (docs 17.8j, 4): a dated row of no unit is taken out by the owner, by anyone once its day's
+    /// leaf is written, or by anyone where the shard is called; a day's leaf by anyone, where no row of its day
+    /// stands. The market's futures row counts one less, and is the empty row where it counts nothing and has no
+    /// unit.
+    pub fn row_out(&self, books: &crate::books::Books, key: &Key, by: RowOutBy) -> Result<(Shard, crate::books::Books)> {
+        let no = |why: &str| Err(Error::Invalid(format!("no row is taken out of the shard's books: {why}")));
+        if books.root() != self.root {
+            return no("the books shown are not the shard's");
+        }
+        let Some(r) = self.rows.iter().take(SHARD_ROWS).position(|x| x.key == Key::futures(key.market) && !x.no_market()) else { return no("its market has no row among the four") };
+        if key.is_dated() {
+            let written = books.row(&Key::day_of(key.market, key.day)).and_then(|l| l.day_said()).is_some_and(|x| x != crate::books::DaySaid::NotWritten);
+            let may = match by {
+                RowOutBy::Owner => true,
+                RowOutBy::DayWritten => written,
+                RowOutBy::Called => self.called != 0,
+            };
+            if !may {
+                return no("its day's leaf is not written, and the shard is not called: its owner takes it out");
+            }
+        }
+        let next = books.unlisted(key)?;
+        let mut s = *self;
+        let row = &mut s.rows[r];
+        row.entered -= 1;
+        if row.entered < 0 {
+            return no("the market's row counts no leaf");
+        }
+        if row.entered == 0 && row.net == 0 && row.gross == 0 {
+            *row = ShardRow::EMPTY;
+        }
+        s.root = next.root();
+        Ok((s, next))
+    }
+}
+
 /// What a draw (kind 5) and a call (kind 11) say (docs 17.8b): an amount (a call's is nothing), the list of prices
 /// in order, and a row of the trace a row of the books. `e` and `n` are the two counts as they are written (the
 /// list's and the rows' lengths, where the statement is well made).

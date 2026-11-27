@@ -34,6 +34,8 @@ pub const NODE_TAG: i64 = 21;
 pub const OF_FUTURES: i64 = 0;
 pub const OF_CALLS: i64 = 1;
 pub const OF_PUTS: i64 = 2;
+/// The leaf of a market's day (docs 17.8j, 3): its strike nothing, the last key of its market and day.
+pub const OF_DAY: i64 = 3;
 /// An empty leaf.
 pub const EMPTY: [u8; 32] = [0; 32];
 
@@ -359,6 +361,127 @@ impl Books {
         let Some(at) = self.leaves.iter().position(|l| l.is_some_and(|x| x.next == key.hash())) else { return invalid("no leaf names the row") };
         let mut b = self.clone();
         let before = b.leaves[at].expect("a row");
+        b.leaves[at] = Some(Row { next: r.next, ..before });
+        b.leaves[place] = None;
+        Ok(b)
+    }
+}
+
+/// What a day's leaf says (docs 17.8j, 3): where a row has its net, 1 for "none"; where a row has what its legs were
+/// entered at, the price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaySaid {
+    NotWritten,
+    Price(i64),
+    None,
+}
+
+impl Key {
+    /// A row of calls or puts of a day and a strike.
+    pub fn is_dated(&self) -> bool {
+        (self.of == OF_CALLS || self.of == OF_PUTS) && self.day > 0 && self.strike > 0
+    }
+
+    /// The leaf of a market's day.
+    pub fn day_of(market: [u8; 32], day: i64) -> Key {
+        Key { market, day, of: OF_DAY, strike: 0 }
+    }
+
+    pub fn is_day(&self) -> bool {
+        self.of == OF_DAY && self.day > 0 && self.strike == 0
+    }
+
+    /// Whether another key is of this key's market and day (the key of nothing is of none).
+    pub fn same_day(&self, o: &Key) -> bool {
+        *o != Key::HEAD && *self != Key::HEAD && self.market == o.market && self.day == o.day
+    }
+
+    /// A key of the tree of dated rows (docs 17.8j): of a market that is one, a dated row or a day's leaf.
+    pub fn listed_made(&self) -> bool {
+        Key::futures(self.market).well_made() && (self.is_dated() || self.is_day())
+    }
+}
+
+impl Row {
+    /// What a day's leaf says; `None` for a row that is not one.
+    pub fn day_said(&self) -> Option<DaySaid> {
+        if !self.key.is_day() {
+            return None;
+        }
+        Some(if self.net == 1 { DaySaid::None } else if self.entered > 0 { DaySaid::Price(self.entered) } else { DaySaid::NotWritten })
+    }
+}
+
+impl Books {
+    /// The leaves of a market: its dated rows and its days' leaves (what its futures row counts: docs 17.8j, 2).
+    pub fn count_of(&self, market: &[u8; 32]) -> i64 {
+        self.leaves.iter().flatten().filter(|r| r.key != Key::HEAD && r.key.market == *market).count() as i64
+    }
+
+    /// The leaf that names a key.
+    pub fn namer(&self, key: &Key) -> Option<Row> {
+        self.leaves.iter().flatten().find(|r| r.next == key.hash() && *key != Key::HEAD).copied()
+    }
+
+    /// `KpfTRowIn` (docs 17.8j, 4): a dated row of no unit is put in for a key the books do not have, at an empty
+    /// place, between the leaf before and what that names. **The day's leaf of its market and day is put in with
+    /// it, "not written", where none stands** (at `place_day`, after the row: it names what the leaf before
+    /// named): none stands where neither the leaf before nor the key it names is of the row's market and day.
+    /// Where one stands it says "not written", and has the row's scale and limit.
+    pub fn listed(&self, key: Key, scale: i64, price_max: i64, place: usize, place_day: Option<usize>) -> Result<Books> {
+        if !key.listed_made() || !key.is_dated() || scale <= 0 || price_max <= 0 || key.strike > price_max {
+            return invalid("a dated row is of a market that is one, of calls or puts, of a day and of a strike within its limit");
+        }
+        if place >= LEAVES || self.leaves[place].is_some() {
+            return invalid("the place is not an empty one");
+        }
+        let Some(before) = self.before(&key) else { return invalid("the key is in the books already") };
+        let after = self.leaves.iter().flatten().find(|r| r.key.hash() == before.next && r.key != Key::HEAD).copied();
+        let stands = key.same_day(&before.key) || after.is_some_and(|r| key.same_day(&r.key));
+        let day = Key::day_of(key.market, key.day);
+        let mut b = self.clone();
+        let at = self.place_of(&before.key).expect("the leaf before is a leaf");
+        match (stands, place_day) {
+            (true, None) => {
+                let Some(leaf) = self.row(&day) else { return invalid("rows of the day stand and its leaf does not") };
+                if leaf.day_said() != Some(DaySaid::NotWritten) || (leaf.scale, leaf.price_max) != (scale, price_max) {
+                    return invalid("no row is listed for a day whose leaf is written, and a row has its day's scale and limit");
+                }
+                b.leaves[place] = Some(Row { key, scale, price_max, net: 0, gross: 0, entered: 0, next: before.next });
+            }
+            (false, Some(pd)) => {
+                if pd >= LEAVES || pd == place || self.leaves[pd].is_some() {
+                    return invalid("the day's leaf's place is not an empty one");
+                }
+                b.leaves[place] = Some(Row { key, scale, price_max, net: 0, gross: 0, entered: 0, next: day.hash() });
+                b.leaves[pd] = Some(Row { key: day, scale, price_max, net: 0, gross: 0, entered: 0, next: before.next });
+            }
+            _ => return invalid("the day's leaf is put in with the first row of its market and day, and with no other"),
+        }
+        b.leaves[at] = Some(Row { next: key.hash(), ..before });
+        Ok(b)
+    }
+
+    /// `KpfTRowOut` (docs 17.8j, 4): a dated row of no unit and nothing entered is taken out; a day's leaf where the
+    /// leaf that names it is not of its market and day (no row of the day stands). The leaf that named it names
+    /// what it named.
+    pub fn unlisted(&self, key: &Key) -> Result<Books> {
+        let Some(place) = self.place_of(key) else { return invalid("no leaf of the key") };
+        let r = self.leaves[place].expect("a leaf");
+        let Some(before) = self.namer(key) else { return invalid("no leaf names the key") };
+        if key.is_dated() {
+            if r.net != 0 || r.gross != 0 || r.entered != 0 {
+                return invalid("a row that has a unit or anything entered stays");
+            }
+        } else if key.is_day() {
+            if key.same_day(&before.key) {
+                return invalid("a day's leaf stays while a row of its day stands");
+            }
+        } else {
+            return invalid("the head stays");
+        }
+        let mut b = self.clone();
+        let at = self.place_of(&before.key).expect("a leaf");
         b.leaves[at] = Some(Row { next: r.next, ..before });
         b.leaves[place] = None;
         Ok(b)
