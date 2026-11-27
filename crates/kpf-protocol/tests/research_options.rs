@@ -1863,3 +1863,43 @@ fn with_the_shards_levels_by_rows_nobody_is_left_unpaid() {
         }
     }
 }
+
+/// 17.8j's second writing, 6: a shard's rows asked a row at a time (no two rows counted together). Never less than
+/// the rows counted together, so never less than the side can lose; what it costs is the owner's coins: how much
+/// more, on the same books, and for a book of calls written against futures held.
+#[test]
+fn a_shards_rows_asked_one_by_one_ask_no_less_than_counted_together() {
+    let alone = |rows: &[Leg], a: i64, r: i64| rows.iter().map(|x| asked_flat(std::slice::from_ref(x), a, r)).sum::<i64>();
+    let mut g = Rng(0x17_8B);
+    let (mut n, mut same, mut together, mut one_by_one) = (0, 0, 0i64, 0i64);
+    for _ in 0..200_000 {
+        let a = 10_000 + g.below(20_000);
+        let now = 10;
+        let strikes = [a - a / 20, a - a / 50, a, a + a / 50, a + a / 20];
+        let held: Vec<Held> = (0..1 + g.below(8))
+            .map(|_| {
+                let mut leg = g.leg(a);
+                if leg.option() {
+                    leg.strike = strikes[g.below(5) as usize];
+                }
+                Held { leg, entered: 0, day: if leg.option() { now + 1 + g.below(3) * 2 } else { 0 } }
+            })
+            .collect();
+        let rows = netted(&held, now, true);
+        for r in [LO, UP] {
+            let (t, o) = (asked_flat(&rows, a, r), alone(&rows, a, r));
+            assert!(o >= t && t >= worst(&netted(&held, now, false), a, r), "{rows:?} at {a}: one by one {o}, together {t}");
+            // (A row alone gives no credit: near its day it is asked what it is asked far from it.)
+            assert_eq!(o, alone(&netted(&held, now, false), a, r));
+            n += 1;
+            same += (o == t) as i64;
+            together += t;
+            one_by_one += o;
+        }
+    }
+    // The clearing side wrote 10 calls at 100 and holds 10 futures, the price 100: together 55, one by one 110.
+    let book = [Leg { kind: CallWritten, units: 10, strike: 10_000, entry: 0, premium: 0, near: false }, Leg { kind: Long, units: 10, strike: 0, entry: 0, premium: 0, near: false }];
+    assert_eq!((asked_flat(&book, 10_000, UP), alone(&book, 10_000, UP)), (5_500, 11_000));
+    println!("{n} books: asked one by one the same as together on {same}; in all {one_by_one} against {together} ({} % more)", (one_by_one - together) * 100 / together);
+    assert!(same > n / 10 && one_by_one > together);
+}

@@ -4979,6 +4979,13 @@ series" (17.8, left out) is what would make that one statement.
 
 A review at the engine after A3, B and D. About twelve scripts more.
 
+**What a row at a time costs, in the model** (`a_shards_rows_asked_one_by_one_ask_no_less_than_counted_together`):
+on the 200,000 books of step 0, asked one by one a shard is asked the same as with its rows counted together on
+220,956 of 400,000, and 27 % more in all; never less. A book of ten calls written at 100 against ten futures
+held, the price 100: 55 together, 110 one by one. A row alone gives no credit, so it is asked near its day what
+it is asked far from it. For the last phase, with the rates: the rows of a market counted together (the first
+writing's point 6, with review T16's Z5 and Z10).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
