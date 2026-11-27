@@ -5309,6 +5309,69 @@ or "no leg", and took. **Before C and D: every script that reads a leg's way, a 
 a statement's length is listed and read first**, and what each does with the new thing is said in the list the
 step is built from.
 
+**What reads a leg's way, a day, a point and a place** (read off the 85 sources before C and D, a script at a
+time; the lines are as of the commit that closed review T18).
+
+*A leg's way* (bytes 94 to 102 of a leg), among the scripts of accounts and shards. **None takes a way of 3 to 6 as
+a futures leg or as "no leg" any more**; each refuses it or knows it.
+
+| Knows an option leg | Refuses it (a `require`, or the answer says wrong) | Reads no leg's way |
+|---|---|---|
+| `KpfTCRow`, `KpfTEnterSD`, `KpfTEnterOff` (a written one's premium), `KpfTLeftD`, `KpfTLeftAllD` | `KpfTEnterS`, `KpfTLeft`, `KpfTLeftAll`, `KpfTLeftC`, `KpfTLeftAllC`, `KpfTLeftVoid` (as the leg named), `KpfTMarkNote`, `KpfTMarkNoteC`, `KpfTDrawNote` (a mark's note), `KpfTCStep`, `KpfTCTok`, `KpfTAddSpot`, `KpfTVaultPay` | the ends (`KpfTCEnd`, `KpfTCEnter`, `KpfTCSplit`, `KpfTCMark`: by the trace's rows), `KpfTStepPrice` (the leg's market), `KpfTJoinC`, `KpfTPass`, `KpfTDrawEntry` and a leaving's note in `KpfTDrawNote` (a chain's hash), the shard's own scripts |
+
+**Where a refusal is a dead end** (review T18's U3, by the line):
+1. `KpfTCStep` refuses the way: an account with an option leg is stepped by nothing under a call.
+2. A note of an option leg to a called shard is applied by nothing: `KpfTLeftC` and `KpfTLeftAllC` refuse the
+   way, `KpfTLeftD` and `KpfTLeftAllD` a called shard; and `KpfTCallEnter` ends an option's entry at a call, whose
+   note (tag 8) is such a note.
+3. So `KpfTCallPay`, which pays no claim while the sum of the gross is not nothing, pays none of a called shard
+   that has an option leg.
+4. `KpfTShardRowD` has no verdict for a call's row of an ended day with a unit: its point lapses at the caller's
+   cost, and a shard with such a row is not called.
+5. `KpfTCRow` says every row of an ended option wrong: its account states nothing, not even a step of it.
+   Nothing writes a day's leaf.
+
+1 to 3 are step C; 4 and 5 are step D.
+
+*A day*: compared with a statement's time by `KpfTCRow` (an ended leg wrong; an entering leg's day more than T
+after; within T no credit), `KpfTEnterSD` (more than T after), `KpfTShardRowD` (ended, with a unit: a draw wrong,
+a call no verdict). A list's entry of a day is refused by every reader of a list (`KpfTCStep`, `KpfTShardRow`,
+`KpfTShardRowD`, `KpfTShardPrice`): no price of a day is in any list, as the second writing has it. `KpfTLeftD`
+and `KpfTLeftAllD` apply a note whatever the day.
+
+*A point and a length*: the ends answer the point 0; `KpfTCRow` an odd point of a covered account's kinds, and a
+point beyond the trace right; `KpfTStepPrice` an even one within the trace; `KpfTShardRow` 1 to 4;
+`KpfTShardPrice` 5 to 100, beyond the list right; `KpfTShardRowD` from 101, beyond the one after its last row
+right. `KpfTPoint` takes any point from 0. A draw's and a call's length is held by `KpfTChange` alone (the two
+forms).
+
+*The place of what is paid a key*: `outputs.length - 1 - 4 * j` in every script of accounts and shards and in six
+of the positions' (`KpfTTake`, `KpfTKind`, `KpfTStepRow`, `KpfTStepEnd`, `KpfTStepLiq`, `KpfTChangeDispute`);
+`- 2 * j` in fifteen of the positions' (`KpfTCure`, `KpfTDispute`, `KpfTExit`, `KpfTExitEnd`, `KpfTExitRefute`,
+`KpfTLate`, `KpfTLiq`, `KpfTLiqDispute`, `KpfTLiqProve`, `KpfTLiqSettle`, `KpfTProve`, `KpfTSettle`, `KpfTLeave`,
+`KpfTNovate`, `KpfTReplace`); at the input's own index in eight (below the inputs' count, where the two rules
+above are held at or beyond it: no collision); `KpfTPay` alone in its transaction. **The two rules meet** (review
+T18, W1): open, the owner of the design's.
+
+*Comments that say what the code no longer does* (to be put right with C): `KpfTCallEnd`'s header (four rows'
+names and four prices), `KpfTShardPrice`'s (points 1 to 4), `KpfTLeft`'s (a tag of 9, which it refuses).
+
+**Step C, the list it is built from** (a call with option legs; each a commit; a review at the engine at its end).
+- **C1. `KpfTCStep`**: an option leg of a day after the call's time is taken at the call's price for its market
+  (the list's entry of its market, of no day): what it is worth exercised there less the same at its entry, by
+  its units, for or against its user; no premium moves; a leg younger than T is counted with the young as a
+  futures leg is. Its note names every leg, option legs among them. An option leg of a day at or before the
+  call's time: refused here until D (the account is stepped once its leg has ended).
+- **C2. A note to a called shard with option legs**: `KpfTLeftDC` (one leg: an account's own, an entry that did
+  not enter, a call's step's) and `KpfTLeftAllDC`, from the twins for a called shard with the dated branch of
+  `KpfTLeftD` and `KpfTLeftAllD`: the leg out of its leaf; what is asked counted in its class.
+- **C3. `KpfTLeftVoidD`** (review T18, W2): a note of an option leg that is in no leaf, or of more units than
+  its leaf has, is spent, the shard as it is: shown the leaf of its key, or the leaf before where none stands.
+- **C4. The model's call** is made of the trace's list (review T17, V4): a market whose units are in dated rows
+  alone is in it.
+- **At the engine, at the end**: a shard with a futures leg and options of two users is called; every account
+  is stepped; every note applied; the claims paid and the call ended; and with one thing changed, refused.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
