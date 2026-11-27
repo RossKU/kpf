@@ -4144,6 +4144,98 @@ it is written above.** It is rewritten before any script (not yet done):
 | D8 (medium) | M1 | the test counts every band the step takes (the options' as well); the model first |
 | D9 to D11 | the keeper's fee's order and time; what a library's move strands; what 17.8g drops of 17.5 (the entry's part of the band at the day; a call's trace where no price was written; a leg whose day came before a call) | said in the rewriting |
 
+### 17.8h The account's side, how it is built (17.8, 6; on paper, for review)
+
+17.4 says the rule, and the model has it in numbers (`research_options.rs`: `asked_as`, `lacks`, `due_stepped`).
+This says the row, the head of a statement, the test of each end, and the order. Nothing of it is built.
+
+**The row as it will stay: 224 bytes** (today 120: a price, six sums, two chains). Twenty numbers and the two
+chains; futures and options, so that the row is changed once.
+
+| Number | What it is |
+|---|---|
+| a | the price stated for the leg's market (as today) |
+| q | a step's price for it (17.4: a step is due by one price); in every other statement the same as a |
+| G, W, WS, LS, GL, TK | as today: what all gained; what they are worth; the worth of those that stay; what those lost, each alone; what those that leave gained; what the token legs count |
+| M | what the legs gain from a to q (an option within T of its day: only what it loses) |
+| BA, BL | the bands of all the legs, and of those that leave (a futures leg: twice the tolerance of its worth, as today's is of the sum; an option: 17.5) |
+| DdA, DuA, RA | of all the legs: the two sums of the group that is open, and R of the groups that are closed |
+| DdS, DuS, RS | the same of the legs that stay |
+| RL | of the legs that leave, each alone: the larger of nothing and what it loses at either end |
+| PA, PS | the premiums of all the option legs, and of those that stay |
+
+- **L and U** of a row: a less, and a plus, the rate on a rounded up (L not below nothing). **q** is within
+  the lower rate of a, or the row is wrong.
+- **A futures leg** adds to the two sums its worth at L and at U less its worth at a, one way or the other.
+  **A token leg** adds nothing (it counts as coins: TK). An option: 17.4, with the stage after this.
+- **A group closes** at a row whose leg's market is not the leg before's: R grows by the larger of nothing,
+  what the sum down lost and what the sum up lost, and the two sums begin again. The end closes the last group
+  (R' below). So that a row knows the leg before, **its answer is shown that leg** as well (its chain is the
+  row before's, opened from the chain two rows before): 111 bytes of an answer, none of a statement. Two rows
+  next to one another, of one market, that say two prices (a, or q): the second is wrong.
+
+**The head of a statement** says, after what it says today (an amount, the leg that leaves, its chain): **the
+rate** (the upper: the maintenance and the tolerance), **the lower rate**, **T** (twice a lateness and a
+dispute period: 17.4), and **the lines** (a bit a leg: for a held option whose strike is between the ends, which
+of its two lines): 32 bytes. The rows compute with what the head says; **the end holds the three numbers to the
+account's terms and times**, or the end is wrong. (A row is answered without the account's terms opened, as
+today.)
+
+**An entry says the place its leg takes** (17.4: a hedge stands next to what it hedges, or it is not netted).
+Today the leg that enters is the last. So: the head of an entry says the place; the row at that place is of the
+leg said, at its entry; the second chain passes it by, and the last row's second chain is the account's legs
+as they were (the first, as today, the legs as they will be).
+
+**The ends** (m: the coins less a note's least; tk and owes as today; R' is R with the last group closed):
+
+| Statement | Today | So |
+|---|---|---|
+| an entry (10) | m + G + tk at the rate on W | m + G + tk at RA' + PA |
+| a take (7) | m - amount + tk at the rate on W, and LS | at RA' + PA + LS |
+| a leg that gained leaves (8) | m + tk at the rate on WS, and LS | at RS' + PS + LS |
+| a leg that lost leaves (8) | the coins pay it | and what stays is at the level of an entry (N65): m + GL + tk + (G - GL) at RS' + PS |
+| every leg leaves (8) | the account ends | the same (with options: wrong while the account holds or wrote one) |
+| a split (12) | what stays at the rate on WS and LS; what moves at the rate on its worth and what it lost | at RS' + PS + LS; at RL, its premium and what it lost |
+| a mark (13), tokens leaving or sold (14, 15) | the rate on W where they test it | RA' + PA in its place (RS' + PS where a token leg leaves) |
+| a step (9) is due | m + G + tk - owes below the lower rate on W | **m + tk - owes + X below PA**, where X is G + M less BA and no less than nothing where G + M is above nothing, and G + M as it is where it is below (17.8g, D: what a step would leave the account) |
+| a step, the leg named | it lost, and the coins pay it, the fee and LS: it leaves alone; else every leg | **it leaves alone where the account lacks less after it than before** (17.4): before, RA' + PA less (m + tk - owes + G), or nothing; after, RS' + PS less (what the coins are once the leg, its premium and the fee are paid, tk, less what is owed then, and G - GL), or nothing; else every leg leaves (not while a token leg stays, as today) |
+
+What a note asks of the shard, the fee's base, what is owed (16.18), the times: as they are built. The bands
+are read from BA and BL where they are computed from W today.
+
+**What it costs.** A statement grows by 104 bytes a leg and 32 for its head: a take of an account of one leg
+by 136 bytes, a statement of six legs by 656. A row's answer by the leg before (111) and the script's lines.
+For the last phase (17.8e): the numbers a kind does not read (q, M and the sums of all the legs are a step's;
+RL a split's) are 48 bytes a row in a statement of any other kind.
+
+**The order.**
+
+1. **Futures and tokens, whole** (one commit: a take by R with a step by the rate on W would step a hedged
+   account the moment its take is paid). The row and the head as above with the options' numbers at nothing;
+   `KpfTCRow`; the ends (`KpfTCEnd`, `KpfTCEnter`, `KpfTCSplit`, `KpfTCMark`, `KpfTCTok`); what reads a row by its
+   place (`KpfTStepPrice`); `covered.rs`, the builders, the tool. **What a futures account is asked changes**: a
+   long and a short of one market next to one another are asked nothing but what each lost alone; an account of
+   one leg, or of legs of several markets, what it is asked today (to the rounding). The tests of amounts
+   change with it, and say which.
+2. **The option leg**: what it is worth (17.2) where a futures leg has its way (a call or a put, held or
+   written); its premium in PA and PS; a held option between the ends along the line the head says; within T
+   of its day only what it loses; its band; a mark names none; a leaving of every leg is wrong beside one; what
+   a step pays of a premium (17.3). An account with an option leg is made in the tests as an object is (the
+   entry with its premium is 17.8's seventh step).
+3. With 17.8g's C: what an account owes may be below nothing (a credit).
+
+**To be said by the review:** whether each of the twenty numbers is needed and whether one is missing (the two
+chains and "the leg before" against carrying the market in the row); the lines in a step, where the stater is
+anyone: proposed, **a step computes both "lacks" with every held option between the ends on its line of
+nothing**, the head's bits read in the user's own statements only (to be run in the model first: `lacks` by
+`asked_flat`); whether "lacks less after than before" with what is owed (16.18) in it can be played by a stater
+that names a leg (the fee is of the leg's worth; a leg named again and again); the leg that lost and leaves by
+its user's statement, held to the level of an entry (a user that cannot leave a losing leg: is that right, and
+what does it do then); a split's leg alone at RL; the rounding of L, U and of a leg's worth at them against
+today's rate on W, and that no account of one leg is asked less than today; the place of an entry and the two
+chains; what `KpfTStepPrice` answers for q (nothing: q is the stater's, held to a by the row); and what of the
+call's scripts reads an account's row.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
