@@ -5126,6 +5126,55 @@ row with a unit has no answer until `KpfTShardRowE`. Not reached: sequences of l
 leavings; `KpfTCStep` under a call with heads of no unit; `KpfTDrawNote` and `KpfTDrawEntry` over a statement
 with dated rows.
 
+**Step B, the list it is built from** (read off the scripts as they are, after review T17; three commits, a
+review at the engine after the third).
+
+*B1: an option enters.*
+- **The model.** `Shard::book_of` takes an option leg (ways 3 to 6): its row's key is its market, its day, calls
+  or puts, its strike; the clearing side's units are the size where the user wrote it (ways 4 and 6) and the
+  size below nothing where the user holds it; the gross the size; what it was entered at is what it is worth
+  exercised at its entry, by the clearing side's units, added to the row's number and to the shard's one number.
+  `Shard::entered_d(books, leg, t0)`: the row is in the tree (no entry puts one in); the leg's scale and limit
+  are the row's; the row's gate (the second writing's 7: what the row is asked with the leg, `dated_adds` at the
+  leg's entry, at the upper rate, and the rate on its gross; or no more than without it); the root, the sum of
+  the gross (`dgross`), the shard's time as a futures entry writes it. `c_marked` and `c_check` take the leg.
+- **`KpfTCRow`**: the leg an entry says may be an option: its first number of 32 bytes is the statement's time;
+  its day is more than T after it (T: the head's); its strike and its premium a unit are above nothing and
+  within the limit. (Today: wrong before anything.) Its row is an option leg's that stays.
+- **`KpfTEnterSD.state`**, written from `KpfTEnterS`: where the twin holds `lg.slice(34, 66)` to the time and
+  three numbers of nothing and the way to 1 or 2, this holds the time, a day above it, a strike and a premium
+  within the limit, and a way of 3 to 6; where the twin reads one of four rows, this is shown the leaf of the
+  key by its path against the root in the 69 bytes, rewrites its net, gross and what was entered, and writes
+  the new root and the sum; the gate by the row's own arithmetic (`KpfTShardRowD`'s, at the leg's entry). The
+  four rows are shown and not changed. Everything else as the twin: the two signatures, the shard's time, the
+  statement on the account marked.
+- **At the engine**: a call held and a call written entered (the account's end right by `KpfTCEnter`, the rows
+  by `KpfTCRow`), each refusal by hand; the trace of a draw over the row the leg is in.
+
+*B2: the premium's return* (review T16, Z9 and ZZ7).
+- An entry of an option the user writes adds its premium exactly (`add` is the premium a unit by the units,
+  held by `KpfTEnterSD`); of any other leg, what its user likes, as today.
+- **The mark says the amount: where it is `i9(1)` today it is `i9(1 + amount)`**, the amount nothing for every
+  entry but a written option's. The marked account stays 180 bytes. **No key is said**: what returns, returns
+  to the account's second key, which is its shard's owner's (`KpfTEnterS` holds the two equal).
+- `KpfTEnterOff.off` pays the amount to that key in an output, before the keeper's fee, where it is a note's
+  least or more; below that it stays in the account, and is said. The five scripts that hold the mark to
+  `i9(1)` (`KpfTCEnter`, `KpfTCallEnter`, `KpfTDrawEntry`, `KpfTStepPrice`, `KpfTEnterS`) are shown the number
+  and hold it above nothing.
+
+*B3: an option leaves before its day* (a step; the notes).
+- `Shard::left_class` and its kin take a note whose legs have a day: each out of its row by its path, the root
+  as the legs before left it.
+- `KpfTLeftD` (one leg with a day; a shard not called), `KpfTLeftDC` (called), `KpfTLeftVoidD` (an entry that
+  ended: `KpfTEnterOff`'s note), and one source for a note of two to six legs of which some have a day
+  (`KpfTLeftAllD`, `KpfTLeftAllDC`): a futures leg by its place among the four, a dated leg by its leaf and
+  path.
+- At the engine: a held call stepped out with its account's other legs; the shard paid the premium as coins;
+  the row and the shard's number as before the entry.
+
+**Not in B**: a call's step over option legs and the call's list with units in dated rows (C; review T17, V4);
+everything of the day (D).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
