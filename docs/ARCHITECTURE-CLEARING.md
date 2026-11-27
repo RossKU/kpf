@@ -3204,10 +3204,16 @@ change when a claim is paid and grows by every coin that reaches the shard.
    tick. On 15,000 paths (five sets of plays, ticks of 0.5 %, 2 % and 4 %) **no user is left unpaid and no
    account leaves the shard unpaid**. Without a leg's time (as the form that is built) users are unpaid on 443
    paths of 1,000; without the day's rule the shard is unpaid by a user on 955. The review's third round added eight
-   tests to it (17.1). Still to show before it is carried into `covered.rs` and `reserve.rs`: a step by a price
-   that shows it; one leg of a group of options leaving (a long stepped away from a written call; a held leg
-   of a spread ending at its day); a held option through a step of every other leg (N71); the sums a row
-   needs; and N81's test as the bound that is stated.
+   tests to it (17.1). **Shown since (28 November 2026): a step by a price that shows it**
+   (`a_step_is_due_by_one_price_that_shows_it`: on 150,000 accounts a step is due by some price exactly where
+   the account, after some move of the lower rate, has less than its premiums; an account no price shows due
+   has its premiums after any such move; a step due by a price is due by the two sums with the lines that ask
+   least as well, which step 580 accounts more than can fail to pay; and of the accounts that the lines that
+   ask most would step on half as much again as they can lose, 8,244, none is due by any price). Still to show
+   before it is carried into `covered.rs` and `reserve.rs`: one leg of a group of options leaving (a long
+   stepped away from a written call; a held leg of a spread ending at its day); a held option through a step
+   of every other leg (N71); the sums a row needs; and N81's test as the bound that is stated (17.8f has its
+   numbers for futures rows: the rate on the gross that closes it).
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
    nothing; under a call a leg younger than T asks nothing (17.9, F116); the two bounds of a stated price
    rounded inward.

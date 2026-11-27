@@ -1367,3 +1367,78 @@ fn review_t2_a_step_stated_with_the_lines_that_ask_most() {
     println!("T2 of {held} accounts with a held option between the ends, each with half as much again as its least lines ask, {due} are due for a step by the lines that ask most");
     assert!(due * 10 > held);
 }
+
+/// 17.4's rule of a step (N80), in numbers. Whoever states a step names one price `q` within the lower rate of the
+/// row's price; the rows sum what the legs gain from the row's price to it (an option within T of its day only
+/// where it loses); and the step is due where the coins, what the legs gained and that sum are below the premiums.
+fn due_at(acct: &Acct, a: i64, q: i64) -> bool {
+    let moved: i64 = acct.legs.iter().map(|x| if x.option() && x.near { x.moved(a, q).min(0) } else { x.moved(a, q) }).sum();
+    acct.coins + acct.gained(a) + moved < acct.premiums()
+}
+
+/// The prices a stater would try: the two ends, and every strike between them with the price either side.
+fn prices_to_try(legs: &[Leg], a: i64) -> Vec<i64> {
+    let (l, u) = ends(a, LO);
+    let mut at = vec![l, u, a];
+    for x in legs.iter().filter(|x| x.option()) {
+        at.extend([x.strike - 1, x.strike, x.strike + 1].into_iter().filter(|p| *p >= l && *p <= u));
+    }
+    at
+}
+
+/// The rule is exact and leaves nothing to choose against the account:
+///  - a step is due by some price exactly where the account, after some move of the lower rate, has less than its
+///    premiums (legs far from their day): no account that pays whatever the price does is stepped, whoever states;
+///  - an account no price shows due has, after any move of the lower rate, its premiums or more;
+///  - a step due by a price is due by the two sums with the lines that ask least as well (what its own user would
+///    state): the rule by a price steps no account the sums would not, and fewer;
+///  - against the lines that ask most (`review_t2_a_step_stated_with_the_lines_that_ask_most`: one account in ten
+///    and more was "due" on half as much again as it can lose): none of those accounts is due by any price.
+#[test]
+fn a_step_is_due_by_one_price_that_shows_it() {
+    let mut rng = Rng(0x17_0085);
+    let (mut due_n, mut not_due_n, mut sums_only, mut spared) = (0, 0, 0, 0);
+    for case in 0..150_000 {
+        let a = 1_000 + rng.below(1_000_000);
+        let legs: Vec<Leg> = (0..1 + rng.below(6)).map(|_| rng.leg(a)).collect();
+        let far = legs.iter().all(|x| !x.near);
+        let mut acct = Acct { coins: 0, legs };
+        // (Coins around the level a step is due at by the sums: from well below to half as much again above.)
+        let level = asked_group(&acct.legs, a, LO) + acct.premiums() - acct.gained(a);
+        acct.coins = level - level.abs() / 2 + rng.below(level.abs() + 2);
+        let tried = prices_to_try(&acct.legs, a);
+        let due = tried.iter().any(|q| due_at(&acct, a, *q));
+        let (l, u) = ends(a, LO);
+        if due {
+            due_n += 1;
+            // By the sums with the lines that ask least, it is due as well.
+            assert!(acct.due(a), "case {case}: due by a price and not by the sums: {:?}", acct.legs);
+            // And where no leg is near its day, the price that shows it is a price the account does not pay at.
+            if far {
+                let q = *tried.iter().find(|q| due_at(&acct, a, **q)).unwrap();
+                assert!(acct.coins + acct.gained(q) < acct.premiums());
+            }
+        } else {
+            not_due_n += 1;
+            sums_only += acct.due(a) as i64;
+            // After any move of the lower rate it has its premiums. (Sampled beside the prices tried.)
+            for q in tried.iter().copied().chain((0..4).map(|_| l + rng.below(u - l + 1))) {
+                assert!(!due_at(&acct, a, q), "case {case}: a price between those tried shows it due");
+                if far {
+                    assert!(acct.coins + acct.gained(q) >= acct.premiums(), "case {case}: {:?} from {a} to {q}", acct.legs);
+                }
+            }
+        }
+        // The lines that ask most: an account with half as much again as it can lose is due by no price.
+        if far {
+            let safe = Acct { coins: worst(&acct.legs, a, LO) * 3 / 2 + acct.premiums() - acct.gained(a), legs: acct.legs.clone() };
+            let most = (0..1u32 << safe.legs.len()).map(|w| asked_as(&safe.legs, a, LO, w)).max().unwrap();
+            if safe.coins + safe.gained(a) < most + safe.premiums() {
+                spared += 1;
+                assert!(!prices_to_try(&safe.legs, a).iter().any(|q| due_at(&safe, a, *q)));
+            }
+        }
+    }
+    println!("a step by a price: {due_n} accounts due, {not_due_n} not ({sums_only} of those due by the two sums with the lines that ask least: the sums step more accounts than can fail to pay); {spared} accounts that the lines that ask most would step are due by no price");
+    assert!(due_n > 20_000 && not_due_n > 20_000 && spared > 1_000);
+}
