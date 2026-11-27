@@ -4149,7 +4149,7 @@ it is written above.** It is rewritten before any script (not yet done):
 17.4 says the rule, and the model has it in numbers (`research_options.rs`: `asked_as`, `lacks`, `due_stepped`).
 This says the row, the head of a statement, the test of each end, and the order. Nothing of it is built.
 
-**The row as it will stay: 224 bytes** (today 120: a price, six sums, two chains). Twenty numbers and the two
+**The row as it will stay: 224 bytes** (232 after review T12: PO, below) (today 120: a price, six sums, two chains). Twenty numbers and the two
 chains; futures and options, so that the row is changed once.
 
 | Number | What it is |
@@ -4235,6 +4235,25 @@ what does it do then); a split's leg alone at RL; the rounding of L, U and of a 
 today's rate on W, and that no account of one leg is asked less than today; the place of an entry and the two
 chains; what `KpfTStepPrice` answers for q (nothing: q is the stater's, held to a by the row); and what of the
 call's scripts reads an account's row.
+
+**Review T12** (`docs/audit/REVIEW-T12-account-side.md`; on paper, nothing run; it holds the row's and the
+head's places and each end as a line, to build from). **The row stands** (the twenty numbers, the group open and
+closed, the leg before shown in an answer, the head held by the end, futures and tokens in one commit). Changed
+before any script:
+
+| Finding | What it is | Decided |
+|---|---|---|
+| E1 (high) | by "lacks less" alone a step names a leg that **gained**: its gain is paid out to the user's key (a note asks it of the shard) while a leg that stays has lost more than the coins pay. A long that gained 3,000 beside a short that lost 8,000, coins 5,000: named, the long "lacks less" (11,000 to 9,000); 2,000 leave for the user, the fee is paid, and the short's loss is then short by 3,500. The model paid the gain into the coins and did not see it | **a leg that gained is named by a step only where no leg that stays has lost** (as built). "Lacks less" is asked of a leg that lost. Again with 17.8g's C (a gain credited) |
+| E2 (high) | an entry's place is not the rows' alone: `KpfTEnterS` writes the marked account's chain itself with the leg at its end, and `KpfTEnterOff` opens it to undo; a place before the end needs the legs after it shown there, or the old chain kept | **stage 1 keeps the leg that enters last**; the head of an entry has the place's 8 bytes, held to the count; the place is a commit of its own. (Until then a hedge nets where it is entered next after what it hedges) |
+| E3 (medium) | "what is owed then" lets a step leave an account with no token owing: named, a short that lost 14,500 beside a long that gained 20,000, coins 1,000: the account owes 13,500, is not due, and takes nothing but a step | stage 1: **where the coins do not pay the leg named and no token is held, every leg leaves** (as built). What is owed beside options: with stage 2 |
+| E4 (medium) | the model is of one underlying, has no fee, nothing owed and no tokens, and pays a gain in | **the model first**: groups of several markets, the fee, what is owed, a gain paid out; E1's account as a test |
+| E5 (medium) | in a step of every leg a written option pays the larger of its premium and what it lost, a leg at a time: no sum of the row gives it | a number more now, **PO** (what the written options that leave pay, each the larger of the two): the row is **232 bytes** |
+| E6 (medium, taken) | where a leg leaves from between two of one market, what stays is counted as one group across the gap only if they are then next to one another in the rows: else more is asked, never less | said here |
+| E7 (medium, of use) | **a hedged pair after a move is safe and cannot be undone a leg at a time**: a take, either leg's leaving and a mark fail (what stays alone would be under); its exits are every leg leaving, which ends the legs of its other markets too, or coins added | not built and not kept room for (a leaving of a group needs a third chain and notes of the shard's side). **Said to the owner of the design** |
+| E8 (medium) | the fee and the band are of the gross worth: a long of 100,000 and a short of 90,000 barely due leave whole, for a fee of 950 on a net of 10,000 | the fee no more than what the coins hold after the loss and what the legs that stay lost (review 47's rule, kept); its base with the rates, in the last phase |
+| E9 (low) | the row needs twice the tolerance for a band, and the upper rate less the lower is not that where the maintenance is below the tolerance | **the head says the rate, the tolerance and T**; each end holds them: the maintenance and the tolerance of the terms, the tolerance, twice the account's lateness and dispute period |
+| E10 to E12, E14 | an account is asked less than today by at most a sompi a leg; the opening of the leg before is asked, not judged (a false leg shown would make a right row wrong); `KpfTChange`, `KpfTEnterS` and `KpfTStepPrice` hold the shape of what is said; a mark reads the sums of all | while building |
+| E13 (stage 2) | a step with every held option on its line of nothing is safe for the shard and takes a hedge apart (a put held against a long, named alone, "lacks less" so and 5,120 more by the lines that ask least) | a held option is named alone only where every leg that stays is a held option; the model first |
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
