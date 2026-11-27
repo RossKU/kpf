@@ -8292,7 +8292,7 @@ fn t1b_r46_a_note_of_the_rest_is_paid_once_to_its_key_as_far_as_the_shard_holds(
     let of = |held: i64, called: i64| shard_made45(Shard { t: w.terms(), rows: [ShardRow::EMPTY; 4].into(), owner, held, expiry: 0, dispute_daa: 50, bond_bps: 100, sid: [0x5d; 32], owed: 30 * KAS1, basis: 0, called, claims: Default::default() }, 74);
     let rest = RestNote { sid: [0x5d; 32], key, amount: 30 * KAS1 };
     let f = [fund(xk(&w.f), 73, 1_000)];
-    let apply = |shard: &OLive<Shard>, r: RestNote| rest_apply(&w.lib, shard, &note_made46(shard, r, 75, 6_050), &w.script("KpfTLeft"), w.payer(&w.f, &f));
+    let apply = |shard: &OLive<Shard>, r: RestNote| rest_apply(&w.lib, shard, &note_made46(shard, r, 75, 6_050), &w.script("KpfTRest"), w.payer(&w.f, &f));
     // In full.
     let rich = of(50 * KAS1, 0);
     let (b, next, left) = apply(&rich, rest).unwrap();
@@ -10693,7 +10693,7 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     let w = ow();
     let gone = ["KpfTLegAdd", "KpfTEnter", "KpfTStepEnter", "KpfTLegOut", "KpfTLegMove", "KpfTHand", "KpfTNoteApply"];
     // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a trace. Every count of the scripts in this file is 71 since.)
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, what is owed, paid, and the row of a trace, 17.8b)");
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72, "(57, the four of the call, the two of section 15, the split of 16.2, the two of a mark, 16.3, the end of kinds 14 and 15, what is owed, paid, and the row of a trace, 17.8b)");
     for n in gone {
         assert!(!kpf_protocol::thin_artifacts::SCRIPTS.contains(&n) && w.scripts.iter().all(|s| s.s != n) && kpf_protocol::thin_artifacts::kit().script(n).is_none(), "F78 is open: {n} is in the library");
     }
@@ -10718,7 +10718,7 @@ fn t1b_fixed_f78_no_script_reads_a_covered_accounts_time_as_coins() {
     // alone, where it answers a take of kind 2.)
     // (Round 54: KpfTCallEnd and KpfTCallPay read a shard's call and basis; KpfTCStep an account's count of legs.)
     // (Round 56, F85 taken out: KpfTStepEnd takes 138 bytes alone, and is no reader of a covered account's places.)
-    assert_eq!(readers, vec!["KpfTAddSpot", "KpfTCEnd", "KpfTCMark", "KpfTCSplit", "KpfTCStep", "KpfTCTok", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTMarkNote", "KpfTOpenC", "KpfTShardEnd", "KpfTShardOpen"]);
+    assert_eq!(readers, vec!["KpfTAddSpot", "KpfTCEnd", "KpfTCMark", "KpfTCSplit", "KpfTCStep", "KpfTCTok", "KpfTCallEnd", "KpfTCallPay", "KpfTEnterOff", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTMarkNote", "KpfTOpenC", "KpfTRest", "KpfTShardEnd", "KpfTShardOpen"]);
 }
 
 /// Rounds 45 and 47, F68 (High), closed by the removal: a leg is in a shard's rows and in its basis by one
@@ -10960,7 +10960,7 @@ fn t1b_r53_no_script_takes_a_note_of_the_old_form_and_none_of_a_covered_account_
     }
     // The applying of a note of the rest, and the spending of a note, shown the old form's object.
     let owing = OLive { s: Shard { owed: 5 * KAS1, ..s.s }, ..s.clone() };
-    let (rb, _, _) = rest_apply(&w.lib, &owing, &rest, &w.script("KpfTLeft"), w.payer(&w.w, &fw)).unwrap();
+    let (rb, _, _) = rest_apply(&w.lib, &owing, &rest, &w.script("KpfTRest"), w.payer(&w.w, &fw)).unwrap();
     let ghost = note_made46(&s, Left { sid, legs: vec![w.fut(2, 3, SHORT, P10)], key: user, asked: 0 }, 78, 6_590);
     let vb = left_void(&w.lib, &s, &ghost, 0, &w.script("KpfTLeftVoid"), w.payer(&w.w, &fw)).unwrap();
     assert!(taken30(&rb, &w.keys) && taken30(&vb, &w.keys));
@@ -12120,7 +12120,7 @@ fn t1b_r54_the_whole_way_of_a_call_and_what_the_order_of_claims_does() {
     // `KpfTLeft.rest` pays nothing on a called shard.
     let old = RestNote { sid: SID47, key: xk(&w.w), amount: 20 * KAS1 };
     let claim_r = note_made46(&s, old, 98, 6_400);
-    assert!(rest_apply(&w.lib, &s, &claim_r, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    assert!(rest_apply(&w.lib, &s, &claim_r, &w.script("KpfTRest"), w.payer(&w.f, &ff)).is_err());
     let with_rest = s.clone();
     // The two claims paid their parts. (Review T6, 17.8c: no claim is paid before the call's time, a lateness and
     // three dispute periods; each is paid its part of all the shard ever held, 44.9 KAS of 70 owed; what is owed
@@ -12343,7 +12343,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTChange", "KpfTPoint", "KpfTShardPrice", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R54 sizes of the scripts: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let mut rows = vec![];
     let mut see = |what: &str, b: kpf_protocol::Result<OBuilt>| match b {
@@ -12394,7 +12394,7 @@ fn t1b_r54_the_sizes_of_the_calls_scripts_and_what_a_block_takes_of_its_transact
         println!("T1b R54 what a block takes: {what}: taken {taken}, {size} bytes, compute {compute}, storage {storage}");
     }
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2317), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093)]);
+    assert_eq!(sizes, vec![("KpfTCallEnd", 1853), ("KpfTCStep", 5319), ("KpfTCallPay", 2567), ("KpfTCallEnter", 1051), ("KpfTChange", 1760), ("KpfTPoint", 2588), ("KpfTShardPrice", 2317), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093)]);
     let unwritten: Vec<&String> = rows.iter().filter(|r| !r.1).map(|r| &r.0).collect();
     println!("T1b R54 what a block takes: not written or not taken: {unwritten:?}");
 }
@@ -12859,7 +12859,7 @@ fn t1b_fixed_f94_a_note_of_the_rest_is_counted_when_it_is_written_and_the_order_
     }
     let mut quiet = owing54(&w, 100 * KAS1, 20 * KAS1);
     quiet.s.called = 0;
-    let (rb, next, left) = rest_apply(&w.lib, &quiet, &note_made46(&quiet, r, 96, 6_710), &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap();
+    let (rb, next, left) = rest_apply(&w.lib, &quiet, &note_made46(&quiet, r, 96, 6_710), &w.script("KpfTRest"), w.payer(&w.f, &f)).unwrap();
     assert!(taken30(&rb, &w.keys) && left.is_none() && (next.held, next.owed) == (80 * KAS1, 0));
     let more = RestNote { amount: 50 * KAS1, ..r };
     // (Round 56, F96: it is spent for nothing: nothing paid, the shard as it is.)
@@ -13017,7 +13017,7 @@ fn t1b_r55_a_shard_that_owes_and_is_not_called_takes_an_entry_a_top_up_a_draw_an
     let (called, _) = s.s.called_at(&up, T0, w.terms().keeper_fee_min);
     assert_eq!((called.owed, cst.outs.list()[0].to), (30 * KAS1, called.hash()));
     // The note paid.
-    let (rb, paid_shard, left) = rest_apply(&w.lib, &s, &note, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (rb, paid_shard, left) = rest_apply(&w.lib, &s, &note, &w.script("KpfTRest"), w.payer(&w.f, &ff)).unwrap();
     let rs = signed("the note of the rest paid", &rb, &w.keys);
     assert!(left.is_none() && (paid_shard.held, paid_shard.owed, paid(&rs, &xk(&w.a))) == (70 * KAS1, 0, 30 * KAS1));
     let mut refused = 0;
@@ -13036,9 +13036,9 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTDrawNote", "KpfTDrawEntry", "KpfTChange", "KpfTCStep", "KpfTCallEnter", "KpfTCallPay", "KpfTLeft", "KpfTLeftAll", "KpfTEnterOff"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R55 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2567), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2567), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTEnterOff", 719)]);
 }
 
 // ================================================================================================================
@@ -13101,7 +13101,7 @@ fn t1b_fixed_f96_a_note_of_the_rest_its_shard_does_not_owe_ends_no_draw_and_is_s
         let live = note_made46(&on, more, 96, 6_050);
         let (next, paid_out, left) = on.s.rest_paid(&more).expect("F96 is open: the model spends no uncounted note");
         assert!(paid_out == 0 && left.is_none() && next.hash() == on.s.hash());
-        let (b, _, _) = rest_apply(&w.lib, &on, &live, &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap();
+        let (b, _, _) = rest_apply(&w.lib, &on, &live, &w.script("KpfTRest"), w.payer(&w.f, &f)).unwrap();
         let sg = signed("a note of the rest that was never counted, spent", &b, &w.keys);
         assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key, paid(&sg, &key)), (on.value, &hash_spk(&w.lib, &on.s.hash()), 0), "the shard as it is, and nothing paid");
         let spender = paid(&sg, &xk(&w.f)) - 1_000 * KAS1;
@@ -13114,7 +13114,7 @@ fn t1b_fixed_f96_a_note_of_the_rest_its_shard_does_not_owe_ends_no_draw_and_is_s
     }
     // The counted note: paid, and not spent for nothing.
     let live = note_made46(&shard, counted, 96, 6_050);
-    let (pb, next, _) = rest_apply(&w.lib, &shard, &live, &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap();
+    let (pb, next, _) = rest_apply(&w.lib, &shard, &live, &w.script("KpfTRest"), w.payer(&w.f, &f)).unwrap();
     let ps = signed("the note of the rest paid", &pb, &w.keys);
     assert_eq!((next.held, next.owed, paid(&ps, &key)), (70 * KAS1, 0, 30 * KAS1));
     let mut t = pb.clone();
@@ -13135,7 +13135,7 @@ fn t1b_fixed_f96_a_note_of_the_rest_its_shard_does_not_owe_ends_no_draw_and_is_s
     let real = RestNote { key: xk(&w.a), ..counted };
     let (after, _, _) = shard.s.rest_paid(&counted).unwrap();
     let after_live = nth(&ps, 0, after, 6_700);
-    let (rb, same, left) = rest_apply(&w.lib, &after_live, &note_made46(&after_live, real, 97, 6_050), &w.script("KpfTLeft"), w.payer(&w.f, &f)).unwrap();
+    let (rb, same, left) = rest_apply(&w.lib, &after_live, &note_made46(&after_live, real, 97, 6_050), &w.script("KpfTRest"), w.payer(&w.f, &f)).unwrap();
     let rs = signed("the real note, after a made-up one took its count", &rb, &w.keys);
     assert!(left.is_none() && same.hash() == after.hash() && paid(&rs, &xk(&w.a)) == 0);
     println!("T1b R56 F96 is closed: a note of more than its shard owes ends no draw and is spent for nothing, the shard as it is (called, what whoever spent it has) {spent:?}; a note the shard owes is paid and not spent so; where a made-up note of 30 KAS was paid first, the real note of 30 KAS is spent by anyone and its holder has nothing");
@@ -13463,7 +13463,7 @@ fn t1b_r56_what_a_block_takes_of_a_hand_over_and_a_join_and_the_sizes_of_the_scr
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTPass", "KpfTJoinC", "KpfTAddC", "KpfTChange", "KpfTDrawNote", "KpfTLeft", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTAcctEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R56 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     let ff = [fund(xk(&w.f), 72, 1_000)];
     let fa = [fund(xk(&w.a), 44, 1_000)];
     let legs: Vec<XLeg> = (0..6).map(|i| w.fut(i % 4, 1, if i % 2 == 0 { LONG } else { SHORT }, P10)).collect();
@@ -13833,7 +13833,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 528), ("KpfTChange", 1571), ("KpfTJoinC", 1550), ("KpfTEnterS", 2282), ("KpfTEnterOff", 719)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R57 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Round 58: the three that changed again.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1760, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3015, 2282), ("KpfTEnterOff", 719, 719)]);
@@ -14128,7 +14128,7 @@ fn t1b_r58_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTAddC", 563), ("KpfTPass", 537), ("KpfTJoinC", 1565), ("KpfTEnterS", 2309), ("KpfTOpenC", 672)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R58 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTAddC", 630), ("KpfTPass", 614), ("KpfTJoinC", 1625), ("KpfTEnterS", 3015), ("KpfTOpenC", 684)]);
 }
@@ -14575,7 +14575,7 @@ fn t1b_r59_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize, usize)> = [("KpfTChangeLate", 708), ("KpfTEnterS", 2293), ("KpfTChange", 1571), ("KpfTCRow", 2239), ("KpfTStepPrice", 1687), ("KpfTCStep", 3239), ("KpfTPoint", 2588), ("KpfTCSplit", 0)].iter().map(|(n, was)| (*n, kit.script(n).unwrap().len(), *was)).collect();
     println!("T1b R59 sizes (the script, bytes, bytes before): {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![("KpfTChangeLate", 725), ("KpfTEnterS", 3015), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTStepPrice", 1821), ("KpfTCStep", 5319), ("KpfTPoint", 2588), ("KpfTCSplit", 2388)]);
 }
@@ -14964,7 +14964,7 @@ fn t1b_r60_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCMark", "KpfTMarkNote", "KpfTCRow", "KpfTChange", "KpfTCStep", "KpfTStepPrice", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R60 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTCMark", 2298), ("KpfTMarkNote", 1419), ("KpfTCRow", 2547), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTStepPrice", 1821), ("KpfTPoint", 2588)]);
 }
@@ -15028,7 +15028,7 @@ fn t1b_fixed_f108_a_note_of_a_mark_that_is_not_applied_ends_a_draw() {
 /// Round 61: `KpfTDrawNote`, in bytes, and what it was.
 #[test]
 fn t1b_r61_the_size_of_the_script_that_changed() {
-    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_742, 71), "(it was 1,406; 1,700 before the claim of four numbers: review T6)");
+    assert_eq!((kpf_protocol::thin_artifacts::kit().script("KpfTDrawNote").unwrap().len(), kpf_protocol::thin_artifacts::SCRIPTS.len()), (1_742, 72), "(it was 1,406; 1,700 before the claim of four numbers: review T6)");
 }
 
 // ================================================================================================================
@@ -15324,7 +15324,7 @@ fn t1b_r62_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTCTok", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTCEnter", "KpfTStepPrice", "KpfTChange", "KpfTCStep", "KpfTEnterS", "KpfTPoint"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     println!("T1b R62 sizes: {sizes:?}");
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTCTok", 3492), ("KpfTCRow", 2547), ("KpfTCEnd", 3832), ("KpfTCSplit", 2388), ("KpfTCMark", 2298), ("KpfTCEnter", 1721), ("KpfTStepPrice", 1821), ("KpfTChange", 1760), ("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTPoint", 2588)]);
 }
@@ -15458,7 +15458,7 @@ fn t1b_r64_a_step_makes_an_account_owe_and_what_an_account_that_owes_does() {
 fn t1b_r64_the_sizes_of_the_scripts_that_changed() {
     let kit = kpf_protocol::thin_artifacts::kit();
     let sizes: Vec<(&str, usize)> = ["KpfTOwed", "KpfTCStep", "KpfTCEnd", "KpfTCTok", "KpfTChange", "KpfTCRow", "KpfTAddC", "KpfTPass"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
-    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 71);
+    assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 72);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
     assert_eq!(sizes, vec![("KpfTOwed", 1154), ("KpfTCStep", 5319), ("KpfTCEnd", 3832), ("KpfTCTok", 3492), ("KpfTChange", 1760), ("KpfTCRow", 2547), ("KpfTAddC", 630), ("KpfTPass", 614)]);
 }

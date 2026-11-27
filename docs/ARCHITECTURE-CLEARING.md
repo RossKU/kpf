@@ -3788,6 +3788,16 @@ difference of the piece when it was built (none measured with the piece taken ou
 | the row's gate judged where an entry is disputed, not where it is stated | less about 400 | | see below: not decided |
 | | about 2,470 to 2,970 | about 2,500 | |
 
+**An operation a script (built).** A script is shown whole by a transaction that uses one entry of it, and
+`KpfTLeft` carried two operations: the applying of a note of one leg, and the paying of a note of the rest.
+The second is a script of its own, `KpfTRest` (1,053 bytes), and `KpfTLeft` is 1,949 (2,914). **A note of one
+leg applied is a transaction of 3,897 bytes (4,862): a fifth less**, with nothing of what is held changed (the
+same lines in two scripts; the default workspace 723 tests, none failed). It was not in the table above: it is
+more than any line of it. The other scripts that carry more than one operation are on no common path
+(`KpfTCTok` 3,492: an answer and a lapse; `KpfTPoint` 2,588: a dispute, a lapse, a dismissal; `KpfTCallPay`
+2,567: a claim and the call's end; `KpfTLiq`, the disputes, `KpfTExit`, `KpfTCancel`, `KpfTOwed`): each is
+taken apart when its path is looked at.
+
 **1. The tree is for the dated rows.** Stage 2 put every row in the tree, and only futures rows exist: every
 entry and leaving paid twelve hashes for books of a few rows. A tree is the lighter form from about nine rows
 on; a shard's futures markets are few, and the rows of options are many. So: the futures rows stay as stage 1

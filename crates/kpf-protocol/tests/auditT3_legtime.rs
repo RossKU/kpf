@@ -1119,7 +1119,7 @@ fn t3_b5_the_sizes_of_the_scripts_that_changed_and_of_an_entry_and_a_step() {
     // KpfTCallEnd 1,853 from 3,695: no loop over the rows. KpfTShardPrice 2,700 (2,697 before R1 of review T5 was closed) from 1,810: the list's order, and
     // the committee found in the row of the entry's name.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
+    assert_eq!(sizes, vec![("KpfTCStep", 5319), ("KpfTEnterS", 3015), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTStepPrice", 1821)]);
     let books: Vec<(&str, usize)> = ["KpfTShardOpen", "KpfTCallPay", "KpfTShardEnd", "KpfTShardPrice", "KpfTCallEnd"].iter().map(|n| (*n, kit.script(n).unwrap().len())).collect();
     assert_eq!(books, vec![("KpfTShardOpen", 752), ("KpfTCallPay", 2567), ("KpfTShardEnd", 1747), ("KpfTShardPrice", 2317), ("KpfTCallEnd", 1853)]);
     let base = seeded(&w);
@@ -1387,7 +1387,7 @@ fn shows_the_rows(w: &World) -> Vec<(&'static str, OBuilt, usize, usize, Shard, 
     // KpfTLeft.rest: a note of the rest, of a shard that owes it and is not called.
     let owing = OLive { s: Shard { owed: 20 * KAS1, ..booked.s }, ..booked.clone() };
     let rest = Rest { sid: owing.s.sid, key: xk(&w.w), amount: 20 * KAS1 };
-    let (b, ..) = rest_apply(&w.lib, &owing, &note_of(&owing, rest, rest.value(), 96), &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, ..) = rest_apply(&w.lib, &owing, &note_of(&owing, rest, rest.value(), 96), &w.script("KpfTRest"), w.payer(&w.f, &ff)).unwrap();
     v.push(("KpfTLeft.rest", b, 5, 0, owing.s, same()));
     // KpfTCallPay.claim and .off: a called shard of no row.
     let called = OLive { s: Shard { owed: 20 * KAS1, called: T0, ..base.s }, ..base.clone() };
@@ -1825,5 +1825,6 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
     }
     opens.sort();
     // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
-    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTShardPrice", "KpfTShardRow"]);
+    // (17.8e: `KpfTRest`, which was `KpfTLeft.rest`, is a script of its own.)
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftVoid", "KpfTRest", "KpfTShardPrice", "KpfTShardRow"]);
 }

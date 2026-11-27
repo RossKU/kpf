@@ -630,7 +630,7 @@ const RELEASE: [&str; 6] = [
     "require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));",
 ];
 // (Review T5, docs 17.8b: 71, with `KpfTShardRow`, the answer of a row of a draw's or a call's trace.)
-const SCRIPTS: [&str; 71] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTMarkNote", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTLeftAll", "KpfTLeftVoid", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay"];
+const SCRIPTS: [&str; 72] = ["KpfTAdd", "KpfTBoth", "KpfTClose", "KpfTSettle", "KpfTLate", "KpfTDispute", "KpfTProve", "KpfTLiq", "KpfTLiqSettle", "KpfTCure", "KpfTLiqDispute", "KpfTLiqProve", "KpfTExit", "KpfTExitEnd", "KpfTExitRefute", "KpfTMatch", "KpfTCancel", "KpfTMerge", "KpfTNovate", "KpfTPlace", "KpfTOpen", "KpfTJoin", "KpfTTurn", "KpfTFold", "KpfTLeave", "KpfTReplace", "KpfTNote", "KpfTCite", "KpfTChange", "KpfTChangeSettle", "KpfTChangeDispute", "KpfTChangeLate", "KpfTTake", "KpfTKind", "KpfTPoint", "KpfTStepRow", "KpfTStepPrice", "KpfTStepEnd", "KpfTStepLiq", "KpfTShardOpen", "KpfTOpenC", "KpfTAddC", "KpfTPass", "KpfTJoinC", "KpfTAcctEnd", "KpfTShardEnd", "KpfTShardRow", "KpfTCallEnd", "KpfTCStep", "KpfTCallPay", "KpfTCallEnter", "KpfTShardPrice", "KpfTDrawNote", "KpfTLeft", "KpfTRest", "KpfTCRow", "KpfTCEnd", "KpfTCSplit", "KpfTCMark", "KpfTMarkNote", "KpfTCTok", "KpfTOwed", "KpfTAddSpot", "KpfTVaultPay", "KpfTLeftAll", "KpfTLeftVoid", "KpfTEnterS", "KpfTCEnter", "KpfTEnterOff", "KpfTDrawEntry", "KpfTSweep", "KpfTPay"];
 /// Round 30. The two services of the library are spent not to move an object named by `who` but to write or cite a
 /// price note: their first argument is not the 24 bytes of the places, and their "going on" is their own (a note
 /// writer writes two outputs under the id, a citation ties the counts). The who-based lints (A3's entry shape, R19's
@@ -826,7 +826,8 @@ fn t1b_a3_every_entry_of_every_script_holds_the_script_to_go_on() {
     assert_eq!(sorted, pinned, "every script of the library");
     assert_eq!(COLLECTORS, kpf_protocol::thin_artifacts::COLLECTORS);
     // (Review T5: 83 and 69, with `KpfTShardRow.answer` and its `release`.)
-    assert_eq!((entries, releases), (83, 69));
+    // (17.8e: 83 and 70: `KpfTLeft.rest` is `KpfTRest.rest`, a script of its own with its `release`.)
+    assert_eq!((entries, releases), (83, 70));
     // Review T5. The new script is an answer of a point as `KpfTShardEnd` is: what the loop above holds of its one
     // entry (it goes on by `ends`, the copy kept with the fee and half a bond, the counts tied; `version == 1`;
     // named by `who`; `release` the six lines; ORACLE_FEE read twice). And, of the parts the loop reads only for

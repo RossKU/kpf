@@ -995,12 +995,12 @@ fn t6_b2_vi_a_note_never_counted_takes_its_amount_from_the_real_claims_and_the_c
     // After it: the claim of 15 is spent for nothing by `KpfTLeft.rest`; the claim (30, 25) is opened by nothing.
     let y_rest = OLive { s: Rest { sid: y.s.sid, key: y.s.key, amount: y.s.amount1 }, value: y.value, id: y.id, op: y.op, daa: y.daa };
     assert_eq!(y_rest.s.hash(), y.s.hash());
-    let (b, after, left) = rest_apply(&w.lib, &opened, &y_rest, &w.script("KpfTLeft"), w.payer(&w.c, &[fund(xk(&w.c), 38)])).unwrap();
+    let (b, after, left) = rest_apply(&w.lib, &opened, &y_rest, &w.script("KpfTRest"), w.payer(&w.c, &[fund(xk(&w.c), 38)])).unwrap();
     let sg = signed("vi: after the call's end the claim of 15 is spent for nothing", &b, &w.keys);
     assert_eq!((after, left, paid_to(&sg, &y.s.key)), (opened.s, None, 0));
     // (Paid up after the end, the shard pays it no more either: it owes nothing.)
     let rich = OLive { s: Shard { held: 50 * KAS1, ..opened.s }, value: (50 * KAS1 + SHARD_CARRIER) as u64, ..opened.clone() };
-    let (b, after, _) = rest_apply(&w.lib, &rich, &y_rest, &w.script("KpfTLeft"), w.payer(&w.c, &[fund(xk(&w.c), 38)])).unwrap();
+    let (b, after, _) = rest_apply(&w.lib, &rich, &y_rest, &w.script("KpfTRest"), w.payer(&w.c, &[fund(xk(&w.c), 38)])).unwrap();
     assert!(accepted(&b, &w.keys) && after == rich.s);
     let mut t = b.clone();
     t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &Shard { held: 35 * KAS1, ..rich.s }.hash());
@@ -1268,9 +1268,9 @@ fn t6_b3_no_claim_is_paid_before_the_time_whatever_input_is_named_and_the_period
     let quiet = live_shard(&base, Shard { called: 0, ..shard.s });
     let rest = OLive { s: Rest { sid: base.s.sid, key: xk(&w.w), amount: 12 * KAS1 }, value: NOTE_MIN as u64, id: base.id, op: op(71), daa: 6_100 };
     let ff = [fund(xk(&w.f), 36)];
-    let (b, after, left) = rest_apply(&w.lib, &quiet, &rest, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, after, left) = rest_apply(&w.lib, &quiet, &rest, &w.script("KpfTRest"), w.payer(&w.f, &ff)).unwrap();
     assert!(accepted(&b, &w.keys) && (after.held, after.owed, left) == (38 * KAS1, 18 * KAS1, None));
-    assert!(rest_apply(&w.lib, &shard, &rest, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    assert!(rest_apply(&w.lib, &shard, &rest, &w.script("KpfTRest"), w.payer(&w.f, &ff)).is_err());
     for next in [Shard { called: CALLED, ..after }, Shard { called: CALLED, owed: 30 * KAS1, ..after }, Shard { called: CALLED, owed: 30 * KAS1, claims: Claims { paid1: 12 * KAS1, owed2: 0, paid2: 0 }, ..after }] {
         let mut t = with_arg(&b, 6, bytes_arg(&shard.s.moving()));
         object_made(&mut t, &w.lib, 0, &shard.s.hash());
@@ -1439,7 +1439,7 @@ fn t6_b5_a_note_of_the_rest_is_a_claim_of_four_numbers_in_every_script_that_hold
     assert_ne!(rest.s.hash(), old_rest_hash(&sid, &key, 12 * KAS1));
     // The three transactions.
     let quiet = live_shard(&base, Shard { held: 50 * KAS1, owed: 30 * KAS1, ..base.s });
-    let (b_rest, ..) = rest_apply(&w.lib, &quiet, &rest, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b_rest, ..) = rest_apply(&w.lib, &quiet, &rest, &w.script("KpfTRest"), w.payer(&w.f, &ff)).unwrap();
     let called = shard_of(&base, 50 * KAS1, 30 * KAS1, 0, 0, 0);
     let due = called.s.claims_time().unwrap();
     let (b_claim, ..) = claim_pay(&w.lib, &called, &rest, &w.script("KpfTCallPay"), w.payer(&w.f, &[coin(xk(&w.f), 36, due)])).unwrap();
@@ -1541,11 +1541,11 @@ fn t6_b6_a_note_of_the_rest_on_a_shard_that_is_not_called_lives_as_before_and_is
     }
     let (s1, rest1) = (nth(&sg, 0, s1, 6_300), nth(&sg, 2, rest, 6_300));
     // Nothing held: nothing is paid. Ten KAS added: paid 10, the note goes on, what is owed falls.
-    assert!(rest_apply(&w.lib, &s1, &rest1, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    assert!(rest_apply(&w.lib, &s1, &rest1, &w.script("KpfTRest"), w.payer(&w.f, &ff)).is_err());
     let fc = [fund(xk(&w.c), 38)];
     let (b, s2) = shard_fund(&w.lib, &s1, &w.script("KpfTAddC"), 10 * KAS1, w.payer(&w.c, &fc)).unwrap();
     let s2 = nth(&signed("B6: the owner adds 10 KAS", &b, &w.keys), 0, s2, 6_310);
-    let (b, s3, rest2) = rest_apply(&w.lib, &s2, &rest1, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).unwrap();
+    let (b, s3, rest2) = rest_apply(&w.lib, &s2, &rest1, &w.script("KpfTRest"), w.payer(&w.f, &ff)).unwrap();
     let sg = signed("B6: the note of the rest paid a part by a shard that is not called", &b, &w.keys);
     let rest2 = rest2.expect("the note goes on");
     assert_eq!((s3.held, s3.owed, s3.claims, rest2.amount), (0, 20 * KAS1, Claims::default(), 20 * KAS1), "what is owed falls as the note is paid: the shard is not called");
@@ -1559,7 +1559,7 @@ fn t6_b6_a_note_of_the_rest_on_a_shard_that_is_not_called_lives_as_before_and_is
     let rest2 = nth(&sg, 2, rest2, 6_320);
     let called = live_shard(&base, Shard { called: CALLED, held: 5 * KAS1, ..s3 });
     let due = called.s.claims_time().unwrap();
-    assert!(rest_apply(&w.lib, &called, &rest2, &w.script("KpfTLeft"), w.payer(&w.f, &ff)).is_err());
+    assert!(rest_apply(&w.lib, &called, &rest2, &w.script("KpfTRest"), w.payer(&w.f, &ff)).is_err());
     assert!(claim_pay(&w.lib, &called, &rest2, &w.script("KpfTCallPay"), w.payer(&w.f, &ff)).is_err(), "before the time of the claims");
     let (b, s4, paid) = claim_pay(&w.lib, &called, &rest2, &w.script("KpfTCallPay"), w.payer(&w.f, &[coin(xk(&w.f), 36, due)])).unwrap();
     let sg = signed("B6: the same note, a claim under a call, paid its part", &b, &w.keys);
@@ -1586,7 +1586,7 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // (At 563ef01: 1,691; 2,374; 4,226; 2,017; 1,154; 1,700; 2,463; 2,700; 2,098. `KpfTCallPay` was 2,518 in the
     // first round: K1's output is 5 bytes.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 2914), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3015), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
+    assert_eq!(sizes, vec![("KpfTCallPay", 2567), ("KpfTLeft", 1949), ("KpfTLeftAll", 5059), ("KpfTLeftVoid", 2093), ("KpfTMarkNote", 1419), ("KpfTDrawNote", 1742), ("KpfTEnterS", 3015), ("KpfTShardPrice", 2317), ("KpfTShardRow", 2105)]);
     let due = shard_of(&base, 0, 0, 0, 0, 0).s.claims_time().unwrap();
     let fl = [coin(xk(&w.f), 36, due)];
     let pay_s = w.script("KpfTCallPay");
@@ -1624,7 +1624,9 @@ fn t6_the_sizes_of_the_transactions_of_a_claim_and_of_a_calls_end() {
     // argument more: a note of one leg applied was 4,550, 4,585, 4,533 and 4,441.)
     // (Review T9, docs 17.8d: 4,961, 4,996, 4,944 and 4,852 before: each 10 bytes more. `KpfTLeft` is 2 bytes less
     // and is shown 12 bytes more of rows.)
-    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_971, 5_006, 4_954, 4_862]);
+    // (17.8e: 4,971, 5,006, 4,954 and 4,862 before: each 965 bytes less. `KpfTLeft` no longer carries the paying of
+    // a note of the rest, which is `KpfTRest`.)
+    assert_eq!(applied.iter().map(|x| x.1).collect::<Vec<_>>(), vec![4_006, 4_041, 3_989, 3_897]);
 }
 
 // ================================================================================================================

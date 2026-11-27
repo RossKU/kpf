@@ -672,20 +672,20 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     // The shard holds 50 again: the rest is paid, is owed no more, and nothing goes on.
     let funded = OLive { s: Shard { held: 50 * KAS1, ..next }, value: (50 * KAS1 + SHARD_CARRIER) as u64, ..nth(&sg, 0, next, 6_300) };
     let rnote = nth(&sg, 2, rest, 6_300);
-    let (b, after, more) = rest_apply(&w.lib, &funded, &rnote, &script, w.payer(&w.w, &f)).unwrap();
+    let (b, after, more) = rest_apply(&w.lib, &funded, &rnote, &w.script("KpfTRest"), w.payer(&w.w, &f)).unwrap();
     signed("the rest paid", &b, &w.keys);
     assert_eq!((after.held, after.owed, more), (20 * KAS1, 0, None));
-    assert!(rest_apply(&w.lib, &OLive { s: Shard { held: 0, ..next }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f)).is_err(), "a shard that holds nothing pays nothing");
+    assert!(rest_apply(&w.lib, &OLive { s: Shard { held: 0, ..next }, ..funded.clone() }, &rnote, &w.script("KpfTRest"), w.payer(&w.w, &f)).is_err(), "a shard that holds nothing pays nothing");
     // It holds 10: 10 are paid, and 20 go on, still owed.
     let part = OLive { s: Shard { held: 10 * KAS1, ..next }, value: (10 * KAS1 + SHARD_CARRIER) as u64, ..funded.clone() };
-    let (b, pafter, pmore) = rest_apply(&w.lib, &part, &rnote, &script, w.payer(&w.w, &f)).unwrap();
+    let (b, pafter, pmore) = rest_apply(&w.lib, &part, &rnote, &w.script("KpfTRest"), w.payer(&w.w, &f)).unwrap();
     signed("the rest paid in part", &b, &w.keys);
     assert_eq!((pafter.held, pafter.owed, pmore), (0, 20 * KAS1, Some(Rest { amount: 20 * KAS1, ..rest })));
     // A note of the rest of more than its shard owes was never counted: it is spent, and nothing is paid (so that
     // it ends no draw for good), called or not.
     for called in [0, 6_400] {
         let never = OLive { s: Shard { owed: 29 * KAS1, called, ..funded.s }, ..funded.clone() };
-        let (b, same, gone) = rest_apply(&w.lib, &never, &rnote, &script, w.payer(&w.w, &f)).unwrap();
+        let (b, same, gone) = rest_apply(&w.lib, &never, &rnote, &w.script("KpfTRest"), w.payer(&w.w, &f)).unwrap();
         let sg = signed("a note of the rest that was never counted, spent", &b, &w.keys);
         assert_eq!((same, gone), (never.s, None));
         assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (never.value, &hash_spk(&w.lib, &never.s.hash())));
@@ -722,7 +722,7 @@ fn what_a_shard_does_not_hold_goes_on_as_a_note_of_the_rest_and_nothing_is_paid_
     signed("legs left a called shard's books, nothing asked", &b, &w.keys);
     assert_eq!((out.rows, out.basis, out.called), ([ShardRow::EMPTY; 4].into(), 0, 6_400));
     // A note of the rest is not paid by this script while its shard is called.
-    assert!(rest_apply(&w.lib, &OLive { s: Shard { called: 6_400, ..funded.s }, ..funded.clone() }, &rnote, &script, w.payer(&w.w, &f)).is_err(), "a called shard pays a note of the rest in full");
+    assert!(rest_apply(&w.lib, &OLive { s: Shard { called: 6_400, ..funded.s }, ..funded.clone() }, &rnote, &w.script("KpfTRest"), w.payer(&w.w, &f)).is_err(), "a called shard pays a note of the rest in full");
 
     // What is not applied: a leg that is in no row; a leg larger than its row has; a leg read out of another row;
     // the books left with the leg in them; what the legs were entered at left as it was.

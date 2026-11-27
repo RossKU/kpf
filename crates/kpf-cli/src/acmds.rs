@@ -376,8 +376,8 @@ pub fn shard_note_cmd(a: &Args) -> R<()> {
             (name, tb::left_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
         }
         AObj::Rest(note) => {
-            let s = script_of(a, &l.lib, "KpfTLeft", &mut node, net)?;
-            ("KpfTLeft", tb::rest_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
+            let s = script_of(a, &l.lib, "KpfTRest", &mut node, net)?;
+            ("KpfTRest", tb::rest_apply(&l.lib, &alive(&l, shard, false)?, &alive(&nl, note, false)?, &s, payer).map_err(e)?)
         }
         other => return Err(format!("--note is a {}, not a note to a shard", other.kind())),
     };
