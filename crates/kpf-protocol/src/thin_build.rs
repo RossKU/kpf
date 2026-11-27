@@ -2372,6 +2372,84 @@ pub fn shard_fund(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, script: 
     Ok((add_c(lib, shard, script, s.fixed_hash(), s.moving(), crate::cross::SIDE_A, s.owner, delta, next.hash(), "shard", p)?, next))
 }
 
+/// A leaf of a shard's tree of dated rows as a script is shown it, 138 bytes (the row without its tag).
+fn leaf138(r: &crate::books::Row) -> Vec<u8> {
+    r.bytes()[9..].to_vec()
+}
+
+fn beside192(b: &[[u8; 32]; crate::books::DEPTH]) -> Vec<u8> {
+    b.iter().flat_map(|h| h.to_vec()).collect()
+}
+
+/// `KpfTRowIn.put` (docs 17.8j, 4): a shard's owner lists the dated row `key`, at the empty place `place`, by the row
+/// `r` of the four (the market's futures row, or an empty place for its head); `place_day`: the empty place of the
+/// day's leaf, where none stands for the row's market and day. The shard and its books after.
+#[allow(clippy::too_many_arguments)]
+pub fn row_in(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, script: &LibScript, key: crate::books::Key, scale: i64, limit: i64, r: usize, place: usize, place_day: Option<usize>, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books)> {
+    use crate::books::{Key, Row};
+    let s = &shard.s;
+    let (next, after) = s.row_in(books, key, scale, limit, r, place, place_day)?;
+    let before = books.before(&key).ok_or_else(|| Error::Invalid("the key is in the books".into()))?;
+    let sb = books.shown(&before.key).ok_or_else(|| Error::Invalid("the leaf before is no leaf".into()))?;
+    let named = books.leaves.iter().flatten().find(|x| x.key != Key::HEAD && x.key.hash() == before.next).map_or(Key::HEAD, |x| x.key);
+    // (Each path is against the books as the write before it left them.)
+    let mut b1 = books.clone();
+    b1.leaves[sb.place] = Some(Row { next: key.hash(), ..before });
+    let day = Key::day_of(key.market, key.day);
+    let (mode, leafd, pd, beside_d) = match place_day {
+        Some(pd) => {
+            let mut b2 = b1.clone();
+            b2.leaves[place] = Some(Row { key, scale, price_max: limit, net: 0, gross: 0, entered: 0, next: day.hash() });
+            (1, vec![0u8; 138], pd, b2.beside(pd))
+        }
+        None => {
+            let sd = books.shown(&day).ok_or_else(|| Error::Invalid("the day's leaf does not stand".into()))?;
+            (0, leaf138(&sd.row), sd.place, sd.beside)
+        }
+    };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(s.terms()), bv(s.moving()), bv(s.rows_bytes()), bv(s.books_head()), bv(leaf138(&before)), iv(sb.place as i64), bv(beside192(&sb.beside)), bv(named.bytes()), iv(key.day), iv(key.of), iv(key.strike), bv(key.market.to_vec()), iv(scale), iv(limit), iv(r as i64), iv(place as i64), bv(beside192(&b1.beside(place))), iv(mode), bv(leafd), iv(pd as i64), bv(beside192(&beside_d)), Arg::Sig(s.owner)]);
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTRowIn", "put", args, 0)?;
+    d.out(shard.value, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next, after))
+}
+
+/// `KpfTRowOut.out` (docs 17.8j, 4): the leaf `key` (a dated row of no unit, or a day's leaf whose day has no row) is
+/// taken out of a shard's books. A dated row by its owner, by its day's leaf written, or by the shard being called.
+pub fn row_out(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, script: &LibScript, key: &crate::books::Key, by: crate::reserve::RowOutBy, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books)> {
+    use crate::books::Key;
+    use crate::reserve::RowOutBy;
+    let s = &shard.s;
+    let (next, after) = s.row_out(books, key, by)?;
+    let sr = books.shown(key).ok_or_else(|| Error::Invalid("no leaf of the key".into()))?;
+    let before = books.namer(key).ok_or_else(|| Error::Invalid("no leaf names the key".into()))?;
+    let pb = books.place_of(&before.key).ok_or_else(|| Error::Invalid("the leaf before is no leaf".into()))?;
+    let mut b1 = books.clone();
+    b1.leaves[sr.place] = None;
+    let r = s.rows.iter().position(|x| x.key == Key::futures(key.market)).ok_or_else(|| Error::Invalid("the market has no row among the four".into()))?;
+    let nothing = (vec![0u8; 138], 0usize, vec![0u8; 192]);
+    let (mode, (leafd, pd, beside_d), sig) = match by {
+        _ if key.is_day() => (0, nothing, bv(vec![0u8; 65])),
+        RowOutBy::Owner => (0, nothing, Arg::Sig(s.owner)),
+        RowOutBy::DayWritten => {
+            let sd = books.shown(&Key::day_of(key.market, key.day)).ok_or_else(|| Error::Invalid("the day's leaf does not stand".into()))?;
+            (1, (leaf138(&sd.row), sd.place, beside192(&sd.beside)), bv(vec![0u8; 65]))
+        }
+        RowOutBy::Called => (2, nothing, bv(vec![0u8; 65])),
+    };
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let mut args = slot_head();
+    args.extend([bv(s.terms()), bv(s.moving()), bv(s.rows_bytes()), bv(s.books_head()), bv(leaf138(&sr.row)), iv(sr.place as i64), bv(beside192(&sr.beside)), bv(leaf138(&before)), iv(pb as i64), bv(beside192(&b1.beside(pb))), iv(r as i64), iv(mode), bv(leafd), iv(pd as i64), bv(beside_d), sig]);
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTRowOut", "out", args, 0)?;
+    d.out(shard.value, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    d.fund(p.funds, &p.change_to);
+    Ok((d.finish()?, next, after))
+}
+
 /// `KpfTAddC`: a party of a covered account adds `delta` to its margin.
 pub fn account_add(lib: &[u8; 32], account: &OLive<Account>, script: &LibScript, side: i64, delta: i64, p: Payer) -> Result<(OBuilt, Account)> {
     let a = &account.s;

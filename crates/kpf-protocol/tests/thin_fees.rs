@@ -96,7 +96,8 @@ fn world() -> World {
     for (i, wt) in [30i64, 22, 15].iter().enumerate() {
         table[i] = Member { key: xk(&members[i]), weight: wt * KAS1 };
     }
-    let funds = vec![fund(xk(&f), 200), fund(xk(&f), 202)];
+    // (17.8j, A2: a library of 78 scripts: a third coin.)
+    let funds = vec![fund(xk(&f), 200), fund(xk(&f), 202), fund(xk(&f), 203)];
     let (g, lib) = lib_genesis_for(2, FLOOR as u64, Some(rid.as_bytes()), Payer { funds: &funds, change_to: xk(&f), rate: MIN_FEE_RATE }).unwrap();
     let gs = signed("library genesis with a fee pool", &g, &keys);
     assert_eq!(lib_check(&gs.tx).unwrap(), lib);

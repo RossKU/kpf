@@ -463,6 +463,20 @@
       "source": "contracts/KpfTRest.sil",
       "source_sha256": "c2dbaea7de69fa0fa4d3d6be4563d50a2926ceb48c0f4ef13dc50de2404b5dcc"
     },
+    "KpfTRowIn": {
+      "artifact": "KpfTRowIn.json",
+      "artifact_sha256": "d38f23b5ca2511d0fcfb6f37e9ea1c3b9822739c63a90f8592eb76fac972f65f",
+      "script_len": 6577,
+      "source": "contracts/KpfTRowIn.sil",
+      "source_sha256": "3913824310ccf1c7c69804dc6d8e9a096559e7dcffd5bbf90ca7dcdaa7906f8c"
+    },
+    "KpfTRowOut": {
+      "artifact": "KpfTRowOut.json",
+      "artifact_sha256": "2438db1ef25fac3c2723764df6019c1ef482870fc33eb88e0b4121823dc62015",
+      "script_len": 3131,
+      "source": "contracts/KpfTRowOut.sil",
+      "source_sha256": "f164172155036a5e9bab023772ef08e91167473a3bddec79390590ef7f17ac29"
+    },
     "KpfTSettle": {
       "artifact": "KpfTSettle.json",
       "artifact_sha256": "9fdc373c80c8f7db6d3790c03d8bdb398da0d2bba6a7c59b6c1e3750ebc0bc3a",

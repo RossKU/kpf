@@ -1,0 +1,271 @@
+pragma silverscript ^0.1.0;
+
+// KpfTRowIn: a dated row is put into a shard's books (docs/ARCHITECTURE-CLEARING.md 17.6, 17.8j: 2 to 4).
+//
+// A shard's dated rows (calls or puts of a market, a day and a strike) and its days' leaves are the leaves of a tree
+// of sixty-four places, beside its four futures rows. A leaf is the hash of a row under a tag: the row's key (60
+// bytes: push(market), and a day, a kind and a strike, each 8 bytes after 0x08), its market's scale and price's
+// limit, the clearing party's net units, the gross units, what its legs were entered at, and push(the hash of the
+// key of the leaf after it in the keys' order): 138 bytes as a script is shown it. The head's leaf, of the key of
+// nothing, names the first; the last names the key of nothing. A shard's state holds the root in its books' hash:
+//   fixed = blake2b(terms(90) + push(blake2b(push8(sum of the gross) + push(blake2b(rows)) + push(root)
+//                                            + push(blake2b(claims' 27 bytes)))))
+// A market's futures row among the four is its head: its scale and limit are every row's of the market, and its
+// ninth field counts the market's leaves in the tree. A day's leaf (kind 3, strike nothing: the last key of its
+// market and day) says the day's price once it is written; it is put in "not written" with the first row of its
+// market and day.
+//
+// No entry makes a row: the shard's owner lists a series, here.
+//   put(who, ageb, slotLen, terms, moving, rows, gbook, leafb, pb, besideb, knext, day, of, strike, market, scale,
+//       limit, r, pe, besidee, mode, leafd, pd, besided, s)
+//       the owner; the shard not called. The row of the key (market, day, of, strike), of no unit, at the empty
+//       place `pe`. `leafb` at `pb` is the leaf before the key, `knext` the key it names, plain. `r`: the
+//       market's futures row among the four, or an empty place where it has none (it becomes its head, of `scale`
+//       and `limit`, with no unit). `mode` 1: no leaf of the market and day stands (neither `leafb` nor `knext`
+//       is of them), and the day's leaf is put in after the row, at the empty place `pd`. `mode` 0: the day's
+//       leaf `leafd` stands at `pd`, not written.
+contract KpfTRowIn(int init_version) {
+    int version = init_version;
+
+    // What every operation leaves in the copy it used, for whoever the prices are from (KpfTSweep, KpfTPay).
+    int constant ORACLE_FEE = 200000;
+    int constant STATE_AT = 2;
+    // (The books' tree, docs 17.6: a leaf is the hash of a row under one tag, a node of its two halves under another.)
+    int constant LEAF_TAG = 20;
+    int constant NODE_TAG = 21;
+    int constant SCALE_MAX = 1000000000;
+    int constant MARGIN_MAX = 1152921504606846975;
+    byte constant SIGHASH_ALL = 0x01;
+
+    function p33(byte[32] h) : byte[] {
+        return byte[](0x20) + byte[](h);
+    }
+
+    function i9(int c) : byte[] {
+        return byte[](0x08) + byte[](c as byte[8]);
+    }
+
+    // The root of the books with the leaf `a` at a place, and the root with `b` there, by the six hashes beside the
+    // place's way: 64 bytes. (A leaf of no bytes is the empty one; else a row's 138 bytes, hashed under the leaf's
+    // tag. A place is one of sixty-four: a place of 64 and more would open what a place below it opens.)
+    function both(byte[] a, byte[] b, int place, byte[] beside) : byte[] {
+        require(place >= 0);
+        require(place <= 63);
+        require(beside.length == 192);
+        byte[] bn0 = byte[](0x08) + byte[](NODE_TAG as byte[8]);
+        byte[] bx0 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        byte[] by0 = bx0;
+        if (a.length != 0) {
+            require(a.length == 138);
+            bx0 = byte[](blake2b(byte[](0x08) + byte[](LEAF_TAG as byte[8]) + a));
+        }
+        if (b.length != 0) {
+            require(b.length == 138);
+            by0 = byte[](blake2b(byte[](0x08) + byte[](LEAF_TAG as byte[8]) + b));
+        }
+        int bp0 = place;
+        for (bd0, 0, 6, 6) {
+            // (The half beside is on the right where the place's bit is nothing, on the left otherwise: the 64
+            // bytes from 0, or from 32, of the hash, the half beside, the hash.)
+            bx0 = byte[](blake2b(bn0 + (bx0 + beside.slice(32 * bd0, 32 * bd0 + 32) + bx0).slice(32 * (bp0 % 2), 32 * (bp0 % 2) + 64)));
+            by0 = byte[](blake2b(bn0 + (by0 + beside.slice(32 * bd0, 32 * bd0 + 32) + by0).slice(32 * (bp0 % 2), 32 * (bp0 % 2) + 64)));
+            bp0 = bp0 / 2;
+        }
+        return bx0 + by0;
+    }
+
+    // The root of the books with the leaf `a` at a place: 32 bytes (as `both`, of one leaf).
+    function up(byte[] a, int place, byte[] beside) : byte[] {
+        require(place >= 0);
+        require(place <= 63);
+        require(beside.length == 192);
+        byte[] un0 = byte[](0x08) + byte[](NODE_TAG as byte[8]);
+        byte[] ux0 = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        if (a.length != 0) {
+            require(a.length == 138);
+            ux0 = byte[](blake2b(byte[](0x08) + byte[](LEAF_TAG as byte[8]) + a));
+        }
+        int up0 = place;
+        for (ud0, 0, 6, 6) {
+            ux0 = byte[](blake2b(un0 + (ux0 + beside.slice(32 * ud0, 32 * ud0 + 32) + ux0).slice(32 * (up0 % 2), 32 * (up0 % 2) + 64)));
+            up0 = up0 / 2;
+        }
+        return ux0;
+    }
+
+    // Whether a key is below another in the order of the books: the key of nothing is below every other, by rule;
+    // the others by their seven numbers (the market's 32 bytes as four, the day, the kind, the strike).
+    function below(byte[] a, byte[] b) : int {
+        byte[] wz8 = byte[](0 as byte[8]);
+        byte[] wh = byte[](0x20) + wz8 + wz8 + wz8 + wz8 + byte[](0x08) + wz8 + byte[](0x08) + wz8 + byte[](0x08) + wz8;
+        int wlt = 0;
+        if (a == wh) {
+            if (b != wh) { wlt = 1; }
+        } else {
+            if (b != wh) {
+                int wsame = 1;
+                for (wk, 0, 7, 7) {
+                    int wo = 1 + 8 * wk;
+                    if (wk >= 4) { wo = 34 + 9 * (wk - 4); }
+                    int wx = int(byte[8](a.slice(wo, wo + 8)));
+                    int wy = int(byte[8](b.slice(wo, wo + 8)));
+                    if (wsame == 1) {
+                        if (wx < wy) {
+                            wlt = 1;
+                            wsame = 0;
+                        }
+                        if (wx > wy) { wsame = 0; }
+                    }
+                }
+            }
+        }
+        return wlt;
+    }
+
+    function slotOf(int j, int slotLen) : byte[] {
+        require(j >= 0);
+        require(j < tx.inputs.length);
+        require(j != this.activeInputIndex);
+        int len = OpTxInputScriptSigLen(j);
+        require(slotLen > STATE_AT + 32);
+        require(slotLen <= len);
+        byte[] rs = OpTxInputScriptSigSubstr(j, len - slotLen, len);
+        require(tx.inputs[j].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs;
+    }
+
+    function goesOn() {
+        int self = this.activeInputIndex;
+        byte[32] lib = OpInputCovenantId(self);
+        require(tx.outputs[self].scriptPubKey == tx.inputs[self].scriptPubKey);
+        require(OpOutputCovenantId(self) == lib);
+        require(tx.outputs[self].value >= tx.inputs[self].value + ORACLE_FEE);
+        require(OpCovOutputCount(lib) == OpCovInputCount(lib));
+    }
+
+    function signedBy(sig s, byte[] key) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, pubkey(byte[32](key))));
+    }
+
+    entry put(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[171] moving, byte[420] rows, byte[69] gbook, byte[138] leafb, int pb, byte[192] besideb, byte[60] knext, int day, int of, int strike, byte[32] market, int scale, int limit, int r, int pe, byte[192] besidee, int mode, byte[138] leafd, int pd, byte[192] besided, sig s) {
+        require(version == 1);
+        require(int(ageb) >= 0);
+        int j = int(byte[8](who.slice(0, 8)));
+        require(who.slice(8, 16) == who.slice(0, 8));
+        require(who.slice(16, 24) == who.slice(0, 8));
+        byte[] rs = slotOf(j, slotLen);
+        byte[] mv = byte[](moving);
+        byte[] tb = byte[](terms);
+        byte[] gb = byte[](gbook);
+        byte[] rw = byte[](rows);
+        byte[] z8 = byte[](0 as byte[8]);
+        byte[] z32 = z8 + z8 + z8 + z8;
+        byte[] z9 = byte[](0x08) + z8;
+        // A shard (an object with no second key), not called: a call is of the rows that stand.
+        require(mv.slice(34, 66) == z32);
+        require(mv.slice(130, 138) == z8);
+        // The market is one: not nothing, and none of the four numbers of its id is nothing written below zero
+        // (two such ids are one key by their numbers, and the books' order is by numbers).
+        byte[] mk = byte[](market);
+        require(mk != z32);
+        byte[] mz = byte[](0x0000000000000080);
+        for (q, 0, 4, 4) {
+            require(mk.slice(8 * q, 8 * q + 8) != mz);
+        }
+        // The key: calls or puts, of a day and of a strike within the limit. Its day's leaf's key.
+        require(day > 0);
+        require(of == 1 || of == 2);
+        require(strike > 0);
+        require(strike <= limit);
+        byte[] key = byte[](0x20) + mk + i9(day) + i9(of) + i9(strike);
+        byte[] dkey = byte[](0x20) + mk + i9(day) + i9(3) + z9;
+        // The market's head among the four rows: its futures row, of this scale and limit; or an empty place,
+        // where no row of the four is the market's, for a scale and a limit within bounds.
+        require(r >= 0);
+        require(r <= 3);
+        byte[] row = rw.slice(105 * r, 105 * r + 105);
+        byte[] name = byte[](0x20) + mk + z9 + z9 + z9;
+        byte[] hd = name + i9(scale) + i9(limit);
+        int count = int(byte[8](row.slice(97, 105)));
+        byte[] units = row.slice(78, 96);
+        if (row.slice(0, 78) != hd) {
+            require(row == byte[](0x20) + z32 + z9 + z9 + z9 + z9 + z9 + z9 + z9 + z9);
+            for (q2, 0, 4, 4) {
+                require(rw.slice(105 * q2, 105 * q2 + 60) != name);
+            }
+            require(scale > 0);
+            require(scale <= SCALE_MAX);
+            require(limit > 0);
+            require(limit <= MARGIN_MAX);
+            count = 0;
+        }
+        require(count >= 0);
+        // The leaf before: its key is below the new key, and the key it names (shown plain) is above the new key,
+        // or it names none.
+        byte[] lb = byte[](leafb);
+        byte[] kn = byte[](knext);
+        require(below(lb.slice(0, 60), key) == 1);
+        require(blake2b(kn) == byte[32](lb.slice(106, 138)));
+        if (kn != byte[](0x20) + z32 + z9 + z9 + z9) {
+            require(below(key, kn) == 1);
+        }
+        // The leaf before opens the shard's books, at its place; rewritten, it names the new key.
+        byte[] r1 = both(lb, lb.slice(0, 105) + p33(blake2b(key)), pb, byte[](besideb));
+        require(blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw)) + p33(byte[32](r1.slice(0, 32))) + p33(blake2b(gb.slice(9, 36))))))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
+        // Whether a leaf of the row's market and day stands: the leaves of a day are next to one another, its
+        // day's leaf the last of them, so one stands exactly where the leaf before or the key it names is of them.
+        int stands = 0;
+        if (lb.slice(0, 42) == key.slice(0, 42)) { stands = 1; }
+        if (kn.slice(0, 42) == key.slice(0, 42)) { stands = 1; }
+        byte[] blank = i9(scale) + i9(limit) + z9 + z9 + z9;
+        byte[] root = r1.slice(32, 64);
+        if (mode == 1) {
+            // The first row of its market and day: the row names the day's leaf, put in with it, "not written",
+            // which names what the leaf before named. Each place is empty in the books as the write before left them.
+            require(stands == 0);
+            byte[] ra2 = both(mk.slice(0, 0), key + blank + p33(blake2b(dkey)), pe, byte[](besidee));
+            require(ra2.slice(0, 32) == r1.slice(32, 64));
+            byte[] ra3 = both(mk.slice(0, 0), dkey + blank + lb.slice(105, 138), pd, byte[](besided));
+            require(ra3.slice(0, 32) == ra2.slice(32, 64));
+            root = ra3.slice(32, 64);
+            count = count + 2;
+        } else {
+            // The day's leaf stands in the books as they are, not written, at the market's scale and limit: no row
+            // is listed for a day whose price is written. The row names what the leaf before named.
+            require(mode == 0);
+            byte[] ld = byte[](leafd);
+            require(ld.slice(0, 105) == dkey + blank);
+            require(up(ld, pd, byte[](besided)) == r1.slice(0, 32));
+            byte[] rb2 = both(mk.slice(0, 0), key + blank + lb.slice(105, 138), pe, byte[](besidee));
+            require(rb2.slice(0, 32) == r1.slice(32, 64));
+            root = rb2.slice(32, 64);
+            count = count + 1;
+        }
+        byte[] rw2 = rw.slice(0, 105 * r) + hd + units + i9(count) + rw.slice(105 * r + 105, 420);
+        signedBy(s, mv.slice(1, 33));
+        byte[32] id = OpInputCovenantId(j);
+        require(OpCovInputCount(id) == 1);
+        require(OpCovOutputCount(id) == 1);
+        int c = OpCovOutputIdx(id, 0);
+        require(tx.outputs[c].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(blake2b(gb.slice(0, 9) + p33(blake2b(rw2)) + p33(byte[32](root)) + p33(blake2b(gb.slice(9, 36))))))) + mv)) + rs.slice(STATE_AT + 32, slotLen))));
+        require(tx.outputs[c].value >= tx.inputs[j].value);
+        goesOn();
+    }
+
+    // The copy lets go of what gathered in it: a script of the library names it at a place, as an object is named
+    // (KpfSlot.go asks no more), and answers for the rest. Only KpfTSweep's entry passes with a copy at a place it
+    // names (every other entry holds what it names to the hash of an object's state), and it asks that the copy goes
+    // on as it is, under the library's id, with what a copy keeps.
+    entry release(int l, int k) {
+        int self = this.activeInputIndex;
+        require(k >= 0);
+        require(k <= 2);
+        // (An input that is not there has no id: the engine refuses the index.)
+        require(OpInputCovenantId(l) == OpInputCovenantId(self));
+        require(OpTxInputScriptSigSubstr(l, 0, 1) == byte[](0x18));
+        require(OpTxInputScriptSigSubstr(l, 1 + 8 * k, 9 + 8 * k) == byte[](self as byte[8]));
+    }
+}

@@ -5018,6 +5018,37 @@ stuck, holds the opposite now: the field is kept, the head stands with no unit w
 its market's leg again, and the market has no second row beside it. No root other than the opened one exists
 yet: nothing writes a leaf (A2).
 
+**A2 as it is built** (the engine; the whole workspace 780 tests, none failed; `s484` to `s488`; the two scripts are written whole by `s485_a2_scripts.py`, the
+tree's own functions being the parked `KpfTRows`'s that review T10 read; the library has 78 scripts).
+- **The model**: `books.rs` (`OF_DAY`, `DaySaid`, `Key::day_of`, `Books::listed`, `unlisted`, `count_of`,
+  `namer`) and `reserve.rs` (`Shard::row_in`, `row_out`, `RowOutBy`). A day's leaf says "not written" with its
+  three numbers nothing; a price where a row has what was entered; "none" by 1 where a row has its net.
+  `tests/thin_rows.rs`: a row listed with its day's leaf and every refusal by hand; 6,000 rows listed and taken
+  out at random over six markets, after each of which the list is in order from the head, a day's leaves stand
+  next to one another with the day's leaf last, every row has its day's leaf at its scale and limit, a
+  market's futures row counts its leaves and stands exactly while it counts any, and the root is the shard's.
+- **`KpfTRowIn.put`** (6,577 bytes): the owner signs; the shard not called; the key (calls or puts, a day, a
+  strike within the limit) of a market that is one; the market's futures row of that scale and limit among the
+  four, or an empty place where none of the four is the market's; the leaf before, below the key, naming a key
+  above it or none; **no leaf of the market and day stands where neither the leaf before nor the key it names
+  is of them (the first 42 bytes of a key): then the day's leaf is put in after the row, at a second empty
+  place; else the day's leaf is shown by its path in the books as they are, and says "not written"**; the head
+  counts one more, or two.
+- **`KpfTRowOut.out`** (3,131 bytes): a dated row of no unit and nothing entered, by its owner's signature, by
+  its day's leaf shown written, or of a called shard; a day's leaf by anyone, where the leaf that names it is
+  not of its market and day; the head counts one less, and is the empty row where it counts none and has no
+  unit.
+- **At the engine** (`thin_draw.rs`, `a_dated_row_is_listed_and_taken_out_at_the_engine`, ten transactions): a
+  call listed (the head takes an empty place, the leaf with it), a put of its day (no second leaf), a call of
+  another day; each taken out, a day's leaf last, the head with the last leaf: the shard as it was opened. A
+  row is listed by no other key than the owner's; an output with another count, the root of before, another
+  scale in the head or a unit in it is refused; a row leaves by anyone of a called shard and of a written day,
+  and no row is listed for a written day. **Measured: a row listed is 9,190 bytes** (three paths: for the last
+  phase; it is an owner's listing, not a user's path), **a leaf taken out 5,768.**
+- Not built here: nothing reads a dated row yet (A3: the trace; B: an entry), and nothing writes a day's leaf
+  (D). A row is listed for a day that has passed if its leaf is not written (review T16, Z13: an entry's own
+  rule refuses the leg).
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

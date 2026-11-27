@@ -1820,7 +1820,7 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
             }
             // (Whoever hashes the rows hashes the 36 bytes with them, every time. Review T6, docs 17.8c: the last
             // 27 hashed by the script; `KpfTCallPay` writes the shard with the 36 bytes it made, `ng`.)
-            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36)))").count() + code.matches("ng.slice(0, 9) + p33(blake2b(rw)) + ng.slice(36, 69) + p33(blake2b(ng.slice(9, 36)))").count(), "{}", p.display());
+            assert_eq!(code.matches("blake2b(rw)").count(), code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + gb.slice(36, 69) + p33(blake2b(gb.slice(9, 36)))").count() + code.matches("ng.slice(0, 9) + p33(blake2b(rw)) + ng.slice(36, 69) + p33(blake2b(ng.slice(9, 36)))").count() + code.matches("gb.slice(0, 9) + p33(blake2b(rw)) + p33(byte[32](r1.slice(0, 32))) + p33(blake2b(gb.slice(9, 36)))").count(), "{}", p.display()); // (17.8j, A2: `KpfTRowIn` and `KpfTRowOut` open the root by a path and hash it where the others are shown its push.)
             assert_eq!((code.matches("gb.slice(9, 41)").count(), code.matches("byte[41] gbook").count()), (0, 0), "{}", p.display());
             assert_eq!(code.matches("ng.slice(0, 9)").count() > 0, p.file_stem().unwrap() == "KpfTCallPay", "{}", p.display());
             assert_eq!(code.matches("blake2b(rows)").count(), 0, "{}", p.display());
@@ -1829,5 +1829,5 @@ fn t3r2_a_script_that_carries_the_32_bytes_unopened_cannot_tell_the_old_form() {
     opens.sort();
     // (Review T5, docs 17.8b: `KpfTShardEnd` and `KpfTCallEnd` read no row and left this list; `KpfTShardRow` is new.)
     // (17.8e: `KpfTRest`, which was `KpfTLeft.rest`, is a script of its own.)
-    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftVoid", "KpfTRest", "KpfTShardPrice", "KpfTShardRow"]);
+    assert_eq!(opens, vec!["KpfTCallPay", "KpfTEnterS", "KpfTLeft", "KpfTLeftAll", "KpfTLeftAllC", "KpfTLeftC", "KpfTLeftVoid", "KpfTRest", "KpfTRowIn", "KpfTRowOut", "KpfTShardPrice", "KpfTShardRow"]);
 }

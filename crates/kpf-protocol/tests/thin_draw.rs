@@ -4211,3 +4211,98 @@ fn an_option_leg_is_asked_its_premium_and_what_it_can_lose_with_its_group() {
     };
     assert_eq!((asked(far), asked(T0 + t + 1), asked(T0 + t)), ((0, 0b10), (0, 0b10), (55 * KAS1 / 10, 0)));
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, A2: a shard's dated rows are listed and taken out (`KpfTRowIn`, `KpfTRowOut`).
+
+/// The owner lists a call of market 0 (the head takes an empty place; the day's leaf is put in with the row), a put
+/// of the same day (no second leaf) and a call of another day; takes them out again, a day's leaf last; and the
+/// shard is as it was. Each transaction at the engine; each with one thing changed refused.
+#[test]
+fn a_dated_row_is_listed_and_taken_out_at_the_engine() {
+    use kpf_protocol::books::{Books, Key, Row, OF_CALLS, OF_PUTS};
+    use kpf_protocol::reserve::RowOutBy;
+    let w = world();
+    let h = w.head(0);
+    let (scale, limit, market) = (h.scale, h.price_max, h.key.market);
+    let s0 = bare(&w);
+    let b0 = Books::opened();
+    let mut n = 60u8;
+    let mut coin = || {
+        n += 1;
+        [fund(xk(&w.c), n)]
+    };
+    let call = Key { market, day: 900_000, of: OF_CALLS, strike: P10 };
+    let put = Key { of: OF_PUTS, ..call };
+    let later = Key { day: 1_800_000, ..call };
+    let (rin, rout) = (w.script("KpfTRowIn"), w.script("KpfTRowOut"));
+    // Listed: the first row of its day.
+    let ff = coin();
+    let (b, s1, b1) = row_in(&w.lib, &s0, &b0, &rin, call, scale, limit, 2, 1, Some(5), w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("a dated row listed with its day's leaf", &b, &w.keys);
+    assert_eq!(s1.rows[2], ShardRow { entered: 2, ..ShardRow::of(h, 0, 0) });
+    let l1 = nth(&sg, 0, s1, 6_200);
+    // (Refused: by another key than the owner's; the shard after as the model has it and no other.)
+    let other = OLive { s: Shard { owner: xk(&w.w), ..s0.s }, ..s0.clone() };
+    let fw = [fund(xk(&w.w), 99)];
+    assert!(row_in(&w.lib, &other, &b0, &rin, call, scale, limit, 2, 1, Some(5), w.payer(&w.w, &fw)).is_ok_and(|(b, _, _)| accepted(&b, &w.keys)), "(control) a shard of another owner lists its own row");
+    for (what, wrong) in [
+        ("the count one, not two", Shard { rows: { let mut r = s1.rows; r[2].entered = 1; r }, ..s1 }),
+        ("the root of before", Shard { root: s0.s.root, ..s1 }),
+        ("the head at another scale", Shard { rows: { let mut r = s1.rows; r[2].scale = scale / 10; r }, ..s1 }),
+        ("a unit in the head", Shard { rows: { let mut r = s1.rows; r[2].gross = 1; r }, ..s1 }),
+    ] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &wrong.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    // A second row of the day: no second leaf; and a row of another day, with its leaf.
+    let ff = coin();
+    let (b, s2, b2) = row_in(&w.lib, &l1, &b1, &rin, put, scale, limit, 2, 3, None, w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("a second row of a day", &b, &w.keys);
+    let l2 = nth(&sg, 0, s2, 6_210);
+    let ff = coin();
+    let (b, s3, b3) = row_in(&w.lib, &l2, &b2, &rin, later, scale, limit, 2, 9, Some(10), w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("a row of another day", &b, &w.keys);
+    let l3 = nth(&sg, 0, s3, 6_220);
+    assert_eq!((s3.rows[2].entered, b3.in_order().len()), (5, 6));
+    assert!(b3.well_linked() && b3.root() == s3.root);
+    // A futures leg enters the head and leaves: the head stands, counting its five leaves.
+    assert_eq!(s3.entered(&fleg(&w, 0, 1, LONG, P10), 2, T0).unwrap().rows[2].entered, 5);
+    // Taken out. A day's leaf stays while a row of its day stands; a row by anyone only where its day is written or
+    // the shard is called; by its owner at any time.
+    let day = Key::day_of(market, 900_000);
+    let ff = coin();
+    assert!(row_out(&w.lib, &l3, &b3, &rout, &day, RowOutBy::Owner, w.payer(&w.c, &ff)).is_err());
+    assert!(row_out(&w.lib, &l3, &b3, &rout, &call, RowOutBy::DayWritten, w.payer(&w.f, &ff)).is_err() && row_out(&w.lib, &l3, &b3, &rout, &call, RowOutBy::Called, w.payer(&w.f, &ff)).is_err());
+    let (b, s4, b4) = row_out(&w.lib, &l3, &b3, &rout, &call, RowOutBy::Owner, w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("a row taken out by its owner", &b, &w.keys);
+    let l4 = nth(&sg, 0, s4, 6_230);
+    // (Of a called shard, and of a written day, by anyone: with the books of each.)
+    let called = OLive { s: Shard { called: 6_000, ..l4.s }, ..l4.clone() };
+    let ff2 = [fund(xk(&w.f), 98)];
+    let (bc, _, _) = row_out(&w.lib, &called, &b4, &rout, &put, RowOutBy::Called, w.payer(&w.f, &ff2)).unwrap();
+    signed("a row of a called shard taken out by anyone", &bc, &w.keys);
+    let mut bw = b4.clone();
+    let at = bw.place_of(&day).unwrap();
+    bw.leaves[at] = Some(Row { entered: P10, ..bw.leaves[at].unwrap() });
+    let written = OLive { s: Shard { root: bw.root(), ..l4.s }, ..l4.clone() };
+    let (bd, _, _) = row_out(&w.lib, &written, &bw, &rout, &put, RowOutBy::DayWritten, w.payer(&w.f, &ff2)).unwrap();
+    signed("a row of a written day taken out by anyone", &bd, &w.keys);
+    assert!(row_in(&w.lib, &written, &bw, &rin, Key { strike: 2 * P10, ..call }, scale, limit, 2, 20, None, w.payer(&w.c, &ff)).is_err(), "a row listed for a written day");
+    let ff = coin();
+    let (b, s5, b5) = row_out(&w.lib, &l4, &b4, &rout, &put, RowOutBy::Owner, w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("the last row of a day taken out", &b, &w.keys);
+    let l5 = nth(&sg, 0, s5, 6_240);
+    let ff = coin();
+    let (b, s6, b6) = row_out(&w.lib, &l5, &b5, &rout, &day, RowOutBy::DayWritten, w.payer(&w.f, &ff2)).unwrap();
+    let sg = signed("a day's leaf taken out by anyone", &b, &w.keys);
+    let l6 = nth(&sg, 0, s6, 6_250);
+    let (b, s7, b7) = row_out(&w.lib, &l6, &b6, &rout, &later, RowOutBy::Owner, w.payer(&w.c, &ff)).unwrap();
+    let sg = signed("the other day's row", &b, &w.keys);
+    let l7 = nth(&sg, 0, s7, 6_260);
+    let ff = coin();
+    let (b, s8, b8) = row_out(&w.lib, &l7, &b7, &rout, &Key::day_of(market, 1_800_000), RowOutBy::Owner, w.payer(&w.c, &ff)).unwrap();
+    signed("the last leaf: the head leaves with it", &b, &w.keys);
+    assert_eq!((s8.rows, s8.root, b8.root()), (s0.s.rows, s0.s.root, b0.root()), "the shard as it was");
+}
