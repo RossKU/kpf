@@ -2867,13 +2867,17 @@ pub fn c_enter_end(lib: &[u8; 32], obj: &OLive<Pointed>, marked: &crate::covered
 /// account's coins, to `rkey`.
 pub fn enter_off(lib: &[u8; 32], obj: &OLive<crate::covered::Marked>, script: &LibScript, p: Payer) -> Result<(OBuilt, Account, crate::covered::Unentered)> {
     let m = &obj.s;
-    let ((leg, before), (after, fee, note)) = m.leg().zip(m.undone()).ok_or_else(|| Error::Invalid("the marked account has no leg to undo, or its coins are beyond what is counted".into()))?;
+    let ((leg, before), (after, fee, note, back)) = m.leg().zip(m.undone_back()).ok_or_else(|| Error::Invalid("the marked account has no leg to undo, or its coins are beyond what is counted".into()))?;
     let mut d = ODraft::new(p.rate, FeeMode::Relay);
-    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(m.0.terms()), bv(before.to_vec()), bv(crate::thin::leg_bytes(&leg)), bv(m.moving())];
+    // (A written option's premium returns to the shard's owner, the account's second key, in the fourth output.)
+    let args = vec![bv(vec![0; 24]), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(m.0.terms()), bv(before.to_vec()), bv(crate::thin::leg_bytes(&leg)), bv(m.moving()), iv(3)];
     let (id, lid) = enter_hash(&mut d, lib, obj, &m.hash(), "marked account", script, "KpfTEnterOff", "off", args, 0)?;
-    d.out(obj.value - fee as u64, hash_spk(lib, &after.hash()), Some((0, id)), "account", None);
+    d.out(obj.value - (back + fee) as u64, hash_spk(lib, &after.hash()), Some((0, id)), "account", None);
     keep(&mut d, script, lid)?;
     d.out(note.value() as u64, hash_spk(lib, &note.hash()), Some((0, id)), "note", None);
+    if back > 0 {
+        d.out(back as u64, crate::tx::p2pk_spk(&m.0.b_key), None, "premium returned", None);
+    }
     // (No output of the fee: the account holds it less, and what the transaction leaves is its funder's. Beside the
     // account and the note a block takes no small payment: review 51, F83.)
     d.fund(p.funds, &p.change_to);

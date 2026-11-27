@@ -13064,7 +13064,7 @@ fn t1b_r55_the_sizes_of_the_scripts_that_changed() {
     println!("T1b R55 sizes: {sizes:?}");
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 80);
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 719)]);
+    assert_eq!(sizes, vec![("KpfTDrawNote", 1742), ("KpfTDrawEntry", 1181), ("KpfTChange", 1886), ("KpfTCStep", 5319), ("KpfTCallEnter", 1051), ("KpfTCallPay", 2461), ("KpfTLeft", 1705), ("KpfTLeftAll", 4476), ("KpfTEnterOff", 974)]);
 }
 
 // ================================================================================================================
@@ -13863,7 +13863,7 @@ fn t1b_r57_the_sizes_of_the_scripts_that_changed() {
     assert_eq!(kpf_protocol::thin_artifacts::SCRIPTS.len(), 80);
     // (Round 58: the three that changed again.)
     // (Review T7, docs 17.8c (b) and (c): KpfTCStep 5,439 from 5,056; KpfTLeft 2,916 from 2,506; KpfTLeftAll 5,093 from 4,310; KpfTLeftVoid 2,088 from 2,030; KpfTMarkNote 1,419 from 1,190; KpfTEnterS 2,982 from 2,484.)
-    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1886, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3039, 2282), ("KpfTEnterOff", 719, 719)]);
+    assert_eq!(sizes, vec![("KpfTAddC", 630, 528), ("KpfTChange", 1886, 1571), ("KpfTJoinC", 1625, 1550), ("KpfTEnterS", 3039, 2282), ("KpfTEnterOff", 974, 719)]);
 }
 
 // ================================================================================================================

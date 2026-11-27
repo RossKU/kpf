@@ -5210,6 +5210,26 @@ their files (below).
   ends unapplied (B2); no note takes an option leg out of its row (B3): until then an option that entered leaves
   the books by nothing.
 
+**B2 as it is built: the premium's return** (the engine; `s511_b2_premium_back.py`, its scripts' part run after
+`s506` and `s499`; 799 tests: 798 passed in the one run of all, and the one that failed was a size's "before"
+that the helper for sizes had written over, put back). **The mark does not change** (the list had it say the
+amount): `KpfTEnterOff` is shown the leg that did not enter, and computes the premium from it. So the five scripts
+that hold the mark are as they were, and two change.
+- `KpfTEnterSD` (4,346 bytes; 4,271): an entry of an option the user writes (its way 4 or 6) adds its premium
+  exactly, the premium a unit by the units.
+- `KpfTEnterOff.off` (974 bytes; 719; an argument more, the output that pays): where the leg is an option the
+  user wrote, its premium (as far as the coins go above a note's least) is paid to the account's second key,
+  which is its shard's owner's, before the keeper's fee; less than a note's least stays in the account.
+- The model: `Marked::premium_added`, `undone_back`; `c_enter` states no entry of a written option that adds
+  another amount.
+- At the engine (`thin_draw.rs`, `a_written_options_premium_returns_to_the_owner_where_its_entry_is_undone`): a
+  call written for 20 KAS: an entry adding a sompi more or less is stated by nobody and refused by the script;
+  undone, the 20 KAS are the owner's and the account has its 40 less the fee; paid to the user's key, refused; a
+  premium of 0.1 KAS stays in the account; a held option's entry returns nothing. An entry undone with its
+  premium returned is 2,340 bytes.
+- **Said as it is**: whose coins pay the premium is the two signers'; the script holds the amount. An entry that
+  adds a written option's premium from its user's own coins returns them to the owner where it is undone.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

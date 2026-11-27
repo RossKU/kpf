@@ -1417,12 +1417,33 @@ impl Marked {
     /// the terms' least fee of a keeper (as far as the coins go above a note's least); the fee; and the note that
     /// the leg did not enter.
     pub fn undone(&self) -> Option<(Account, i64, Unentered)> {
+        self.undone_back().map(|(after, fee, note, _)| (after, fee, note))
+    }
+
+    /// The premium an entry added, where the leg it says is an option the user writes: the premium a unit by the
+    /// units (`KpfTEnterSD` holds what such an entry adds to it). Nothing for any other leg.
+    pub fn premium_added(l: &XLeg) -> Option<i64> {
+        match crate::crow::option_of(l) {
+            Some(o) if !o.held => worth(l.size, l.scale, o.premium),
+            _ => Some(0),
+        }
+    }
+
+    /// `undone`, and what returns to the shard's owner (the account's second key) of a written option's premium,
+    /// before the keeper's fee: all of it, as far as the coins go above a note's least; nothing where that is
+    /// less than a note's least (it stays in the account). Docs 17.8j, B2.
+    pub fn undone_back(&self) -> Option<(Account, i64, Unentered, i64)> {
         let a = &self.0;
         let (l, _) = self.leg()?;
-        let fee = a.t.keeper_fee_min.min(sub(a.a_margin, NOTE_MIN)?).max(0);
+        let mut back = Marked::premium_added(&l)?.min(sub(a.a_margin, NOTE_MIN)?);
+        if back < NOTE_MIN {
+            back = 0;
+        }
+        let coins = sub(a.a_margin, back)?;
+        let fee = a.t.keeper_fee_min.min(sub(coins, NOTE_MIN)?).max(0);
         let legs = a.legs[..a.legs.len() - 1].to_vec();
-        let after = Account { legs, a_margin: sub(a.a_margin, fee)?, a_min_counter: sub(a.a_min_counter, 1)?, ..a.clone() };
-        Some((after, fee, Unentered { sid: a.shard?, leg: l, key: a.a_key }))
+        let after = Account { legs, a_margin: sub(coins, fee)?, a_min_counter: sub(a.a_min_counter, 1)?, ..a.clone() };
+        Some((after, fee, Unentered { sid: a.shard?, leg: l, key: a.a_key }, back))
     }
 }
 
@@ -1549,6 +1570,10 @@ impl Account {
         let no = |why: &str| Error::Invalid(format!("no entry into this covered account: {why}"));
         if crate::crow::option_of(&leg).is_some_and(|o| o.day.checked_sub(t0).is_none_or(|x| x <= self.c_head().t)) {
             return Err(no("an option enters more than T before its day (T: twice a lateness and a dispute period): its row would be answered wrong"));
+        }
+        // (An option the user writes: what its entry adds is its premium, exactly. Docs 17.8j, B2.)
+        if crate::crow::option_of(&leg).is_some_and(|o| !o.held) && Marked::premium_added(&leg) != Some(more) {
+            return Err(no("the entry of an option the user writes adds its premium exactly (the premium a unit by the units): coins of the user's own are added apart"));
         }
         if a.len() != self.legs.len() || a.iter().zip(&self.legs).any(|(p, l)| *p <= 0 || *p > l.price_max) {
             return Err(no("it is stated with one price a leg the account has, within its market's limit"));

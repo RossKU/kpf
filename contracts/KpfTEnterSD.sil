@@ -237,6 +237,11 @@ contract KpfTEnterSD(int init_version) {
         require(strike <= pm);
         require(int(byte[8](lg.slice(58, 66))) >= 0);
         require(int(byte[8](lg.slice(58, 66))) <= pm);
+        // (An option the user writes: what its entry adds is its premium, exactly: the premium a unit by the units.
+        // It returns to the shard's owner where the entry is undone: KpfTEnterOff. Docs 17.8j, B2; review T16, Z9.)
+        if (dir == 4 || dir == 6) {
+            require(add == (size / sc) * int(byte[8](lg.slice(58, 66))) + (size % sc) * (int(byte[8](lg.slice(58, 66))) / sc) + ((size % sc) * (int(byte[8](lg.slice(58, 66))) % sc)) / sc);
+        }
         require(sc > 0);
         require(sc <= SCALE_MAX);
         require(size > 0);

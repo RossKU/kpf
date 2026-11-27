@@ -4546,3 +4546,62 @@ fn an_option_enters_a_covered_account_and_its_row_in_the_shards_tree() {
     let forced = c_enter_state_d_as(&w.lib, &acct3, &poor, &b6, &enter, SEED, committee, &st_p, &said_p, &after_p, w.payer(&w.w, &f));
     assert!(forced.is_err() || !accepted(&forced.unwrap(), &w.keys), "the gate, at the engine");
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, B2: the premium of an option the user writes returns to the shard's owner where its entry is undone.
+
+/// A call written at 9 for 2 a unit, ten units: its entry adds its premium, 20 KAS, exactly (a sompi more or less
+/// is stated by nobody, and refused by `KpfTEnterSD`). Where the entry ended and is undone (`KpfTEnterOff`), the 20
+/// KAS return to the account's second key, the shard's owner's, before the keeper's fee: the account has what it
+/// had, less the fee. To another key, or a sompi less: refused. A premium of less than a note's least stays in the
+/// account. (An option the user holds adds what its user likes, and nothing returns.)
+#[test]
+fn a_written_options_premium_returns_to_the_owner_where_its_entry_is_undone() {
+    use kpf_protocol::books::{Books, Key, OF_CALLS};
+    use kpf_protocol::covered::CEnterSaid;
+    let w = world();
+    let h = w.head(0);
+    let base = seeded(&w);
+    let committee = w.markets[0].committee_id;
+    let day = T0 + 1_000_000;
+    let k9 = Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 9 };
+    let (s1, b1) = base.s.row_in(&Books::opened(), k9, h.scale, h.price_max, 0, 1, Some(2)).unwrap();
+    let shard = OLive { s: s1, ..base.clone() };
+    let enter = w.script("KpfTEnterSD");
+    let f = [fund(xk(&w.w), 33)];
+    let ff = [fund(xk(&w.f), 36)];
+    let acct = cov(&w, &shard, &[], 40 * KAS1);
+    let written = oleg(&w, 0, 4, 10, P10 / 10 * 9, P10, day, 2 * KAS1);
+    for more in [20 * KAS1 - 1, 20 * KAS1 + 1, 0] {
+        assert!(c_enter_state_d(&w.lib, &acct, &shard, &b1, &enter, SEED, committee, written, more, &[], T0, w.payer(&w.w, &f)).is_err(), "a written option's entry adding {more}");
+    }
+    let (b, st, said, marked, _, next, _) = c_enter_state_d(&w.lib, &acct, &shard, &b1, &enter, SEED, committee, written, 20 * KAS1, &[], T0, w.payer(&w.w, &f)).unwrap();
+    signed("a written call's entry, adding its premium", &b, &w.keys);
+    // (At the engine: the same entry saying a sompi more added.)
+    let more = CEnterSaid { add: said.add + 1, ..said.clone() };
+    let forced = c_enter_state_d_as(&w.lib, &acct, &shard, &b1, &enter, SEED, committee, &Stated { arg: more.arg(), held: st.held + 1, ..st }, &more, &next, w.payer(&w.w, &f));
+    assert!(forced.is_err() || !accepted(&forced.unwrap(), &w.keys), "a written option's entry that adds a sompi more than its premium");
+    // The entry ended: the marked account again. Undone.
+    assert_eq!(marked.0.a_margin, 60 * KAS1);
+    let m = OLive { s: marked.clone(), value: marked.0.a_margin as u64, id: acct.id, op: op(90), daa: 6_700 };
+    let (b, after, note) = enter_off(&w.lib, &m, &w.script("KpfTEnterOff"), w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a written option's entry undone: its premium returns to the owner", &b, &w.keys);
+    let fee = w.terms().keeper_fee_min;
+    assert_eq!((after.legs.len(), after.a_margin, note.leg), (0, 40 * KAS1 - fee, marked.0.legs[0]));
+    assert!(pays(&sg, &xk(&w.c), 20 * KAS1), "the 20 KAS to the shard's owner");
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), ((40 * KAS1 - fee) as u64, &hash_spk(&w.lib, &after.hash())));
+    // (To another key: refused.)
+    let mut t = b.clone();
+    let at = t.tx.outputs.iter().position(|o| o.script_public_key == p2pk_spk(&xk(&w.c)) && o.value == 20 * KAS1 as u64).expect("the output that returns the premium");
+    t.tx.outputs[at].script_public_key = p2pk_spk(&xk(&w.w));
+    assert!(!accepted(&t, &w.keys), "the premium returned to the user");
+    // A premium of less than a note's least stays in the account; an option held returns nothing.
+    for (what, leg, more) in [("a written call of a premium of 0.1 KAS", oleg(&w, 0, 4, 10, P10 / 10 * 9, P10, day, KAS1 / 100), KAS1 / 10), ("a held call", oleg(&w, 0, 3, 10, P10 / 10 * 9, P10, day, 2 * KAS1), 7 * KAS1)] {
+        let (_, _, _, marked, _, _, _) = c_enter_state_d(&w.lib, &acct, &shard, &b1, &enter, SEED, committee, leg, more, &[], T0, w.payer(&w.w, &f)).unwrap();
+        let m = OLive { s: marked.clone(), value: marked.0.a_margin as u64, id: acct.id, op: op(91), daa: 6_700 };
+        let (b, after, _) = enter_off(&w.lib, &m, &w.script("KpfTEnterOff"), w.payer(&w.f, &ff)).unwrap();
+        let sg = signed(&format!("{what}: its entry undone"), &b, &w.keys);
+        assert_eq!(after.a_margin, 40 * KAS1 + more - fee, "{what}: what was added stays");
+        assert!(!sg.tx.outputs.iter().any(|o| o.script_public_key == p2pk_spk(&xk(&w.c))), "{what}: nothing to the owner");
+    }
+}

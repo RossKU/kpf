@@ -213,10 +213,10 @@
     },
     "KpfTEnterOff": {
       "artifact": "KpfTEnterOff.json",
-      "artifact_sha256": "ae6f69b30014584a8bd942ee82e386876a08fb36515454280797815ca5f89649",
-      "script_len": 719,
+      "artifact_sha256": "a5a5e463855f695543a4ed4e747ec8cec53de42db5282bb7e2293d13b7c84bb7",
+      "script_len": 974,
       "source": "contracts/KpfTEnterOff.sil",
-      "source_sha256": "560c3d39bc3ce40f47128adf05c9185989937ee461856cdb197b37090ee2b616"
+      "source_sha256": "19e2b2a8ddff283faac3a8624992e21f4288831f2927cac7c115cc3b7e4e09bd"
     },
     "KpfTEnterS": {
       "artifact": "KpfTEnterS.json",
@@ -227,10 +227,10 @@
     },
     "KpfTEnterSD": {
       "artifact": "KpfTEnterSD.json",
-      "artifact_sha256": "254f9ee7f8d7240472faeb09e368b14ed29320899e8f0715390207545102118f",
-      "script_len": 4271,
+      "artifact_sha256": "28f0505915fd10860a50ae369b68bd6f1477c2b6ae0148617c6c9d64d0da5325",
+      "script_len": 4346,
       "source": "contracts/KpfTEnterSD.sil",
-      "source_sha256": "5fee80488bf74a60eb7fdbeae42719e2434b4bbde3ad8dc1ea044ffd3bc3ac87"
+      "source_sha256": "1071cc23890b3d4d323a80f67229991c9313cab84f77f2d04da409d12b127859"
     },
     "KpfTExit": {
       "artifact": "KpfTExit.json",

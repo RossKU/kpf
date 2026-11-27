@@ -18,7 +18,8 @@ pragma silverscript ^0.1.0;
 // account without the leg, unmarked, a leg fewer counted, the coins added staying; and the note that the leg did
 // not enter (a note that a leg left, asking nothing, of a kind of its own: 8), a note's least in it: applied to
 // the shard, it takes the leg out of its row and out of what the legs were entered at.
-//   off(who, ageb, slotLen, terms, root, leg, moving)      anyone; `root`: the chain before the leg. (The fee is no
+//   off(who, ageb, slotLen, terms, root, leg, moving, po)  anyone; `root`: the chain before the leg; `po`: the
+//   output that returns a written option's premium to the shard's owner (docs 17.8j, B2). (The fee is no
 //   output: the account holds it less, and what the transaction leaves is whoever undoes it's. Beside the
 //   account and the note a block takes no small payment: review 51, F83.)
 contract KpfTEnterOff(int init_version) {
@@ -110,7 +111,7 @@ contract KpfTEnterOff(int init_version) {
     int constant UNENTERED = 8;
     int constant KEEPER_AT = 37;
 
-    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[111] leg, byte[180] moving) {
+    entry off(byte[24] who, byte[8] ageb, int slotLen, byte[90] terms, byte[32] root, byte[111] leg, byte[180] moving, int po) {
         require(version == 1);
         require(int(ageb) >= 0);
         int j = int(byte[8](who.slice(0, 8)));
@@ -125,6 +126,27 @@ contract KpfTEnterOff(int init_version) {
         require(blake2b(p33(blake2b(tb + p33(blake2b(byte[](root) + lg)))) + mv) == byte[32](rs.slice(STATE_AT, STATE_AT + 32)));
         require(mv.slice(171, 180) == i9(1));
         int coins = iAt(mv, AMARGIN_AT);
+        // The premium of an option the user wrote (its way 4 or 6) was added with its entry, by the shard's owner
+        // (KpfTEnterSD holds what such an entry adds to it): it returns to the account's second key, which is its
+        // shard's owner's, in the output `po`, before the keeper's fee. Less than a note's least stays in the
+        // account. Docs 17.8j, B2; review T16, Z9.
+        int back = 0;
+        if (iAt(lg, 94) == 4 || iAt(lg, 94) == 6) {
+            int psz = iAt(lg, 85);
+            int psc = iAt(lg, 67);
+            int ppu = iAt(lg, 58);
+            require(psc > 0);
+            back = (psz / psc) * ppu + (psz % psc) * (ppu / psc) + ((psz % psc) * (ppu % psc)) / psc;
+            if (back > coins - NOTE_MIN) { back = coins - NOTE_MIN; }
+            if (back < NOTE_MIN) { back = 0; }
+        }
+        if (back > 0) {
+            require(po >= 0);
+            require(po < tx.outputs.length);
+            require(tx.outputs[po].scriptPubKey == byte[](new ScriptPubKeyP2PK(pubkey(byte[32](mv.slice(34, 66))))));
+            require(tx.outputs[po].value >= back);
+        }
+        coins = coins - back;
         int fee = iAt(tb, KEEPER_AT);
         if (fee > coins - NOTE_MIN) { fee = coins - NOTE_MIN; }
         if (fee < 0) { fee = 0; }
@@ -133,7 +155,7 @@ contract KpfTEnterOff(int init_version) {
         require(OpCovOutputCount(id) == 2);
         int c0 = OpCovOutputIdx(id, 0);
         require(tx.outputs[c0].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 67) + byte[]((coins - fee) as byte[8]) + mv.slice(75, 121) + byte[]((iAt(mv, 121) - 1) as byte[8]) + mv.slice(129, 171))) + rs.slice(STATE_AT + 32, slotLen))));
-        require(tx.outputs[c0].value >= tx.inputs[j].value - fee);
+        require(tx.outputs[c0].value >= tx.inputs[j].value - back - fee);
         int c1 = OpCovOutputIdx(id, 1);
         require(tx.outputs[c1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs.slice(0, STATE_AT) + byte[](blake2b(i9(NOTE_TAG) + mv.slice(138, 171) + i9(UNENTERED) + p33(blake2b(z32 + lg)) + mv.slice(0, 33) + i9(0))) + rs.slice(STATE_AT + 32, slotLen))));
         require(tx.outputs[c1].value >= NOTE_MIN);
