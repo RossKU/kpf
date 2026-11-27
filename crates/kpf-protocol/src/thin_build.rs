@@ -2964,6 +2964,57 @@ pub fn unentered_apply(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, not
     Ok((b, next))
 }
 
+/// `KpfTLeftD.apply` (docs 17.8j, 9): a note that one option leg left is applied to its shard, which is not called
+/// and whose tree of dated rows is `books`. The shard and the books after, and the note of the rest where the
+/// shard did not hold what was asked.
+pub fn left_apply_d(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::reserve::Left>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books, Option<crate::reserve::Rest>)> {
+    let (next, after, _, paid, rest) = shard.s.left_d(books, &note.s, note.value as i64)?;
+    let b = left_apply_d_of(lib, shard, books, note, &note.s, note.s.hash(), crate::reserve::NOTE_LEFT, next, paid, rest, script, p)?;
+    Ok((b, next, after, rest))
+}
+
+/// `KpfTLeftD.apply` on the note that an option leg did not enter (`KpfTEnterOff` wrote it): the leg is taken out
+/// of its dated row at its entry, and nothing is paid.
+pub fn unentered_apply_d(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<crate::covered::Unentered>, script: &LibScript, p: Payer) -> Result<(OBuilt, crate::reserve::Shard, crate::books::Books)> {
+    let left = note.s.as_left();
+    let (next, after, _, paid, rest) = shard.s.left_d(books, &left, NOTE_MIN_OF_A_NOTE)?;
+    let b = left_apply_d_of(lib, shard, books, note, &left, note.s.hash(), crate::covered::NOTE_UNENTERED, next, paid, rest, script, p)?;
+    Ok((b, next, after))
+}
+
+/// What a note that asks nothing holds: a note's least.
+const NOTE_MIN_OF_A_NOTE: i64 = crate::reserve::NOTE_MIN;
+
+/// As `left_apply_d`, the note's kind and the outputs said (for whoever tests what the script refuses).
+#[allow(clippy::too_many_arguments)]
+pub fn left_apply_d_of<N>(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, books: &crate::books::Books, note: &OLive<N>, n: &crate::reserve::Left, nhash: [u8; 32], tag: i64, next: crate::reserve::Shard, paid: i64, rest: Option<crate::reserve::Rest>, script: &LibScript, p: Payer) -> Result<OBuilt> {
+    let s = &shard.s;
+    let [leg] = n.legs.as_slice() else { return invalid("a note of one option leg (several legs: with the note of several, docs 17.8j, 9)") };
+    let (head, _, _) = crate::reserve::Shard::book_of_option(leg)?;
+    let shown = books.shown(&head.key).ok_or_else(|| Error::Invalid("the leg's series is not in the shard's books".into()))?;
+    let mut d = ODraft::new(p.rate, FeeMode::Relay);
+    let who: Vec<u8> = [0i64, 2, 2].iter().flat_map(|w| sm8(*w)).collect();
+    let args = vec![
+        bv(who), bv(sm8(0).to_vec()), iv(pinned::kit().object_len() as i64), bv(s.terms()), bv(s.rows_bytes()), bv(s.books_head()), bv(s.moving()), bv(crate::thin::leg_bytes(leg)), iv(0), bv(n.key.to_vec()), iv(n.asked), iv(tag), iv(0),
+        bv(leaf138(&shown.row)), iv(shown.place as i64), bv(beside192(&shown.beside)),
+    ];
+    let (id, lid) = enter_hash(&mut d, lib, shard, &s.hash(), "shard", script, "KpfTLeftD", "apply", args, 0)?;
+    d.contract(note, OWhich::T(SLOT), pinned::kit().object(lib, &nhash), "go", vec![iv(1), iv(1)], "note", 0);
+    let taken = crate::reserve::held_for(n.asked, note.value as i64);
+    let value = (shard.value as i64).checked_sub(paid).and_then(|v| v.checked_add(taken)).filter(|v| *v >= 0).ok_or_else(|| Error::Invalid("what the shard would hold is beyond what is counted".into()))?;
+    d.out(value as u64, hash_spk(lib, &next.hash()), Some((0, id)), "shard", None);
+    keep(&mut d, script, lid)?;
+    if let Some(left) = &rest {
+        let c = left.claim();
+        d.out(c.value() as u64, hash_spk(lib, &c.hash()), Some((0, id)), "note", None);
+    }
+    d.fund(p.funds, &p.change_to);
+    if paid > 0 {
+        d.last(paid, &n.key, "what the user is paid", &p.change_to);
+    }
+    d.finish()
+}
+
 /// `KpfTLeftVoid.void`: a note of legs one of which is no leg of the shard's books is spent, the shard as it is
 /// (it is applied by nothing, and would end every draw). `k`: the leg that is not in the books (`Shard::gone_at`).
 pub fn left_void(lib: &[u8; 32], shard: &OLive<crate::reserve::Shard>, note: &OLive<crate::reserve::Left>, k: usize, script: &LibScript, p: Payer) -> Result<OBuilt> {

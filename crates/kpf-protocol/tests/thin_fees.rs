@@ -16,7 +16,9 @@ const T0: i64 = 6_500;
 /// What the genesis gives each copy and the fee pool, and so what each keeps.
 // (11 KAS: at 10 the genesis of a library of 63 scripts in two copies is above a block's storage mass.)
 // (What a copy of a library of two copies holds at the least: `lib_copy_least(2)`, with 70 scripts.)
-const FLOOR: i64 = 13 * KAS1;
+// (17.8j, B3: 14 KAS with a library of 81 scripts. A genesis writes a copy of every script in one transaction, and an
+// output weighs more the less it holds: 13 KAS a copy did for 80.)
+const FLOOR: i64 = 14 * KAS1;
 
 fn kp(seed: u8) -> Keypair {
     Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[seed; 32]).expect("a secret key"))

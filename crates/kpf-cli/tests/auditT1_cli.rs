@@ -2790,7 +2790,8 @@ fn t1b_r53_the_old_form_of_a_covered_account_is_gone_from_the_command_line() {
     // (78 with `KpfTRowIn` and `KpfTRowOut`: docs 17.8j, A2.)
     // (79 with `KpfTShardRowD`: docs 17.8j, A3.)
     // (80 with `KpfTEnterSD`: docs 17.8j, B1.)
-    assert_eq!(names.len(), 80, "{names:?}");
+    // (81 with `KpfTLeftD`: docs 17.8j, B3.)
+    assert_eq!(names.len(), 81, "{names:?}");
     assert!(names.iter().any(|n| n == "KpfTShardRow"), "{names:?}");
     assert!(gone.iter().all(|g| !names.iter().any(|n| n == g)), "{names:?}");
     for cmd in ["acct-leg", "acct-out"] {

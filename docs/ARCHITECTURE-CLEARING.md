@@ -5230,6 +5230,33 @@ that hold the mark are as they were, and two change.
 - **Said as it is**: whose coins pay the premium is the two signers'; the script holds the amount. An entry that
   adds a written option's premium from its user's own coins returns them to the owner where it is undone.
 
+**B3, the first part, as it is built: a note of one option leg** (the engine; `s514_b3_left_d.py`: `KpfTLeftD` is
+written from `KpfTLeft`, run after `s478`; the library has 81 scripts; 800 tests: 794 passed in the one run of
+all, and the six that failed were one thing, below).
+- **`KpfTLeftD.apply`** (2,726 bytes; the twin 1,705): a note that one option leg left (an account's own, tag
+  6), or that it did not enter (tag 8), applied to a shard that is not called: the leaf of the leg's key by its
+  path; the row loses the clearing side's units of the leg, the size, and what the leg was worth exercised at
+  its entry; so does the shard's one number; the root and the sum of the gross. What is asked is as the twin
+  has it: what the account paid, which the note holds, is the shard's coins (a premium among it: it is in no
+  row's number); what is asked above nothing is paid as far as the shard holds, the rest a note of the rest.
+- **The model**: `Shard::left_d` (the option legs of a note out of their rows; the futures legs and what is
+  asked by `left_holding`; a note of option legs alone by the same lines).
+- **At the engine** (`thin_draw.rs`, `a_note_of_an_option_leg_takes_it_out_of_its_row`): a held call that
+  entered leaves by a note that holds its premium of 5 KAS: the shard holds 5 more, and the row, the root, the
+  sum and the shard's number are as before the entry; six other shards after are refused. A note that asks 3
+  KAS pays its user. The note that the leg did not enter (the entry undone by `KpfTEnterOff`) takes it out and
+  pays nothing. A written call in the money leaves, and the row and the shard's number lose the 10 KAS that
+  were entered. Applied by nothing: a leg of a series that is not listed, of more units than its row has (at
+  the engine as well), a futures leg, two legs, a called shard. **An option's whole way through the books is
+  so run at the engine: listed, entered, left; or entered, undone, taken out.**
+- **Measured**: a note of an option leg applied is 5,046 bytes (a futures leg's 3,686).
+- **A library's genesis**: with 81 scripts a copy holds 14 KAS in the test of the fee pool where 13 did for 80
+  (the genesis is one transaction, and an output weighs more the less it holds: 17.8e's last line). About 1,150
+  KAS to make a library of this size, held by the copies.
+- **Not built (the rest of B3)**: a note of several legs of which some have a day (an account of a futures leg
+  and an option that is taken whole in a step writes one), and the twins for a called shard: until then such a
+  note is applied by nothing.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

@@ -650,6 +650,53 @@ impl Shard {
         Ok((Shard { root: next.root(), dgross, basis: b, expiry: until, ..*self }, next))
     }
 
+    /// `KpfTLeftD.apply` (docs 17.8j, 9): the shard, and its tree `books`, once a note of legs of which some have a
+    /// day is applied: each option leg out of its dated row (the row has it: its units, its scale and limit) and
+    /// out of what the legs were entered at; the futures legs and what is asked as `left_holding` has them. Not
+    /// of a called shard (its notes are counted in their class: with the call's step for option legs).
+    #[allow(clippy::type_complexity)]
+    pub fn left_d(&self, books: &crate::books::Books, n: &Left, holds: i64) -> Result<(Shard, crate::books::Books, Vec<usize>, i64, Option<Rest>)> {
+        let no = |why: &str| Err(Error::Invalid(format!("the note is not applied: {why}")));
+        if self.called != 0 {
+            return no("the shard is called");
+        }
+        if books.root() != self.root {
+            return no("the books shown are not the shard's");
+        }
+        let (mut b, mut s) = (books.clone(), *self);
+        for l in n.legs.iter().filter(|l| crate::crow::option_of(l).is_some()) {
+            let (head, units, basis) = Shard::book_of_option(l)?;
+            let Some(row) = b.row(&head.key) else { return no("an option leg is in no row of the shard's tree") };
+            if (row.scale, row.price_max) != (head.scale, head.price_max) || row.gross < l.size {
+                return no("an option leg's row is of another scale or limit, or has fewer units than the leg");
+            }
+            b = b.moved(&head.key, units.checked_neg().unwrap_or(0), -l.size, basis.checked_neg().unwrap_or(0))?;
+            let (Some(bs), Some(dg)) = (s.basis.checked_sub(basis).filter(|x| *x != i64::MIN), s.dgross.checked_sub(l.size).filter(|x| *x >= 0)) else { return no("the books are beyond what is counted") };
+            (s.basis, s.dgross) = (bs, dg);
+        }
+        s.root = b.root();
+        let rest = Left { legs: n.legs.iter().filter(|l| crate::crow::option_of(l).is_none()).copied().collect(), ..n.clone() };
+        if !rest.legs.is_empty() {
+            let (next, at, paid, claim) = s.left_holding(&rest, holds)?;
+            return Ok((next, b, at, paid, claim));
+        }
+        // (A note of option legs alone: what is asked, as `left_class` has it of a shard that is not called. What
+        // the account paid, which the note holds, is the shard's coins; what is asked is paid as far as it holds,
+        // and the rest is owed.)
+        if n.sid != self.sid || n.legs.is_empty() || n.legs.len() > 6 {
+            return no("it is to another shard, or not of one to six legs");
+        }
+        let beyond = || Error::Invalid("the books are beyond what is counted".into());
+        if n.asked < 0 {
+            s.held = s.held.checked_add(held_for(n.asked, holds)).ok_or_else(beyond)?;
+        }
+        let pay = n.asked.max(0).min(s.held);
+        let owed = n.asked.max(0) - pay;
+        s.held -= pay;
+        s.owed = s.owed.checked_add(owed).ok_or_else(beyond)?;
+        Ok((s, b, vec![], pay, (owed > 0).then_some(Rest { sid: n.sid, key: n.key, amount: owed })))
+    }
+
     /// The shard's committee is the leg's, for a leg that enters: the shard's id is the hash of `seed`, of that
     /// committee, and of the terms and periods of the accounts under it (`KpfTEnterS`; review 51, F80).
     pub fn of_committee(&self, seed: &[u8; 32], l: &XLeg) -> bool {

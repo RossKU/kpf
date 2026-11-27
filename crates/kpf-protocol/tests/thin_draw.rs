@@ -4605,3 +4605,106 @@ fn a_written_options_premium_returns_to_the_owner_where_its_entry_is_undone() {
         assert!(!sg.tx.outputs.iter().any(|o| o.script_public_key == p2pk_spk(&xk(&w.c))), "{what}: nothing to the owner");
     }
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// 17.8j, B3: a note of an option leg is applied to its shard (`KpfTLeftD`).
+
+/// A call held at 11 entered (ten units; the clearing side wrote them). Its note takes it out of its dated row:
+/// where the account paid its premium (the note asks 5 KAS below nothing and holds them), the shard holds 5 KAS
+/// more, as coins, and the row, the root, the sum of the gross and the shard's number are as before the entry;
+/// where the leg gained, the shard pays its user. The note that the leg did not enter (its entry ended) takes it
+/// out the same way, and pays nothing. Another shard after is refused; a note of a leg that is in no row, or of
+/// more units than its row has, is applied by nothing.
+#[test]
+fn a_note_of_an_option_leg_takes_it_out_of_its_row() {
+    use kpf_protocol::books::{Books, Key, Row, OF_CALLS};
+    use kpf_protocol::reserve::Left;
+    let w = world();
+    let h = w.head(0);
+    let scale = h.scale;
+    let base = seeded(&w);
+    let committee = w.markets[0].committee_id;
+    let day = T0 + 1_000_000;
+    let (k11, k9) = (Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 11 }, Key { market: h.key.market, day, of: OF_CALLS, strike: P10 / 10 * 9 });
+    let (s1, b1) = base.s.row_in(&Books::opened(), k11, scale, h.price_max, 0, 1, Some(2)).unwrap();
+    let (s2, b2) = s1.row_in(&b1, k9, scale, h.price_max, 0, 3, None).unwrap();
+    let shard = OLive { s: s2, ..base.clone() };
+    let f = [fund(xk(&w.w), 33)];
+    let ff = [fund(xk(&w.f), 36)];
+    let (enter, left_d) = (w.script("KpfTEnterSD"), w.script("KpfTLeftD"));
+    let acct = cov(&w, &shard, &[], 20 * KAS1);
+    let held = oleg(&w, 0, 3, 10, P10 / 10 * 11, P10, day, KAS1 / 2);
+    let (_, _, _, marked, _, next, b3) = c_enter_state_d(&w.lib, &acct, &shard, &b2, &enter, SEED, committee, held, 0, &[], T0, w.payer(&w.w, &f)).unwrap();
+    let leg = kpf_protocol::covered::leg_entered(&held, T0);
+    let with = OLive { s: next, ..shard.clone() };
+    let before = Shard { expiry: next.expiry, ..shard.s };
+    assert_eq!((next.dgross, b3.row(&k11).unwrap().net), (10 * scale, -10 * scale));
+
+    // The leg left in a step, its premium paid: the note holds the 5 KAS.
+    let n = Left { sid: next.sid, legs: vec![leg], key: xk(&w.w), asked: -5 * KAS1 };
+    let note = OLive { value: (NOTE_MIN + 5 * KAS1) as u64, ..left_note(&with, &n, 1) };
+    let (b, after, books, rest) = left_apply_d(&w.lib, &with, &b3, &note, &left_d, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a note of an option leg applied: the premium is the shard's coins", &b, &w.keys);
+    assert_eq!((after, books.root(), rest), (Shard { held: before.held + 5 * KAS1, ..before }, b2.root(), None), "the shard as before the entry, holding the premium");
+    assert_eq!((sg.tx.outputs[0].value, &sg.tx.outputs[0].script_public_key), (with.value + 5 * KAS1 as u64, &hash_spk(&w.lib, &after.hash())));
+    // (Another shard after: refused.)
+    let other = |row: Row| {
+        let mut x = b3.clone();
+        let at = x.place_of(&k11).unwrap();
+        x.leaves[at] = Some(row);
+        x.root()
+    };
+    let r3 = b3.row(&k11).unwrap();
+    for (what, wrong) in [
+        ("the root with the leg still in its row", Shard { root: next.root, ..after }),
+        ("the sum of the gross as with the leg", Shard { dgross: next.dgross, ..after }),
+        ("the row's net left, its gross taken", Shard { root: other(Row { gross: 0, ..r3 }), ..after }),
+        ("the units taken the other way", Shard { root: other(Row { net: -20 * scale, gross: 0, ..r3 }), ..after }),
+        ("the shard's number of what was entered moved", Shard { basis: 1, ..after }),
+        ("the premium not taken", Shard { held: before.held, ..after }),
+    ] {
+        let mut t = b.clone();
+        t.tx.outputs[0].script_public_key = hash_spk(&w.lib, &wrong.hash());
+        assert!(!accepted(&t, &w.keys), "{what}");
+    }
+    // The leg gained 3 KAS (less its premium, in what the account's end asked): the shard pays its user.
+    let n = Left { asked: 3 * KAS1, ..n.clone() };
+    let note = left_note(&with, &n, 2);
+    let (b, after, _, rest) = left_apply_d(&w.lib, &with, &b3, &note, &left_d, w.payer(&w.f, &ff)).unwrap();
+    let sg = signed("a note of an option leg that gained applied", &b, &w.keys);
+    assert_eq!((after, rest), (Shard { held: before.held - 3 * KAS1, ..before }, None));
+    assert!(pays(&sg, &xk(&w.w), 3 * KAS1));
+    // The entry ended and was undone: the note that the leg did not enter takes it out, and pays nothing.
+    let m = OLive { s: marked.clone(), value: marked.0.a_margin as u64, id: acct.id, op: op(90), daa: 6_700 };
+    let (bo, _, un) = enter_off(&w.lib, &m, &w.script("KpfTEnterOff"), w.payer(&w.f, &ff)).unwrap();
+    let so = signed("an option's entry undone", &bo, &w.keys);
+    let unote = nth(&so, 2, un, 6_710);
+    let (b, after, books) = unentered_apply_d(&w.lib, &with, &b3, &unote, &left_d, w.payer(&w.f, &ff)).unwrap();
+    signed("the note that an option did not enter applied", &b, &w.keys);
+    assert_eq!((after, books.root()), (before, b2.root()), "the shard as before the entry");
+    // A written call (in the money at its entry): the row and the shard's number lose what was entered.
+    let acct2 = cov(&w, &with, &[], 40 * KAS1);
+    let written = oleg(&w, 0, 4, 10, P10 / 10 * 9, P10, day, 2 * KAS1);
+    let with0 = OLive { s: Shard { expiry: 0, ..next }, ..shard.clone() };
+    let (_, _, _, _, _, next2, b4) = c_enter_state_d(&w.lib, &acct2, &with0, &b3, &enter, SEED, committee, written, 20 * KAS1, &[], T0, w.payer(&w.w, &f)).unwrap();
+    assert_eq!((next2.basis, b4.row(&k9).unwrap().entered), (10 * KAS1, 10 * KAS1));
+    let both_in = OLive { s: next2, ..shard.clone() };
+    let nw = Left { sid: next2.sid, legs: vec![kpf_protocol::covered::leg_entered(&written, T0)], key: xk(&w.w), asked: 0 };
+    let (b, after, books, _) = left_apply_d(&w.lib, &both_in, &b4, &left_note(&both_in, &nw, 3), &left_d, w.payer(&w.f, &ff)).unwrap();
+    signed("a note of a written call applied", &b, &w.keys);
+    assert_eq!((after.basis, after.dgross, books.root()), (0, 10 * scale, b3.root()), "the books with the held call alone");
+    // Applied by nothing: a leg of a series that is not listed, a leg of more units than its row has, a futures leg
+    // by this script, a note of two legs; a called shard.
+    let stray = Left { legs: vec![kpf_protocol::covered::leg_entered(&oleg(&w, 0, 3, 10, P10 / 10 * 12, P10, day, KAS1 / 2), T0)], ..n.clone() };
+    let more = Left { legs: vec![kpf_protocol::covered::leg_entered(&oleg(&w, 0, 3, 11, P10 / 10 * 11, P10, day, KAS1 / 2), T0)], ..n.clone() };
+    let fut = Left { legs: vec![kpf_protocol::covered::leg_entered(&fleg(&w, 0, 1, LONG, P10), T0)], ..n.clone() };
+    let two = Left { legs: vec![leg, leg], ..n.clone() };
+    for (what, x) in [("a series that is not listed", &stray), ("more units than the row has", &more), ("a futures leg", &fut), ("two legs", &two)] {
+        assert!(left_apply_d(&w.lib, &with, &b3, &left_note(&with, x, 4), &left_d, w.payer(&w.f, &ff)).is_err(), "{what}");
+    }
+    let called = OLive { s: Shard { called: 6_000, ..next }, ..shard.clone() };
+    assert!(left_apply_d(&w.lib, &called, &b3, &left_note(&called, &n, 5), &left_d, w.payer(&w.f, &ff)).is_err(), "a called shard");
+    // (At the engine: the note of eleven units on the row of ten, with the shard after written as if it had them.)
+    let forced = left_apply_d_of(&w.lib, &with, &b3, &left_note(&with, &more, 6), &more, more.hash(), kpf_protocol::reserve::NOTE_LEFT, before, 0, None, &left_d, w.payer(&w.f, &ff));
+    assert!(forced.is_err() || !accepted(&forced.unwrap(), &w.keys), "a note of more units than the row has, at the engine");
+}
