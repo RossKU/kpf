@@ -4645,6 +4645,176 @@ with an option leg takes no step under a call: not live while no option enters, 
 reached: prices stated the tolerance off with options (W4), a hand-over or a join of an account with option
 legs, the end of a sale (15) at the engine, block weights, and O9, which stands as review T14 left it.
 
+### 17.8j The seventh step, whole: the dated rows, an option's entry, its leaving, its day, a call (on paper, for review; nothing of it built)
+
+**Where it starts.** An account knows an option leg whole (17.8i, reviews T14 and T15): its row, the ends, a
+step. Nothing lets one in: `KpfTCRow` says the leg an entry says is wrong where it is an option; the shard's
+books take futures legs only (`Shard::book_of`); `KpfTCStep` takes the ways 1 and 2. The shard's books are four
+futures rows written whole; the tree, its two scripts and the answer of a trace's row by paths are built,
+reviewed (T10) and parked (`run/parked/tree-all-rows/`). The committee's note of a day is built (`KpfTDay`).
+What 17.6, 17.7 and 17.8g say stands; this section says what they left open (17.8e: where a dated row's scale
+and limit come from, how a trace goes over four rows and then a list; 17.8g: B and C as transactions; reviews
+T14 and T15: O9, a call's step), and the order it is built in. Each numbered point is decided here unless it
+says "open".
+
+**1. The books' hash** is of four things: the sum of the gross of every row, the hash of the four futures rows,
+**the root of the tree of dated rows**, the hash of the claims' numbers. A shard is opened with the root of a
+tree of the head leaf alone (a constant). Every script that shows the four rows is shown the root beside them,
+33 bytes; only a script that touches a dated row opens it.
+
+**2. A market's futures row is its head.** One scale and one limit a market were held, in the tree of every
+row, by the market's futures row being its first leaf. With the futures rows out of the tree: **the ninth
+field of a futures row (what its legs were entered at: nothing, in a futures row, today) is the count of the
+market's dated rows.** A dated row is put in only where its market has a row among the four (an empty place
+takes the market, with no unit, where it has none), takes that row's scale and limit, and the count rises by
+one; taken out, the count falls. A futures row with a count is not the empty row: no other market takes its
+place (review T9's Q3 is this rule already). The tree then has no futures key and no rule of a market's first
+row: the head leaf, and keys in order. Cost: dated rows of four markets a shard at the most, as futures.
+
+**3. A dated row** is the parked leaf: the key (the market, the day, what it is of, the strike), the scale and
+the limit, the net (the clearing side's units: above nothing where users wrote more than they hold), the gross,
+what its legs were entered at, the hash of the key after. "Of": 1 calls, 2 puts, **3 the price of the day**
+(17.8g, B), with a strike of nothing: it is the last key of its market and day, so the leaf before it shows
+whether a row of that day still stands. A day's leaf holds the price where a row holds what was entered, and 1
+for "none" where a row holds its net; its gross is nothing.
+
+**4. A row put in and taken out** (`KpfTRowIn`, `KpfTRowOut`; the parked scripts, with the four rows shown).
+- In: the owner signs; the shard not called; the key well made (a strike within the limit, a day more than T
+  after the time the transaction says, which is not ahead of the chain; "of" 1 or 2); the leaf before below it
+  and naming a key above it or nothing; an empty place; the market's futures row as point 2 says.
+- Out: a row of no unit and nothing entered; by the owner at any time, by anyone once its day has passed. A
+  day's leaf: by anyone, where the leaf before it is not of its market and day.
+- No entry puts a row in (as stage 2 had it): the owner lists a series before anyone enters it.
+
+**5. What an option leg is to the books.** Its row's key is its market, its day, calls or puts, its strike. The
+clearing side's units: the size where the user wrote it, the size below nothing where the user holds it. The
+gross: the size. What it was entered at: what it is worth exercised at its entry by the clearing side's units,
+added to the row's number and to the shard's one number over all rows (17.3: the books take an option at what
+it is worth exercised at its entry). No premium is in the books.
+
+**6. What a shard is asked, and the trace of a draw and of a call.** As an account (17.4, 17.8h): what its side
+can lose by a move of the rate, the rows of one market counted together, and the rate on the gross of every row
+at the market's price.
+- **The order** is the list's (the markets, as today): for each market its futures row, then its dated rows as
+  the tree has them. A trace's row says the place (0 to 3 a futures row; 64 and the leaf's place a dated row),
+  the place of its price in the list, the two sums of the open market, what the closed markets are asked, the
+  worth of the gross, the clearing side's worth signed, and **the hash of the key the tree names next** (the
+  head's at the start; carried by a futures row; a dated row is of that key and writes what its leaf names).
+  88 bytes a row; sixty-seven rows at the most. The end holds that the last row has no key left, and that the
+  count of futures rows traced is the count of rows with a market (their places in the list rise, so none is
+  traced twice).
+- **A futures row** adds what its net units gain from the price to each end of the rate (the account's `ends`).
+  A market with no dated row is so asked the rate on its net, to the rounding: the amounts of today's tests
+  move by a sompi, as the account's did at 17.8h's stage 1.
+- **A dated row of a day to come** adds what its net is worth exercised to the clearing side's worth; and to
+  the two sums: where the clearing side wrote (net below nothing), exactly what it gains at each end; where it
+  holds (net above nothing), the same where the strike is outside the ends, and along the line of nothing
+  between them (it loses what it is worth exercised now, at both ends: no line is chosen for a shard). **Within
+  T of its day** each of its two sums is no more than nothing (17.4, N68).
+- **A row whose gross is nothing** adds nothing and reads no price (review T8, P1), a day's leaf among them.
+- **A draw is wrong while a dated row of an ended day has a unit.** (The owner ends the legs, or waits for the
+  fallback: 10.) No day's price is read by a draw.
+- **A call** is right by one price a market that shows it (17.4, N80: "a call's test of a shard is the same,
+  over its rows"): an entry of the list says, beside the price, a second price within the lower rate of it; the
+  rows sum what the clearing side gains from the first to the second (a dated row within T of its day: no more
+  than nothing); the call is right where the shard's equity at the first prices and that sum are below the
+  lower rate on the gross. This takes the place of the price moved the tolerance in the shard's favour a row
+  (`counted_at`), which has no meaning for rows counted together. An entry of the list is 64 bytes.
+- **A dated row of an ended day, in a call's trace**, is counted at its day's price: its answer is shown the
+  day's leaf, or the leaf before where none stands, and then counts the row at what its legs were entered at
+  (17.5). A script of its own (`KpfTShardRowE`): the common answer does not carry a third path.
+
+**7. The row's gate** (17.8c) for a dated row is the same sentence: what the shard holds, less what it owes, is
+at least what this row alone is asked with the leg, at the leg's entry, at the upper rate; or the row is asked
+no more with the leg than without it. A row alone, where the clearing side holds, is asked the rate on the
+gross only.
+
+**8. An option enters** (kind 10, as a futures leg; `KpfTCEnter` is built for it).
+- `KpfTCRow`: the leg an entry says may be an option where: its time is the statement's; its day is more than T
+  after it; its strike and premium are within the limit. Its row is an option leg's that stays.
+- `KpfTEnterSD`, the twin of `KpfTEnterS` for a leg with a day: the dated row and its path where the twin reads
+  one of four; the row is there (4); the leg's scale and limit are the row's; the gate (7); the root rewritten.
+- **The premium of an option the user writes** is put into the account in the transaction that states the
+  entry (the entry's "add", which the account's gate then holds: the coins hold every premium, T15's Y1). An
+  entry carries the two signatures; whose coins they are is the signers'. **Where the entry ends unapplied the
+  added coins return to the key the entry says** (the owner's, for a written option; today what is added stays
+  in the account). Open: read in the scripts where an entry ends unapplied (a wrong point, a lapse, the
+  shard's time) and say the one place the key is paid.
+
+**9. An option leaves before its day** in a step, or with its account under a call; never by its user's
+statement (17.4). The note to the shard says the leg whole (as today: its chain) and what is asked or paid; a
+premium paid is coins in the note, and is no row's number.
+- `KpfTLeftD` (a note of one leg with a day; a shard not called), its twin for a called shard, and
+  `KpfTLeftVoidD`: the dated row by its path; the row and the shard's number lose what the leg was entered at.
+- A note of several legs of which some have a day (`KpfTLeftAllD` and its twin): a futures leg by its place
+  among the four, a dated leg by its row and path against the root as the legs before left it.
+- Open: whether `KpfTLeftAllD` is one script or the note of an account that holds option legs is written a leg
+  a note (what `KpfTCEnd` writes changes then: a step of every leg writes up to six notes).
+
+**10. The day** (17.8g, B and C, as transactions).
+- **`KpfTDayIn.price`**, anyone: the shard, beside the committee's note of the market and the day (read as
+  17.8g, A says: four times its spread within the tolerance); no leaf of that key stands (the leaf before); the
+  leaf is written with the lower of the price and the market's limit; the count of the market's futures row
+  rises. **`KpfTDayIn.none`**: the same with no note, shown an input that landed at or after the day and the
+  fallback's time. Either writes **the shard's note of the day** (tag 23), which `KpfTDayCopy` copies.
+- **`KpfTDayLeg.end`**, anyone: the account, not under a statement; the shard's note of the leg's market and
+  day; the leg named, its day at or before the note's. What it gained is what it is worth exercised at the
+  day's price less the same at its entry, less the entry's part of its band, and for a held option less its
+  premium. Below nothing: the coins pay it into a note to the shard, and what they do not pay is added to what
+  the account owes. Above nothing: **the number of what the account owes goes down by it, below nothing where
+  it owed less**: a credit, no coin. A written option's premium is its user's from here. "None": the leg ends
+  at its entry and every premium is its user's. The note to the shard says the leg and what was paid; applied,
+  the row loses the leg. A keeper's fee after the loss and the premium, from the coins, never owed.
+- **A credit** counts for the account wherever what it owes counts against it (every end subtracts that
+  number: below nothing it adds). **It is taken out by a take that says how much of it**: the take's test
+  counts the credit less that; the account writes a note to the shard that asks it for the user's key (the
+  form a mark's note has, of no leg), and the number rises. A leaving of every leg asks what is left of it in
+  its note. Nothing touches the shard and an account at once (14).
+- **O9, decided: in a step an ended leg is passed by a row that adds its premium and nothing else, and is named
+  by no step** (it leaves by `KpfTDayLeg.end`). **An account that holds an ended leg is not taken whole**, as
+  one that holds tokens: the leg named leaves alone, owing what the coins do not pay. In every other kind an
+  ended leg's row is wrong, as built: its user ends it first. So a due account is stepped while no price of a
+  day is written; what an ended leg lost waits for the price or the fallback.
+
+**11. Under a call** (17.3, 17.9).
+- `KpfTCStep` takes an option leg of a day after the call's time at the call's price for its market: what it
+  gained or lost exercised from its entry, as a futures leg; no premium moves; a leg younger than T asks
+  nothing (17.9).
+- An account with a leg whose day is at or before the call's time is ended first (`KpfTDayLeg.end`, whose note
+  is a claim of the first class where it asks): the call's step refuses it. **Said as it is:** no claim is paid
+  while a row has a unit, so one such leg holds every claim until the day's price is written or the fallback's
+  time has passed.
+- A row of gross nothing is counted in no call.
+
+**12. What moves an option without a price** (a hand-over, a join, a split by the two signatures): the leg's
+bytes go as a futures leg's; the premium is in the coins. To be read in `KpfTPass`, `KpfTJoinC` and `KpfTLegOut`
+that none of them reads a leg's way as 1 or 2 only, and that a join keeps legs of one market next to one
+another or the account is asked more (17.4).
+
+**The order it is built in**, each a commit with every test passing, a review at the engine after B, D and E:
+
+| | What | Scripts |
+|---|---|---|
+| 0 | **The model first** (no script): a shard's books of futures and dated rows, the requirement by rows against what the legs under them can lose (the rows never ask less), a draw and a call by one price a market, ended rows, a credit in an account through its day; with the walk of 17.8, 1 by rows | none |
+| A | The books' hash with a root; the tree back for dated rows; a row put in and out; a trace's row for a dated row; the two sums in a draw and a call (futures amounts move by the rounding) | `KpfTRowIn`, `KpfTRowOut`, `KpfTShardRow` (and a twin for a dated row), `KpfTShardEnd`, `KpfTCallEnd`, `KpfTShardPrice`, every script that shows the rows (33 bytes) |
+| B | An option enters and leaves in a step | `KpfTCRow`, `KpfTEnterSD`, `KpfTLeftD` and twins, `KpfTLeftAllD` |
+| C | A call with option legs | `KpfTCStep`, the twins for a called shard |
+| D | The day: its leaf, the shard's note, an ended leg, a credit, O9 | `KpfTDayIn`, `KpfTDayCopy`, `KpfTDayLeg`, `KpfTShardRowE`, `KpfTCRow`, `KpfTCEnd` and the other ends (what is owed below nothing) |
+| E | The tool: a series listed, an option entered, stepped, ended; then testnet | none |
+
+About fourteen scripts more: the library's genesis is then of ninety copies (17.8e's last line: with the
+scripts' final count).
+
+**For the review on paper**: each numbered point against the scripts and models as they are (does anything
+built contradict it; what does it not say that a script will need); the trace's order and the count that no
+row is left out or traced twice (6); the futures row as a market's head against a row emptied by the last leg
+(2) and against review T9's Q1 and Q3; a call by one price a market against review T3's L4 and 17.9 (what an
+owner gains by the second price being its to choose; a caller's); the day's leaf as the last key of its day
+(3, 4, 10) against a row put in for an ended day; a credit (10) against every end that reads what an account
+owes, and against a called shard; O9 as decided against the freeze it was found as, and whether "not taken
+whole" leaves a loss unpaid; what an owner or a user gains by the day's price being written late, or never;
+the premium's return (8); whether any of it can be left out of the first form with the goal's row still held.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
