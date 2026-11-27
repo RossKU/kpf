@@ -4407,6 +4407,81 @@ every leg, with no token held): what it pays is now of the risk taken away.
 of a leg alone, of its worth, counted by the end as before). It stays for the option leg, whose band is not a
 rate on a worth (17.5); if stage 2 does not read it, it leaves the row in the last phase.
 
+### 17.8i The option leg in an account, how it is built (17.8h's stage 2; on paper, for review)
+
+17.2 to 17.5 say what an option leg is and what holds; 17.8h has the row and the ends for futures and tokens,
+with the options' numbers at nothing. This says what an option leg adds to a row, what each end does with it,
+and what changes of 17.8h now that a step is by what is asked (review T13, W3). Nothing of it is built. An
+account with an option leg is made in the tests as an object is: the entry with its premium, the shard's dated
+rows, and the day (17.8g, B and C) are 17.8's seventh step.
+
+**The leg.** Where a futures leg says its way: 3 a call the user holds, 4 a call it wrote, 5 a put it holds, 6
+a put it wrote (as a leg of an account no shard covers has them; the strike is not there). Its 32 bytes: the
+time it entered, its day, its strike, its premium a unit. Its entry: the market's price where it entered. A
+strike within the market's limit; a day after the time it entered; a premium not below nothing.
+
+**What it is worth exercised**, v(p), by its units: a call held, the larger of nothing and the worth at p less
+the worth at the strike; a put held, the other way; one the user wrote, that below nothing.
+
+**What it adds to a row** (L and U, q, the head: 17.8h):
+
+| Number | A futures leg | An option leg |
+|---|---|---|
+| G; GL where it leaves | its worth at a less at its entry, by its way | v(a) less v(entry) |
+| W; WS where it stays | its worth at a | its underlying's worth at a (the base of the fee of a leg named, as a futures leg's) |
+| LS where it stays | what it lost | the same |
+| M | what it gains from a to q | v(q) less v(a); **within T of its day, no more than nothing** |
+| the two sums; RL alone | what it gains from a to L and to U | v(L) and v(U) less v(a). **A held option whose strike is between L and U: along the line its bit of the head says** (worth nothing wherever the price goes: v(a) lost at both ends; or exercised wherever: what it is exercised at each end, below nothing as well, less v(a)). **Within T of its day: each no more than nothing.** In a step: the line of nothing, whatever the head says (below) |
+| the band where it leaves alone (BL) | twice the tolerance of its worth | what it loses by a move of twice the tolerance, the worse way (17.5) |
+| PA; PS where it stays | nothing | its premium by its units |
+| PO where it leaves | nothing | held: its premium. Written: its premium less what it lost, or nothing (17.3: the shard is paid the larger of the premium and what it lost) |
+| NS where it stays | one | **nothing for a held option**, one for a written |
+
+A row of a leg whose day is at or before the statement's time is **wrong**: an ended leg leaves by the day's
+transaction (17.8g, C) before anything is stated on its account. T and the statement's time: the head's, and
+the statement's own.
+
+**Three numbers change in the row of 17.8h, and one is new: 256 bytes.**
+
+- **The band of every leg leaving is what the legs can lose by a move of twice the tolerance**: the two sums and
+  the closed groups again, at that rate (three numbers, where the row has the band of all the legs, which no
+  end reads). For futures legs it is what is built (R by twice the tolerance over the rate), to the rounding.
+  For options R by a ratio is not it: a call held a hundredth out of the money is asked nothing but its
+  premium, and a price stated a hundredth high shows it a gain.
+- **NS**: how many of the legs that stay are not held options (a step's rule, below).
+
+**The ends** (R', m, tk, owes as in 17.8h):
+
+| Statement | With an option leg |
+|---|---|
+| an entry (10), a take (7), a mark (13), tokens leaving (14) | the premiums beside R: PA where all stay, PS of what stays |
+| a leaving (8) | **an option is named by none**: its row is wrong where it leaves, alone or with every leg (nobody exercises before the day: 17.5). Of a futures leg beside options: the premiums of what stays beside R |
+| a mark (13) | names no option: its row is wrong |
+| a split (12) | moves an option with its premium (how one is sold: 17.4): what moves at RL, its premium and what it lost; what stays at RS', PS and LS |
+| a step (9) is due | the coins and what a step would leave of what the legs gained **below the premiums** (PA) |
+| a step, a futures leg or a written option named | as 17.8h, with every held option between the ends on its line of nothing; where it leaves alone the coins pay what it lost and its PO, and then the fee |
+| a step, a held option named | **alone only where every leg that stays is a held option** (NS of the last row is nothing: review T12, E13); else every leg |
+| a step, every leg | the coins pay what the legs lost together, then PO as far as they go, then the fee; what they gained together is asked less the band above. What the coins do not pay of a premium is not owed (a premium is the user's own coins, or the owner's: 17.3) |
+| the fee of every leg | what is asked, **R and the premiums**, by the fee's rate over the rate (an account of held options is asked its premiums alone) |
+
+**To be shown in the model first** (`research_options.rs`; the options' model has one underlying, no fee and
+its own step): a step with every held option on its line of nothing and E13's rule, against the rule that
+takes the lines that ask least (how many steps part, and that the shard is unpaid by none; N71 as it was); the
+band at twice the tolerance (a held option near its strike stated the tolerance high gains nothing by it); a
+step by what is asked with premiums (the walk of 17.8, 1, with W3's fee).
+
+**To be said by the review:** whether an ended leg's row being wrong can freeze an account against its user or
+its stepper (who sends the day's transaction, and what if no price of the day is written yet); the day and T
+against the statement's time where a statement stands for a dispute period across the day; whether "an option
+is named by no leaving" leaves a user with a futures leg and an option no way to close the option but a split
+or a step; a written option that gained (it ended out of the money before its day?) named in a step; the
+premium of a written option in a split (the owner's coins move to another account of the same user: 17.3's
+"never margin for its other legs"); whether PO as one sum is enough where a step of every leg pays losses
+first and premiums after, and where a leg leaves alone; the band of a held option that leaves alone against
+17.5's (the entry's part); whether the fee on R and the premiums pays whoever steps an account of held options
+too little or too much; what E13's rule does to a put held against a long (the long named first); and the
+cost: 256 bytes a row (24 more than is built), and what `KpfTCRow` weighs with two kinds of leg more.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts
