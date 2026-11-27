@@ -3545,7 +3545,7 @@ The checks of each script, as lists to build from, are in `docs/audit/REVIEW-T4-
 
 The model of the tree is `books.rs` (no script reads it yet): the key (60 bytes: the market, the day, what the
 row is of, the strike), the row (the key, its market's scale and price's limit, the net, the gross, what its
-legs were entered at where it has a day, the hash of the key after: 165 bytes hashed under a leaf's tag), the
+legs were entered at where it has a day, the hash of the key after: 147 bytes hashed under a leaf's tag), the
 head leaf, a row put in and taken out, the root and the books' hash in the form 17.8a, 1 built. What the model
 decided beyond 17.6 and 17.10:
 
@@ -3576,19 +3576,20 @@ row of `books.rs`'s fields; `Shard` still holds four of them. Every test of toda
 | `KpfTShardOpen` | nothing more | the root of a tree of the head leaf alone, a constant |
 | a row put in (new, `KpfTRowIn`; the owner signs) | the leaf before and its path, the key it names plain, the new row's key, scale and limit, an empty place and its path against the root as the leaf before rewrote it | the leaf before's key below the new key; the key it names above it, or nothing; the rule of a market's first row; the new row of no unit |
 | a row taken out (new, `KpfTRowOut`; anyone for a row whose day has passed, the owner for a futures row) | the row and its path, the leaf before and its path, the key the row names plain | no unit, nothing entered; the futures row's rule; the leaf before names what the row named; the place empty |
-| `KpfTEnterS`, `KpfTLeft`, `KpfTLeftVoid` | the one row and its path (165 + 8 + 192 bytes, where 408 are shown today) | the row opens the root; the root with the row rewritten |
+| `KpfTEnterS`, `KpfTLeft`, `KpfTLeftVoid` | the one row and its path (138 + 8 + 192 bytes: the row without its tag, its place, six hashes; 408 are shown today) | the row opens the root; the root with the row rewritten |
 | `KpfTLeftAll` | a row and its path for each leg of the note, in the note's order: each path against the root as the leg before rewrote it (two legs of one row: the second is shown the row as the first left it) | the same, leg by leg |
 | `KpfTShardRow` (a row of a trace) | the row and its path, and the row before it in the trace's order and its path | the row before names this row's key (the first: the head names it); the trace's row as today |
 | a point more of a trace (the last) | the last row and its path | it names the key of nothing: no row is left out at the end |
 | `KpfTShardPrice` | no row (the shard's id by the seed) | as stage 1 |
+| `KpfTMarkNote` | no row, as today: the books' three numbers and the root | as today |
 | `KpfTCallPay` | no row: the books' three numbers and the root | the sum of the gross is nothing (the four rows compared whole today, beside it) |
 | `KpfTChange` | | a trace's length by its two counts: 24 bytes, 56 a price, 40 a row; sixty-three rows and a number of prices at the most |
 
 - A row's place among the sixty-four is whoever puts it in's to choose; the trace's row says the place (the
   first of its five numbers, which says the row's number among four today).
 - No entry puts a row in: an entry on a market the shard has no row of is refused, and the owner puts the row
-  in first (a transaction of its own: about 700 bytes of rows and paths; the common entry is not made heavier
-  for it).
+  in first (a transaction of its own: about 700 bytes of rows and paths, 4 to 4.5 kB with its script; the common
+  entry is not made heavier for it).
 - The model: `Shard` holds `books::Books` in a form that copies (sixty-four places); `rows` as tests say it
   today is given by a function (the rows in the keys' order), and a shard of given rows is made by one.
 
@@ -3602,6 +3603,43 @@ enter); who takes a dated row out and when (its day has passed AND it has no uni
 against today's 5,554 (an entry) and 4,852 (a note of one leg), which review T4 estimated 6 to 15 % heavier
 before the last two pieces made them 10 % heavier already; and S1 (the leaving that raises a row's requirement):
 does anything in the tree make either of its two directions cheaper or dearer.
+
+**Review T8** (`docs/audit/REVIEW-T8-tree-plan.md`; on paper, nothing run; every size reasoned from the scripts
+as they are, none compiled). **The tree's rules as the model has them are sound; no rule of a row put in or
+taken out changes.** One leaf shown is enough for one scale and one limit a market: the order compares the
+market first, so a market's rows are next to one another; its futures key is the least of its keys, so the leaf
+before a new futures row is never of its market; a dated row needs a row of its market before it, which has the
+market's scale and limit; the futures row leaves only where the row after is another market's. A leaf before
+that another transaction rewrote opens no root; only the owner fills a tree, and nothing of a user's is held by
+a full one. Decided, before any script:
+
+| Finding | What it is | Decided |
+|---|---|---|
+| P1 (medium) | with the tree a row stands at no unit until it is taken out, and a trace asks a price of every row with a market: an owner puts in a row of a market its committee never signs, and no call's trace can be answered | **a row whose gross is nothing adds nothing to a trace and reads no price** (what a row of no market is today). The rest stands as today and is open: a leg of one unit in such a market does the same, and a row is the owner's to put in. With the day and the option rows: what a call does with a price nobody can cite |
+| P2 | a key shown as bytes with a day written as nothing below zero is the futures row by its numbers and not by its bytes | `KpfTRowIn` takes the market as 32 bytes and the rest as numbers and writes the key itself; "nothing" on a shown row is compared as bytes; `KpfTChange` holds the two counts as written |
+| P3 (medium) | a place of 64 + p opens what p opens: a trace would have two right forms | every place is held within 0 to 63 before its path; a trace's row with a place beyond is answered wrong with nothing opened |
+| P4 | a leaf is 147 bytes hashed (9 + 60 + 45 + 33), not 165 | corrected above; a row with its path is about 345 bytes |
+| P5 (medium) | the arms of a dated row cannot be tested before the day is built | in stage 2 `KpfTRowIn` takes a futures key only and `KpfTRowOut` is the owner's only; the model keeps both arms, for the day |
+| P6 (medium) | `KpfTLeftAll` is the one path that is much heavier: the script about 7.2 to 7.8 kB (5,093), a note of six legs of six rows about 12 kB (7.6), a note of two legs about 10 kB (7.2) | the note stays whole, a path a leg, no limit of legs; it fits (the rows and paths go as one push). A test of the worst case with its bytes; a twin of three legs from the same source if the script measures above 7 kB |
+| P7 (medium) | the model's `Shard` copies, and with sixty-four places it is 8.7 kB: frames of many of them can overflow a test's stack | the type's change alone first, and the tests run; the stack set larger if it must be; an `Arc` inside and no copying is the fallback. Not fewer places in the model than the scripts take |
+| P8 | stage 1 is worth a commit of its own if the tests' change is spent there once | stage 1 brings the tests the form they keep: a shard of given rows by a function, a row read by its market and not by its number, the points of a trace by functions |
+| P9 | the last point | folded into the row's answer: the last row of a trace names the key of nothing; a trace of no row shows the head alone. Rows are points 1 to 63, prices from 64 |
+| P10 | `408` is two things in the scripts (the four rows; the longest trace in `KpfTChange`) | the trace's length by its counts: 24 + 56 a price + 40 a row, each count 63 at the most (6,072 bytes the longest) |
+| P12 to P14 | the market of nothing; the opened tree's root; a rule made local; a called shard | a key of the market of nothing is no row's; a test holds `KpfTShardOpen`'s constant to the model's opened root; `KpfTRowIn` compares the named key's market with the new futures row's; no row is put into a called shard |
+
+Stage 1's own five points for its review: the list's order is the plain markets'; the committee by the seed (a
+shard made by hand with an id of chosen bytes fails a price's answer); "an entry no row is of is cited by
+nobody" is "by anybody"; a futures row and an options row of one market are one entry of the list; which uses
+of the tags 13 and 14 are a shard's row's name and which an account's own.
+
+Sizes, reasoned: an entry stated about 5.65 to 5.85 kB (5,554 today: 2 to 5 % more); a note of one leg applied
+about 5.0 to 5.2 kB (4,852: 3 to 7 % more); a price answered about 450 bytes lighter; a row of a trace answered
+about 4.9 to 5.3 kB (4,290). No cheaper form is worth two forms: a depth of five saves 80 bytes a path.
+
+S1 and the leaf: a higher rate on the gross is neither cheaper nor dearer with the tree. "Young by a leaving"
+would need a time in the leaf and in the list's entry (a call's step reads no row), and is a rule a row where
+dated rows are judged an underlying. **The leaf has no field for it**: if S1 is closed, it is by the rate
+(not decided: the owner of the design's).
 
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 

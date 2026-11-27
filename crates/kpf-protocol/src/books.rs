@@ -117,7 +117,8 @@ impl Key {
     pub fn well_made(&self) -> bool {
         // (Two ids that differ in the sign of a number of nothing are one key by their numbers: neither is one.)
         let plain = (0..4).all(|i| self.market[8 * i..8 * i + 8] != [0, 0, 0, 0, 0, 0, 0, 0x80]);
-        *self != Key::HEAD && plain && (self.is_futures() || ((self.of == OF_CALLS || self.of == OF_PUTS) && self.day > 0 && self.strike > 0))
+        // (And the market of nothing is the head's.)
+        self.market != [0; 32] && plain && (self.is_futures() || ((self.of == OF_CALLS || self.of == OF_PUTS) && self.day > 0 && self.strike > 0))
     }
 }
 
@@ -140,7 +141,7 @@ pub struct Row {
 }
 
 impl Row {
-    /// 165 bytes.
+    /// 147 bytes: the tag, the key, five numbers, the hash of the key after.
     pub fn bytes(&self) -> Vec<u8> {
         [i9(LEAF_TAG), self.key.bytes(), i9(self.scale), i9(self.price_max), i9(self.net), i9(self.gross), i9(self.entered), p33(&self.next)].concat()
     }
@@ -158,6 +159,20 @@ fn node(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
     blake2b(&[i9(NODE_TAG), l.to_vec(), r.to_vec()].concat())
 }
 
+/// The hash of a half of no leaf, at each height (the first: an empty leaf).
+fn empties() -> [[u8; 32]; DEPTH + 1] {
+    let mut e = [EMPTY; DEPTH + 1];
+    for d in 0..DEPTH {
+        e[d + 1] = node(&e[d], &e[d]);
+    }
+    e
+}
+
+/// The level above a level (one of the `empties` where both halves are).
+fn above(level: &[[u8; 32]], e: &[[u8; 32]; DEPTH + 1], d: usize) -> Vec<[u8; 32]> {
+    level.chunks(2).map(|c| if c[0] == e[d] && c[1] == e[d] { e[d + 1] } else { node(&c[0], &c[1]) }).collect()
+}
+
 /// A row as a script is shown it: the row, its place among the leaves, and the hashes beside its way to the root
 /// (the lowest first).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +184,10 @@ pub struct Shown {
 
 /// The root a leaf at a place gives with the hashes beside its way.
 pub fn root_of(leaf: &[u8; 32], place: usize, beside: &[[u8; 32]; DEPTH]) -> [u8; 32] {
+    if place >= LEAVES {
+        // (A place of 64 + p would open what p opens: no place beyond the leaves opens anything. Review T8, P3.)
+        return [0xff; 32];
+    }
     let mut h = *leaf;
     for (d, b) in beside.iter().enumerate() {
         h = if place >> d & 1 == 0 { node(&h, b) } else { node(b, &h) };
@@ -208,9 +227,9 @@ impl Books {
     }
 
     pub fn root(&self) -> [u8; 32] {
-        let mut level = self.level0();
-        while level.len() > 1 {
-            level = level.chunks(2).map(|c| node(&c[0], &c[1])).collect();
+        let (mut level, e) = (self.level0(), empties());
+        for d in 0..DEPTH {
+            level = above(&level, &e, d);
         }
         level[0]
     }
@@ -228,10 +247,10 @@ impl Books {
     /// The hashes beside a place's way to the root.
     pub fn beside(&self, place: usize) -> [[u8; 32]; DEPTH] {
         let mut out = [[0u8; 32]; DEPTH];
-        let (mut level, mut i) = (self.level0(), place);
-        for o in out.iter_mut() {
+        let (mut level, mut i, e) = (self.level0(), place, empties());
+        for (d, o) in out.iter_mut().enumerate() {
             *o = level[i ^ 1];
-            level = level.chunks(2).map(|c| node(&c[0], &c[1])).collect();
+            level = above(&level, &e, d);
             i >>= 1;
         }
         out
@@ -250,18 +269,21 @@ impl Books {
         Some(Shown { row: self.leaves[place]?, place, beside: self.beside(place) })
     }
 
-    /// The rows in the order of their keys, the head first: each is the one the row before names.
+    /// The rows in the order of their keys, the head first. (In books made by `put` and `out` each is the one
+    /// the row before names: `well_linked`.)
     pub fn in_order(&self) -> Vec<Row> {
-        let mut out = vec![];
-        let mut at = self.row(&Key::HEAD);
-        while let Some(r) = at {
-            out.push(r);
-            if r.next == Key::HEAD.hash() || out.len() > LEAVES {
-                break;
-            }
-            at = self.leaves.iter().flatten().find(|x| x.key.hash() == r.next).copied();
-        }
+        let mut out: Vec<Row> = self.leaves.iter().flatten().copied().collect();
+        out.sort_by(|a, b| if a.key == b.key { std::cmp::Ordering::Equal } else if a.key.below(&b.key) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
         out
+    }
+
+    /// Whether the rows are a list from the head: each names the one after it in the keys' order, the last the
+    /// key of nothing, and no key is twice.
+    pub fn well_linked(&self) -> bool {
+        let rows = self.in_order();
+        rows.first().is_some_and(|r| r.key == Key::HEAD)
+            && rows.windows(2).all(|w| w[0].key.below(&w[1].key) && w[0].next == w[1].key.hash())
+            && rows.last().is_some_and(|r| r.next == Key::HEAD.hash())
     }
 
     /// The leaf before a key that is not in the books: the one whose key is below it and that names a key above
@@ -387,6 +409,7 @@ mod tests {
     /// gross is the rows'; and every row opens the root.
     fn holds(b: &Books, every: bool) {
         let rows = b.in_order();
+        assert!(b.well_linked(), "a list from the head");
         assert_eq!(rows.len(), b.leaves.iter().flatten().count(), "every row once");
         assert_eq!(rows[0].key, Key::HEAD);
         assert!(rows.windows(2).all(|w| w[0].key.below(&w[1].key) && w[0].next == w[1].key.hash()), "in the order of the keys");
@@ -497,6 +520,7 @@ mod tests {
             assert_eq!(s.root(), root);
             assert_ne!(Shown { place: s.place ^ 1, ..s }.root(), root, "at another place");
             assert_ne!(Shown { place: (s.place + 32) % LEAVES, ..s }.root(), root, "at another place");
+            assert_ne!(Shown { place: s.place + LEAVES, ..s }.root(), root, "at a place beyond the leaves");
             assert_ne!(Shown { row: Row { net: s.row.net + 1, ..s.row }, ..s }.root(), root, "a unit more");
             assert_ne!(Shown { row: Row { scale: s.row.scale + 1, ..s.row }, ..s }.root(), root, "another scale");
             assert_ne!(Shown { row: Row { next: Key::HEAD.hash(), ..s.row }, ..s }.root() == root, row.next != Key::HEAD.hash(), "another key after");
@@ -521,7 +545,7 @@ mod tests {
         assert!(full.out(&Key::HEAD).is_err());
         let mut twin = [0u8; 32];
         twin[7] = 0x80;
-        for bad in [Key::HEAD, Key::futures(twin), Key { market: [7; 32], day: 0, of: OF_CALLS, strike: 5 }, Key { market: [7; 32], day: 9, of: 3, strike: 5 }, Key { market: [7; 32], day: 9, of: OF_PUTS, strike: 0 }] {
+        for bad in [Key::HEAD, Key::futures(twin), Key { market: [0; 32], day: 9, of: OF_CALLS, strike: 5 }, Key { market: [7; 32], day: 0, of: OF_CALLS, strike: 5 }, Key { market: [7; 32], day: 9, of: 3, strike: 5 }, Key { market: [7; 32], day: 9, of: OF_PUTS, strike: 0 }] {
             assert!(Books::opened().put(bad, 1, 1, 1).is_err(), "{bad:?}");
         }
     }
