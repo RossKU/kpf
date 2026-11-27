@@ -3854,6 +3854,40 @@ stated again. For a clearing party of many users that is the limit that is felt 
 here, and is the next question of the form (rows, or accounts' notes, that are objects of their own, so that
 what two users do does not meet in one output).
 
+### 17.8f S1 in numbers: the rate on the gross (a model; no rate changed)
+
+Review T7's S1: a leaving raises its row's requirement, and nothing asks the shard to hold it. An owner's long
+and short of one row are asked little while they set each other off; the owner draws down to that; one of them
+leaves, and the shard is below its lower level at once: a call is due at a time of the owner's choosing. The
+direction taken was the rate, not a rule for the leg that stays (17.8e; the owner of the design, 28 November
+2026). The model (`s1_what_a_shard_that_held_its_upper_requirement_holds_after_legs_leave`, in `thin_draw.rs`:
+20,000 random books of one to four rows that hold exactly their upper requirement, after legs leave at the
+same prices; the maintenance rate 5 %, the tolerance 0.5 %):
+
+| the upper rate on the gross | below its lower level after legs left | by, at the most | a row set off is asked, of one side | a one-sided row |
+|---|---|---|---|---|
+| today: the lower rate on the gross and a tolerance, 2.25 % | in 14.5 % of the books | 1.74 % of the side that stays | 4.50 % | 7.75 % |
+| half the upper rate on the net, 2.75 % (what review T7 and I said first) | in 3.3 % | 0.74 % | 5.50 % | 8.25 % |
+| **half the two lower rates together, 3.13 %** | **in none** | | 6.26 % | 8.63 % |
+
+**What I said first does not close it.** At 2.75 % a row set off holds what its larger side is asked at the
+upper rate on the net alone, 5.5 %; but a one-sided row's lower level is the two lower rates together, 6.25 %:
+the shard is still below it once a side leaves. What closes it is that a row set off whole holds what one of
+its sides alone is asked at the lower level: the upper rate on the gross is half of the lower rate on the net
+and the lower rate on the gross together, (4.5 % + 1.75 %) / 2 = 3.125 %. A requirement is a sum over legs, so
+a shard that held its upper requirement is then at or above its lower level after any legs leave, in any
+order (the model's 20,000). It is a number in two scripts (`KpfTEnterS`'s gate, `KpfTShardEnd`) and the model:
+no byte. What it costs is what the clearing party holds before it draws or takes a leg: a book set off whole,
+6.26 % of one side where it is 4.50 % (39 % more); a one-sided book, 8.63 % where it is 7.75 % (11 % more).
+The level a call is due at does not move. (A form that asks the more of today's upper requirement and of the
+larger sides' lower levels leaves a one-sided book at 7.75 %, for some 70 bytes in each of the two scripts;
+`KpfTEnterS` has no place of its stack to spare for it.)
+
+**Not decided:** the owner of the design agreed to "the rate" on my first number (2.75 %, a fifth more for a
+book set off), which does not close S1. The choice is 3.13 % (closed; 39 % and 11 % more), 2.75 % (narrowed:
+a call still due at once, with at the most 0.74 % less than the lower level), or nothing until the rates are
+set. Whichever: the numbers of many tests move with it, and it is reviewed at the engine.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

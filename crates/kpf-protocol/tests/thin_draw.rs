@@ -3903,3 +3903,48 @@ fn a_note_is_applied_by_the_script_of_its_shards_state_and_not_by_its_twin() {
         }
     }
 }
+
+/// S1 (review T7), in numbers, with no rate changed: a leaving raises its row's requirement and nothing asks the
+/// shard to hold it. A shard that holds exactly its upper requirement (what a draw and an entry's gate leave it),
+/// after any of its legs leave at the same prices: is it below its lower level, where a call is due at once? The
+/// requirement is a rate on the worth of the net units and a rate on the worth of the gross (docs 12); the lower
+/// level's are the maintenance rate less the tolerance, and half the maintenance rate less three tolerances.
+/// For three upper rates on the gross: today's (the lower one and a tolerance), half the upper rate on the net
+/// (what review T7 and I proposed first), and half the two lower rates together.
+#[test]
+fn s1_what_a_shard_that_held_its_upper_requirement_holds_after_legs_leave() {
+    let (mmr, g) = (500i64, 50i64);
+    let (rn_up, rn_lo, rg_lo) = (mmr + g, mmr - g, (mmr - 3 * g) / 2);
+    let need = |net: i64, gross: i64, rn: i64, rg: i64| (net.abs() * rn + gross * rg + 9_999) / 10_000;
+    let mut r = Rng(0x51);
+    let mut table = vec![];
+    for (what, rg_up) in [("today: the lower rate and a tolerance", rg_lo + g), ("half the upper rate on the net", rn_up / 2), ("half the two lower rates together", (rn_lo + rg_lo + 1) / 2)] {
+        // (Worth in KAS of the longs and of the shorts of each of up to four rows; the shard holds its upper
+        // requirement; then every short, or every long, or a part, leaves.)
+        let (mut worst, mut below, mut cases) = (0i64, 0, 0);
+        for _ in 0..20_000 {
+            let rows: Vec<(i64, i64)> = (0..r.range(1, 4)).map(|_| (r.range(0, 1_000_000), r.range(0, 1_000_000))).collect();
+            let held: i64 = rows.iter().map(|(l, s)| need(l - s, l + s, rn_up, rg_up)).sum();
+            let left: Vec<(i64, i64)> = rows.iter().map(|(l, s)| match r.range(0, 3) { 0 => (*l, 0), 1 => (0, *s), 2 => (*l, r.range(0, *s)), _ => (r.range(0, *l), *s) }).collect();
+            let lower: i64 = left.iter().map(|(l, s)| need(l - s, l + s, rn_lo, rg_lo)).sum();
+            cases += 1;
+            if held < lower {
+                below += 1;
+                // (How far below, in parts in ten thousand of the larger side that stays.)
+                let side: i64 = left.iter().map(|x: &(i64, i64)| x.0.max(x.1)).sum::<i64>().max(1);
+                worst = worst.max((lower - held) * 10_000 / side);
+            }
+        }
+        // What it costs: the upper requirement of a row set off whole, and of a one-sided row, in parts in ten
+        // thousand of one side.
+        let (hedged, one) = (need(0, 2_000_000, rn_up, rg_up) / 100, need(1_000_000, 1_000_000, rn_up, rg_up) / 100);
+        println!("S1, {what} ({rg_up} bps on the gross): below the lower level after legs left in {below} of {cases}, by {worst} bps of the side that stays at the most; a row set off is asked {hedged} bps of one side, a one-sided row {one}");
+        table.push((rg_up, below, worst, hedged, one));
+    }
+    // Today's rate and the first proposal leave a shard below its lower level; half the two lower rates together
+    // never does: a row set off holds what its larger side alone is asked at the lower level.
+    assert!(table[0].1 > 0 && table[1].1 > 0 && table[2].1 == 0, "{table:?}");
+    assert_eq!((table[0].0, table[1].0, table[2].0), (225, 275, 313));
+    assert_eq!((table[0].3, table[1].3, table[2].3), (450, 550, 626));
+    assert_eq!((table[0].4, table[1].4, table[2].4), (775, 825, 863));
+}
