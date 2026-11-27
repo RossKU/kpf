@@ -1442,3 +1442,156 @@ fn a_step_is_due_by_one_price_that_shows_it() {
     println!("a step by a price: {due_n} accounts due, {not_due_n} not ({sums_only} of those due by the two sums with the lines that ask least: the sums step more accounts than can fail to pay); {spared} accounts that the lines that ask most would step are due by no price");
     assert!(due_n > 20_000 && not_due_n > 20_000 && spared > 1_000);
 }
+
+/// What an account lacks of the level of an entry at a price: what it is asked and its premiums, less its coins and
+/// what its legs gained.
+fn lacks(a: &Acct, p: i64) -> i64 {
+    (asked_group(&a.legs, p, UP) + a.premiums() - a.coins - a.gained(p)).max(0)
+}
+
+/// A step of the legs named (a bit a leg) at a price, as 17.3 has it: they leave at the price. What they gained
+/// together, less the band of the futures legs among them, is paid into the account; what they lost together the
+/// coins pay, with the premium of each option held among them and, of each written, what its premium is above
+/// what it lost. The account that stays, what the shard was paid, and what it was owed and not paid.
+fn stepped(a: &Acct, named: u32, p: i64) -> (Acct, i64, i64) {
+    let (stays, paid, unpaid, _) = stepped_net(a, named, p);
+    (stays, paid, unpaid)
+}
+
+/// As `stepped`, and what the shard has of the step: what it was paid less what it paid into the account.
+fn stepped_net(a: &Acct, named: u32, p: i64) -> (Acct, i64, i64, i64) {
+    let (stays, paid, owes, net) = stepped_owing(a, 0, named, p);
+    (stays, paid, owes, net)
+}
+
+/// As `stepped_net`, of an account that owes its shard (16.18): what the legs that leave gained is set against what
+/// the account owes before any of it is coins of the account, and what the coins do not pay is owed.
+fn stepped_owing(a: &Acct, owes: i64, named: u32, p: i64) -> (Acct, i64, i64, i64) {
+    let (mut gain, mut owed, mut band) = (0i64, 0i64, 0i64);
+    let mut stay = vec![];
+    for (i, x) in a.legs.iter().enumerate() {
+        if named >> i & 1 == 0 {
+            stay.push(*x);
+            continue;
+        }
+        gain += x.gained(p);
+        if x.option() {
+            let lost = (-x.gained(p)).max(0);
+            owed += if x.held() { x.premium_all() } else { (x.premium_all() - lost).max(0) };
+        } else {
+            band += rate_up(x.units * p, 2 * G);
+        }
+    }
+    owed += (-gain).max(0);
+    let asks = (gain - band).max(0);
+    let set_off = asks.min(owes);
+    let coins = a.coins + asks - set_off;
+    let paid = owed.min(coins);
+    (Acct { coins: coins - paid, legs: stay }, paid, owes - set_off + owed - paid, paid - (asks - set_off))
+}
+
+/// 17.4: "a step of some legs is right only where the account lacks less after it than before it; else every leg
+/// leaves", in the cases 17.8 names and at random.
+#[test]
+fn a_step_of_some_legs_is_right_only_where_the_account_lacks_less() {
+    // Ten units; prices in hundredths. A long from 100 and a call written at 110 for a premium of 2, which the
+    // shard's owner paid into the account: it has what an entry asks, 55 a unit's worth of the rate, and the 20.
+    let long = Leg { kind: Long, units: 10, strike: 0, entry: 10_000, premium: 0, near: false };
+    let call = Leg { kind: CallWritten, units: 10, strike: 11_000, entry: 10_000, premium: 200, near: false };
+    let mut acct = Acct { coins: 0, legs: vec![long, call] };
+    acct.coins = asked_group(&acct.legs, 10_000, UP) + acct.premiums();
+    assert_eq!((acct.coins, acct.premiums()), (7_500, 2_000));
+    // The price falls 7 %: the long lost 70 a unit... 7,000; the account has 500 and its premiums are 2,000: due.
+    let p = 9_300;
+    assert!(due_at(&acct, p, p) && prices_to_try(&acct.legs, p).iter().any(|q| due_at(&acct, p, *q)));
+    let before = lacks(&acct, p);
+    // (a) The long stepped away from the written call: the coins pay what it lost; the call stays on 500. The
+    // account lacks less: right.
+    let (stays, paid, unpaid) = stepped(&acct, 0b01, p);
+    assert_eq!((stays.coins, paid, unpaid, stays.legs.len(), before, lacks(&stays, p)), (500, 7_000, 0, 1, 6_620, 1_500));
+    // It is still due (500 against a premium of 2,000): the call leaves next, and the shard is paid the 500.
+    assert!(due_at(&stays, p, p));
+    let (none, paid2, unpaid2) = stepped(&stays, 0b1, p);
+    // (b) Every leg at once: the same coins reach the shard, and the same is not paid.
+    let (all, paid_all, unpaid_all) = stepped(&acct, 0b11, p);
+    assert_eq!((paid + paid2, unpaid + unpaid2, none.coins), (paid_all, unpaid_all, all.coins));
+    assert_eq!((paid_all, unpaid_all), (7_500, 1_500));
+    // (c) The call named alone, worth nothing, for its premium: the shard has the 2,000 and the long stays on what
+    // is left. The account lacks as much as before: wrong (17.3).
+    let (stays, paid, _) = stepped(&acct, 0b10, p);
+    assert_eq!((paid, stays.coins, lacks(&stays, p)), (2_000, 5_500, before));
+    // (And had that step been taken: the long, stepped after it, pays 5,500 of the 7,000 it lost: the shard has
+    // the same 7,500, in another order; what the rule keeps is the order: what was lost before what was priced.)
+    let (_, paid2, unpaid2) = stepped(&stays, 0b1, p);
+    assert_eq!((paid + paid2, unpaid2), (7_500, 1_500));
+
+    // N71: a held option whose premium the coins hold, through a step of every other leg. A long from 100 and a
+    // put held at 90 for a premium of 1 (the user's own 10): the price falls 7 %.
+    let put = Leg { kind: PutHeld, units: 10, strike: 9_000, entry: 10_000, premium: 100, near: false };
+    let mut acct = Acct { coins: 0, legs: vec![long, put] };
+    acct.coins = asked_group(&acct.legs, 10_000, UP) + acct.premiums() + 2_000;
+    let before = lacks(&acct, p);
+    let (stays, paid, unpaid) = stepped(&acct, 0b01, p);
+    // The long's loss is paid whole, the put stays with its premium in coins beside it: the account lacks nothing,
+    // and is due at no price. The option goes on.
+    assert_eq!((paid, unpaid, stays.legs.len(), lacks(&stays, p)), (7_000, 0, 1, 0));
+    assert!(before > 0 && stays.coins >= stays.premiums() && !prices_to_try(&stays.legs, p).iter().any(|q| due_at(&stays, p, *q)));
+    // With coins that do not pay the long's loss, the put stays on nothing: the account lacks its premium, less
+    // than before (the long's risk is gone): the step of the long alone is right, and the put is due next.
+    acct.coins -= 3_000;
+    let (stays, _, unpaid) = stepped(&acct, 0b01, p);
+    assert!(unpaid > 0 && stays.coins == 0 && lacks(&stays, p) == 1_000 && lacks(&stays, p) < lacks(&acct, p) && due_at(&stays, p, p));
+
+    // At random: accounts that are due by a price, every step of some of their legs.
+    let mut rng = Rng(0x17_0086);
+    let (mut due_n, mut right, mut wrong, mut premium_only, mut ends_n, mut less_n, mut least, mut apart_less) = (0, 0, 0, 0, 0, 0, 0i64, 0);
+    for _ in 0..60_000 {
+        let a = 1_000 + rng.below(1_000_000);
+        let legs: Vec<Leg> = (0..2 + rng.below(4)).map(|_| Leg { near: false, ..rng.leg(a) }).collect();
+        let mut acct = Acct { coins: 0, legs };
+        let level = worst(&acct.legs, a, LO) + acct.premiums() - acct.gained(a);
+        acct.coins = (level - rng.below(level.abs() / 2 + 2)).max(0);
+        if !prices_to_try(&acct.legs, a).iter().any(|q| due_at(&acct, a, *q)) {
+            continue;
+        }
+        due_n += 1;
+        let before = lacks(&acct, a);
+        let n = acct.legs.len() as u32;
+        let (all, _, _, net_all) = stepped_net(&acct, (1 << n) - 1, a);
+        assert!(all.legs.is_empty());
+        for named in 1..(1u32 << n) - 1 {
+            let (stays, _, _, net) = stepped_net(&acct, named, a);
+            if lacks(&stays, a) >= before {
+                wrong += 1;
+                // (A step that names only options written that lost nothing, where they add nothing to what is
+                // asked, is among these: it takes a premium and leaves the account as it was.)
+                let only_written = acct.legs.iter().enumerate().all(|(i, x)| named >> i & 1 == 0 || (x.kind == CallWritten || x.kind == PutWritten) && x.gained(a) == 0);
+                premium_only += (only_written && asked_group(&stays.legs, a, UP) == asked_group(&acct.legs, a, UP)) as i64;
+                continue;
+            }
+            right += 1;
+            // What the shard has of it, followed by a step of every leg that stays at the same price, against a
+            // step of every leg at once: what it was paid less what it paid in. (Found, not claimed: where legs
+            // leave apart, what one gained is paid in less its band, and is no longer set against what another
+            // lost before the coins pay.)
+            let (_, _, owes, _) = stepped_net(&acct, named, a);
+            let (_, _, _, net_rest) = stepped_owing(&stays, owes, (1 << stays.legs.len()) - 1, a);
+            apart_less += (net + stepped_net(&stays, (1 << stays.legs.len()) - 1, a).3 < net_all) as i64;
+            if net + net_rest >= net_all {
+                ends_n += 1;
+            } else {
+                // (Found: only by the band. Together, the bands of the futures legs are taken from what all
+                // gained; apart, a leg's band is at most what that leg gained. Never by more than the bands.)
+                let bands: i64 = acct.legs.iter().filter(|x| !x.option()).map(|x| rate_up(x.units * a, 2 * G)).sum();
+                assert!(net_all - net - net_rest <= bands);
+                less_n += 1;
+                least = least.max(net_all - net - net_rest);
+            }
+        }
+    }
+    println!("a step of some legs: {due_n} accounts due by a price; of every step of some of their legs {right} are right (the account lacks less) and {wrong} wrong ({premium_only} of them an option written named for its premium alone); followed by a step of what stays, the shard has as much as of a step of every leg at once, or more, in {ends_n} of the right ones, and less in {less_n} (by {least} at the most); without what the account owes carried from the first step to the second, less in {apart_less}");
+    // What the account owes is carried (16.18): legs that leave apart leave the shard what they leave it together,
+    // but for the band: never less by more than the bands of the futures legs (asserted above).
+    assert!(apart_less > less_n);
+    assert!(due_n > 5_000 && right > 5_000 && wrong > 5_000 && premium_only > 100);
+}

@@ -3209,11 +3209,23 @@ change when a claim is paid and grows by every coin that reaches the shard.
    the account, after some move of the lower rate, has less than its premiums; an account no price shows due
    has its premiums after any such move; a step due by a price is due by the two sums with the lines that ask
    least as well, which step 580 accounts more than can fail to pay; and of the accounts that the lines that
-   ask most would step on half as much again as they can lose, 8,244, none is due by any price). Still to show
-   before it is carried into `covered.rs` and `reserve.rs`: one leg of a group of options leaving (a long
-   stepped away from a written call; a held leg of a spread ending at its day); a held option through a step
-   of every other leg (N71); the sums a row needs; and N81's test as the bound that is stated (17.8f has its
-   numbers for futures rows: the rate on the gross that closes it).
+   ask most would step on half as much again as they can lose, 8,244, none is due by any price). **And a step
+   of some legs** (`a_step_of_some_legs_is_right_only_where_the_account_lacks_less`): a long stepped away from
+   a written call is right (the account lacks 1,500 where it lacked 6,620), and with the call's step after it
+   the shard has what a step of both at once gives it; the call named alone, worth nothing, for its premium
+   leaves the account lacking as much as before, and is wrong (17.3's line; at random, 30,029 such steps, all
+   wrong by the rule); **N71: a held option whose premium the coins hold goes on through a step of every other
+   leg** (the account then lacks nothing and is due at no price), and where the coins do not pay the others'
+   loss it stays on nothing and is due next. On 58,819 accounts due by a price, of every step of some of their
+   legs 503,427 are right and 269,239 wrong. Found: legs that leave apart leave the shard what they leave it
+   together only because what the coins do not pay is owed by the account and what a later leg gained is set
+   against it (16.18: without that, less in 74,463 of the right steps); and then never less by more than the
+   bands (together, the futures legs' bands are taken from what all gained; apart, a leg's band is at most
+   what that leg gained: 53,391 steps). Still to show before it is carried into `covered.rs` and `reserve.rs`:
+   a held leg of a spread ending at its day (with the day: 17.5's test of a leg that gained, where its gain
+   is to be read as coins of the account or as no coin, is to be said first); the sums a row needs; and N81's
+   test as the bound that is stated (17.8f has its numbers for futures rows: the rate on the gross that
+   closes it).
 2. **The leg as it will stay**, futures only: the time it entered, and a day, a strike and a premium of
    nothing; under a call a leg younger than T asks nothing (17.9, F116); the two bounds of a stated price
    rounded inward.
