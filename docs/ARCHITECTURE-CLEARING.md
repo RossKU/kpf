@@ -4815,6 +4815,28 @@ owes, and against a called shard; O9 as decided against the freeze it was found 
 whole" leaves a loss unpaid; what an owner or a user gains by the day's price being written late, or never;
 the premium's return (8); whether any of it can be left out of the first form with the goal's row still held.
 
+**Step 0, as shown** (`research_options.rs`, twenty-one tests; `s469_model_rows.py`; no script).
+`a_shards_rows_ask_no_less_than_its_side_can_lose_and_no_more_than_its_legs`: on 200,000 random books of one to
+eight legs (five strikes, three days, so that legs meet in one series), at the upper and the lower rate, what
+the rows ask is **never less than what the clearing side loses at any price the move reaches** (the ends, every
+strike between and a price either side), exactly that on 221,886 of 400,000, and never more than the legs asked
+one by one; netting a series changes nothing of what is lost at any price. On 16,521 the rows ask less than leg
+by leg, 5,073 of them less than the legs counted one by one near their day: legs of one series set each other
+off exactly at every price and at their day, so **a row near its day is netted as any other**, and the rule of
+N68 is the row's, not the leg's. `with_the_shards_levels_by_rows_nobody_is_left_unpaid`: review T2's walks (an
+owner that pays its shard up, states at the edge and sets its book off; users that know the next price and
+take; a hedge by the clock, a user's and the owner's own) with the levels by rows, 28,000 paths: no user and no
+account unpaid. **What this does not show:** in those walks two legs seldom meet in one series (what the owner
+took differs from the walk leg by leg in one set of twenty-eight), so they say that nothing breaks, and the
+books at random are what holds the rule. Not in the model yet, and before step A: a call by a second price a
+market (6) against today's call of a futures shard. Reckoned: today a price is moved the tolerance in the
+shard's favour and the lower rate is the maintenance rate less the tolerance, which for one market is the
+shard's equity at the price below the maintenance rate less twice the tolerance of the net; so the second
+price is within **that** rate of the first (the account's lower rate less the tolerance), and a futures shard
+is called where it is today, to the rounding. An ended row in a call, and a credit through a day, are 17.8, 1's
+(`a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_without_it`) and are not shown again by
+rows.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

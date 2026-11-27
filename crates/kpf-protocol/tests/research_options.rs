@@ -846,6 +846,9 @@ struct Extra {
     users_take: bool,
     /// The rate on the gross is of futures units only: an option row adds nothing to it.
     gross_futures: bool,
+    /// The shard's levels by rows (17.8j, 6): the legs of one series (calls or puts, a strike, a day) netted, and
+    /// the futures legs.
+    rows: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -857,6 +860,37 @@ struct Seen {
     /// Users' accounts stepped, and entered.
     stepped: i64,
     entered: i64,
+}
+
+/// A shard's rows (17.8j, 5 and 6), as legs of the clearing side: the futures legs netted, and the legs of one
+/// series (calls or puts, a strike, a day) netted. A row where the clearing side holds is a held option (counted
+/// along the line of nothing between the ends); where it wrote, a written one. A row within T of its day is near.
+fn netted(legs: &[Held], now: i64, near: bool) -> Vec<Leg> {
+    let mut rows: Vec<((u8, i64, i64), i64)> = vec![];
+    for h in legs {
+        let (of, net) = match h.leg.kind {
+            Long => (0, -h.leg.units),
+            Short => (0, h.leg.units),
+            CallHeld => (1, -h.leg.units),
+            CallWritten => (1, h.leg.units),
+            PutHeld => (2, -h.leg.units),
+            PutWritten => (2, h.leg.units),
+        };
+        let key = if of == 0 { (0, 0, 0) } else { (of, h.leg.strike, h.day) };
+        match rows.iter_mut().find(|r| r.0 == key) {
+            Some(r) => r.1 += net,
+            None => rows.push((key, net)),
+        }
+    }
+    let kind = |of: u8, holds: bool| match (of, holds) {
+        (0, true) => Long,
+        (0, false) => Short,
+        (1, true) => CallHeld,
+        (1, false) => CallWritten,
+        (2, true) => PutHeld,
+        _ => PutWritten,
+    };
+    rows.into_iter().filter(|r| r.1 != 0).map(|((of, strike, day), net)| Leg { kind: kind(of, net > 0), units: net.abs(), strike, entry: 0, premium: 0, near: near && of != 0 && day - now <= T }).collect()
 }
 
 /// The two edges of a stated price, rounded inward.
@@ -879,8 +913,12 @@ fn worst_near(legs: &[Leg], a: i64, r: i64) -> i64 {
 
 impl Shard {
     fn level(&self, p: i64, upper: bool, x: Extra) -> i64 {
-        let side: Vec<Leg> = self.parties.iter().flat_map(|a| a.legs_at(self.now, self.rules)).map(|l| mirror(&l)).collect();
+        let mut side: Vec<Leg> = self.parties.iter().flat_map(|a| a.legs_at(self.now, self.rules)).map(|l| mirror(&l)).collect();
         let units: i64 = side.iter().filter(|l| !(x.gross_futures && l.option())).map(|l| l.units).sum();
+        if x.rows {
+            let held: Vec<Held> = self.parties.iter().flat_map(|a| a.legs.iter().copied()).collect();
+            side = netted(&held, self.now, self.rules.near);
+        }
         let (r, gross) = if upper { (UP, GROSS_UP) } else { (LO, GROSS_LO) };
         (if x.exact { worst_near(&side, p, r) } else { asked_flat(&side, p, r) }) + rate_up(units * p, gross)
     }
@@ -1184,7 +1222,7 @@ fn tally(tick: i64, rules: Rules, plays: u32, x: Extra, paths: u64) -> [i64; 8] 
     t
 }
 
-const X0: Extra = Extra { top_own: 0, edge: false, set_off: false, informed: false, farm: false, pair: 0, junior: false, exact: false, young_net: false, edge_users: false, witness: false, users_take: false, gross_futures: false };
+const X0: Extra = Extra { top_own: 0, edge: false, set_off: false, informed: false, farm: false, pair: 0, junior: false, exact: false, young_net: false, edge_users: false, witness: false, users_take: false, gross_futures: false, rows: false };
 const BOTH: Rules = Rules { young: true, near: true };
 
 /// The claim of `a_shard_of_options_pays_its_users_whatever_its_owner_does`, against an owner that pays its shard
@@ -1727,4 +1765,75 @@ fn a_held_leg_that_gained_at_its_day_leaves_only_where_the_account_stands_withou
     }
     println!("a held leg at its day: by the rule its gain stayed in the account on {kept_n} paths and left at its day on {left_n} (on {later} it left at a later visit); the shard unpaid {unpaid_rule} in all with the rule, on {by_band} paths and never by more than the band of the futures legs a step takes; paid out at the day whatever stays, the shard is unpaid on {paths_none} paths, {unpaid_none} in all; with the band counted in a step's test (M1) the shard is unpaid {unpaid_band}, {sooner} visits stepping an account the plain test does not");
     assert!(kept_n > 3_000 && left_n > 1_000 && paths_none > 300 && unpaid_none > 10 * unpaid_rule && unpaid_band == 0 && sooner > 0);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// 17.8j, step 0: a shard's requirement by rows.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// What a shard is asked by its rows (the legs of one series netted) is never less than what its side can lose at
+/// any price a move of the rate reaches, and never more than what it is asked leg by leg. Legs of one series set
+/// each other off exactly at every price and at their day, so a row near its day is netted as any other: there
+/// the rows ask less than the legs counted one by one near their day, and still no less than can be lost.
+#[test]
+fn a_shards_rows_ask_no_less_than_its_side_can_lose_and_no_more_than_its_legs() {
+    let mut g = Rng(0x17_8A);
+    let (mut n, mut exact, mut below_legs, mut below_near, mut more) = (0, 0, 0, 0, 0i64);
+    for _ in 0..200_000 {
+        let a = 10_000 + g.below(20_000);
+        let now = 10;
+        let strikes = [a - a / 20, a - a / 50, a, a + a / 50, a + a / 20];
+        let held: Vec<Held> = (0..1 + g.below(8))
+            .map(|_| {
+                let mut leg = g.leg(a);
+                if leg.option() {
+                    leg.strike = strikes[g.below(5) as usize];
+                }
+                Held { leg, entered: 0, day: if leg.option() { now + 1 + g.below(3) * 2 } else { 0 } }
+            })
+            .collect();
+        for r in [LO, UP] {
+            let side_plain: Vec<Leg> = held.iter().map(|h| mirror(&h.leg)).collect();
+            let side_near: Vec<Leg> = held.iter().map(|h| mirror(&Leg { near: h.leg.option() && h.day - now <= T, ..h.leg })).collect();
+            let rows = netted(&held, now, true);
+            let rows_plain = netted(&held, now, false);
+            let lost = worst(&side_plain, a, r);
+            assert_eq!(lost, worst(&rows_plain, a, r), "netting a series changes nothing of what is lost at any price");
+            let (by_rows, by_legs) = (asked_flat(&rows, a, r), asked_flat(&side_near, a, r));
+            assert!(by_rows >= lost, "the rows ask {by_rows}, the side can lose {lost}: {held:?} at {a}");
+            assert!(by_rows >= worst_near(&rows, a, r));
+            assert!(by_rows <= by_legs, "the rows ask {by_rows}, the legs {by_legs}: {held:?} at {a}");
+            n += 1;
+            exact += (by_rows == lost) as i64;
+            below_legs += (by_rows < by_legs) as i64;
+            below_near += (by_rows < worst_near(&side_near, a, r)) as i64;
+            more += by_rows - lost;
+        }
+    }
+    println!("{n} books by rows: {exact} asked exactly what the side can lose (the others {more} more in all); {below_legs} asked less than leg by leg, {below_near} of them less than the legs counted one by one near their day");
+    assert!(exact > n / 10 && below_legs > 1_000 && below_near > 1_000);
+}
+
+/// The walks of review T2 with the shard's levels by rows: an owner that pays its shard up, states at the edge and
+/// sets its book off; users that know the next price and take; a hedge by the clock. Nobody is left unpaid.
+#[test]
+fn with_the_shards_levels_by_rows_nobody_is_left_unpaid() {
+    let hard = Extra { young_net: true, edge: true, edge_users: true, rows: true, ..X0 };
+    let sets: Vec<(&str, u32, Extra)> = vec![
+        ("the owner pays its shard up, at the edge, sets off", 0b0111, Extra { top_own: 1, set_off: true, ..hard }),
+        ("its shard paid up to the lower level only", 0b0110, Extra { top_own: 2, ..hard }),
+        ("users that know the next price, and take", 0b0000, Extra { informed: true, users_take: true, ..hard }),
+        ("the same, steps exact", 0b0000, Extra { informed: true, users_take: true, witness: true, ..hard }),
+        ("a user's hedge by the clock", 0b1010, Extra { witness: true, ..hard }),
+        ("the owner's own hedge by the clock", 0b1001, Extra { top_own: 1, ..hard }),
+        ("no pay-in where a user will gain", 0b0000, Extra { informed: true, farm: true, ..hard }),
+    ];
+    for (name, plays, x) in sets {
+        for tick in [50, 200, 400, 450] {
+            let t = tally(tick, BOTH, plays, x, 1_000);
+            let flat = tally(tick, BOTH, plays, Extra { rows: false, ..x }, 1_000);
+            println!("rows {name:50} {tick:3} bps: unpaid {} {} {}; {} ticks a path; the owner took {} a path (leg by leg {})", t[0], t[1], t[2], t[4], t[5], flat[5]);
+            assert_eq!((t[0], t[1], t[2]), (0, 0, 0), "{name}, ticks of {tick} bps");
+        }
+    }
 }
