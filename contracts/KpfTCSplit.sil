@@ -189,6 +189,8 @@ contract KpfTCSplit(int init_version) {
             // (No more than the coins: what a token leg counts leaves no coin that is not there.)
             if (coins - amount - NOTE_MIN < 0) { ok = 0; }
             if (coins - amount - NOTE_MIN + tk < rst + int(byte[8](row.slice(152, 160))) + ls) { ok = 0; }
+            // (Tokens stand for no premium. Review T15, Y1.)
+            if (coins - amount - NOTE_MIN < int(byte[8](row.slice(152, 160)))) { ok = 0; }
             int lost = 0;
             if (gl < 0) { lost = 0 - gl; }
             // (The leg that moves, alone: what it can lose at either end of a move of the rate.)

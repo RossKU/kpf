@@ -321,7 +321,7 @@ contract KpfTCRow(int init_version) {
                     // Wrong, before anything: a strike out of its market's range, a premium below nothing, an
                     // ended leg (it leaves by the day's transaction), a leaving or a mark that names it (nobody
                     // exercises before the day), and the leg an entry says (an option enters by the seventh step).
-                    if (strike <= 0 || strike > int(byte[8](lg.slice(76, 84))) || pu < 0 || day <= t0) { ok = 0; }
+                    if (strike <= 0 || strike > int(byte[8](lg.slice(76, 84))) || pu < 0 || pu > int(byte[8](lg.slice(76, 84))) || day <= t0) { ok = 0; }
                     if (leaves == 1) {
                         if (kind == 8 || kind == 13) { ok = 0; }
                     }

@@ -204,6 +204,8 @@ contract KpfTCTok(int init_version) {
             wtime = when;
             if (ok == 1) {
                 if (m + tk < rst + int(byte[8](row.slice(152, 160))) + ls) { ok = 0; }
+                // (Tokens stand for no premium. Review T15, Y1.)
+                if (m < int(byte[8](row.slice(152, 160)))) { ok = 0; }
             }
         } else {
             tkey = p33(claimer);

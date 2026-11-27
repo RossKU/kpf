@@ -171,6 +171,8 @@ contract KpfTCEnter(int init_version) {
         if (ok == 1) {
             // The user stands, of the net: its coins less a note's least, and what all its legs gained or lost.
             if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain + tk < rall + int(byte[8](row.slice(144, 152)))) { ok = 0; }
+            // (Tokens stand for no premium. Review T15, Y1.)
+            if (int(byte[8](mv.slice(67, 75))) - NOTE_MIN + gain < int(byte[8](row.slice(144, 152)))) { ok = 0; }
             // (The place of the leg that enters: the last. docs 17.8h, review T12, E2.)
             if (int(byte[8](said.slice(159, 167))) != n) { ok = 0; }
         }

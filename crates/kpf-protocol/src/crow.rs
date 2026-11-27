@@ -218,11 +218,12 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
         // A token leg: nothing for the legs' worth, for what they gained or for what is asked. One that stays
         // counts, as coins, its worth less its discount (where a futures leg has its entry), rounded down, and a
         // sompi; the one named (kinds 14, 15) leaves the chain, its worth whole the fifth sum.
+        // (Its discount is held where it stays and where it is named: review T15, Y5.)
+        if !(0..=BPS).contains(&l.entry) {
+            return Some(None);
+        }
         match part {
             Part::Stays => {
-                if !(0..=BPS).contains(&l.entry) {
-                    return Some(None);
-                }
                 r.tk = add(r.tk, add(rate_down(w, BPS - l.entry)?, 1)?)?;
                 r.h = with(l);
             }
@@ -235,7 +236,7 @@ pub fn crow_after(kind: i64, head: &CHead, t0: i64, i: usize, before: &CRow, leg
         // An option leg (docs 17.8i; review T14's list). Wrong before anything: a strike out of its market's
         // range, a premium below nothing, a day at or before the statement's time (an ended leg leaves by the
         // day's transaction), and where a leaving or a mark names it (nobody exercises before the day).
-        if o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.day <= t0 || ((kind == crate::covered::KIND_C_LEAVE || kind == KIND_C_MARK) && part != Part::Stays) || matches!(part, Part::Marked(_)) {
+        if o.strike <= 0 || o.strike > l.price_max || o.premium < 0 || o.premium > l.price_max || o.day <= t0 || ((kind == crate::covered::KIND_C_LEAVE || kind == KIND_C_MARK) && part != Part::Stays) || matches!(part, Part::Marked(_)) {
             return Some(None);
         }
         let wk = worth(l.size, l.scale, o.strike)?;

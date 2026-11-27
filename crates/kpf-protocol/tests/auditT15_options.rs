@@ -274,28 +274,31 @@ fn t15_y1_beside_a_token_leg_a_take_reaches_the_premium_and_a_step_then_asks_nob
         // Without the token leg the premium stays: no take of a sompi.
         let plain = cov(&w, &[option], NOTE_MIN + premium);
         assert!(plain.s.c_state(KIND_C_TAKE, 1, 0, &[P10], T0, plain.value as i64, xk(&w.w)).is_err(), "{what}: with no token leg the premium is held");
-        // Beside the token leg: all of it leaves, and the engine takes the end right.
+        // Closed: beside the token leg the premium is held the same. No take of a sompi by the model, and a take
+        // of a sompi written by hand is answered wrong at the engine.
         let acct = cov(&w, &[option, tok], NOTE_MIN + premium);
         acct.s.c_check().expect("a covered account of the form");
-        let (s, o, e) = ruled(&w, &acct, KIND_C_TAKE, premium, 0, &[P10, P10], &w.w).expect("Y1 is closed: the take of the premium is refused beside a token leg");
-        let last = s.rows[1];
-        assert_eq!((last.pa, last.closed().unwrap().0, e), (premium, 0, (true, false)), "{what}: the take");
-        assert!(last.tk >= premium && last.tk < premium + KAS1 / 10, "{what}: the tokens count {} for a premium of {premium}", last.tk);
-        let bare = o.after.unwrap();
-        assert_eq!(bare.a_margin, NOTE_MIN, "{what}: the coins hold a note's least");
-        // A step, the token stated the tolerance low: due. The option named leaves alone; nothing is paid, nothing owed.
-        let next = live_of(&w, &bare);
-        assert!(next.s.c_state(KIND_C_STEP, 0, 1, &[P10, P10], T0, next.value as i64, xk(&w.f)).is_err(), "{what}: not due at the price of the take");
-        let (s9, o9, e9) = ruled(&w, &next, KIND_C_STEP, 0, 1, &[P10, low], &w.f).expect("Y1 is closed: no step with the token stated the tolerance low");
+        assert!(ruled(&w, &acct, KIND_C_TAKE, 1, 0, &[P10, P10], &w.w).is_none(), "Y1 (closed): {what}: no take of a sompi beside a token leg");
+        let head = acct.s.c_head_least(KIND_C_TAKE, T0, &[P10, P10]);
+        let rows = acct.s.c_trace_at(KIND_C_TAKE, T0, &head, &[P10, P10], &[P10, P10], |_, _| Part::Stays).unwrap();
+        let last = rows[1];
+        assert!(last.pa == premium && last.closed().unwrap().0 == 0 && last.tk >= premium, "{what}: the tokens count {} for a premium of {premium}", last.tk);
+        let by_hand = CSaid { amount: 1, skip: 0, lc: [0; 32], head, rows };
+        assert_eq!(handed(&w, &acct, KIND_C_TAKE, &by_hand, &w.w), (Some(false), (false, true)), "Y1 (closed): {what}: a take of a sompi at the engine");
+        // An account that holds a note's least beside the two (its coins paid a loss, say). A step, the token
+        // stated the tolerance low: due. The option named leaves alone, and the account owes its premium.
+        let next = cov(&w, &[option, tok], NOTE_MIN);
+        assert!(next.s.c_state(KIND_C_STEP, 0, 1, &[P10, P10], T0, next.value as i64, xk(&w.f)).is_err(), "{what}: not due at the market's price");
+        let (s9, o9, e9) = ruled(&w, &next, KIND_C_STEP, 0, 1, &[P10, low], &w.f).expect("due with the token stated the tolerance low");
         let end = o9.after.clone().unwrap();
         let note = o9.note.clone().unwrap();
         assert_eq!(e9, (true, false), "{what}: the end of the step at the engine");
-        assert_eq!((end.legs.clone(), end.a_margin, end.b_margin, note.asked, s9.amount, s9.rows[1].po), (vec![tok], NOTE_MIN, 0, 0, 0, premium), "Y1 is closed: {what}: the premium is paid or owed");
-        // And the tokens leave.
-        assert!(end.c_state(KIND_C_TOK_OUT, 0, 1, &[P10], end.b_min_counter.max(T0), end.a_margin, xk(&w.w)).is_ok(), "{what}: the tokens leave after it");
-        said.push(format!("{what}: {premium} taken out, the option stepped out, the shard paid {} of it and owed {}", -note.asked, end.b_margin));
+        assert_eq!((end.legs.clone(), end.a_margin, end.b_margin, note.asked, s9.amount, s9.rows[1].po), (vec![tok], NOTE_MIN, premium, 0, 0, premium), "Y1 (closed): {what}: the premium the coins do not pay is owed");
+        // And the tokens do not leave while it is owed.
+        assert!(end.c_state(KIND_C_TOK_OUT, 0, 1, &[P10], end.b_min_counter.max(T0), end.a_margin, xk(&w.w)).is_err(), "{what}: the tokens stay while the premium is owed");
+        said.push(format!("{what}: no take reaches the premium of {premium}; the option stepped out, the shard paid {} of it and owed {}", -note.asked, end.b_margin));
     }
-    println!("T15 Y1 (open): {said:?}");
+    println!("T15 Y1 (closed): {said:?}");
 }
 
 // ================================================================================================================
@@ -368,7 +371,8 @@ fn step_ruled(x: &Account, row: &CRow) -> Option<(bool, i64)> {
     let room = m.max(0);
     let mut all = false;
     let (mut pay, mut prem, mut fee) = (0, 0, 0);
-    if held_leaves && stay != 0 {
+    // (After Y2: not beside tokens.)
+    if held_leaves && stay != 0 && tk == 0 {
         all = true;
     } else if gl < 0 {
         pay = -gl;
@@ -378,7 +382,8 @@ fn step_ruled(x: &Account, row: &CRow) -> Option<(bool, i64)> {
         let after = (rs + ps - (e + gain - prem)).max(0);
         if tk != 0 {
             pay = pay.min(room);
-        } else if after >= before || m < pay {
+        } else if after >= before || m < pay || pol > prem {
+            // (After Y3: nor where the coins do not pay all of its premium.)
             all = true;
         }
     } else {
@@ -392,7 +397,7 @@ fn step_ruled(x: &Account, row: &CRow) -> Option<(bool, i64)> {
             let left = m - owes - prem;
             let before = (ra + pa - (m - owes) - gain).max(0);
             let after = (rs + ps - (left + gain - gl)).max(0);
-            if after >= before || left < ps {
+            if after >= before || left < ps || pol - set > prem {
                 all = true;
             }
         }
@@ -518,20 +523,27 @@ fn t15_y2_a_held_option_that_lost_beside_a_leg_that_has_not_and_a_token_leg_take
         let last = *whole.s.c_trace_at(KIND_C_STEP, T0, &whole.s.c_head(), &a, &q, |_, _| Part::Stays).unwrap().last().unwrap();
         let lost = -last.gain;
         assert!(coins - NOTE_MIN + last.tk + last.gain + last.m < last.pa && lost >= 49 * KAS1, "due at {price}: the legs lost {lost}");
-        // No step of any leg, by the model (`c_state`, and the prices that show it due) and at the engine.
-        for skip in 1..=3i64 {
-            assert!(whole.s.c_state(KIND_C_STEP, 0, skip, &a, T0, coins, xk(&w.f)).is_err() && stmt(&whole.s, KIND_C_STEP, 0, skip, &a, T0, coins, None, xk(&w.f)).unwrap().is_none(), "Y2 is closed: a step of leg {skip} at {price}");
-            if skip <= 2 {
-                let rows = whole.s.c_trace_at(KIND_C_STEP, T0, &whole.s.c_head(), &a, &q, |i, _| if i as i64 + 1 == skip { Part::Leaves } else { Part::Stays }).unwrap();
-                for fee in [0, KAS1 / 100] {
-                    let s = CSaid { amount: fee, skip, lc: chain_of_one(&whole.s.legs[skip as usize - 1]), head: whole.s.c_head(), rows: rows.clone() };
-                    assert_eq!(handed(&w, &whole, KIND_C_STEP, &s, &w.f), (Some(false), (false, true)), "Y2 is closed: the end of a step of leg {skip} at {price}");
-                }
-            }
+        // Closed: the put named leaves alone (an account that holds tokens is not taken whole), and the shard
+        // is paid or owed what it lost and its premium. The long (it has not lost while the put has) and the
+        // token leg are named by no step.
+        for skip in [1i64, 3] {
+            assert!(whole.s.c_state(KIND_C_STEP, 0, skip, &a, T0, coins, xk(&w.f)).is_err() && stmt(&whole.s, KIND_C_STEP, 0, skip, &a, T0, coins, None, xk(&w.f)).unwrap().is_none(), "no step of leg {skip} at {price}");
         }
-        // Its tokens are not sold (it owes nothing), and its user states nothing that takes the put out.
-        assert!(whole.s.c_state(KIND_C_TOK_SOLD, 0, 3, &a, T0, coins, xk(&w.f)).is_err());
-        said.push(format!("at {price}: the legs lost {lost}, the coins hold {}; no step", coins - NOTE_MIN));
+        let rows = whole.s.c_trace_at(KIND_C_STEP, T0, &whole.s.c_head(), &a, &q, |i, _| if i == 0 { Part::Leaves } else { Part::Stays }).unwrap();
+        for fee in [0, KAS1 / 100] {
+            let s = CSaid { amount: fee, skip: 1, lc: chain_of_one(&whole.s.legs[0]), head: whole.s.c_head(), rows: rows.clone() };
+            assert_eq!(handed(&w, &whole, KIND_C_STEP, &s, &w.f), (Some(false), (false, true)), "the end of a step of the long at {price}");
+        }
+        assert!(whole.s.c_state(KIND_C_STEP, 0, 2, &a, T0, coins, xk(&w.f)).is_ok(), "Y2 (closed): `c_state` states the step of the put at {price}");
+        let (s, o, e) = ruled2(&w, &whole, KIND_C_STEP, 0, 2, &a, None).expect("Y2 (closed): the put named takes a step");
+        let end = o.after.clone().expect("the put leaves alone");
+        let asked = o.note.clone().unwrap().asked;
+        let put_lost = -s.rows[2].gl;
+        assert_eq!((e, end.legs.clone()), ((true, false), vec![long, tok]), "Y2 (closed): the end at the engine at {price}");
+        assert_eq!(-asked + end.b_margin, put_lost + KAS1, "Y2 (closed): at {price} the shard is paid or owed what the put lost and its premium");
+        assert_eq!(end.b_margin > 0, put_lost > coins - NOTE_MIN, "it owes only what the coins do not pay");
+        said.push(format!("at {price}: the put lost {put_lost}, the coins hold {}; the put leaves alone, the shard is paid {} and owed {}, the fee {}", coins - NOTE_MIN, -asked, end.b_margin, s.amount));
+        let _ = lost;
     }
     // Without the hundredth of a token: every leg leaves at 10.5, and the shard is paid.
     let plain = cov(&w, &[long, put], coins);
@@ -540,7 +552,7 @@ fn t15_y2_a_held_option_that_lost_beside_a_leg_that_has_not_and_a_token_leg_take
     let paid = -o.note.clone().unwrap().asked;
     assert_eq!((e, o.after.is_none()), ((true, false), true));
     assert_eq!(paid, -s.rows[1].gain + KAS1, "the shard is paid what the legs lost and the premium");
-    println!("T15 Y2 (open): a put held in the money that lost, a hundredth of a long, a hundredth of a token: {said:?}; without the token leg every leg leaves at 10.5 and the shard is paid {paid}");
+    println!("T15 Y2 (closed): a put held in the money that lost, a hundredth of a long, a hundredth of a token: {said:?}; without the token leg every leg leaves at 10.5 and the shard is paid {paid}");
 }
 
 // ================================================================================================================
@@ -567,22 +579,18 @@ fn t15_y3_an_option_named_alone_pays_of_its_premium_what_the_coins_hold_beside_a
     let a = [P10, P10 * 95 / 100];
     let acct = cov(&w, &[written, short], NOTE_MIN + k(700));
     acct.s.c_check().expect("a covered account of the form");
-    // The written call named: alone.
-    let (s, o, e) = ruled2(&w, &acct, KIND_C_STEP, 0, 1, &a, None).expect("due");
-    let after = o.after.clone().expect("Y3 is closed: the written call does not leave alone where the coins do not pay its premium");
-    assert_eq!((e, s.rows[1].po, s.rows[1].gain, after.legs.clone(), after.a_margin, o.note.clone().unwrap().asked, s.amount), ((true, false), k(900), k(500), vec![short], NOTE_MIN, -k(700), 0), "Y3 is closed");
-    // Its user leaves with the short: paid what it gained beyond the band (0.475 at its entry, 0.475 at its leaving).
-    let (_, _, o2) = stmt(&after, KIND_C_LEAVE, 0, ALL, &a[1..], T0, after.a_margin, None, xk(&w.w)).unwrap().expect("the short leaves");
-    let asked = o2.note.unwrap().asked;
-    assert_eq!(asked, k(405));
-    let user_alone = asked + o2.paid;
-    // The short named: every leg; the shard has the premium whole.
-    let (s, o, e) = ruled2(&w, &acct, KIND_C_STEP, 0, 2, &a, None).expect("due");
+    // Closed: the coins do not pay the call's premium (9, of which nothing is set against a gain of its own), so
+    // the call named does not leave alone: every leg, as where the short is named. The short's gain beyond the
+    // band (4.05) is set against the premium and the coins pay 4.95: the shard has its 9 whichever leg is named.
     let fee_all = (k(522) + k(1) / 2 + k(900)) / 550 * 50 + ((k(522) + k(1) / 2 + k(900)) % 550) * 50 / 550;
-    assert_eq!((e, o.after.is_none(), s.rows[1].band(), o.note.unwrap().asked, s.amount, o.paid), ((true, false), true, Some(k(95)), -k(495), fee_all, NOTE_MIN + k(700) - k(495) - fee_all));
-    let (shard_alone, shard_all) = (k(700) - k(405), k(495));
-    assert_eq!((shard_all - shard_alone, user_alone - o.paid), (k(200), k(200) + fee_all), "Y3 is closed: the choice of the leg moves nothing of the premium");
-    println!("T15 Y3 (open): a written call of 9 KAS of premium beside a short that gained 5, coins 7: named alone the shard has {shard_alone} net of what it pays the short; with every leg {shard_all}; the user has {user_alone} or {}", o.paid);
+    let mut got = vec![];
+    for skip in [1i64, 2] {
+        let (s, o, e) = ruled2(&w, &acct, KIND_C_STEP, 0, skip, &a, None).expect("due");
+        assert_eq!((e, o.after.is_none(), s.rows[1].po, s.rows[1].gain, s.rows[1].band(), o.note.clone().unwrap().asked, s.amount, o.paid), ((true, false), true, k(900), k(500), Some(k(95)), -k(495), fee_all, NOTE_MIN + k(700) - k(495) - fee_all), "Y3 (closed): leg {skip} named");
+        got.push((o.note.unwrap().asked, o.paid));
+    }
+    assert_eq!(got[0], got[1], "Y3 (closed): the choice of the leg moves nothing of the premium");
+    println!("T15 Y3 (closed): a written call of 9 KAS of premium beside a short that gained 5, coins 7: whichever leg is named every leg leaves, the shard has {} and the user {}", -got[0].0, got[0].1);
 }
 
 // ================================================================================================================
@@ -610,19 +618,19 @@ fn t15_y6_how_the_model_states_a_step_a_split_and_a_token_leg_named() {
         let due = stmt(&x, KIND_C_STEP, 0, 1, &at, T0, NOTE_MIN + m, None, xk(&w.f)).unwrap().is_some();
         let stated = x.c_state(KIND_C_STEP, 0, 1, &at, T0, NOTE_MIN + m, xk(&w.f)).is_ok();
         assert!(due, "due with coins {m}");
-        assert_eq!(stated, m < k(242), "Y6 is closed: (a) `c_state` states the step that is due with coins {m}");
+        assert!(stated, "Y6 (closed): (a) `c_state` states the step that is due with coins {m}");
         missed += usize::from(!stated);
     }
-    assert_eq!(x_step_prices(&cov(&w, &two, NOTE_MIN).s, &at), (at[0] + up_of(at[0], 450), at[0] - up_of(at[0], 450)), "the end `c_step_prices` takes, and the end the step is due by");
+    assert_eq!(missed, 0);
+    assert_eq!(x_step_prices(&cov(&w, &two, NOTE_MIN).s, &at), (at[0] - up_of(at[0], 450), at[0] - up_of(at[0], 450)), "Y6 (closed): the end `c_step_prices` takes is the end the step is due by");
     // (b)
     let hedge = [fleg(&w, 0, 10, LONG, P10), oleg(&w, 0, PUT_HELD, 10, P10, P10, FAR, KAS1 / 10)];
     let amount = NOTE_MIN + k(550);
     let x = cov(&w, &hedge, amount + NOTE_MIN + k(100)).s;
     let by_state = x.c_state(KIND_C_SPLIT, amount, 1, &[P10; 2], T0, x.a_margin, xk(&w.w));
     let by_line = stmt(&x, KIND_C_SPLIT, amount, 1, &[P10; 2], T0, x.a_margin, Some(0), xk(&w.w)).unwrap();
-    assert!(by_state.is_err() && by_line.is_some(), "Y6 is closed: (b) `c_state` states the split by the line that asks least of what stays");
-    let richer = cov(&w, &hedge, amount + NOTE_MIN + k(100) + k(550)).s;
-    assert!(richer.c_state(KIND_C_SPLIT, amount, 1, &[P10; 2], T0, richer.a_margin, xk(&w.w)).is_ok() && cov(&w, &hedge, amount + NOTE_MIN + k(100) + k(550) - 1).s.c_state(KIND_C_SPLIT, amount, 1, &[P10; 2], T0, amount + NOTE_MIN + k(100) + k(550) - 1, xk(&w.w)).is_err(), "by its lines the put that stays is asked 5.5 more");
+    assert!(by_state.is_ok() && by_line.is_some(), "Y6 (closed): (b) `c_state` states the split by the line that asks least of what stays");
+    assert!(cov(&w, &hedge, amount + NOTE_MIN + k(100) - 1).s.c_state(KIND_C_SPLIT, amount, 1, &[P10; 2], T0, amount + NOTE_MIN + k(100) - 1, xk(&w.w)).is_err(), "and with a sompi less no split");
     // (c)
     let with_tok = cov(&w, &[fleg(&w, 0, 10, LONG, P10), tleg_c(&w, 1, 100)], 100 * KAS1);
     let mut named = vec![];
@@ -630,14 +638,12 @@ fn t15_y6_how_the_model_states_a_step_a_split_and_a_token_leg_named() {
         let got = with_tok.s.c_state(kind, amount, 2, &[P10; 2], T0, with_tok.value as i64, xk(&w.w)).ok().map(|(st, s, _)| with_tok.s.c_wrong_point(kind, &s, &st.claimer, &st.outs, st.held, T0, &[P10; 2]));
         named.push(got);
     }
-    assert_eq!(named, vec![Some(Some(3)), Some(Some(3))], "Y6 is closed: (c) `c_state` states no leaving and no split that names a token leg");
+    assert_eq!(named, vec![None, None], "Y6 (closed): (c) `c_state` states no leaving and no split that names a token leg");
     // (A step: a call written far out of the money whose premium the coins do not hold, and a tenth of a token:
-    // due. The token leg named: the model's end takes it, asks nothing, and returns the account without its
-    // token leg.)
+    // due. The token leg is named by no step.)
     let due_tok = cov(&w, &[oleg(&w, 0, CALL_WRITTEN, 10, P10 * 13 / 10, P10, FAR, KAS1 / 5), tleg_c(&w, 1, 10)], NOTE_MIN);
-    let (st, s, o) = due_tok.s.c_state(KIND_C_STEP, 0, 2, &[P10; 2], T0, due_tok.value as i64, xk(&w.f)).expect("Y6 is closed: (c) `c_state` states no step that names a token leg");
-    assert_eq!((o.after.map(|y| y.legs.len()), o.note.unwrap().asked, due_tok.s.c_wrong_point(KIND_C_STEP, &s, &st.claimer, &st.outs, st.held, T0, &[P10; 2])), (Some(1), 0, Some(3)));
-    println!("T15 Y6 (open): (a) {missed} of 5 due steps not stated by `c_state`; (b) a split stated by the lines of a take asks 5.5 KAS more of what stays; (c) a leaving and a split that name a token leg are stated, their row 2 wrong");
+    assert!(due_tok.s.c_state(KIND_C_STEP, 0, 2, &[P10; 2], T0, due_tok.value as i64, xk(&w.f)).is_err(), "Y6 (closed): (c) `c_state` states no step that names a token leg");
+    println!("T15 Y6 (closed): (a) every due step is stated by `c_state`; (b) a split is stated by the lines that ask least of it; (c) no leaving, split or step that names a token leg is stated");
 }
 
 /// The ends of the lower rate `c_step_prices` takes for the first group, and the one a step of it is due by.
@@ -758,11 +764,12 @@ fn t15_held_the_ends_with_premiums_at_their_edges_a_sompi_either_side() {
     edge(&w, "tokens leave from beside a held call", &[call_h10, tleg_c(&w, 1, 100)], NOTE_MIN + k(500), KIND_C_TOK_OUT, 0, 2, &[P10; 2], None);
     n += 12 * 2 + 3;
 
-    // 9. Due below the premiums: a call held at 12 for 5, alone, at 10: due with coins under 5. Named, it leaves
-    // alone; the coins pay what they hold of its premium.
+    // 9. Due below the premiums: a call held at 12 for 5, alone, at 10: due with coins under 5. The coins do not
+    // pay all of its premium, so it does not leave alone (after Y3): every leg, which is the same leg; the
+    // coins pay what they hold of its premium and no account is left.
     let call_h12 = oleg(&w, 0, CALL_HELD, 10, p(1_200), P10, FAR, KAS1 / 2);
     let (_, o) = due_edge(&w, "a held call alone", &[call_h12], 0, NOTE_MIN + k(500) - 1, 1, &[P10]);
-    assert_eq!((o.after.clone().map(|x| (x.legs.len(), x.a_margin)), o.note.clone().unwrap().asked, o.fee), (Some((0, NOTE_MIN)), -(k(500) - 1), 0));
+    assert_eq!((o.after.clone().map(|x| (x.legs.len(), x.a_margin)), o.note.clone().unwrap().asked, o.fee), (None, -(k(500) - 1), 0));
     // 9. A long that lost 5 at 9.5 (4.275 more at the lower rate below) beside a call held at 11 for 5: due with
     // coins under 14.275.
     let call_h11 = oleg(&w, 0, CALL_HELD, 10, p(1_100), P10, FAR, KAS1 / 2);
@@ -1122,7 +1129,7 @@ fn option_walk(w: &World, seed: u64, accounts: usize, tokens: bool, moves: i64, 
                         let head = x.c_head_least(KIND_C_TAKE, t, &a);
                         let last = *x.c_trace_at(KIND_C_TAKE, t, &head, &a, &a, |_, _| Part::Stays).unwrap().last().unwrap();
                         let mm = x.a_margin - NOTE_MIN;
-                        let most = mm.min(mm + last.tk - last.closed().unwrap().0 - last.pa - last.ls);
+                        let most = mm.min(mm + last.tk - last.closed().unwrap().0 - last.pa - last.ls).min(mm - last.pa);
                         if most > 0 && t >= x.b_min_counter && x.b_margin == 0 {
                             let (_, _, o) = stmt(&x, KIND_C_TAKE, most, 0, &a, t, x.a_margin, None, xk(&w.w)).unwrap().expect("the most a take gives is the rule's");
                             assert!(stmt(&x, KIND_C_TAKE, most + 1, 0, &a, t, x.a_margin, None, xk(&w.w)).unwrap().is_none());
@@ -1212,7 +1219,7 @@ fn t15_held_on_the_model_with_options_the_shard_is_unpaid_nothing_at_the_markets
         // (Y3: every premium that is short is short beside something the user keeps; none where whoever steps
         // takes the step that pays it most, which is the step of every leg.)
         assert_eq!((o.unpaid_prem, o.unpaid_prem_on), (o.unpaid_prem_kept, o.unpaid_prem_kept_on), "{}", said(&o));
-        assert_eq!(o.unpaid_prem > 0, policy == 0, "{}", said(&o));
+        assert_eq!(o.unpaid_prem_kept, 0, "Y3 (closed): no premium is short beside what the user keeps: {}", said(&o));
     }
 }
 
@@ -1226,8 +1233,8 @@ fn t15_y1_y2_on_the_model_with_a_token_leg_in_every_account() {
     println!("T15 walk with options and a token leg in every account: {} accounts, {} steps of a leg; stuck at {} visits (the legs then lost {} beyond the coins); a premium short on {} steps, {} in all (the most {}), {} of it beside what the user keeps; a loss unpaid {}; due after its user's own statement {}", o.accounts, o.steps_alone, o.stuck, o.stuck_lost, o.unpaid_prem_on, o.unpaid_prem, o.unpaid_prem_most, o.unpaid_prem_kept, o.unpaid_loss, o.due_after_own);
     assert!(o.parts.is_empty(), "the rule as written here and the model part: {:?}", o.parts.iter().take(4).collect::<Vec<_>>());
     assert_eq!((o.unpaid_loss, o.due_after_own, o.steps_all), (0, 0, 0));
-    assert!(o.stuck > 0, "Y2 is closed: no account with a token leg is stuck");
-    assert!(o.unpaid_prem_kept > 0, "Y1 is closed: no premium is short beside tokens the user keeps");
+    assert_eq!(o.stuck, 0, "Y2 (closed): no account with a token leg is stuck");
+    assert_eq!(o.unpaid_prem_kept, 0, "Y1 (closed): no premium is short beside tokens the user keeps");
 }
 
 // ================================================================================================================
@@ -1733,9 +1740,9 @@ fn t15_y5_a_token_leg_named_whose_discount_is_out_of_range_is_right_by_the_model
     }
     assert_eq!(got[3], (Some(true), (true, false)), "a discount of the whole: right");
     for g in &got[..3] {
-        assert_eq!(*g, (Some(true), (false, true)), "Y5 is closed: the model and the engine agree on a token leg named whose discount is out of range");
+        assert_eq!(*g, (Some(false), (false, true)), "Y5 (closed): the model and the engine agree on a token leg named whose discount is out of range");
     }
-    println!("T15 Y5 (open): a token leg named by kinds 14 and 15 whose discount is out of range: right by the model, answered wrong at the engine");
+    println!("T15 Y5 (closed): a token leg named by kinds 14 and 15 whose discount is out of range: wrong by the model and at the engine");
 }
 
 /// Kinds 8, 13, 14 and 15: an option named by a leaving, a mark, or as tokens, is wrong; one that stays is counted.

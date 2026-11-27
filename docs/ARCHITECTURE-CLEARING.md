@@ -4611,6 +4611,40 @@ the long whole within T of the day.
 payments against `stepped_owing`, leg by leg): the options' model has one underlying and its own step, and the
 engine's review is asked for the walks instead. The tool states no account with an option leg (none enters).
 
+**Review T15** (the engine; `docs/audit/REVIEW-T15-options.md`, `tests/auditT15_options.rs`, fifteen tests). The
+scripts are the model to the sompi for every leg of the form (17,619 rows of every kind, each of the 24 numbers
+a sompi off, the lines set and cleared, the ends a sompi either side); with no token leg the rule left no loss
+unpaid and no account stuck on 12,000 accounts. **Both high findings are where an option leg meets a token leg**,
+which no test of mine had tried.
+
+| Finding | What | Closed by (`s463_t15_fixes.py`) |
+|---|---|---|
+| Y1 (high) | A take tested the coins and what the tokens count against what is asked and the premiums: tokens stood for premiums. A step pays a premium from coins alone and the rest was not owed. A written call's 2 KAS of the owner's premium beside a quarter of a token: taken out, the call then stepped out with the token stated the tolerance low; the shard paid nothing and owed nothing | **Tokens stand for no premium.** Every end that counts what the token legs count (a take, a leg leaving, a split, a mark, tokens leaving, an entry) holds the premiums to the coins alone as well. **Beside tokens a premium the coins do not pay is owed** (16.18), as a loss is |
+| Y2 (high) | A held option named beside a leg that is not one takes every leg (E13); an account that holds tokens is not taken whole (W1); the other leg is not named while a leg that stays has lost (O2). A put held in the money that lost, a hundredth of a long, a hundredth of a token: no step was right, the legs 99.985 down on coins of 57. W1 again | **Beside tokens a held option named leaves alone**, owing what the coins do not pay of its loss and its premium. E13 stands where no token is held |
+| Y3 (medium) | O3 guards the premiums that stay. An option leaving alone paid of its own premium what the coins held, the rest not owed, while the legs that stay kept what they gained: whoever states the step chose 2 KAS of the shard's | **An option leaves alone only where the coins pay all of its premium that is not set against what it gained**; else every leg (where what all gained beyond the band is set against the premiums first). Beside tokens it leaves alone and the rest is owed |
+| Y4 (low) | On legs that fail the size's rule the script counts worths the option's rule never reads, and gives no verdict where the model gives one. Nothing bounded a premium | A premium a unit is within the market's limit (`c_check`, the row's model and `KpfTCRow`: wrong before anything). The rest stands: no account of the form has such a leg, and the test shows it as it is |
+| Y5 (low; a token leg) | A token leg named by kinds 14 and 15 with a discount out of range: right by the model, wrong at the engine | The model holds a token leg to its discount where it is named as where it stays |
+| Y6 (low; the model's `c_state`, no script) | A step's prices read an option as a short futures leg and tried the two ends only (1,920 of 5,783 right steps not stated); the lines were chosen by a take's test whatever the kind; a leaving, a split and a step that name a token leg were stated, with a wrong row | `c_step_prices_at`: of the ends, the price and every strike between with a sompi either side, the one at which the group gains least by the row's own sum. `c_head_for`: the lines that ask least of what the statement's own end tests. No statement names a leg of the other sort |
+
+| Script | Before | Now |
+|---|---|---|
+| `KpfTCEnd` | 5,459 | 5,871 |
+| `KpfTCRow` | 7,508 | 7,520 |
+| `KpfTCEnter`, `KpfTCSplit`, `KpfTCMark`, `KpfTCTok` | 2,003, 2,643, 2,507, 3,767 | 2,069, 2,716, 2,573, 3,847 |
+
+The review's seven tests of the findings hold the closed rule now (Y4's as it stands), and its own writing of
+the step's rule was changed by the three lines of Y2 and Y3. Its walks after the fixes: with no token leg, 12,000 accounts (9,939 with options), 5,376 steps: stuck 0, a loss unpaid 0, a premium short 0, due after its user's own statement 0, right steps the model does not state 0 of 11,223. With a
+token leg in every account: 6,000 accounts, 1,944 steps of a leg: stuck 0 (before: 142 visits), a premium short 0 (before: 331 steps, 881.6 KAS), a loss unpaid 0. The whole workspace: 774 tests, none failed.
+
+**What the review held and a user should be told** (N68 as written): an account that stands by a hedge is **due at
+once, with no price moved, the block its option comes within T of its day**; the shard is unpaid nothing; in the
+walk 95 such steps cost their users 100 KAS of fees. The tool must say the day a hedge stops counting.
+
+**For the seventh step, from the review**: `KpfTCStep` (a call's step) asks a leg's way to be 1 or 2, so an account
+with an option leg takes no step under a call: not live while no option enters, and decided with the entry. Not
+reached: prices stated the tolerance off with options (W4), a hand-over or a join of an account with option
+legs, the end of a sale (15) at the engine, block weights, and O9, which stands as review T14 left it.
+
 ### 17.9 Of the form that is built: a leg entered, and a call (F116, high: closed at the call's step; L1 and L4 open)
 
 14.6 has no band under a call: every leg leaves at the call's one price for its row, and what the accounts

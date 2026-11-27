@@ -261,6 +261,8 @@ contract KpfTCEnd(int init_version) {
                 // (No more than the coins: what a token leg counts leaves no coin that is not there.)
                 if (m - amount < 0) { ok = 0; }
                 if (m - amount + tk < rall + pa + ls) { ok = 0; }
+                // (Tokens stand for no premium: the coins hold the premiums. Review T15, Y1.)
+                if (m - amount < pa) { ok = 0; }
             }
             if (ok == 1) {
                 due = byte[](0x00) + byte[](blake2b(p33(blake2b(tb + p33(root))) + mv.slice(0, 67) + byte[]((coins - amount) as byte[8]) + mv.slice(75, 130) + byte[](when as byte[8]) + mv.slice(138, 171))) + byte[]((held - amount) as byte[8]) + byte[](0x01) + byte[](claimer) + byte[](amount as byte[8]);
@@ -284,6 +286,9 @@ contract KpfTCEnd(int init_version) {
             // (What the leg named pays of its premium where it leaves alone: an option's premium is PA less PS; a
             // holder's whole (a held option that leaves is counted in NS by 256), a writer's less what it lost.)
             int pol = 0;
+            // (What the coins do not pay of it: with no token held the leg does not leave alone then, review T15, Y3;
+            // beside tokens the account owes it, Y1.)
+            int shp = 0;
             int setoff = 0;
             int wl = 0;
             int liq = int(byte[8](tb.slice(LIQFEE_AT, LIQFEE_AT + 8)));
@@ -293,11 +298,13 @@ contract KpfTCEnd(int init_version) {
                     if (all == 0) {
                         if (gl >= 0) {
                             if (m + tk < rst + ps + ls) { ok = 0; }
+                            if (m < ps) { ok = 0; }
                         } else {
                             if (m + gl < 0) { ok = 0; }
                             // (What stays is at the level of an entry: without the leg it may be asked more.
                             // docs 17.4, N65.)
                             if (m + gain + tk < rst + ps) { ok = 0; }
+                            if (m + gl < ps) { ok = 0; }
                         }
                     }
                 } else {
@@ -333,9 +340,10 @@ contract KpfTCEnd(int init_version) {
                                 if (pol < 0) { pol = 0; }
                             }
                         }
-                        if (ns >= 256 && ns % 256 != 0) {
+                        if (ns >= 256 && ns % 256 != 0 && tk == 0) {
                             // A held option is named alone only where every leg that stays is a held option
-                            // (review T12, E13): else every leg leaves.
+                            // (review T12, E13): else every leg leaves. (Not beside tokens: an account that holds
+                            // them is not taken whole, and the option leaves alone. Review T15, Y2.)
                             all = 1;
                         } else if (gl < 0) {
                             // The leg named lost: the coins pay what it lost, then of its premium what they can;
@@ -353,12 +361,14 @@ contract KpfTCEnd(int init_version) {
                             if (bf < 0) { bf = 0; }
                             int af = rst + ps - (m + tk - owes + gain - prem);
                             if (af < 0) { af = 0; }
+                            shp = pol - prem;
                             if (tk != 0) {
                                 // (An account that holds tokens is not taken whole: the leg named leaves alone,
                                 // and the account owes what the coins do not pay. docs 16.18; review T13, W1.)
-                                if (m + gl < 0) { owing = 1; }
-                            } else if (af >= bf || m + gl < 0) {
-                                // (The account does not lack less without the leg, or the coins do not pay it.)
+                                if (m + gl < 0 || shp > 0) { owing = 1; }
+                            } else if (af >= bf || m + gl < 0 || shp > 0) {
+                                // (The account does not lack less without the leg, or the coins do not pay it,
+                                // or its premium.)
                                 all = 1;
                             }
                         } else {
@@ -376,12 +386,15 @@ contract KpfTCEnd(int init_version) {
                             int capg = m - prem - ps;
                             if (capg < 0) { capg = 0; }
                             if (fee > capg) { fee = capg; }
+                            shp = pol - sof - prem;
                             if (tk == 0) {
                                 int bg = rall + pa - (m - owes) - gain;
                                 if (bg < 0) { bg = 0; }
                                 int ag = rst + ps - (m - owes - prem + gain - gl);
                                 if (ag < 0) { ag = 0; }
-                                if (ag >= bg || m - owes - prem < ps) { all = 1; }
+                                if (ag >= bg || m - owes - prem < ps || shp > 0) { all = 1; }
+                            } else {
+                                if (shp > 0) { owing = 1; }
                             }
                         }
                     }
@@ -460,6 +473,8 @@ contract KpfTCEnd(int init_version) {
                         int grace = t0 + int(byte[8](mv.slice(94, 102))) + int(byte[8](mv.slice(103, 111)));
                         if (when < grace) { when = grace; }
                     }
+                    // (Beside tokens the account owes what the coins do not pay of the leg's premium.)
+                    more = more + shp;
                     // (The coins pay of the leg's premium what the rule found: with what it lost, in the note.)
                     asked = asked - prem;
                     pay = pay + prem;
